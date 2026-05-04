@@ -236,11 +236,66 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
   return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
 }
 
-function stripFullLineCommentsForHeuristics(source: string): string {
-  return source
-    .split("\n")
-    .map((line) => (line.trimStart().startsWith("//") ? "" : line))
-    .join("\n");
+function stripCommentsForHeuristics(source: string): string {
+  let stripped = "";
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  let inBlockComment = false;
+
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i] ?? "";
+    const next = source[i + 1] ?? "";
+
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i++;
+        continue;
+      }
+      if (ch === "\n") {
+        stripped += "\n";
+      }
+      continue;
+    }
+
+    if (quote) {
+      stripped += ch;
+      if (escaped) {
+        escaped = false;
+      } else if (ch === "\\") {
+        escaped = true;
+      } else if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      stripped += ch;
+      continue;
+    }
+
+    if (ch === "/" && next === "/") {
+      while (i < source.length && source[i] !== "\n") {
+        i++;
+      }
+      if (source[i] === "\n") {
+        stripped += "\n";
+      }
+      continue;
+    }
+
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      i++;
+      continue;
+    }
+
+    stripped += ch;
+  }
+
+  return stripped;
 }
 
 function findSourceRuleMatch(params: {
@@ -282,7 +337,7 @@ function findSourceRuleMatch(params: {
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
-  const heuristicSource = stripFullLineCommentsForHeuristics(source);
+  const heuristicSource = stripCommentsForHeuristics(source);
   const heuristicLines = heuristicSource.split("\n");
   const matchedLineRules = new Set<string>();
 

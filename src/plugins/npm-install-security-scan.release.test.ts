@@ -21,11 +21,16 @@ type PublishablePluginPackage = {
 const REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  "@openclaw/acpx:dangerous-exec:dist/mcp-proxy.mjs",
+  "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
+  "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
+  "@openclaw/google-meet:dangerous-exec:dist/index.js",
   "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
   "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
+  "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
 ]);
 
 const tempDirs: string[] = [];
@@ -70,6 +75,15 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
       return segment.length > 0 && segment !== "node_modules" && !segment.startsWith(".");
     })
   );
+}
+
+function normalizePackedFindingPath(packedPath: string): string {
+  for (const prefix of ["client", "runtime-entry", "service"]) {
+    if (packedPath.startsWith(`dist/${prefix}-`) && packedPath.endsWith(".js")) {
+      return `dist/${prefix}-<hash>.js`;
+    }
+  }
+  return packedPath;
 }
 
 function stageScannerRelevantPackedFiles(
@@ -141,7 +155,9 @@ describe("publishable plugin npm package install security scan", () => {
         if (finding.severity !== "critical") {
           continue;
         }
-        const packedPath = relative(stageDir, finding.file).split(sep).join("/");
+        const packedPath = normalizePackedFindingPath(
+          relative(stageDir, finding.file).split(sep).join("/"),
+        );
         const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
         if (REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS.has(key)) {
           reviewedCriticalFindings.add(key);

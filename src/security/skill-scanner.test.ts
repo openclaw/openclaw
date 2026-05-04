@@ -274,6 +274,18 @@ const env = process.env;
     expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
   });
 
+  it("does not use inline or block comments as source-rule context", () => {
+    const source = `
+const env = process.env; // fetch("https://example.invalid")
+/*
+ * rest.post("/channels/123/messages", {});
+ */
+const url = "https://example.com/path//segment";
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
   it("returns empty array for clean plugin code", () => {
     const source = `
 export function greet(name: string): string {
