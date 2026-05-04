@@ -547,6 +547,10 @@ describe("resolveSessionOptionGroups", () => {
     ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
   });
 
+  it("keeps the active agent main session visible when no row exists yet", () => {
+    expect(labelsForSessionOptions({ sessionKey: "agent:main:main" })).toEqual(["main"]);
+  });
+
   it("disambiguates duplicate grouped labels with scoped suffixes", () => {
     const labels = labelsForSessionOptions({
       sessionKey: "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b",

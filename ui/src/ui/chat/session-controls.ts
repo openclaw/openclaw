@@ -549,6 +549,10 @@ function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: s
   return agentId === defaultAgentId;
 }
 
+function isAgentMainSessionKey(key: string): boolean {
+  return parseAgentSessionKey(key)?.rest === "main";
+}
+
 function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
   const normalizedAgentId = normalizeAgentId(agentId);
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
@@ -662,6 +666,8 @@ export function resolveSessionOptionGroups(
     addOption(row.key);
   }
   if (byKey.has(sessionKey)) {
+    addOption(sessionKey);
+  } else if (isAgentMainSessionKey(sessionKey)) {
     addOption(sessionKey);
   }
 

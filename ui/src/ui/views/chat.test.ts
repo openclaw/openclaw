@@ -873,6 +873,35 @@ describe("chat session controls", () => {
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:main");
   });
 
+  it("shows the active agent main session instead of a blank select when no row exists yet", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = "agent:main:main";
+    state.agentsList = {
+      defaultId: "main",
+      mainKey: "agent:main:main",
+      scope: "all",
+      agents: [{ id: "main", name: "MB Black" }],
+    };
+    state.sessionsResult = {
+      ts: 0,
+      path: "",
+      count: 0,
+      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+      sessions: [],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const sessionSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-chat-session-select="true"]',
+    );
+
+    expect(sessionSelect?.value).toBe("agent:main:main");
+    expect([...sessionSelect!.options].map((option) => option.value)).toEqual(["agent:main:main"]);
+    expect(sessionSelect?.selectedOptions[0]?.textContent?.trim()).toBe("main");
+  });
+
   it("patches the current session model and refreshes active tool visibility", async () => {
     const { state, request } = createChatHeaderState();
     state.agentsPanel = "tools";
