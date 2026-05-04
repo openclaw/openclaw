@@ -407,7 +407,6 @@ describe("capability cli", () => {
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({
         context: expect.objectContaining({
-          systemPrompt: "You are a personal assistant running inside OpenClaw.",
           messages: [
             expect.objectContaining({
               role: "user",
@@ -417,6 +416,11 @@ describe("capability cli", () => {
         }),
       }),
     );
+    const calls = mocks.completeWithPreparedSimpleCompletionModel.mock.calls as unknown as Array<
+      [{ context?: { systemPrompt?: string } }]
+    >;
+    const call = calls[0]?.[0];
+    expect(call.context).not.toHaveProperty("systemPrompt");
   });
 
   it("passes image files to local model probes", async () => {
@@ -440,7 +444,6 @@ describe("capability cli", () => {
     expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
       expect.objectContaining({
         context: expect.objectContaining({
-          systemPrompt: "You are a personal assistant running inside OpenClaw.",
           messages: [
             expect.objectContaining({
               role: "user",
@@ -453,6 +456,11 @@ describe("capability cli", () => {
         }),
       }),
     );
+    const calls = mocks.completeWithPreparedSimpleCompletionModel.mock.calls as unknown as Array<
+      [{ context?: { systemPrompt?: string } }]
+    >;
+    const call = calls[0]?.[0];
+    expect(call.context).not.toHaveProperty("systemPrompt");
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         inputs: [
@@ -461,6 +469,55 @@ describe("capability cli", () => {
             mimeType: "image/png",
           }),
         ],
+      }),
+    );
+  });
+
+  it("adds minimal instructions only for openai-codex local model probes", async () => {
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "openai-codex",
+        id: "gpt-5.5",
+        api: "openai-codex-responses",
+        maxTokens: 128,
+      },
+      auth: {
+        apiKey: "codex-app-server",
+        source: "codex-app-server",
+        mode: "token",
+      },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "openai-codex/gpt-5.5",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({
+          systemPrompt: "You are a personal assistant running inside OpenClaw.",
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: "hello",
+            }),
+          ],
+        }),
       }),
     );
   });

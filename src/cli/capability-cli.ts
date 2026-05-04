@@ -660,12 +660,17 @@ async function runModelRun(params: {
         'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
     }
+    const localModelRunSystemPrompt =
+      prepared.selection.provider === "openai-codex" ||
+      prepared.model.api === "openai-codex-responses"
+        ? LOCAL_MODEL_RUN_SYSTEM_PROMPT
+        : undefined;
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
       cfg,
       context: {
-        systemPrompt: LOCAL_MODEL_RUN_SYSTEM_PROMPT,
+        ...(localModelRunSystemPrompt ? { systemPrompt: localModelRunSystemPrompt } : {}),
         messages: [
           {
             role: "user",
