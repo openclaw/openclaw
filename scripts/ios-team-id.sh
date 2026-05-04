@@ -62,32 +62,67 @@ load_teams_from_xcode_preferences() {
     [[ -z "$team_id" ]] && continue
     append_team "$team_id" "${is_free:-0}" "${team_name:-}"
   done < <(
-    plutil -extract IDEProvisioningTeams json -o - "$plist_path" 2>/dev/null \
-      | "$python_cmd" -c '
+    "$python_cmd" -c '
 import json
+import plistlib
+import subprocess
 import sys
 
+def emit_teams(containers):
+    emitted = 0
+    for teams in containers:
+        if not isinstance(teams, list):
+            continue
+        for team in teams:
+            if not isinstance(team, dict):
+                continue
+            team_id = str(team.get("teamID", "")).strip()
+            if not team_id:
+                continue
+            is_free = "1" if bool(team.get("isFreeProvisioningTeam", False)) else "0"
+            team_name = str(team.get("teamName", "")).replace("\t", " ").strip()
+            print(f"{team_id}\t{is_free}\t{team_name}")
+            emitted += 1
+    return emitted
+
+# Primary: defaults export (handles both IDEProvisioningTeamByIdentifier
+# and IDEProvisioningTeams in a single pass)
 try:
-    data = json.load(sys.stdin)
+    raw = subprocess.run(
+        ["defaults", "export", "com.apple.dt.Xcode", "-"],
+        capture_output=True,
+    ).stdout
+    if raw:
+        data = plistlib.loads(raw)
+        if isinstance(data, dict):
+            containers = []
+            for key in ("IDEProvisioningTeamByIdentifier", "IDEProvisioningTeams"):
+                container = data.get(key)
+                if isinstance(container, dict):
+                    containers.extend(container.values())
+                elif isinstance(container, list):
+                    containers.append(container)
+            if emit_teams(containers) > 0:
+                raise SystemExit(0)
+except SystemExit:
+    raise
 except Exception:
-    raise SystemExit(0)
+    pass
 
-if not isinstance(data, dict):
-    raise SystemExit(0)
-
-for teams in data.values():
-    if not isinstance(teams, list):
-        continue
-    for team in teams:
-        if not isinstance(team, dict):
-            continue
-        team_id = str(team.get("teamID", "")).strip()
-        if not team_id:
-            continue
-        is_free = "1" if bool(team.get("isFreeProvisioningTeam", False)) else "0"
-        team_name = str(team.get("teamName", "")).replace("\t", " ").strip()
-        print(f"{team_id}\t{is_free}\t{team_name}")
-'
+# Fallback: plutil extracts only IDEProvisioningTeams as JSON
+try:
+    result = subprocess.run(
+        ["plutil", "-extract", "IDEProvisioningTeams", "json", "-o", "-",
+         sys.argv[1]],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0 and result.stdout:
+        data = json.loads(result.stdout)
+        if isinstance(data, dict):
+            emit_teams(data.values())
+except Exception:
+    pass
+' "$plist_path"
   )
 }
 
