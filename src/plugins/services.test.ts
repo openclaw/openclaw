@@ -215,4 +215,41 @@ describe("startPluginServices", () => {
 
     expect(untrustedContexts[0]?.internalDiagnostics).toBeUndefined();
   });
+
+  it("grants internal diagnostics to global-origin official diagnostics plugins", async () => {
+    const otelContexts: OpenClawPluginServiceContext[] = [];
+    const otelService = createTrackingService("diagnostics-otel", { contexts: otelContexts });
+    await startPluginServices({
+      registry: createRegistry([otelService], "diagnostics-otel", "global"),
+      config: createServiceConfig(),
+    });
+
+    expect(otelContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(otelContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+
+    const promContexts: OpenClawPluginServiceContext[] = [];
+    const promService = createTrackingService("diagnostics-prometheus", {
+      contexts: promContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([promService], "diagnostics-prometheus", "global"),
+      config: createServiceConfig(),
+    });
+
+    expect(promContexts[0]?.internalDiagnostics?.onEvent).toBeTypeOf("function");
+    expect(promContexts[0]?.internalDiagnostics?.emit).toBeTypeOf("function");
+  });
+
+  it("does not grant internal diagnostics to config-origin diagnostics plugins", async () => {
+    const configContexts: OpenClawPluginServiceContext[] = [];
+    const configService = createTrackingService("diagnostics-otel", {
+      contexts: configContexts,
+    });
+    await startPluginServices({
+      registry: createRegistry([configService], "diagnostics-otel", "config"),
+      config: createServiceConfig(),
+    });
+
+    expect(configContexts[0]?.internalDiagnostics).toBeUndefined();
+  });
 });

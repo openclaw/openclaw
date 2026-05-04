@@ -25,7 +25,7 @@ function createServiceContext(params: {
   service?: PluginServiceRegistration;
 }): OpenClawPluginServiceContext {
   const grantsInternalDiagnostics =
-    params.service?.origin === "bundled" &&
+    (params.service?.origin === "bundled" || params.service?.origin === "global") &&
     params.service.pluginId === params.service.service.id &&
     (params.service.service.id === "diagnostics-otel" ||
       params.service.service.id === "diagnostics-prometheus");
