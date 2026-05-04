@@ -1451,6 +1451,7 @@ function relocateCandidateRange(
   let bestMatch:
     | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
     | undefined;
+  let nearestContainingDistance: number | undefined;
   for (let startIndex = 0; startIndex < lines.length; startIndex += 1) {
     for (let span = 1; span <= maxSpan && startIndex + span <= lines.length; span += 1) {
       const startLine = startIndex + 1;
@@ -1461,6 +1462,12 @@ function relocateCandidateRange(
         continue;
       }
       const distance = Math.abs(startLine - candidate.startLine);
+      if (
+        comparison.quality === 2 &&
+        (nearestContainingDistance === undefined || distance < nearestContainingDistance)
+      ) {
+        nearestContainingDistance = distance;
+      }
       let shouldReplace = false;
       if (!bestMatch) {
         shouldReplace = true;
@@ -1469,9 +1476,10 @@ function relocateCandidateRange(
       } else if (comparison.quality === bestMatch.quality) {
         const bestSpan = bestMatch.endLine - bestMatch.startLine + 1;
         if (comparison.quality === 2) {
+          const containingDistanceLimit = (nearestContainingDistance ?? distance) + 1;
           shouldReplace =
             distance < bestMatch.distance ||
-            (span < bestSpan && distance <= bestMatch.distance + 1);
+            (span < bestSpan && distance <= containingDistanceLimit);
         } else {
           shouldReplace =
             distance < bestMatch.distance ||
