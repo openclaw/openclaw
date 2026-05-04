@@ -36,7 +36,7 @@ patchedDependencies:
     hash: 1fe782f9679d7a725cbe59e51d61419fbb25d4c463d186c43c95644770cb2b98
     path: patches/@agentclientprotocol__claude-agent-acp@0.32.0.patch
   '@whiskeysockets/baileys@7.0.0-rc.9':
-    hash: 23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201
+    hash: 8da41a8b54d2dc2224540c218429b7cae22d8979674f8cc28378d459b58e8bf0
     path: patches/@whiskeysockets__baileys@7.0.0-rc.9.patch
 
 importers:
@@ -1534,7 +1534,7 @@ importers:
     dependencies:
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
-        version: 7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        version: 7.0.0-rc.9(patch_hash=8da41a8b54d2dc2224540c218429b7cae22d8979674f8cc28378d459b58e8bf0)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       https-proxy-agent:
         specifier: ^9.0.0
         version: 9.0.0
@@ -11357,7 +11357,7 @@ snapshots:
       '@wasm-audio-decoders/common': 9.0.7
     optional: true
 
-  '@whiskeysockets/baileys@7.0.0-rc.9(patch_hash=23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
+  '@whiskeysockets/baileys@7.0.0-rc.9(patch_hash=8da41a8b54d2dc2224540c218429b7cae22d8979674f8cc28378d459b58e8bf0)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4

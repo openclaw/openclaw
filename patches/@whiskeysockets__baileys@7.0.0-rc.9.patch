@@ -1,8 +1,154 @@
+diff --git a/lib/Defaults/index.js b/lib/Defaults/index.js
+index 7651b275c8..6b3e7816cf 100644
+--- a/lib/Defaults/index.js
++++ b/lib/Defaults/index.js
+@@ -2,7 +2,7 @@ import { proto } from '../../WAProto/index.js';
+ import { makeLibSignalRepository } from '../Signal/libsignal.js';
+ import { Browsers } from '../Utils/browser-utils.js';
+ import logger from '../Utils/logger.js';
+-const version = [2, 3000, 1027934701];
++const version = [2, 3000, 1035194821];
+ export const UNAUTHORIZED_CODES = [401, 403, 419];
+ export const DEFAULT_ORIGIN = 'https://web.whatsapp.com';
+ export const CALL_VIDEO_PREFIX = 'https://call.whatsapp.com/video/';
+@@ -112,4 +112,10 @@ export const DEFAULT_CACHE_TTLS = {
+     CALL_OFFER: 5 * 60, // 5 minutes
+     USER_DEVICES: 5 * 60 // 5 minutes
+ };
++export const TimeMs = {
++    Minute: 60 * 1000,
++    Hour: 60 * 60 * 1000,
++    Day: 24 * 60 * 60 * 1000,
++    Week: 7 * 24 * 60 * 60 * 1000
++};
+ //# sourceMappingURL=index.js.map
+\ No newline at end of file
+diff --git a/lib/Socket/chats.js b/lib/Socket/chats.js
+index 82021743f2..e76d9c2c2f 100644
+--- a/lib/Socket/chats.js
++++ b/lib/Socket/chats.js
+@@ -14,7 +14,7 @@ const MAX_SYNC_ATTEMPTS = 2;
+ export const makeChatsSocket = (config) => {
+     const { logger, markOnlineOnConnect, fireInitQueries, appStateMacVerification, shouldIgnoreJid, shouldSyncHistoryMessage, getMessage } = config;
+     const sock = makeSocket(config);
+-    const { ev, ws, authState, generateMessageTag, sendNode, query, signalRepository, onUnexpectedError } = sock;
++    const { ev, ws, authState, generateMessageTag, sendNode, query, signalRepository, onUnexpectedError, sendUnifiedSession } = sock;
+     let privacySettings;
+     let syncState = SyncState.Connecting;
+     /** this mutex ensures that the notifications (receipts, messages etc.) are processed in order */
+@@ -497,6 +497,9 @@ export const makeChatsSocket = (config) => {
+                 return;
+             }
+             ev.emit('connection.update', { isOnline: type === 'available' });
++            if (type === 'available') {
++                void sendUnifiedSession();
++            }
+             await sendNode({
+                 tag: 'presence',
+                 attrs: {
+diff --git a/lib/Socket/socket.js b/lib/Socket/socket.js
+index fe1aa7f2f3..9a49a17740 100644
+--- a/lib/Socket/socket.js
++++ b/lib/Socket/socket.js
+@@ -3,7 +3,7 @@ import { randomBytes } from 'crypto';
+ import { URL } from 'url';
+ import { promisify } from 'util';
+ import { proto } from '../../WAProto/index.js';
+-import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, INITIAL_PREKEY_COUNT, MIN_PREKEY_COUNT, MIN_UPLOAD_INTERVAL, NOISE_WA_HEADER, UPLOAD_TIMEOUT } from '../Defaults/index.js';
++import { DEF_CALLBACK_PREFIX, DEF_TAG_PREFIX, INITIAL_PREKEY_COUNT, MIN_PREKEY_COUNT, MIN_UPLOAD_INTERVAL, NOISE_WA_HEADER, TimeMs, UPLOAD_TIMEOUT } from '../Defaults/index.js';
+ import { DisconnectReason } from '../Types/index.js';
+ import { addTransactionCapability, aesEncryptCTR, bindWaitForConnectionUpdate, bytesToCrockford, configureSuccessfulPairing, Curve, derivePairingCodeKey, generateLoginNode, generateMdTagPrefix, generateRegistrationNode, getCodeFromWSError, getErrorCodeFromStreamError, getNextPreKeysNode, makeEventBuffer, makeNoiseHandler, promiseTimeout, signedKeyPair, xmppSignedPreKey } from '../Utils/index.js';
+ import { getPlatformId } from '../Utils/browser-utils.js';
+@@ -20,6 +20,7 @@ import { WebSocketClient } from './Client/index.js';
+ export const makeSocket = (config) => {
+     const { waWebSocketUrl, connectTimeoutMs, logger, keepAliveIntervalMs, browser, auth: authState, printQRInTerminal, defaultQueryTimeoutMs, transactionOpts, qrTimeout, makeSignalRepository } = config;
+     const publicWAMBuffer = new BinaryInfo();
++    let serverTimeOffsetMs = 0;
+     const uqTagId = generateMdTagPrefix();
+     const generateMessageTag = () => `${uqTagId}${epoch++}`;
+     if (printQRInTerminal) {
+@@ -718,11 +719,13 @@ export const makeSocket = (config) => {
+     ws.on('CB:iq,,pair-success', async (stanza) => {
+         logger.debug('pair success recv');
+         try {
++            updateServerTimeOffset(stanza);
+             const { reply, creds: updatedCreds } = configureSuccessfulPairing(stanza, creds);
+             logger.info({ me: updatedCreds.me, platform: updatedCreds.platform }, 'pairing configured successfully, expect to restart the connection...');
+             ev.emit('creds.update', updatedCreds);
+             ev.emit('connection.update', { isNewLogin: true, qr: undefined });
+             await sendNode(reply);
++            void sendUnifiedSession();
+         }
+         catch (error) {
+             logger.info({ trace: error.stack }, 'error in pairing');
+@@ -732,6 +735,7 @@ export const makeSocket = (config) => {
+     // login complete
+     ws.on('CB:success', async (node) => {
+         try {
++            updateServerTimeOffset(node);
+             await uploadPreKeysToServerIfRequired();
+             await sendPassiveIq('active');
+             // After successful login, validate our key-bundle against server
+@@ -749,6 +753,7 @@ export const makeSocket = (config) => {
+         clearTimeout(qrTimer); // will never happen in all likelyhood -- but just in case WA sends success on first try
+         ev.emit('creds.update', { me: { ...authState.creds.me, lid: node.attrs.lid } });
+         ev.emit('connection.update', { connection: 'open' });
++        void sendUnifiedSession();
+         if (node.attrs.lid && authState.creds.me?.id) {
+             const myLID = node.attrs.lid;
+             process.nextTick(async () => {
+@@ -839,6 +844,37 @@ export const makeSocket = (config) => {
+         }
+         Object.assign(creds, update);
+     });
++    const updateServerTimeOffset = ({ attrs }) => {
++        const tValue = attrs?.t;
++        if (!tValue) {
++            return;
++        }
++        const parsed = Number(tValue);
++        if (Number.isNaN(parsed) || parsed <= 0) {
++            return;
++        }
++        const localMs = Date.now();
++        serverTimeOffsetMs = parsed * 1000 - localMs;
++        logger.debug({ offset: serverTimeOffsetMs }, 'calculated server time offset');
++    };
++    const getUnifiedSessionId = () => {
++        const offsetMs = 3 * TimeMs.Day;
++        const now = Date.now() + serverTimeOffsetMs;
++        const id = (now + offsetMs) % TimeMs.Week;
++        return id.toString();
++    };
++    const sendUnifiedSession = async () => {
++        if (!ws.isOpen) {
++            return;
++        }
++        const node = { tag: 'ib', attrs: {}, content: [{ tag: 'unified_session', attrs: { id: getUnifiedSessionId() } }] };
++        try {
++            await sendNode(node);
++        }
++        catch (error) {
++            logger.debug({ error }, 'failed to send unified_session telemetry');
++        }
++    };
+     return {
+         type: 'md',
+         ws,
+@@ -862,6 +898,8 @@ export const makeSocket = (config) => {
+         digestKeyBundle,
+         rotateSignedPreKey,
+         requestPairingCode,
++        updateServerTimeOffset,
++        sendUnifiedSession,
+         wamBuffer: publicWAMBuffer,
+         /** Waits for the connection to WA to reach a state */
+         waitForConnectionUpdate: bindWaitForConnectionUpdate(ev),
 diff --git a/lib/Utils/messages-media.js b/lib/Utils/messages-media.js
-index 0d32dfb4882dfe029ba8804772d7d89404b08e76..73809fcd1d52362aef0c35cb7416c29d86482df0 100644
+index 0d32dfb488..59cac3ef37 100644
 --- a/lib/Utils/messages-media.js
 +++ b/lib/Utils/messages-media.js
-@@ -353,9 +353,17 @@
+@@ -353,9 +353,17 @@ export const encryptedStream = async (media, mediaType, { logger, saveOriginalFi
          const fileSha256 = sha256Plain.digest();
          const fileEncSha256 = sha256Enc.digest();
          encFileWriteStream.write(mac);
@@ -20,9 +166,7 @@ index 0d32dfb4882dfe029ba8804772d7d89404b08e76..73809fcd1d52362aef0c35cb7416c29d
          logger?.debug('encrypted data successfully');
          return {
              mediaKey,
-@@ -520,11 +528,10 @@
-             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-             let result;
+@@ -522,7 +530,6 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger, opt
              try {
                  const stream = createReadStream(filePath);
                  const response = await fetch(url, {
@@ -30,9 +174,7 @@ index 0d32dfb4882dfe029ba8804772d7d89404b08e76..73809fcd1d52362aef0c35cb7416c29d
                      method: 'POST',
                      body: stream,
                      headers: {
-                         ...(() => {
-                             const hdrs = options?.headers;
-@@ -535,6 +542,11 @@
+@@ -535,6 +542,11 @@ export const getWAUploadToServer = ({ customUploadHosts, fetchAgent, logger, opt
                          'Content-Type': 'application/octet-stream',
                          Origin: DEFAULT_ORIGIN
                      },
