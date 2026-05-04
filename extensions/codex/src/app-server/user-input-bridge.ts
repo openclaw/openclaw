@@ -2,6 +2,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatCodexDisplayText } from "../command-formatters.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -208,16 +209,26 @@ function formatUserInputPrompt(questions: UserInputQuestion[]): string {
   const lines = ["Codex needs input:"];
   questions.forEach((question, index) => {
     if (questions.length > 1) {
-      lines.push("", `${index + 1}. ${question.header}`, question.question);
+      lines.push(
+        "",
+        `${index + 1}. ${formatCodexDisplayText(question.header)}`,
+        formatCodexDisplayText(question.question),
+      );
     } else {
-      lines.push("", question.header, question.question);
+      lines.push(
+        "",
+        formatCodexDisplayText(question.header),
+        formatCodexDisplayText(question.question),
+      );
     }
     if (question.isSecret) {
       lines.push("This channel may show your reply to other participants.");
     }
     question.options?.forEach((option, optionIndex) => {
       lines.push(
-        `${optionIndex + 1}. ${option.label}${option.description ? ` - ${option.description}` : ""}`,
+        `${optionIndex + 1}. ${formatCodexDisplayText(option.label)}${
+          option.description ? ` - ${formatCodexDisplayText(option.description)}` : ""
+        }`,
       );
     });
     if (question.isOther) {
