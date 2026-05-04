@@ -58,6 +58,14 @@ function readStringMap(value: unknown): Record<string, string> {
   return result;
 }
 
+function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    return false;
+  }
+  delete record[key];
+  return true;
+}
+
 function readPackageVersion(packageDir: string): string | undefined {
   const packageJson = readJsonObject(path.join(packageDir, "package.json"));
   const version = packageJson?.version;
@@ -137,6 +145,7 @@ function removeManagedNpmDependency(params: {
           dependencies,
         };
   saveJsonFile(npmPackageJsonPath, nextPackageJson);
+  removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
   if (path.basename(path.dirname(scopeDir)) === "node_modules") {
@@ -145,6 +154,44 @@ function removeManagedNpmDependency(params: {
     } catch {
       // Other packages can still live under the scope directory.
     }
+  }
+}
+
+function removeManagedNpmPackageLockDependency(params: {
+  npmRoot: string;
+  packageName: string;
+}): void {
+  const packageLockPath = path.join(params.npmRoot, "package-lock.json");
+  const packageLock = readJsonObject(packageLockPath);
+  if (!packageLock) {
+    return;
+  }
+
+  let changed = false;
+  const packages = packageLock.packages;
+  if (isRecord(packages)) {
+    const rootPackage = packages[""];
+    if (isRecord(rootPackage)) {
+      const rootDependencies = readStringMap(rootPackage.dependencies);
+      if (deleteObjectKey(rootDependencies, params.packageName)) {
+        changed = true;
+        if (Object.keys(rootDependencies).length === 0) {
+          delete rootPackage.dependencies;
+        } else {
+          rootPackage.dependencies = rootDependencies;
+        }
+      }
+    }
+    changed = deleteObjectKey(packages, `node_modules/${params.packageName}`) || changed;
+  }
+
+  const dependencies = packageLock.dependencies;
+  if (isRecord(dependencies)) {
+    changed = deleteObjectKey(dependencies, params.packageName) || changed;
+  }
+
+  if (changed) {
+    saveJsonFile(packageLockPath, packageLock);
   }
 }
 
