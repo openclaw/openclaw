@@ -806,6 +806,8 @@ export async function runEmbeddedPiAgent(
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
+      // Pi owns JSONL persistence; this marker only lets the outer retry avoid
+      // replaying the same inbound channel message after overflow compaction.
       let lastPersistedCurrentMessageId: string | number | undefined;
       const onUserMessagePersisted: RunEmbeddedPiAgentParams["onUserMessagePersisted"] = (
         message,
@@ -1648,6 +1650,9 @@ export async function runEmbeddedPiAgent(
                   params.currentMessageId !== undefined &&
                   params.currentMessageId === lastPersistedCurrentMessageId
                 ) {
+                  // The first attempt reached Pi far enough to persist this user turn.
+                  // Retrying the original prompt would replay it, so resume from the
+                  // compacted transcript and suppress the next user append.
                   nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
                   suppressNextUserMessagePersistence = true;
                 }

@@ -755,6 +755,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
+    // Agent-run delivery is a live projection; Pi message_end owns persisted
+    // assistant transcript entries, including stale media/text final payloads.
     expect(assistantUpdates).toEqual([]);
     const transcriptLines = fs
       .readFileSync(mockState.transcriptPath, "utf-8")
@@ -804,6 +806,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
+    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
+    // Pi persists the model-visible assistant turn from message_end.
     expect(assistantUpdates).toEqual([]);
     const transcriptLines = fs
       .readFileSync(mockState.transcriptPath, "utf-8")
