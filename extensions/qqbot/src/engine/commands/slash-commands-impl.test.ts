@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
 import { getFrameworkCommands, matchSlashCommand } from "./slash-commands-impl.js";
-import type { SlashCommandContext } from "./slash-commands.js";
+import { SlashCommandRegistry, type SlashCommandContext } from "./slash-commands.js";
 
 function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
   return {
@@ -29,12 +29,38 @@ function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): S
 }
 
 describe("QQBot framework slash commands", () => {
-  it("routes bot-approve through the auth-gated framework registry", () => {
-    expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-approve");
+  it("does not expose private-only admin commands through the framework registry", () => {
+    const names = getFrameworkCommands().map((command) => command.name);
+
+    expect(names).not.toContain("bot-approve");
+    expect(names).not.toContain("bot-clear-storage");
+    expect(names).not.toContain("bot-logs");
+    expect(names).not.toContain("bot-streaming");
   });
 
-  it("routes bot-streaming through the auth-gated framework registry", () => {
-    expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-streaming");
+  it("keeps private-only auth commands out of framework registration", () => {
+    const registry = new SlashCommandRegistry();
+    registry.register({
+      name: "private-admin",
+      description: "private admin command",
+      requireAuth: true,
+      c2cOnly: true,
+      handler: () => "ok",
+    });
+    registry.register({
+      name: "shared-admin",
+      description: "shared admin command",
+      requireAuth: true,
+      handler: () => "ok",
+    });
+
+    expect(registry.getFrameworkCommands().map((command) => command.name)).toEqual([
+      "shared-admin",
+    ]);
+  });
+
+  it("keeps bot-streaming out of framework registration", () => {
+    expect(getFrameworkCommands().map((command) => command.name)).not.toContain("bot-streaming");
   });
 
   it("does not write streaming config when the sender is not command-authorized", async () => {
