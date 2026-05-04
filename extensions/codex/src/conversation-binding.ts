@@ -520,7 +520,7 @@ async function notifyTerminalCodexGoalBestEffort(params: {
     return;
   }
   try {
-    const response = await params.client.request<JsonValue | undefined>(
+    const response = await params.client.request(
       CODEX_CONTROL_METHODS.goalGet,
       { threadId: params.threadId },
       { timeoutMs: params.runtimeRequestTimeoutMs },
