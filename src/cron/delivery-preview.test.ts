@@ -9,11 +9,13 @@ vi.mock("./isolated-agent/delivery-target.js", () => ({
   resolveDeliveryTarget: mocks.resolveDeliveryTarget,
 }));
 
-const { resolveCronDeliveryPreview } = await import("./delivery-preview.js");
+const { clearCronDeliveryPreviewsCache, resolveCronDeliveryPreview, resolveCronDeliveryPreviews } =
+  await import("./delivery-preview.js");
 
 describe("resolveCronDeliveryPreview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    clearCronDeliveryPreviewsCache();
     mocks.resolveDeliveryTarget.mockResolvedValue({
       ok: true,
       channel: "telegram",
@@ -65,5 +67,54 @@ describe("resolveCronDeliveryPreview", () => {
 
     expect(preview).toEqual({ label: "not requested", detail: "not requested" });
     expect(mocks.resolveDeliveryTarget).not.toHaveBeenCalled();
+  });
+
+  it("reuses in-flight delivery preview resolution for identical job lists", async () => {
+    let release!: () => void;
+    const pending = new Promise((resolve) => {
+      release = () =>
+        resolve({
+          ok: true,
+          channel: "telegram",
+          to: "direct-123",
+          mode: "implicit",
+        });
+    });
+    mocks.resolveDeliveryTarget.mockReturnValueOnce(pending);
+    const job = makeCronJob({
+      id: "job-1",
+      agentId: "avery",
+      delivery: undefined,
+    });
+
+    const first = resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
+    const second = resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledTimes(1);
+    release();
+    await expect(first).resolves.toEqual({
+      "job-1": {
+        detail: "resolved from last, main session",
+        label: "announce -> telegram:direct-123",
+      },
+    });
+    await expect(second).resolves.toEqual({
+      "job-1": {
+        detail: "resolved from last, main session",
+        label: "announce -> telegram:direct-123",
+      },
+    });
+  });
+
+  it("clears cached delivery preview results on demand", async () => {
+    const job = makeCronJob({ id: "job-1", delivery: undefined });
+
+    await resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
+    await resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledTimes(1);
+
+    clearCronDeliveryPreviewsCache();
+    await resolveCronDeliveryPreviews({ cfg: {} as never, jobs: [job] });
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledTimes(2);
   });
 });

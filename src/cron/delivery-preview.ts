@@ -5,6 +5,41 @@ import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
 
+const CRON_DELIVERY_PREVIEWS_CACHE_TTL_MS = 1_000;
+
+type CronDeliveryPreviewsCacheEntry = {
+  expiresAt: number;
+  previews: Record<string, CronDeliveryPreview>;
+};
+
+const cronDeliveryPreviewsCache = new Map<string, CronDeliveryPreviewsCacheEntry>();
+const cronDeliveryPreviewsInFlight = new Map<
+  string,
+  Promise<Record<string, CronDeliveryPreview>>
+>();
+
+function getCronDeliveryPreviewsCacheKey(params: {
+  defaultAgentId?: string;
+  jobs: CronJob[];
+}): string {
+  return JSON.stringify({
+    defaultAgentId: params.defaultAgentId ?? null,
+    jobs: params.jobs.map((job) => ({
+      id: job.id,
+      updatedAtMs: job.updatedAtMs,
+      agentId: job.agentId,
+      sessionTarget: job.sessionTarget,
+      sessionKey: job.sessionKey,
+      delivery: job.delivery,
+    })),
+  });
+}
+
+export function clearCronDeliveryPreviewsCache(): void {
+  cronDeliveryPreviewsCache.clear();
+  cronDeliveryPreviewsInFlight.clear();
+}
+
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
     return "last";
@@ -90,7 +125,20 @@ export async function resolveCronDeliveryPreviews(params: {
   defaultAgentId?: string;
   jobs: CronJob[];
 }): Promise<Record<string, CronDeliveryPreview>> {
-  const entries = await Promise.all(
+  const cacheKey = getCronDeliveryPreviewsCacheKey({
+    defaultAgentId: params.defaultAgentId,
+    jobs: params.jobs,
+  });
+  const now = Date.now();
+  const cached = cronDeliveryPreviewsCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.previews;
+  }
+  const existing = cronDeliveryPreviewsInFlight.get(cacheKey);
+  if (existing) {
+    return existing;
+  }
+  const promise = Promise.all(
     params.jobs.map(
       async (job) =>
         [
@@ -102,6 +150,18 @@ export async function resolveCronDeliveryPreviews(params: {
           }),
         ] as const,
     ),
-  );
-  return Object.fromEntries(entries);
+  )
+    .then((entries) => {
+      const previews = Object.fromEntries(entries);
+      cronDeliveryPreviewsCache.set(cacheKey, {
+        expiresAt: Date.now() + CRON_DELIVERY_PREVIEWS_CACHE_TTL_MS,
+        previews,
+      });
+      return previews;
+    })
+    .finally(() => {
+      cronDeliveryPreviewsInFlight.delete(cacheKey);
+    });
+  cronDeliveryPreviewsInFlight.set(cacheKey, promise);
+  return promise;
 }

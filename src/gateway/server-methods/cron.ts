@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import {
+  clearCronDeliveryPreviewsCache,
+  resolveCronDeliveryPreviews,
+} from "../../cron/delivery-preview.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -308,6 +311,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
+    clearCronDeliveryPreviewsCache();
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {
@@ -403,6 +407,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info("cron: job updated", { jobId });
+    clearCronDeliveryPreviewsCache();
     respond(true, job, undefined);
   },
   "cron.remove": async ({ params, respond, context }) => {
@@ -430,6 +435,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const result = await context.cron.remove(jobId);
     if (result.removed) {
       context.logGateway.info("cron: job removed", { jobId });
+      clearCronDeliveryPreviewsCache();
     }
     respond(true, result, undefined);
   },
