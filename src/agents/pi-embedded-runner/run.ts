@@ -5,7 +5,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentEvent, emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -941,6 +941,15 @@ export async function runEmbeddedPiAgent(
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
         // subscribers like memory extensions and usage trackers.
         const runOwnsCompactionBeforeHook = async (reason: string) => {
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "compaction",
+            data: { phase: "start" },
+          });
+          void params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "start" },
+          });
           if (
             contextEngine.info.ownsCompaction !== true ||
             !hookRunner?.hasHooks("before_compaction")
@@ -960,6 +969,17 @@ export async function runEmbeddedPiAgent(
           reason: string,
           compactResult: Awaited<ReturnType<typeof contextEngine.compact>>,
         ) => {
+          const willRetry = compactResult.compacted;
+          const completed = compactResult.ok && compactResult.compacted;
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "compaction",
+            data: { phase: "end", willRetry, completed },
+          });
+          void params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "end", willRetry, completed },
+          });
           if (
             contextEngine.info.ownsCompaction !== true ||
             !compactResult.ok ||
