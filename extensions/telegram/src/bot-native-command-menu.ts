@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import type { LanguageCode } from "grammy/types";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeOptionalString,
@@ -26,6 +25,7 @@ export type TelegramMenuCommand = {
 
 type TelegramCommandMenuScope =
   | { label: "default"; options?: undefined }
+  | { label: "all_private_chats"; options: { scope: { type: "all_private_chats" } } }
   | { label: "all_group_chats"; options: { scope: { type: "all_group_chats" } } };
 
 type TelegramPluginCommandSpec = {
@@ -36,6 +36,7 @@ type TelegramPluginCommandSpec = {
 
 const TELEGRAM_COMMAND_MENU_SCOPES: readonly TelegramCommandMenuScope[] = [
   { label: "default" },
+  { label: "all_private_chats", options: { scope: { type: "all_private_chats" } } },
   { label: "all_group_chats", options: { scope: { type: "all_group_chats" } } },
 ];
 
@@ -504,7 +505,7 @@ export function syncTelegramMenuCommands(params: {
     const currentHash = hashCommandList(commandsToRegister);
     const cachedHash = readCachedCommandHash(accountId, botIdentity);
     if (cachedHash === currentHash) {
-      logVerbose("telegram: command menu unchanged; skipping sync");
+      runtime.log?.("telegram: command menu unchanged; skipping sync");
       return;
     }
 

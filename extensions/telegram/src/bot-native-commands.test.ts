@@ -160,6 +160,33 @@ describe("registerTelegramNativeCommands", () => {
     resetPluginCommandMocks();
   });
 
+  it("clears native command menus in every Telegram scope when explicitly disabled", async () => {
+    const { bot, setMyCommands } = createCommandBot();
+
+    registerTelegramNativeCommands(
+      createNativeCommandTestParams(
+        { commands: { native: false } },
+        {
+          bot,
+          nativeEnabled: false,
+          nativeSkillsEnabled: false,
+          nativeDisabledExplicit: true,
+        },
+      ),
+    );
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(3);
+    });
+    expect(setMyCommands).toHaveBeenCalledWith([]);
+    expect(setMyCommands).toHaveBeenCalledWith([], {
+      scope: { type: "all_private_chats" },
+    });
+    expect(setMyCommands).toHaveBeenCalledWith([], {
+      scope: { type: "all_group_chats" },
+    });
+  });
+
   it("scopes skill commands when account binding exists", () => {
     const cfg: OpenClawConfig = {
       agents: {

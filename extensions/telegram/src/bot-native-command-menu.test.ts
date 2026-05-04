@@ -293,13 +293,15 @@ describe("bot-native-command-menu", () => {
 
     expect(callOrder).toEqual([
       "delete:default",
+      "delete:all_private_chats",
       "delete:all_group_chats",
       "set:default",
+      "set:all_private_chats",
       "set:all_group_chats",
     ]);
   });
 
-  it("registers the menu in default and group chat scopes", async () => {
+  it("registers the menu in default, private chat, and group chat scopes", async () => {
     const deleteMyCommands = vi.fn(async () => undefined);
     const setMyCommands = vi.fn(async () => undefined);
     const commands = [{ command: "cmd", description: "Command" }];
@@ -313,10 +315,13 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(2);
+      expect(setMyCommands).toHaveBeenCalledTimes(3);
     });
 
     expect(setMyCommands).toHaveBeenCalledWith(commands);
+    expect(setMyCommands).toHaveBeenCalledWith(commands, {
+      scope: { type: "all_private_chats" },
+    });
     expect(setMyCommands).toHaveBeenCalledWith(commands, {
       scope: { type: "all_group_chats" },
     });
@@ -347,17 +352,27 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(4);
+      expect(setMyCommands).toHaveBeenCalledTimes(6);
     });
 
     expect(setMyCommandsPayload(setMyCommands, 0)).toEqual([
       { command: "cmd", description: "Default" },
     ]);
-    expect(setMyCommandsPayload(setMyCommands, 2)).toEqual([
+    expect(setMyCommandsCall(setMyCommands, 1).at(1)).toEqual({
+      scope: { type: "all_private_chats" },
+    });
+    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
+      scope: { type: "all_group_chats" },
+    });
+    expect(setMyCommandsPayload(setMyCommands, 3)).toEqual([
       { command: "cmd", description: "한국어" },
     ]);
-    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({ language_code: "ko" });
-    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({
+    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({ language_code: "ko" });
+    expect(setMyCommandsCall(setMyCommands, 4).at(1)).toEqual({
+      scope: { type: "all_private_chats" },
+      language_code: "ko",
+    });
+    expect(setMyCommandsCall(setMyCommands, 5).at(1)).toEqual({
       scope: { type: "all_group_chats" },
       language_code: "ko",
     });
@@ -385,10 +400,10 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(4);
+      expect(setMyCommands).toHaveBeenCalledTimes(6);
     });
 
-    const localizedPayload = setMyCommandsPayload(setMyCommands, 2);
+    const localizedPayload = setMyCommandsPayload(setMyCommands, 3);
     expect(localizedPayload[0]).toMatchObject({ command: "long" });
     expect((localizedPayload[0] as { description: string }).description).toHaveLength(256);
   });
@@ -435,7 +450,7 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(2);
+      expect(setMyCommands).toHaveBeenCalledTimes(3);
     });
 
     syncMenuCommandsWithMocks({
@@ -447,7 +462,9 @@ describe("bot-native-command-menu", () => {
       botIdentity: "bot-a",
     });
 
-    expect(setMyCommands).toHaveBeenCalledTimes(2);
+    // setMyCommands should NOT have been called again for any scope.
+    expect(setMyCommands).toHaveBeenCalledTimes(3);
+    expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync");
   });
 
   it("does not reuse cached hash across different bot identities", async () => {
@@ -465,7 +482,7 @@ describe("bot-native-command-menu", () => {
       accountId,
       botIdentity: "token-bot-a",
     });
-    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(3));
 
     syncMenuCommandsWithMocks({
       deleteMyCommands,
@@ -475,7 +492,7 @@ describe("bot-native-command-menu", () => {
       accountId,
       botIdentity: "token-bot-b",
     });
-    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
   });
 
   it("does not cache empty-menu hash when deleteMyCommands fails", async () => {
@@ -495,7 +512,7 @@ describe("bot-native-command-menu", () => {
       accountId,
       botIdentity: "bot-a",
     });
-    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(3));
 
     syncMenuCommandsWithMocks({
       deleteMyCommands,
@@ -505,7 +522,44 @@ describe("bot-native-command-menu", () => {
       accountId,
       botIdentity: "bot-a",
     });
-    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(6));
+  });
+
+  it("deletes commands in all scopes and does not set commands for an empty menu", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    const runtimeLog = vi.fn();
+    const accountId = `test-empty-delete-success-${Date.now()}`;
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() => expect(deleteMyCommands).toHaveBeenCalledTimes(3));
+
+    syncMenuCommandsWithMocks({
+      deleteMyCommands,
+      setMyCommands,
+      runtimeLog,
+      commandsToRegister: [],
+      accountId,
+      botIdentity: "bot-a",
+    });
+
+    await vi.waitFor(() =>
+      expect(runtimeLog).toHaveBeenCalledWith("telegram: command menu unchanged; skipping sync"),
+    );
+
+    expect(deleteMyCommands).toHaveBeenCalledWith();
+    expect(deleteMyCommands).toHaveBeenCalledWith({ scope: { type: "all_private_chats" } });
+    expect(deleteMyCommands).toHaveBeenCalledWith({ scope: { type: "all_group_chats" } });
+    expect(deleteMyCommands).toHaveBeenCalledTimes(3);
+    expect(setMyCommands).not.toHaveBeenCalled();
   });
 
   it("retries with fewer commands on BOT_COMMANDS_TOO_MUCH", async () => {
@@ -531,15 +585,20 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(3);
+      expect(setMyCommands).toHaveBeenCalledTimes(4);
     });
     const firstPayload = setMyCommandsPayload(setMyCommands, 0);
     const secondPayload = setMyCommandsPayload(setMyCommands, 1);
     const thirdPayload = setMyCommandsPayload(setMyCommands, 2);
+    const fourthPayload = setMyCommandsPayload(setMyCommands, 3);
     expect(firstPayload).toHaveLength(100);
     expect(secondPayload).toHaveLength(80);
     expect(thirdPayload).toHaveLength(80);
+    expect(fourthPayload).toHaveLength(80);
     expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
+      scope: { type: "all_private_chats" },
+    });
+    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({
       scope: { type: "all_group_chats" },
     });
     expect(runtimeLog).toHaveBeenCalledWith(
@@ -571,12 +630,30 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(5);
+      expect(setMyCommands).toHaveBeenCalledTimes(7);
     });
     expect(setMyCommandsPayload(setMyCommands, 0)).toHaveLength(100);
     expect(setMyCommandsPayload(setMyCommands, 1)).toHaveLength(80);
+    expect(setMyCommandsPayload(setMyCommands, 2)).toHaveLength(80);
     expect(setMyCommandsPayload(setMyCommands, 3)).toHaveLength(80);
-    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({ language_code: "ko" });
+    expect(setMyCommandsPayload(setMyCommands, 4)).toHaveLength(80);
+    expect(setMyCommandsPayload(setMyCommands, 5)).toHaveLength(80);
+    expect(setMyCommandsPayload(setMyCommands, 6)).toHaveLength(80);
+    expect(setMyCommandsCall(setMyCommands, 2).at(1)).toEqual({
+      scope: { type: "all_private_chats" },
+    });
+    expect(setMyCommandsCall(setMyCommands, 3).at(1)).toEqual({
+      scope: { type: "all_group_chats" },
+    });
+    expect(setMyCommandsCall(setMyCommands, 4).at(1)).toEqual({ language_code: "ko" });
+    expect(setMyCommandsCall(setMyCommands, 5).at(1)).toEqual({
+      scope: { type: "all_private_chats" },
+      language_code: "ko",
+    });
+    expect(setMyCommandsCall(setMyCommands, 6).at(1)).toEqual({
+      scope: { type: "all_group_chats" },
+      language_code: "ko",
+    });
   });
 
   it.each([
@@ -600,7 +677,7 @@ describe("bot-native-command-menu", () => {
     });
 
     await vi.waitFor(() => {
-      expect(setMyCommands).toHaveBeenCalledTimes(3);
+      expect(setMyCommands).toHaveBeenCalledTimes(4);
     });
     expect(runtimeLog).toHaveBeenCalledWith(
       "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
