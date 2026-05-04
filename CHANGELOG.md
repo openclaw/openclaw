@@ -42,16 +42,29 @@ Docs: https://docs.openclaw.ai
 - Discord/status: add degraded Discord transport and gateway event-loop starvation signals to `openclaw channels status`, `openclaw status --deep`, and fetch-timeout logs so intermittent socket resets do not look like a healthy running channel. (#76327) Thanks @joshavant.
 - Providers/OpenRouter: add opt-in response caching params that send OpenRouter's `X-OpenRouter-Cache`, `X-OpenRouter-Cache-TTL`, and cache-clear headers only on verified OpenRouter routes. Thanks @vincentkoc.
 - Providers/OpenRouter: expand app-attribution categories so OpenClaw advertises coding, programming, writing, chat, and personal-agent usage on verified OpenRouter routes. Thanks @vincentkoc.
+- Plugins/update: make package upgrades swap pnpm/npm-prefix installs cleanly, keep legacy plugin install runtime chunks working, and on the beta channel fall back default-line npm plugins to default/latest when plugin beta releases are missing or fail install validation. Thanks @vincentkoc and @joshavant.
+- Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
+- Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
+- Agents/sandbox: store sandbox container and browser registry entries as per-runtime shard files, reducing unrelated session lock contention while `openclaw doctor --fix` migrates legacy monolithic registry files. (#74831) Thanks @luckylhb90.
+- Plugins/ClawHub: annotate 429 errors from ClawHub with the reset window from `RateLimit-Reset`/`Retry-After` and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see when downloads will recover and how to lift the cap. Thanks @romneyda.
 - Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 - Plugin SDK: add plugin-owned `SessionEntry` slot projection and scoped trusted-policy session extension reads. (#75609; replaces part of #73384/#74483) Thanks @100yenadmin.
 
 ### Fixes
 
+- CLI/update: disable and skip plugins that fail package-update plugin sync, so a broken npm/ClawHub/git/marketplace plugin cannot turn a successful OpenClaw package update into a failed update result. Thanks @vincentkoc.
+- Diagnostics: grant the internal diagnostics event bus to official installed diagnostics exporter plugins, so npm-installed `@openclaw/diagnostics-prometheus` can emit metrics without broadening the capability to arbitrary global plugins. Fixes #76628. Thanks @RayWoo.
+- Browser: enforce strict SSRF current-URL checks before existing-session screenshots, matching existing-session snapshot handling. Thanks @vincentkoc.
+- Active Memory: give timeout partial transcript recovery enough abort-settle headroom so temporary recall summaries are returned before cleanup. Thanks @vincentkoc.
+- Gateway/chat: clear the active reply-run guard before draining queued same-session follow-up turns, so sequential `chat.send` calls no longer trip `ReplyRunAlreadyActiveError` every other request. Fixes #77485. Thanks @bws14email.
 - Doctor/config: restore legacy group chat config migrations for `routing.allowFrom`, `routing.groupChat.*`, and `channels.telegram.requireMention` so upgrades keep WhatsApp, Telegram, and iMessage group mention gates and history settings instead of leaving configs invalid or silently blocked. Thanks @scoootscooob.
+- CLI/update: make package-update follow-up processes write completion results and exit explicitly, so Windows packaged upgrades do not hang after the new package finishes post-core plugin work. Thanks @vincentkoc.
+- Release validation: skip Slack live QA unless Slack credentials are explicitly configured, so release gates can keep proving non-Slack surfaces while Slack is still local and credential-gated. Thanks @vincentkoc.
 - fix(gateway): clamp unbound websocket auth scopes [AI]. (#77413) Thanks @pgondhi987.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - Active Memory: send a bounded latest-message search query to the recall worker so channel/runtime metadata does not become the memory search string. Fixes #65309. Thanks @joeykrug, @westley3601, @pimenov, and @tasi333.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
+- Providers/OpenRouter: keep DeepSeek V4 `reasoning_effort` on OpenRouter-supported values, mapping stale `max` thinking overrides to `xhigh` so `openrouter/deepseek/deepseek-v4-pro` no longer fails with OpenRouter's invalid-effort 400. Fixes #77350. (#77423) Thanks @krllagent, @mushuiyu886, and @sallyom.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Claude CLI: honor non-off `/think` levels by passing Claude Code's session-scoped `--effort` flag through the CLI backend seam, so chat bridges no longer show an inert thinking control. Fixes #77303. Thanks @Petr1t.
 - Agents/subagents: refresh deferred final-delivery payloads when same-session completion output changes, so retried parent notifications use the final child summary instead of stale progress text. Thanks @vincentkoc.
@@ -64,6 +77,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/status: label Linux managed gateway services as `systemd user`, making status output explicit about the user-service scope instead of implying a system-level unit. Thanks @vincentkoc.
 - Plugins/install: remove the previous managed plugin directory when a reinstall switches sources, so stale ClawHub and npm copies no longer keep duplicate plugin ids in discovery after the new install wins. Thanks @vincentkoc.
 - Plugins/install: let official plugin reinstall recovery repair source-only installed runtime shadows, so `openclaw plugins install npm:@openclaw/discord --force` can replace the bad package instead of stopping at stale config validation. Thanks @vincentkoc.
+- CLI/update: stage pnpm-detected npm-layout global package updates through a clean npm prefix swap, keep plugin install runtime imports behind a stable alias, and ship legacy install-runtime aliases back to `2026.3.22`, preventing stale overlay chunks from breaking plugin post-update sync. Thanks @vincentkoc.
 - Plugins/commands: allow the official ClawHub Codex plugin package to keep reserved `/codex` command ownership, matching the existing npm-managed Codex package behavior. Thanks @vincentkoc.
 - Auth/OpenAI Codex: rewrite invalidated per-agent Codex auth-order and session profile overrides toward a healthy relogin profile, so revoked OAuth accounts do not stay pinned after signing in again. Thanks @BunsDev.
 - Plugins/commands: scope QQBot framework slash commands to the QQBot channel so `/bot-*` command handlers and native specs do not leak onto unrelated chat surfaces. Thanks @vincentkoc.
@@ -72,6 +86,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/discovery: ignore managed npm plugin packages that only expose TypeScript source entries without compiled runtime output, so stale/broken installs cannot hide a working bundled or reinstallable channel plugin during setup. Thanks @vincentkoc.
 - CLI/update: treat OpenClaw stable correction versions like `2026.5.3-1` as newer than their base stable release, so package updates no longer ask for downgrade confirmation. Thanks @vincentkoc.
 - Plugins/install: suppress dangerous-pattern scanner warnings for trusted official OpenClaw npm installs, so installing `@openclaw/discord` no longer prints credential-harvesting warnings for the official package. Thanks @vincentkoc.
+- Plugins/commands: suppress dangerous-pattern scanner warnings for trusted catalog npm installs from owner-gated `/plugins install` commands, so chat-driven installs match the CLI install trust path. Thanks @vincentkoc.
 - Plugins/release: make the published npm runtime verifier reject blank `openclaw.runtimeExtensions` entries instead of treating them as absent and passing via inferred outputs. Thanks @vincentkoc.
 - Plugins/security: ignore inline and block comments when matching source-rule context in plugin install scans, so comment-only `fetch`/`post` references near environment defaults do not block clean plugins. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed install records for bundled plugins even when the bundled plugin is not explicitly configured, so doctor cleanup cannot leave orphaned install metadata behind. Thanks @vincentkoc.
@@ -213,6 +228,8 @@ Docs: https://docs.openclaw.ai
 - QQBot: preserve the framework command authorization decision when converting framework command contexts into engine slash command contexts, so downstream slash handlers see `commandAuthorized` matching the channel's resolved `isAuthorizedSender` instead of a hardcoded `true`. (#77453) Thanks @drobison00.
 - Security/Windows: block `LOCALAPPDATA` from workspace `.env` and resolve Windows update-flow portable Git path prepends from the trusted process-local `LOCALAPPDATA` only, so workspace-supplied values cannot redirect `git` discovery during `openclaw update`. (#77470) Thanks @drobison00.
 - Browser/SSRF: enforce the existing current-tab URL navigation policy before tab-scoped debug, export, and read routes (console, page errors, network requests, trace start/stop, response body, screenshot, snapshot, storage, etc.) collect from an already-selected tab, so blocked tabs return a policy error instead of being read first and redacted only at response time. (#75731) Thanks @eleqtrizit.
+- Security/Windows: route the `.cmd`/`.bat` process wrapper through the shared Windows install-root resolver instead of `process.env.ComSpec`, so workspace dotenv-blocked `SystemRoot`/`WINDIR` overrides and unsafe values like UNC paths or path-lists cannot redirect `cmd.exe` selection on Windows. (#77472) Thanks @drobison00.
+- Agents/bootstrap: honor `BOOTSTRAP.md` content injected by `agent:bootstrap` hooks when deciding whether bootstrap is pending, so hook-provided required setup instructions are included in the system prompt. (#77501) Thanks @ificator.
 
 ## 2026.5.3-1
 
@@ -556,7 +573,6 @@ Docs: https://docs.openclaw.ai
 - Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)
 - Crabbox/scripts: print the selected Crabbox binary, version, and supported providers before `pnpm crabbox:*` commands, and reject stale binaries that lack `blacksmith-testbox` provider support.
 - Agents/Codex: add committed happy-path prompt snapshots for Codex/message-tool Telegram direct, Discord group, and heartbeat turns so prompt drift can be reviewed. Thanks @pashpashpash.
-- OpenAI Codex: format `/codex status` rate-limit display with actual usage percentages and reset timestamps from `GetAccountRateLimitsResponse`, showing each window as `5h: 23% used · resets May 7` instead of `none returned` or `Primary/Secondary`. Thanks @MatthewSchleder.
 
 ### Fixes
 
