@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
+import {
+  collectDurableServiceEnvVars,
+  readStateDirDotEnvVars,
+} from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
@@ -392,6 +395,35 @@ function resolveGatewayInstallWorkingDirectory(params: {
   return resolveGatewayStateDir(params.env);
 }
 
+function retainLaunchAgentManagedServiceEnvValues(params: {
+  environment: Record<string, string | undefined>;
+  durableEnvironment: Record<string, string | undefined>;
+  managedServiceEnvKeys: string | undefined;
+  stateDirDotEnvEnvironment: Record<string, string | undefined>;
+  serviceEnvironment: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+}): void {
+  if (params.platform !== "darwin" || !params.serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim()) {
+    return;
+  }
+  const managedKeys = readManagedServiceEnvKeysFromEnvironment({
+    OPENCLAW_SERVICE_MANAGED_ENV_KEYS: params.managedServiceEnvKeys,
+  });
+  if (managedKeys.size === 0) {
+    return;
+  }
+  for (const [rawKey, value] of Object.entries(params.stateDirDotEnvEnvironment)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+    if (!key || !managedKeys.has(key) || typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    if (params.durableEnvironment[rawKey] !== value) {
+      continue;
+    }
+    params.environment[rawKey] = value;
+  }
+}
+
 async function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
@@ -408,6 +440,7 @@ async function buildGatewayInstallEnvironment(params: {
   environment: Record<string, string | undefined>;
   environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 }> {
+  const stateDirDotEnvEnvironment = readStateDirDotEnvVars(params.env);
   const durableEnvironment = collectDurableServiceEnvVars({
     env: params.env,
     config: params.config,
@@ -463,6 +496,14 @@ async function buildGatewayInstallEnvironment(params: {
     omitKeys: Object.keys(params.serviceEnvironment),
   });
   writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
+  retainLaunchAgentManagedServiceEnvValues({
+    environment,
+    durableEnvironment,
+    managedServiceEnvKeys,
+    stateDirDotEnvEnvironment,
+    serviceEnvironment: params.serviceEnvironment,
+    platform: params.platform,
+  });
   if (environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
     environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
   }

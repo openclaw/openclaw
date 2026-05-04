@@ -38,6 +38,10 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Channels/WhatsApp: allow `@whiskeysockets/libsignal-node` in `onlyBuiltDependencies` so pnpm v9+ `blockExoticSubdeps` no longer rejects the baileys git-tarball subdep and silences all inbound agent replies. Fixes #76539. Thanks @ottodeng and @vincentkoc.
+- Gateway/install: keep `.env`-managed values in the macOS LaunchAgent env file while still tracking `OPENCLAW_SERVICE_MANAGED_ENV_KEYS`, so regenerated services do not boot without managed auth/provider keys. Fixes #75374.
+- Gateway/restart: verify listener PIDs by argv when `lsof` reports only the Node process name, so stale gateway cleanup can find macOS `cnode` listeners. Fixes #70664.
+- Gateway/logging: expand leading `~` in `logging.file` before creating the file logger, preventing startup crash loops for home-relative log paths. Fixes #73587.
+- Channels/CLI: keep `openclaw channels list --json` usable when provider usage fetching fails, and report per-provider usage errors without aborting the channel list. Refs #67595.
 - Gateway/systemd: preserve operator-added secrets in the Gateway env file across re-stage while clearing OpenClaw-managed keys (such as `OPENCLAW_GATEWAY_TOKEN`) so a fresh staging value is never shadowed by a stale env-file copy; operator secrets are also retained when the state-dir `.env` is empty. Fixes #76860. Thanks @hclsys.
 - Plugin updates: do not short-circuit trusted official npm updates as unchanged when the default/latest spec still resolves to an already-installed prerelease that the installer should replace with a stable fallback. Thanks @vincentkoc.
 - Plugin tools: keep auth-unavailable optional tools hidden even when another default tool from the same plugin is available and `tools.alsoAllow` names the optional tool. Thanks @vincentkoc.

@@ -597,6 +597,67 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("retains managed .env values for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv("TAVILY_API_KEY=dotenv-tavily\nOPENROUTER_API_KEY=or-key\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+    });
+
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENROUTER_API_KEY).toBe("or-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "OPENROUTER_API_KEY,TAVILY_API_KEY",
+    );
+  });
+
+  it("does not retain config env values for macOS LaunchAgent env files", async () => {
+    await writeStateDirDotEnv("OPENROUTER_API_KEY=or-dotenv\nTAVILY_API_KEY=dotenv-tavily\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            BRAVE_API_KEY: "brave-config-key",
+            OPENROUTER_API_KEY: "or-config-key",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.BRAVE_API_KEY).toBeUndefined();
+    expect(plan.environment.OPENROUTER_API_KEY).toBeUndefined();
+    expect(plan.environment.TAVILY_API_KEY).toBe("dotenv-tavily");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "BRAVE_API_KEY,OPENROUTER_API_KEY,TAVILY_API_KEY",
+    );
+  });
+
   it("works when .env file does not exist", async () => {
     mockNodeGatewayPlanFixture({ serviceEnvironment: { OPENCLAW_PORT: "3000" } });
 
