@@ -49,27 +49,32 @@ export function createDiscordDnsLookup(): LookupFunction {
       return dns.lookup(hostname, lookupOptions, callback as never);
     }
 
-    dns.lookup(
-      hostname,
-      { ...lookupOptions, all: true },
-      (err, addresses) => {
-        if (err) {
-          callback(err, "", 4);
-          return;
-        }
-        if (!Array.isArray(addresses)) {
-          callback(new Error("Expected all lookup addresses to be an array"), "", 4);
-          return;
-        }
+    dns.lookup(hostname, { ...lookupOptions, all: true }, (err, addresses) => {
+      if (err) {
+        callback(err, "", 4);
+        return;
+      }
+      if (!Array.isArray(addresses)) {
+        callback(new Error("Expected all lookup addresses to be an array"), "", 4);
+        return;
+      }
 
-        const reordered = reorderLookupAddresses(addresses);
-        const first = reordered[0];
-        if (!first) {
-          callback(new Error("No Discord DNS addresses resolved"), "", 4);
-          return;
-        }
-        callback(null, first.address, first.family);
-      },
-    );
+      const reordered = reorderLookupAddresses(addresses);
+      const wantsAll = typeof lookupOptions === "object" && lookupOptions.all === true;
+      if (wantsAll) {
+        (callback as (err: NodeJS.ErrnoException | null, addresses: dns.LookupAddress[]) => void)(
+          null,
+          reordered,
+        );
+        return;
+      }
+
+      const first = reordered[0];
+      if (!first) {
+        callback(new Error("No Discord DNS addresses resolved"), "", 4);
+        return;
+      }
+      callback(null, first.address, first.family);
+    });
   };
 }
