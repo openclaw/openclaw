@@ -39,6 +39,7 @@ import {
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
+  resolveDashboardHeaderContext,
   resolveSessionOptionGroups,
   resolveSessionDisplayName,
   switchChatSession,
@@ -449,6 +450,50 @@ describe("resolveSessionDisplayName", () => {
         row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+describe("resolveDashboardHeaderContext", () => {
+  it("uses the active agent identity name", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:deep-chat:imessage:sample-thread",
+        agentsList: {
+          defaultId: "deep-chat",
+          mainKey: "main",
+          scope: "user",
+          agents: [{ id: "deep-chat", identity: { name: "Deep Chat" } }],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Deep Chat" });
+  });
+
+  it("falls back to the configured agent name", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:beta:main",
+        agentsList: {
+          defaultId: "beta",
+          mainKey: "main",
+          scope: "user",
+          agents: [{ id: "beta", name: "Coding" }],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Coding" });
+  });
+
+  it("falls back to the agent id", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:beta:subagent:maintainer-v2",
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "user",
+          agents: [],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "beta" });
   });
 });
 
