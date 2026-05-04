@@ -27,6 +27,13 @@ function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
 }
 
+function isCommandCarrierExecutable(executable: string, options?: { includeExec?: boolean }) {
+  return (
+    COMMAND_CARRIER_EXECUTABLES.has(executable) ||
+    Boolean(options?.includeExec && executable === "exec")
+  );
+}
+
 export function buildCommandPayloadCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
@@ -87,10 +94,10 @@ function detectCarrierInlineEvalArgvInternal(
   }
 
   const executable = normalizeExecutableToken(executableArgv[0] ?? "");
-  if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(executableArgv);
+  const carriedArgv = resolveCarrierCommandArgv(executableArgv, 0, { includeExec: true });
   if (!carriedArgv) {
     return null;
   }
@@ -179,10 +186,10 @@ export function detectShellWrapperThroughCarrierArgv(
   shellCommandFlag: (argv: string[], startIndex: number) => unknown,
 ): string | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv);
+  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
   if (!carriedArgv) {
     return null;
   }
@@ -194,10 +201,10 @@ export function detectShellWrapperThroughCarrierArgv(
 
 export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuiltinHit | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv);
+  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
   if (!carriedArgv) {
     return null;
   }

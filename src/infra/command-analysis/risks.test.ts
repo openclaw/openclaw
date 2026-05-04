@@ -57,6 +57,10 @@ describe("command-analysis risks", () => {
     expect(detectInlineEvalArgv(["env", "-P", "/usr/bin", "python3", "-c", "print(1)"])?.flag).toBe(
       "-c",
     );
+    expect(detectInlineEvalArgv(["exec", "python3", "-c", "print(1)"])?.flag).toBe("-c");
+    expect(detectInlineEvalArgv(["exec", "-a", "py", "python3", "-c", "print(1)"])?.flag).toBe(
+      "-c",
+    );
     expect(detectInlineEvalArgv(["command", "node", "--eval", "1"])?.flag).toBe("--eval");
     expect(detectInlineEvalArgv(["env", "-S", 'python3 -c "print(1)"'])?.flag).toBe("-c");
     expect(detectInlineEvalArgv(["python3", "script.py"])).toBeNull();
@@ -111,6 +115,12 @@ describe("command-analysis risks", () => {
     ).toBe("sudo");
     expect(
       detectShellWrapperThroughCarrierArgv(
+        ["exec", "bash", "-lc", "id"],
+        (argv, startIndex) => argv[startIndex] === "-lc",
+      ),
+    ).toBe("exec");
+    expect(
+      detectShellWrapperThroughCarrierArgv(
         ["sudo", "echo", "bash", "-lc", "id"],
         (argv, startIndex) => argv[startIndex] === "-lc",
       ),
@@ -122,6 +132,13 @@ describe("command-analysis risks", () => {
       kind: "eval",
     });
     expect(detectCarriedShellBuiltinArgv(["command", "source", "./env.sh"])).toEqual({
+      kind: "source",
+      command: "source",
+    });
+    expect(detectCarriedShellBuiltinArgv(["exec", "eval", "echo hi"])).toEqual({
+      kind: "eval",
+    });
+    expect(detectCarriedShellBuiltinArgv(["exec", "source", "./env.sh"])).toEqual({
       kind: "source",
       command: "source",
     });
