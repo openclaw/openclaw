@@ -171,6 +171,8 @@ const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
+const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
+  "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -769,6 +771,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryAttempts = 0;
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
+      let compactionContinuationRetryAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -781,6 +784,7 @@ export async function runEmbeddedPiAgent(
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
+      let compactionContinuationRetryInstruction: string | null = null;
       let nextAttemptPromptOverride: string | null = null;
       const ackExecutionFastPathInstruction = resolveAckExecutionFastPathInstruction({
         provider,
@@ -801,6 +805,22 @@ export async function runEmbeddedPiAgent(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
+      let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
+      // Pi owns JSONL persistence; this marker only lets the outer retry avoid
+      // replaying the same inbound channel message after overflow compaction.
+      let lastPersistedCurrentMessageId: string | number | undefined;
+      const onUserMessagePersisted: RunEmbeddedPiAgentParams["onUserMessagePersisted"] = (
+        message,
+      ) => {
+        if (params.currentMessageId !== undefined) {
+          lastPersistedCurrentMessageId = params.currentMessageId;
+        }
+        params.onUserMessagePersisted?.(message);
+      };
+      const continueFromCurrentTranscript = () => {
+        nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+        suppressNextUserMessagePersistence = true;
+      };
       const maybeEscalateRateLimitProfileFallback = (params: {
         failoverProvider: string;
         failoverModel: string;
@@ -896,6 +916,24 @@ export async function runEmbeddedPiAgent(
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
           }
+        };
+        const onCompactionHookMessages = async (payload: {
+          phase: "before" | "after";
+          messages: string[];
+        }) => {
+          const messages = payload.messages.filter((message) => message.trim().length > 0);
+          if (messages.length === 0) {
+            return;
+          }
+          await params.onAgentEvent?.({
+            stream: "compaction",
+            data: {
+              phase: payload.phase === "before" ? "start" : "end",
+              ...(payload.phase === "after" ? { completed: true } : {}),
+              messages,
+            },
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          });
         };
         // When the engine owns compaction, compactEmbeddedPiSessionDirect is
         // bypassed. Fire lifecycle hooks here so recovery paths still notify
@@ -996,6 +1034,7 @@ export async function runEmbeddedPiAgent(
             planningOnlyRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
+            compactionContinuationRetryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
@@ -1070,6 +1109,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
+            currentTurnContext: params.currentTurnContext,
             images: params.images,
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
@@ -1104,6 +1144,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            toolProgressDetail: params.toolProgressDetail,
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
@@ -1138,11 +1179,15 @@ export async function runEmbeddedPiAgent(
             ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
+            enableHeartbeatTool: params.enableHeartbeatTool,
+            forceHeartbeatTool: params.forceHeartbeatTool,
             requireExplicitMessageTarget: params.requireExplicitMessageTarget,
             internalEvents: params.internalEvents,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
+            suppressNextUserMessagePersistence,
+            onUserMessagePersisted,
           });
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
@@ -1286,7 +1331,7 @@ export async function runEmbeddedPiAgent(
                 (retryingFromTranscript ? "retrying from current transcript" : "retrying prompt"),
             );
             if (retryingFromTranscript) {
-              nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+              continueFromCurrentTranscript();
             }
             continue;
           }
@@ -1364,6 +1409,7 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "timeout_recovery",
@@ -1470,7 +1516,7 @@ export async function runEmbeddedPiAgent(
                 `context overflow persisted after in-attempt compaction (attempt ${overflowCompactionAttempts}/${MAX_OVERFLOW_COMPACTION_ATTEMPTS}); retrying prompt without additional compaction for ${provider}/${modelId}`,
               );
               if (preflightRecovery?.source === "mid-turn") {
-                nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                continueFromCurrentTranscript();
               }
               continue;
             }
@@ -1520,6 +1566,7 @@ export async function runEmbeddedPiAgent(
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
                   }),
+                  onCompactionHookMessages,
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
@@ -1602,7 +1649,16 @@ export async function runEmbeddedPiAgent(
                 autoCompactionCount += 1;
                 log.info(`auto-compaction succeeded for ${provider}/${modelId}; retrying prompt`);
                 if (preflightRecovery?.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                } else if (
+                  params.currentMessageId !== undefined &&
+                  params.currentMessageId === lastPersistedCurrentMessageId
+                ) {
+                  // The first attempt reached Pi far enough to persist this user turn.
+                  // Retrying the original prompt would replay it, so resume from the
+                  // compacted transcript and suppress the next user append.
                   nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                  suppressNextUserMessagePersistence = true;
                 }
                 continue;
               }
@@ -1644,7 +1700,7 @@ export async function runEmbeddedPiAgent(
                     `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
                   );
                   if (preflightRecovery?.source === "mid-turn") {
-                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    continueFromCurrentTranscript();
                   }
                   continue;
                 }
@@ -2286,7 +2342,7 @@ export async function runEmbeddedPiAgent(
                   source: "planning_only_retry",
                 },
               });
-              params.onAgentEvent?.({
+              void params.onAgentEvent?.({
                 stream: "plan",
                 data: {
                   phase: "update",
@@ -2347,6 +2403,29 @@ export async function runEmbeddedPiAgent(
                 timedOut,
                 attempt,
               });
+          if (
+            !emptyAssistantReplyIsSilent &&
+            attemptCompactionCount > 0 &&
+            payloadCount === 0 &&
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !attempt.didSendDeterministicApprovalPrompt &&
+            !attempt.lastToolError &&
+            !resolveAttemptReplayMetadata(attempt).hadPotentialSideEffects &&
+            compactionContinuationRetryAttempts < 1
+          ) {
+            compactionContinuationRetryAttempts += 1;
+            compactionContinuationRetryInstruction = COMPACTION_CONTINUATION_RETRY_INSTRUCTION;
+            log.warn(
+              `compaction interrupted visible final answer: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `compactions=${attemptCompactionCount} — retrying ${compactionContinuationRetryAttempts}/1 with compacted-transcript continuation`,
+            );
+            continue;
+          }
+          compactionContinuationRetryInstruction = null;
           if (reasoningOnlyRetriesExhausted && !finalAssistantVisibleText) {
             log.warn(
               `reasoning-only retries exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +

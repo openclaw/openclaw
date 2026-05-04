@@ -369,6 +369,13 @@ function formatRatioStats(stats: SummaryStats | null): string {
   return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
 }
 
+function getStartupTraceStat(
+  startupTrace: Record<string, SummaryStats>,
+  key: string,
+): SummaryStats | null {
+  return startupTrace[key] ?? null;
+}
+
 async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -571,7 +578,13 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     }
     const key = metricMatch[1];
     const value = Number(metricMatch[2]);
-    if (!Number.isFinite(value) || (key !== "eventLoopMax" && !key.endsWith("Ms"))) {
+    if (
+      !Number.isFinite(value) ||
+      (key !== "eventLoopMax" &&
+        !key.endsWith("Ms") &&
+        !key.endsWith("Mb") &&
+        !key.endsWith("Count"))
+    ) {
       continue;
     }
     metrics.push({ key, value });
@@ -806,12 +819,14 @@ async function runCase(options: {
     });
     if (index >= options.warmup) {
       samples.push(sample);
+      const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} run ${samples.length}/${options.runs}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} readyLog=${formatMs(sample.readyLogMs)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
     } else {
+      const heapUsedMb = sample.startupTrace["memory.ready.heapUsedMb"] ?? null;
       console.log(
-        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)}`,
+        `[gateway-startup-bench] ${options.benchCase.id} warmup ${index + 1}/${options.warmup}: healthz=${formatMs(sample.healthz.ms)} readyz=${formatMs(sample.readyz.ms)} cpu=${formatMs(sample.cpuMs)} cpuCore=${formatRatio(sample.cpuCoreRatio)} rss=${formatMb(sample.maxRssMb)} heap=${formatMb(heapUsedMb)}`,
       );
     }
   }
@@ -827,8 +842,14 @@ function printResult(result: CaseResult): void {
   console.log(`  ready log:    ${formatStats(result.summary.readyLogMs)}`);
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
   console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
+  console.log(
+    `  ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.externalMb"))}`,
+  );
+  console.log(
+    `  post-ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.externalMb"))}`,
+  );
   const trace = Object.entries(result.summary.startupTrace)
-    .filter(([name]) => !name.endsWith(".total"))
+    .filter(([name]) => !name.endsWith(".total") && !name.startsWith("memory."))
     .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))
     .slice(0, 8);
   if (trace.length > 0) {

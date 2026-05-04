@@ -19,7 +19,7 @@ import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js"
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -176,6 +176,36 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         pluginToolAllowlist: expect.arrayContaining(["memory_search", "memory_get"]),
+      }),
+    );
+  });
+
+  it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["lobster"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolAllowlist: ["lobster", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
+      }),
+    );
+  });
+
+  it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { deny: ["pdf"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolDenylist: expect.arrayContaining(["pdf"]),
       }),
     );
   });

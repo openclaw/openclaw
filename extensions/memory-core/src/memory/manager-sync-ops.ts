@@ -160,6 +160,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly vector: {
     enabled: boolean;
     available: boolean | null;
+    semanticAvailable?: boolean;
     extensionPath?: string;
     loadError?: string;
     dims?: number;
@@ -213,6 +214,7 @@ export abstract class MemoryManagerSyncOps {
   protected resetVectorState(): void {
     this.vectorReady = null;
     this.vector.available = null;
+    this.vector.semanticAvailable = undefined;
     this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.vectorDegradedWriteWarningShown = false;
