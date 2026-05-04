@@ -698,6 +698,7 @@ export async function runCodexAppServerAttempt(
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
+  let turnCompletionIdleWatchPinnedByTerminalError = false;
   let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
@@ -834,9 +835,22 @@ export async function runCodexAppServerAttempt(
     });
     if (options?.arm) {
       turnCompletionIdleWatchArmed = true;
+      turnCompletionIdleWatchPinnedByTerminalError = false;
     }
     scheduleTurnCompletionIdleWatch();
     scheduleTurnTerminalIdleWatch();
+  };
+
+  const disarmTurnCompletionIdleWatch = () => {
+    turnCompletionIdleWatchArmed = false;
+    turnCompletionIdleWatchPinnedByTerminalError = false;
+    clearTurnCompletionIdleTimer();
+  };
+
+  const armTurnCompletionIdleWatch = (options?: { pinnedByTerminalError?: boolean }) => {
+    turnCompletionIdleWatchArmed = true;
+    turnCompletionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
+    scheduleTurnCompletionIdleWatch();
   };
 
   const emitLifecycleStart = () => {
@@ -869,12 +883,33 @@ export async function runCodexAppServerAttempt(
       pendingNotifications.push(notification);
       return;
     }
+    const isCurrentTurnNotification = isTurnNotification(
+      notification.params,
+      thread.threadId,
+      turnId,
+    );
+    if (isCurrentTurnNotification && notification.method === "error") {
+      if (isRetryableErrorNotification(notification.params)) {
+        disarmTurnCompletionIdleWatch();
+      } else {
+        armTurnCompletionIdleWatch({ pinnedByTerminalError: true });
+      }
+    } else if (
+      turnCompletionIdleWatchArmed &&
+      !turnCompletionIdleWatchPinnedByTerminalError &&
+      notification.method !== "turn/completed" &&
+      isCurrentTurnNotification
+    ) {
+      // The short completion-idle watchdog only guards the blind gap after
+      // OpenClaw hands a dynamic tool result back to Codex. Once Codex sends
+      // another turn notification, the app-server is alive again; the longer
+      // terminal watchdog still covers a truly stuck turn.
+      disarmTurnCompletionIdleWatch();
+    }
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
-    const isTurnCompletion =
-      notification.method === "turn/completed" &&
-      isTurnNotification(notification.params, thread.threadId, turnId);
+    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
     try {
       await projector.handleNotification(notification);
     } catch (error) {
@@ -1655,6 +1690,13 @@ function isTurnNotification(
   return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
 }
 
+function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  return readBoolean(value, "willRetry") === true || readBoolean(value, "will_retry") === true;
+}
+
 function isTerminalTurnStatus(status: string | undefined): boolean {
   return status === "completed" || status === "interrupted" || status === "failed";
 }
@@ -1671,6 +1713,11 @@ function readNestedTurnId(record: JsonObject): string | undefined {
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function readBoolean(record: JsonObject, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 async function readMirroredSessionHistoryMessages(
