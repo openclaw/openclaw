@@ -252,6 +252,8 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
 
     In guild channels, normal assistant final replies stay private by default. Visible Discord output must be sent explicitly with the `message` tool, so the agent can lurk by default and only post when it decides a channel reply is useful.
 
+    This means the selected model must reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check the session log for assistant text with `didSendViaMessagingTool: false`. That means the model produced a private final answer instead of calling `message(action=send)`. Switch to a stronger tool-calling model, or use the config below to restore legacy automatic final replies.
+
     <Tabs>
       <Tab title="Ask your agent">
         > "Allow my agent to respond on this server without having to be @mentioned"

@@ -777,6 +777,13 @@ Group messages default to **require mention** (metadata mention or safe regex pa
 
 Visible replies are controlled separately. Group/channel rooms default to `messages.groupChat.visibleReplies: "message_tool"`: OpenClaw still processes the turn, but normal final replies stay private and visible room output requires `message(action=send)`. Set `"automatic"` only when you want the legacy behavior where normal replies are posted back to the room. To apply the same tool-only visible-reply behavior to direct chats too, set `messages.visibleReplies: "message_tool"`; the Codex harness also uses that tool-only behavior as its unset direct-chat default.
 
+Tool-only visible replies require a model/runtime that reliably calls tools. If
+the session log shows assistant text with `didSendViaMessagingTool: false`, the
+model produced a private final answer instead of calling the message tool.
+Switch to a stronger tool-calling model for that channel, or set
+`messages.groupChat.visibleReplies: "automatic"` to restore legacy visible final
+replies.
+
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
 
 The gateway hot-reloads `messages` config after the file is saved. Restart only when file watching or config reload is disabled in the deployment.
