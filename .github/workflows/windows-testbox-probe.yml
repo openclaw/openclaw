@@ -18,6 +18,11 @@ on:
         required: false
         default: false
         type: boolean
+      import_ubuntu_wsl2:
+        description: "Import a throwaway Ubuntu WSL2 distro when none is installed"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -56,20 +61,68 @@ jobs:
 
       - name: Probe WSL2
         id: wsl2
+        env:
+          IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
+          UBUNTU_WSL_ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz
         run: |
           $ErrorActionPreference = "Continue"
           $ok = $false
+
+          function Invoke-WslText {
+            param([string[]] $Arguments)
+            $output = & wsl.exe @Arguments 2>&1
+            $code = $LASTEXITCODE
+            $text = (($output | ForEach-Object { "$_" }) -join "`n") -replace "`0", ""
+            [pscustomobject]@{ Code = $code; Text = $text }
+          }
+
+          function Get-WslDistros {
+            $result = Invoke-WslText -Arguments @("--list", "--quiet")
+            $result.Text -split "\r?\n" |
+              ForEach-Object { $_.Trim() } |
+              Where-Object {
+                $_ -and
+                $_ -notmatch "Windows Subsystem for Linux has no installed distributions" -and
+                $_ -notmatch "^Use 'wsl\.exe" -and
+                $_ -notmatch "^and 'wsl\.exe"
+              }
+          }
 
           $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
           if (-not $wsl) {
             Write-Warning "wsl.exe is not available on this runner."
           } else {
             Write-Host "wsl.exe=$($wsl.Source)"
-            wsl.exe --status
-            Write-Host "wsl_status_exit=$LASTEXITCODE"
-            wsl.exe --list --verbose
-            Write-Host "wsl_list_exit=$LASTEXITCODE"
-            wsl.exe --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+            $status = Invoke-WslText -Arguments @("--status")
+            Write-Host $status.Text
+            Write-Host "wsl_status_exit=$($status.Code)"
+
+            $list = Invoke-WslText -Arguments @("--list", "--verbose")
+            Write-Host $list.Text
+            Write-Host "wsl_list_exit=$($list.Code)"
+
+            $distros = @(Get-WslDistros)
+            if ($distros.Count -eq 0 -and $env:IMPORT_UBUNTU_WSL2 -eq "true") {
+              Write-Host "import_ubuntu_wsl2=true"
+              $wslRoot = "C:\wsl\UbuntuProbe"
+              $rootfs = "C:\wsl\ubuntu-noble-wsl.rootfs.tar.gz"
+              New-Item -ItemType Directory -Force -Path @((Split-Path -Parent $rootfs), $wslRoot) | Out-Null
+              Invoke-WebRequest -Uri $env:UBUNTU_WSL_ROOTFS_URL -OutFile $rootfs -UseBasicParsing
+              wsl.exe --import UbuntuProbe $wslRoot $rootfs --version 2
+              Write-Host "wsl_import_exit=$LASTEXITCODE"
+              $list = Invoke-WslText -Arguments @("--list", "--verbose")
+              Write-Host $list.Text
+              Write-Host "wsl_list_after_import_exit=$($list.Code)"
+              $distros = @(Get-WslDistros)
+            }
+
+            if ($distros.Count -gt 0) {
+              $distro = $distros[0]
+              Write-Host "wsl_probe_distro=$distro"
+              wsl.exe -d $distro --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+            } else {
+              wsl.exe --exec bash -lc 'set -euo pipefail; uname -a; if [ -f /etc/os-release ]; then sed -n "1,8p" /etc/os-release; fi'
+            }
             if ($LASTEXITCODE -eq 0) {
               $ok = $true
             }
