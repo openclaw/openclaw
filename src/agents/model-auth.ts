@@ -43,6 +43,7 @@ import {
   type ResolvedProviderAuth,
 } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export {
   ensureAuthProfileStore,
@@ -232,6 +233,59 @@ function resolveProviderAuthOverride(
     return auth;
   }
   return undefined;
+}
+
+function isConfigProfileModeCompatible(params: {
+  configuredMode: string | undefined;
+  storedType: string | undefined;
+}): boolean {
+  if (!params.configuredMode || !params.storedType) {
+    return true;
+  }
+  if (params.configuredMode === params.storedType) {
+    return true;
+  }
+  return params.configuredMode === "oauth" && params.storedType === "token";
+}
+
+function buildAuthProfileModeMismatchHint(params: {
+  cfg: OpenClawConfig | undefined;
+  store: AuthProfileStore;
+  provider: string;
+}): string | null {
+  const profiles = params.cfg?.auth?.profiles;
+  if (!profiles) {
+    return null;
+  }
+  const providerAuthKey = resolveProviderIdForAuth(params.provider, { config: params.cfg });
+  for (const [profileId, profileConfig] of Object.entries(profiles)) {
+    if (
+      resolveProviderIdForAuth(profileConfig.provider, { config: params.cfg }) !== providerAuthKey
+    ) {
+      continue;
+    }
+    const credential = params.store.profiles[profileId];
+    if (
+      !credential ||
+      resolveProviderIdForAuth(credential.provider, { config: params.cfg }) !== providerAuthKey
+    ) {
+      continue;
+    }
+    if (
+      isConfigProfileModeCompatible({
+        configuredMode: profileConfig.mode,
+        storedType: credential.type,
+      })
+    ) {
+      continue;
+    }
+    return [
+      `Auth profile "${profileId}" for provider "${params.provider}" exists as ${credential.type}`,
+      `but auth.profiles.${profileId}.mode is "${profileConfig.mode}", so it is skipped.`,
+      `Update that config mode to "${credential.type}" or remove the stale auth.profiles override.`,
+    ].join(" ");
+  }
+  return null;
 }
 
 function isLocalBaseUrl(baseUrl: string): boolean {
@@ -729,12 +783,20 @@ export async function resolveApiKeyForProvider(params: {
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
   const resolvedAgentDir = path.dirname(authStorePath);
+  const authProfileModeMismatchHint = buildAuthProfileModeMismatchHint({
+    cfg,
+    store,
+    provider,
+  });
   throw new Error(
     [
       `No API key found for provider "${provider}".`,
+      authProfileModeMismatchHint,
       `Auth store: ${authStorePath} (agentDir: ${resolvedAgentDir}).`,
       `Configure auth for this agent (${formatCliCommand("openclaw agents add <id>")}) or copy only portable static auth profiles from the main agentDir.`,
-    ].join(" "),
+    ]
+      .filter(Boolean)
+      .join(" "),
   );
 }
 

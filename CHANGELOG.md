@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Auth/OpenAI Codex: normalize legacy OAuth profile field aliases and explain stale auth profile mode overrides, so older Codex OAuth accounts do not get masked as missing API keys. Fixes #47964. (#75030) Thanks @liaoandi and @vincentkoc.
 - Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.
 - Dependencies: refresh runtime and provider packages including Pi 0.73.0, ACPX adapters, OpenAI, Anthropic, Slack, and TypeScript native preview, while keeping the Bedrock runtime installer override pinned below the Windows ARM Node 24 npm resolver failure.
 - Agents/performance: pass the resolved workspace through BTW, compaction, embedded-run model generation, and PDF model setup so explicit agent-dir model refreshes can reuse the current workspace-scoped plugin metadata snapshot instead of falling back to cold plugin metadata scans. (#77519, #77532)

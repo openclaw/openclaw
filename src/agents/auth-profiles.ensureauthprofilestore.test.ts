@@ -11,6 +11,7 @@ import {
   saveAuthProfileStore,
 } from "./auth-profiles/store.js";
 import type { AuthProfileCredential } from "./auth-profiles/types.js";
+import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.hoisted(() =>
   vi.fn<() => ProviderExternalAuthProfile[]>(() => []),
@@ -124,6 +125,16 @@ describe("ensureAuthProfileStore", () => {
     return profile;
   }
 
+  function expectOAuthProfile(
+    profile: AuthProfileCredential,
+  ): Extract<AuthProfileCredential, { type: "oauth" }> {
+    expect(profile.type).toBe("oauth");
+    if (profile.type !== "oauth") {
+      throw new Error(`Expected oauth profile, got ${profile.type}`);
+    }
+    return profile;
+  }
+
   it("migrates legacy auth.json and deletes it (PR #368)", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profiles-"));
     try {
@@ -163,6 +174,42 @@ describe("ensureAuthProfileStore", () => {
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("normalizes legacy OpenAI Codex OAuth field aliases on load", () => {
+    withTempAgentDir("openclaw-auth-codex-legacy-aliases-", (agentDir) => {
+      const expires = Date.now() + 60_000;
+      writeAuthProfileStore(agentDir, {
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access_token: "legacy-access-token",
+          refreshToken: "legacy-refresh-token",
+          expires_at: String(expires),
+          account_id: "acct_legacy",
+        },
+      });
+
+      const profile = expectOAuthProfile(loadAuthProfile(agentDir, "openai-codex:default"));
+
+      expect(profile.access).toBe("legacy-access-token");
+      expect(profile.refresh).toBe("legacy-refresh-token");
+      expect(profile.expires).toBe(expires);
+      expect(profile.accountId).toBe("acct_legacy");
+      expect(
+        resolvePiCredentialMapFromStore({
+          version: AUTH_STORE_VERSION,
+          profiles: { "openai-codex:default": profile },
+        }),
+      ).toEqual({
+        "openai-codex": {
+          type: "oauth",
+          access: "legacy-access-token",
+          refresh: "legacy-refresh-token",
+          expires,
+        },
+      });
+    });
   });
 
   it("merges main auth profiles into agent store and keeps agent overrides", () => {
