@@ -116,6 +116,7 @@ import {
   resolveGroupToolPolicy,
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
+import type { AnyAgentTool } from "../../pi-tools.types.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
@@ -302,6 +303,7 @@ import {
   wrapStreamFnTrimToolCallNames,
 } from "./attempt.tool-call-normalization.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt.tool-run-context.js";
+import { wrapStreamFnAbortRepeatedToolSchemaValidationFailures } from "./attempt.tool-schema-validation-guard.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { waitForCompactionRetryWithAggregateTimeout } from "./compaction-retry-aggregate-timeout.js";
 import {
@@ -1941,6 +1943,11 @@ export async function runEmbeddedAttempt(
           activeSession.agent.streamFn,
         );
       }
+
+      activeSession.agent.streamFn = wrapStreamFnAbortRepeatedToolSchemaValidationFailures(
+        activeSession.agent.streamFn,
+        allCustomTools as AnyAgentTool[],
+      );
 
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
