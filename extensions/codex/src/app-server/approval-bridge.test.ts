@@ -160,6 +160,41 @@ describe("Codex app-server approval bridge", () => {
     expect(description).toContain("Proposed network policy: allow registry.npmjs.org");
   });
 
+  it("keeps command approval permission details visible after long command previews", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-long-command-permissions", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-long-command-permissions",
+        decision: "allow-always",
+      });
+
+    await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-long-permissions",
+        command: `${"npm install ".repeat(500)} --unsafe-perm`,
+        additionalPermissions: {
+          network: { enabled: true },
+          fileSystem: {
+            write: ["/"],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("[preview truncated or unsafe content omitted]");
+    expect(description).toContain("Additional permissions: network, fileSystem");
+    expect(description).toContain("High-risk targets: network access, filesystem root");
+  });
+
   it("sanitizes command previews before forwarding approval text and events", async () => {
     const params = createParams();
     mockCallGatewayTool

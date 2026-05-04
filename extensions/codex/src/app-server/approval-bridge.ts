@@ -15,6 +15,7 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
 const PERMISSION_SAMPLE_LIMIT = 2;
 const PERMISSION_VALUE_MAX_LENGTH = 48;
+const COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH = 80;
 const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
 const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
 const ANSI_OSC_SEQUENCE_RE = new RegExp(
@@ -192,9 +193,13 @@ function buildApprovalContext(params: {
     readString(params.requestParams, "itemId") ??
     readString(params.requestParams, "callId") ??
     readString(params.requestParams, "approvalId");
+  const commandDetailLines =
+    params.method === "item/commandExecution/requestApproval"
+      ? describeCommandApprovalDetails(params.requestParams)
+      : [];
   const commandPreview = sanitizeApprovalPreview(
     readDisplayCommandPreview(params.requestParams),
-    180,
+    commandDetailLines.length > 0 ? COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH : 180,
   );
   const reasonPreview = sanitizeApprovalPreview(
     readStringPreview(params.requestParams, "reason"),
@@ -206,10 +211,6 @@ function buildApprovalContext(params: {
   const permissionLines =
     params.method === "item/permissions/requestApproval"
       ? describeRequestedPermissions(params.requestParams)
-      : [];
-  const commandDetailLines =
-    params.method === "item/commandExecution/requestApproval"
-      ? describeCommandApprovalDetails(params.requestParams)
       : [];
   const title =
     kind === "exec"
