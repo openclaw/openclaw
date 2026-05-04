@@ -379,7 +379,10 @@ describe("matrix live qa scenarios", () => {
         );
         const payload =
           typeof params === "object" && params !== null ? (params as { id?: unknown }) : undefined;
-        approvalId = String(payload?.id ?? "approval-missing");
+        if (typeof payload?.id !== "string") {
+          throw new Error("approval request missing id");
+        }
+        approvalId = payload.id;
         return { id: approvalId, status: "accepted" };
       }
       if (method === "exec.approval.waitDecision") {
