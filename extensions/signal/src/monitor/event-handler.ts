@@ -123,6 +123,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    replyToId?: string;
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
@@ -217,6 +218,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
+      ReplyToId: entry.replyToId,
       ReplyToBody: entry.replyToBody,
       ReplyToSender: entry.replyToSender,
       ReplyToIsQuote: entry.replyToIsQuote,
@@ -400,7 +402,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       const combinedText = entries
         .map((entry) => entry.bodyText)
         .filter(Boolean)
-        .join("\\n");
+        .join("\n");
       if (!combinedText.trim()) {
         return;
       }
@@ -411,6 +413,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaType: undefined,
         mediaPaths: undefined,
         mediaTypes: undefined,
+        replyToId: undefined,
+        replyToBody: undefined,
+        replyToSender: undefined,
+        replyToIsQuote: undefined,
       });
     },
     onError: (err) => {
@@ -572,14 +578,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
     });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow,
-      });
+    const {
+      contextVisibilityMode,
+      quoteSenderAllowed,
+      visibleQuoteId,
+      visibleQuoteText,
+      visibleQuoteSender,
+      visibleQuoteIsQuote,
+    } = resolveSignalQuoteContext({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow,
+    });
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
@@ -878,6 +890,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -896,9 +909,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      replyToId: visibleQuoteId,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
-      replyToIsQuote: visibleQuoteText ? true : undefined,
+      replyToIsQuote: visibleQuoteIsQuote,
     });
   };
 }
