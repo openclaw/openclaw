@@ -5552,7 +5552,18 @@ td.data-table-key-col {
 .ov-access-grid {
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+}
+
+.ov-access-grid .field {
+  min-width: 0;
+}
+
+.ov-access-grid .field input,
+.ov-access-grid .field select {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
 }
 
 .ov-access-grid__full {

@@ -34,3 +34,17 @@ describe("sessions filter styles", () => {
     expect(css).toContain(".sessions-filter-bar {\n    flex-direction: column;");
   });
 });
+
+describe("overview access grid styles", () => {
+  it("keeps access fields and native controls within the card", () => {
+    const css = readComponentsCss();
+
+    expect(css).toContain(
+      "grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));",
+    );
+    expect(css).toContain(".ov-access-grid .field {\n  min-width: 0;");
+    expect(css).toContain(".ov-access-grid .field input,\n.ov-access-grid .field select {");
+    expect(css).toContain("box-sizing: border-box;");
+    expect(css).toContain("width: 100%;");
+  });
+});
