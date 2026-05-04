@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentskills.io/schemas/skill.frontmatter.schema.json",
+  "title": "AgentSkills SKILL.md Frontmatter",
+  "description": "Schema for SKILL.md YAML frontmatter per AgentSkills spec (https://agentskills.io/specification)",
+  "type": "object",
+  "required": ["name", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Skill name (lowercase, hyphens only, must match directory name)"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "description": "Brief description of what the skill does (max 1024 chars)"
+    },
+    "license": {
+      "type": "string",
+      "description": "License identifier (e.g., MIT, Proprietary, Apache-2.0)"
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "author": {
+          "type": "string",
+          "description": "Author or organization name"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$",
+          "description": "Semantic version (e.g., 1.0, 1.0.0)"
+        },
+        "source": {
+          "type": "string",
+          "description": "Source repository (e.g., org/repo)"
+        },
+        "homepage": {
+          "type": "string",
+          "format": "uri",
+          "description": "URL to skill homepage or documentation"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Categorization tags"
+        }
+      },
+      "additionalProperties": true
+    },
+    "dependencies": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Other skills this skill depends on"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Capabilities this skill provides"
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Keywords or patterns that trigger this skill"
+    }
+  },
+  "additionalProperties": true
+}
