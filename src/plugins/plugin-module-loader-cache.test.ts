@@ -1,5 +1,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginModuleLoaderFactory } from "./plugin-module-loader-cache.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -22,7 +23,17 @@ async function loadCachedPluginModuleLoader(scope: string) {
     typeof import("./plugin-module-loader-cache.js")
   >(import.meta.url, `./plugin-module-loader-cache.js?scope=${scope}`);
 
-  return { createJiti, getCachedPluginModuleLoader };
+  const getCachedPluginModuleLoaderWithMock: typeof getCachedPluginModuleLoader = (params) =>
+    getCachedPluginModuleLoader({
+      ...params,
+      createLoader: params.createLoader ?? asPluginModuleLoaderFactory(createJiti),
+    });
+
+  return { createJiti, getCachedPluginModuleLoader: getCachedPluginModuleLoaderWithMock };
+}
+
+function asPluginModuleLoaderFactory(factory: unknown): PluginModuleLoaderFactory {
+  return factory as PluginModuleLoaderFactory;
 }
 
 describe("getCachedPluginModuleLoader", () => {
@@ -361,7 +372,8 @@ describe("getCachedPluginModuleLoader", () => {
   it("serves compiled .js targets from native require without invoking the module loader", async () => {
     const fromSourceTransformer = vi.fn();
     const createJiti = vi.fn(() => fromSourceTransformer);
-    vi.doMock("jiti", () => ({ createJiti }));
+    const jitiModuleFactory = vi.fn(() => ({ createJiti }));
+    vi.doMock("jiti", jitiModuleFactory);
     const nativeStub = vi.fn((target: string) => ({
       ok: true as const,
       moduleExport: { loadedFrom: target },
@@ -381,12 +393,14 @@ describe("getCachedPluginModuleLoader", () => {
       modulePath: "/repo/dist/extensions/demo/api.js",
       importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
       loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { loadedFrom: string };
     expect(result.loadedFrom).toBe("/repo/dist/extensions/demo/api.js");
     // Jiti should not be constructed or invoked for .js targets that
     // `tryNativeRequireJavaScriptModule` resolves.
+    expect(jitiModuleFactory).not.toHaveBeenCalled();
     expect(createJiti).not.toHaveBeenCalled();
     expect(fromSourceTransformer).not.toHaveBeenCalled();
     // allowWindows must be passed so the native fast path works on Windows too.
@@ -396,6 +410,48 @@ describe("getCachedPluginModuleLoader", () => {
     expect(getPluginModuleLoaderStats()).toMatchObject({
       calls: 1,
       nativeHits: 1,
+      nativeMisses: 0,
+      sourceTransformFallbacks: 0,
+      sourceTransformForced: 0,
+    });
+  });
+
+  it("does not source-transform fallback after native loading reaches a missing dependency", async () => {
+    const fromSourceTransformer = vi.fn();
+    const createJiti = vi.fn(() => fromSourceTransformer);
+    vi.doMock("jiti", () => ({ createJiti }));
+    const missingDependency = Object.assign(new Error("Cannot find module 'missing-dep'"), {
+      code: "MODULE_NOT_FOUND",
+    });
+    const nativeStub = vi.fn(() => {
+      throw missingDependency;
+    });
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: () => true,
+      tryNativeRequireJavaScriptModule: nativeStub,
+    }));
+    const { getCachedPluginModuleLoader, getPluginModuleLoaderStats } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=native-missing-dependency");
+
+    const cache = new Map();
+    const loader = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      createLoader: asPluginModuleLoaderFactory(createJiti),
+    });
+
+    expect(() => loader("/repo/dist/extensions/demo/api.js")).toThrow("missing-dep");
+    expect(createJiti).not.toHaveBeenCalled();
+    expect(fromSourceTransformer).not.toHaveBeenCalled();
+    expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
+      allowWindows: true,
+    });
+    expect(getPluginModuleLoaderStats()).toMatchObject({
+      calls: 1,
+      nativeHits: 0,
       nativeMisses: 0,
       sourceTransformFallbacks: 0,
       sourceTransformForced: 0,
@@ -420,6 +476,7 @@ describe("getCachedPluginModuleLoader", () => {
       modulePath: "/repo/dist/extensions/demo/api.js",
       importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
       loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
@@ -455,6 +512,7 @@ describe("getCachedPluginModuleLoader", () => {
       importerUrl: "file:///C:/Users/alice/openclaw/dist/src/plugins/public-surface-loader.js",
       loaderFilename: "C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js",
       tryNative: true,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     loader("C:\\Users\\alice\\openclaw\\dist\\extensions\\feishu\\api.js");
@@ -489,6 +547,7 @@ describe("getCachedPluginModuleLoader", () => {
       loaderFilename: "file:///repo/src/plugins/bundled-capability-runtime.ts",
       aliasMap: { "openclaw/plugin-sdk": "/repo/shim.js" },
       tryNative: false,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     const result = loader("/repo/dist/extensions/demo/api.js") as { fromSourceTransform: boolean };
@@ -528,6 +587,7 @@ describe("getCachedPluginModuleLoader", () => {
       importerUrl: "file:///C:/Users/alice/openclaw/src/plugins/loader.ts",
       loaderFilename: "C:\\Users\\alice\\openclaw\\extensions\\feishu\\api.ts",
       tryNative: false,
+      createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     loader("C:\\Users\\alice\\openclaw\\extensions\\feishu\\api.ts");
@@ -560,6 +620,7 @@ describe("getCachedPluginModuleLoader", () => {
       modulePath: "/repo/dist/extensions/demo/api.js",
       importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
       loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      createLoader: asPluginModuleLoaderFactory(createJiti),
     });
 
     const loose = loader as unknown as (t: string, ...a: unknown[]) => unknown;

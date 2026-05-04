@@ -664,6 +664,10 @@ async function compactEmbeddedPiSessionDirectOnce(
       messageProvider: resolvedMessageProvider,
       agentAccountId: params.agentAccountId,
       sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
       groupId: params.groupId,

@@ -467,6 +467,36 @@ describe("config plugin validation", () => {
     expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
   });
 
+  it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          discord: { token: "xxx" },
+        },
+        plugins: {
+          allow: ["discord"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not found: discord (stale config entry ignored; remove it from plugins config)",
+    });
+  });
+
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
     const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
     await mkdirSafe(path.dirname(installedPluginIndexPath));

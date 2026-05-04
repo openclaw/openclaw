@@ -472,7 +472,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
-  it("plans Open WebUI as a functional-image lane with OpenAI credentials", () => {
+  it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,
       selectedLaneNames: ["openwebui"],
@@ -482,14 +482,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes).toEqual([
       expect.objectContaining({
         imageKind: "functional",
-        live: false,
+        live: true,
         name: "openwebui",
+        resources: expect.arrayContaining(["docker", "live", "live:openai", "service"]),
       }),
     ]);
     expect(plan.needs).toMatchObject({
+      e2eImage: true,
       functionalImage: true,
+      liveImage: false,
       package: true,
     });
+  });
+
+  it("excludes Open WebUI from skip-live Docker all plans", () => {
+    const plan = planFor({
+      liveMode: "skip",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
   it("surfaces Docker lane test-state scenarios in plan JSON", () => {

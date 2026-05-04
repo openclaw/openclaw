@@ -903,6 +903,7 @@ export async function runAgentTurnWithFallback(params: {
   activeSessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
+  toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
@@ -1469,6 +1470,7 @@ export async function runAgentTurnWithFallback(params: {
                   }
                   return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
                 })(),
+                toolProgressDetail: params.toolProgressDetail,
                 suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
                 disableTools: params.opts?.disableTools,
                 enableHeartbeatTool: params.opts?.enableHeartbeatTool,
@@ -1539,6 +1541,7 @@ export async function runAgentTurnWithFallback(params: {
                           evt.data.args && typeof evt.data.args === "object"
                             ? (evt.data.args as Record<string, unknown>)
                             : undefined,
+                        detailMode: params.toolProgressDetail,
                       });
                     }
                   }
@@ -1552,6 +1555,7 @@ export async function runAgentTurnWithFallback(params: {
                       status: readStringValue(evt.data.status),
                       summary: readStringValue(evt.data.summary),
                       progressText: readStringValue(evt.data.progressText),
+                      meta: readStringValue(evt.data.meta),
                       approvalId: readStringValue(evt.data.approvalId),
                       approvalSlug: readStringValue(evt.data.approvalSlug),
                     });

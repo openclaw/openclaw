@@ -17,6 +17,15 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).toContain('from "./server-cron-lazy.js"');
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
+    expect(serverImpl).not.toMatch(
+      /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
+    );
+    expect(serverImpl).not.toMatch(
+      /export\s+\{[^}]*__resetModelCatalogCacheForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
+    );
+    expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
+      'import("./server-session-key.js")',
+    );
     expect(readSource("src/gateway/server-shared-auth-generation.ts")).not.toContain(
       'from "./config-reload.js"',
     );
@@ -40,5 +49,16 @@ describe("gateway startup import boundaries", () => {
     );
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
+  });
+
+  it("marks gateway close before awaiting gateway_stop hooks", () => {
+    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const closeStart = serverImpl.indexOf("close: async (opts)");
+    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
+    const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
+
+    expect(closeStart).toBeGreaterThan(-1);
+    expect(markStart).toBeGreaterThan(closeStart);
+    expect(markStart).toBeLessThan(hookStart);
   });
 });

@@ -771,11 +771,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official OpenClaw package"),
-      ),
-    ).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
@@ -982,6 +978,37 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
       expect(result.error).toContain("runtimeExtensions length (1)");
       expect(result.error).toContain("extensions length (2)");
+    }
+  });
+
+  it("rejects package installs when runtimeExtensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-blank-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+          runtimeExtensions: [" "],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.runtimeExtensions[0]");
+      expect(result.error).toContain("non-empty string");
     }
   });
 
@@ -1959,11 +1986,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes("allowed because it is an official OpenClaw package"),
-      ),
-    ).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
