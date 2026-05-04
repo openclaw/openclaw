@@ -8,6 +8,11 @@ import {
 } from "../agents/harness/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  listRegisteredContextEngines,
+  restoreRegisteredContextEngines,
+  type RegisteredContextEngineEntry,
+} from "../context-engine/registry.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -244,6 +249,7 @@ type CachedPluginState = {
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
+  contextEngines: RegisteredContextEngineEntry[];
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -1482,6 +1488,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         );
         restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
         restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
+        restoreRegisteredContextEngines(cached.state.contextEngines);
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
           corpusSupplements: cached.state.memoryCorpusSupplements,
@@ -2400,6 +2407,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           compactionProviders: listRegisteredCompactionProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
+          contextEngines: listRegisteredContextEngines(),
         },
         onlyPluginIds,
       );

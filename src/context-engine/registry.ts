@@ -424,6 +424,49 @@ export function clearContextEnginesForOwner(owner: string): void {
   }
 }
 
+/**
+ * A serializable snapshot of a registered context engine for cache restore.
+ */
+export type RegisteredContextEngineEntry = {
+  id: string;
+  factory: ContextEngineFactory;
+  owner: string;
+};
+
+/**
+ * List all registered context engines with their factories and owners.
+ * Used for caching and restoring plugin state.
+ */
+export function listRegisteredContextEngines(): RegisteredContextEngineEntry[] {
+  const entries: RegisteredContextEngineEntry[] = [];
+  for (const [id, entry] of getContextEngineRegistryState().engines.entries()) {
+    entries.push({ id, factory: entry.factory, owner: entry.owner });
+  }
+  return entries;
+}
+
+/**
+ * Restore previously cached context engines. Clears existing plugin-owned engines
+ * first, then re-registers all entries from the cache.
+ */
+export function restoreRegisteredContextEngines(entries: RegisteredContextEngineEntry[]): void {
+  // Clear all plugin-owned context engines first
+  const registry = getContextEngineRegistryState().engines;
+  for (const [id, entry] of registry.entries()) {
+    if (entry.owner.startsWith("plugin:")) {
+      registry.delete(id);
+    }
+  }
+  // Restore all cached entries
+  for (const { id, factory, owner } of entries) {
+    if (id === defaultSlotIdForKey("contextEngine") && owner !== CORE_CONTEXT_ENGINE_OWNER) {
+      // Skip restoring the default engine slot with a non-core owner
+      continue;
+    }
+    registry.set(id, { factory, owner });
+  }
+}
+
 function describeResolvedContextEngineContractError(
   engineId: string,
   engine: unknown,
