@@ -143,18 +143,33 @@ describe("gateway config methods", () => {
     expect(typeof current.payload?.hash).toBe("string");
     expect(current.payload?.config).toBeTruthy();
 
+    const nextConfig = structuredClone(current.payload?.config ?? {});
+    delete (nextConfig as Record<string, unknown>).meta;
+
     const res = await rpcReq<{
       ok?: boolean;
       path?: string;
       config?: Record<string, unknown>;
     }>(requireWs(), "config.set", {
-      raw: JSON.stringify(current.payload?.config ?? {}, null, 2),
+      raw: JSON.stringify(nextConfig, null, 2),
       baseHash: current.payload?.hash,
     });
 
     expect(res.ok).toBe(true);
     expect(res.payload?.path).toBe(createConfigIO().configPath);
     expect(res.payload?.config).toBeTruthy();
+    const responseMeta = res.payload?.config?.meta as
+      | { lastTouchedVersion?: string; lastTouchedAt?: string }
+      | undefined;
+    expect(responseMeta?.lastTouchedVersion).toBeTypeOf("string");
+
+    const after = await rpcReq<{
+      config?: { meta?: { lastTouchedVersion?: string; lastTouchedAt?: string } };
+    }>(requireWs(), "config.get", {});
+    expect(after.ok).toBe(true);
+    const afterMeta = after.payload?.config?.meta;
+    expect(afterMeta?.lastTouchedVersion).toBe(responseMeta?.lastTouchedVersion);
+    expect(afterMeta?.lastTouchedAt).toBe(responseMeta?.lastTouchedAt);
   });
 
   it("redacts browser cdpUrl credentials from config.get responses", async () => {

@@ -47,6 +47,7 @@ export type ConfigReplaceResult = {
   previousHash: string | null;
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
+  persistedConfig: OpenClawConfig;
   afterWrite: ConfigWriteAfterWrite;
   followUp: ConfigWriteFollowUp;
 };
@@ -135,27 +136,27 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   afterWrite?: ConfigWriteOptions["afterWrite"];
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
-}): Promise<boolean> {
+}): Promise<OpenClawConfig | null> {
   const nextConfig = applyUnsetPathsForWrite(
     params.nextConfig,
     resolveManagedUnsetPathsForWrite(params.writeOptions?.unsetPaths),
   );
   const changedKeys = getChangedTopLevelKeys(params.snapshot.sourceConfig, nextConfig);
   if (changedKeys.length !== 1 || changedKeys[0] === "<root>") {
-    return false;
+    return null;
   }
 
   const key = changedKeys[0];
   const includePath = getSingleTopLevelIncludeTarget({ snapshot: params.snapshot, key });
   if (!includePath || !isRecord(nextConfig) || !(key in nextConfig)) {
-    return false;
+    return null;
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
   if (params.writeOptions?.skipPluginValidation) {
     // Skip the include fast path so the root writer handles the write with
     // plugin validation disabled end-to-end (including the post-write readback).
-    return false;
+    return null;
   }
 
   const validated = validateConfigObjectWithPlugins(nextConfig);
@@ -176,7 +177,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     !hadRuntimeSnapshot &&
     !getRuntimeConfigSnapshotRefreshHandler()
   ) {
-    return true;
+    return nextConfig;
   }
 
   const refreshed = await (
@@ -224,7 +225,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
         { cause },
       ),
   });
-  return true;
+  return refreshedSnapshot.sourceConfig;
 }
 
 export async function replaceConfigFile(params: {
@@ -244,26 +245,29 @@ export async function replaceConfigFile(params: {
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
-  const wroteInclude = await tryWriteSingleTopLevelIncludeMutation({
+  const persistedIncludeConfig = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
     nextConfig: params.nextConfig,
     afterWrite,
     writeOptions: params.writeOptions ?? writeOptions,
     io: params.io,
   });
-  if (!wroteInclude) {
-    await (params.io?.writeConfigFile ?? writeConfigFile)(params.nextConfig, {
+  let persistedConfig = persistedIncludeConfig;
+  if (!persistedConfig) {
+    const writeResult = await (params.io?.writeConfigFile ?? writeConfigFile)(params.nextConfig, {
       baseSnapshot: snapshot,
       ...writeOptions,
       ...params.writeOptions,
       afterWrite,
     });
+    persistedConfig = writeResult.persistedConfig;
   }
   return {
     path: snapshot.path,
     previousHash,
     snapshot,
     nextConfig: params.nextConfig,
+    persistedConfig,
     afterWrite,
     followUp: resolveConfigWriteFollowUp(afterWrite),
   };
@@ -290,7 +294,7 @@ export async function mutateConfigFile<T = void>(params: {
   const afterWrite = resolveConfigWriteAfterWrite(
     params.afterWrite ?? params.writeOptions?.afterWrite,
   );
-  const wroteInclude = await tryWriteSingleTopLevelIncludeMutation({
+  const persistedIncludeConfig = await tryWriteSingleTopLevelIncludeMutation({
     snapshot,
     nextConfig: draft,
     afterWrite,
@@ -300,18 +304,21 @@ export async function mutateConfigFile<T = void>(params: {
     },
     io: params.io,
   });
-  if (!wroteInclude) {
-    await (params.io?.writeConfigFile ?? writeConfigFile)(draft, {
+  let persistedConfig = persistedIncludeConfig;
+  if (!persistedConfig) {
+    const writeResult = await (params.io?.writeConfigFile ?? writeConfigFile)(draft, {
       ...writeOptions,
       ...params.writeOptions,
       afterWrite,
     });
+    persistedConfig = writeResult.persistedConfig;
   }
   return {
     path: snapshot.path,
     previousHash,
     snapshot,
     nextConfig: draft,
+    persistedConfig,
     result,
     afterWrite,
     followUp: resolveConfigWriteFollowUp(afterWrite),
