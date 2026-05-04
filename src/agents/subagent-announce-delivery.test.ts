@@ -722,6 +722,62 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("keeps all grouped child results in direct completion fallback", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-4",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-grouped-results",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:first",
+          childSessionId: "child-session-1",
+          announceType: "subagent task",
+          taskLabel: "first task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "first child result",
+          replyInstruction: "Summarize the result.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:second",
+          childSessionId: "child-session-2",
+          announceType: "subagent task",
+          taskLabel: "second task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "second child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-thread-fallback",
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "first task:\nfirst child result\n\nsecond task:\nsecond child result",
+        idempotencyKey: "announce-thread-fallback-grouped-results",
+      }),
+    );
+  });
+
   it("keeps concise requester rewrites primary even when child output is long", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -1264,5 +1320,34 @@ describe("extractThreadCompletionFallbackText", () => {
         },
       ]),
     ).toBe("sample task");
+  });
+
+  it("combines multiple task completion results for grouped announce fallback", () => {
+    expect(
+      extractThreadCompletionFallbackText([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:first",
+          announceType: "subagent task",
+          taskLabel: "first task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "first child result",
+          replyInstruction: "Summarize the result.",
+        },
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:second",
+          announceType: "subagent task",
+          taskLabel: "second task",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "second child result",
+          replyInstruction: "Summarize the result.",
+        },
+      ]),
+    ).toBe("first task:\nfirst child result\n\nsecond task:\nsecond child result");
   });
 });
