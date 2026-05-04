@@ -961,7 +961,7 @@ export async function runToolProgressErrorScenario(context: MatrixQaScenarioCont
     expectedPreviewKind: "notice",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_ERROR"),
     label: "tool progress error",
-    progressPattern: /read from missing-matrix-tool-progress-target\.txt/i,
+    progressPattern: /\bread\s*:?\s*from\s+missing-matrix-tool-progress-target\.txt\b/i,
     triggerBodyBuilder: buildMatrixToolProgressErrorPrompt,
   });
 }
