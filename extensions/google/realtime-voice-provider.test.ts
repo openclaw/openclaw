@@ -357,6 +357,12 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.sendAudio(silence20ms);
 
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+    expect(session.sendClientContent).toHaveBeenCalledWith({
+      turns: [
+        { role: "user", parts: [{ text: expect.stringContaining("preceding voice input") }] },
+      ],
+      turnComplete: true,
+    });
 
     const callsAfterStreamEnd = session.sendRealtimeInput.mock.calls.length;
     bridge.sendAudio(silence20ms);
@@ -369,6 +375,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.sendAudio(silence20ms);
 
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+    expect(session.sendClientContent).toHaveBeenCalledTimes(2);
   });
 
   it("accepts PCM16 24 kHz audio without the telephony mu-law hop", async () => {

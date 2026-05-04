@@ -22238,6 +22238,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Milliseconds of user silence before Talk mode finalizes and sends the current transcript. Leave unset to keep the platform default pause window (700 ms on macOS and Android, 900 ms on iOS).",
           },
+          realtimeTransport: {
+            type: "string",
+            enum: ["auto", "gateway-relay", "provider-browser"],
+          },
         },
         additionalProperties: false,
         title: "Talk",

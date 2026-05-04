@@ -47,6 +47,8 @@ type RelaySession = {
   context: GatewayRequestContext;
   bridge: RealtimeVoiceBridgeSession;
   expiresAtMs: number;
+  ready: boolean;
+  readyReplayPending: boolean;
   cleanupTimer: ReturnType<typeof setTimeout>;
 };
 
@@ -131,8 +133,10 @@ export function createTalkRealtimeRelaySession(
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   let relay: RelaySession | undefined;
-  const emit = (event: TalkRealtimeRelayEvent) =>
-    broadcastToOwner(params.context, params.connId, event);
+  const emit = (event: TalkRealtimeRelayEvent) => {
+    const targetConnId = relay?.connId ?? params.connId;
+    broadcastToOwner(params.context, targetConnId, event);
+  };
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     providerConfig: params.providerConfig,
@@ -164,7 +168,13 @@ export function createTalkRealtimeRelaySession(
         args: toolCall.args,
       });
     },
-    onReady: () => emit({ relaySessionId, type: "ready" }),
+    onReady: () => {
+      if (relay) {
+        relay.ready = true;
+        relay.readyReplayPending = true;
+      }
+      emit({ relaySessionId, type: "ready" });
+    },
     onError: (error) => emit({ relaySessionId, type: "error", message: error.message }),
     onClose: (reason) => {
       const active = relaySessions.get(relaySessionId);
@@ -182,6 +192,8 @@ export function createTalkRealtimeRelaySession(
     context: params.context,
     bridge,
     expiresAtMs,
+    ready: false,
+    readyReplayPending: false,
     cleanupTimer: setTimeout(() => {
       const active = relaySessions.get(relaySessionId);
       if (active) {
@@ -217,11 +229,17 @@ export function createTalkRealtimeRelaySession(
 
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   const session = relaySessions.get(relaySessionId);
-  if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+  if (!session || Date.now() > session.expiresAtMs) {
     if (session) {
       closeRelaySession(session, "completed");
     }
     throw new Error("Unknown realtime relay session");
+  }
+  if (session.connId !== connId) {
+    session.connId = connId;
+    if (session.ready) {
+      session.readyReplayPending = true;
+    }
   }
   return session;
 }
@@ -238,6 +256,13 @@ export function sendTalkRealtimeRelayAudio(params: {
   const session = getRelaySession(params.relaySessionId, params.connId);
   const audio = Buffer.from(params.audioBase64, "base64");
   session.bridge.sendAudio(audio);
+  if (session.ready && session.readyReplayPending) {
+    session.readyReplayPending = false;
+    broadcastToOwner(session.context, session.connId, {
+      relaySessionId: session.id,
+      type: "ready",
+    });
+  }
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }

@@ -116,6 +116,13 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
   }
+  if (
+    source.realtimeTransport === "auto" ||
+    source.realtimeTransport === "gateway-relay" ||
+    source.realtimeTransport === "provider-browser"
+  ) {
+    normalized.realtimeTransport = source.realtimeTransport;
+  }
 
   const providers = normalizeTalkProviders(source.providers);
   const provider = normalizeOptionalString(source.provider);
@@ -178,6 +185,9 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
   if (typeof normalized?.speechLocale === "string") {
     payload.speechLocale = normalized.speechLocale;
+  }
+  if (typeof normalized?.realtimeTransport === "string") {
+    payload.realtimeTransport = normalized.realtimeTransport;
   }
   if (normalized?.providers && Object.keys(normalized.providers).length > 0) {
     payload.providers = normalized.providers;
