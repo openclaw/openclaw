@@ -152,6 +152,7 @@ describe("run-oxlint", () => {
           stderr: "",
         };
       },
+      exists: () => true,
     });
 
     expect(spawnCalls).toEqual([
@@ -165,6 +166,22 @@ describe("run-oxlint", () => {
       "extensions/slack/src/index.ts",
       "test/vitest/channel/openclaw.test.tsx",
     ]);
+  });
+
+  it("skips tracked extension files missing from a sparse checkout", () => {
+    const result = collectTrackedTypeScriptFiles("/repo", ["extensions"], {
+      spawn: () => ({
+        status: 0,
+        stdout:
+          "extensions/slack/src/index.ts\0" +
+          "extensions/not-present/src/index.ts\0" +
+          "extensions/slack/src/runtime.tsx\0",
+        stderr: "",
+      }),
+      exists: (filePath: string) => !filePath.includes("not-present"),
+    });
+
+    expect(result).toEqual(["extensions/slack/src/index.ts", "extensions/slack/src/runtime.tsx"]);
   });
 
   it("does not expand an empty root list to the whole repository", () => {
