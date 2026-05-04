@@ -198,7 +198,12 @@ describe("loadWorkspaceSkillEntries", () => {
 
     const browserEntry = enabledEntries.find((entry) => entry.skill.name === "browser-automation");
     const browserSkillDir = path.join(pluginRoot, "skills", "browser-automation");
-    expect(browserEntry?.skill.baseDir).toBe(browserSkillDir);
+    expect(browserEntry?.skill.baseDir).toBe(
+      path.join(workspaceDir, ".plugin-skills", "browser-automation"),
+    );
+    expect(browserEntry?.skill.filePath).toBe(
+      path.join(workspaceDir, ".plugin-skills", "browser-automation", "SKILL.md"),
+    );
     await expect(
       fs.readlink(path.join(workspaceDir, ".plugin-skills", "browser-automation")),
     ).resolves.toBe(browserSkillDir);
