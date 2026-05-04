@@ -318,6 +318,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Telegram-only reasoning stream:
 
     - `/reasoning stream` sends reasoning to the live preview while generating
+    - the reasoning preview is deleted after final delivery; use `/reasoning on` when reasoning should remain visible
     - final answer is sent without reasoning text
 
   </Accordion>

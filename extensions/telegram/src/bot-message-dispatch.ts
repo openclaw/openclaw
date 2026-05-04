@@ -1025,10 +1025,6 @@ export const dispatchTelegramMessage = async ({
                         continue;
                       }
                       if (info.kind === "final") {
-                        if (reasoningLane.hasStreamedMessage) {
-                          activePreviewLifecycleByLane.reasoning = "complete";
-                          retainPreviewOnCleanupByLane.reasoning = true;
-                        }
                         reasoningStepState.resetForNextStep();
                       }
                     }

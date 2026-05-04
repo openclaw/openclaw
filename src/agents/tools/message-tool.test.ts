@@ -1107,6 +1107,20 @@ describe("message tool reasoning tag sanitization", () => {
       target: "signal:+15551234567",
       channel: "signal",
     },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n\nVisible answer",
+      expected: "Visible answer",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n_more internal notes_",
+      expected: "",
+      target: "telegram:123",
+      channel: "telegram",
+    },
   ])(
     "sanitizes reasoning tags in $field before sending",
     async ({ channel, target, field, input, expected }) => {

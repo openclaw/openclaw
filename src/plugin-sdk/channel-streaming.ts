@@ -635,7 +635,10 @@ function compactProgressLineDetail(detail: string, maxChars: number): string {
 
 function removeUnbalancedInlineBackticks(value: string): string {
   const backtickCount = Array.from(value).filter((char) => char === "`").length;
-  return backtickCount % 2 === 1 ? value.replaceAll("`", "") : value;
+  if (backtickCount % 2 === 0) {
+    return value;
+  }
+  return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
 }
 
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
