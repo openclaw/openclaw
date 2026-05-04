@@ -18,6 +18,7 @@ const ExecApprovalsPolicyFields = {
   ask: Type.Optional(Type.String()),
   askFallback: Type.Optional(Type.String()),
   autoAllowSkills: Type.Optional(Type.Boolean()),
+  trustedOperatorMode: Type.Optional(Type.Boolean()),
 };
 
 export const ExecApprovalsDefaultsSchema = Type.Object(ExecApprovalsPolicyFields, {

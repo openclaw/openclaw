@@ -383,6 +383,7 @@ async function evaluateSystemRunPolicyPhase(
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
+  const trustedOperatorMode = approvals.agent.trustedOperatorMode;
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,
@@ -402,6 +403,7 @@ async function evaluateSystemRunPolicyPhase(
       env: parsed.env,
       skillBins: bins,
       autoAllowSkills,
+      trustedOperatorMode,
     });
   const strictInlineEval =
     agentExec?.strictInlineEval === true || cfg.tools?.exec?.strictInlineEval === true;

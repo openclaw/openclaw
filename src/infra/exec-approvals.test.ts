@@ -93,6 +93,63 @@ describe("exec approvals allowlist evaluation", () => {
     expect(result.allowlistMatches).toEqual([]);
   });
 
+  it("satisfies allowlist via trusted operator mode for read-only git", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "git status --short",
+          argv: ["git", "status", "--short"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "git",
+              resolvedPath: "/usr/bin/git",
+              executableName: "git",
+            }),
+          }),
+        },
+      ],
+    };
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: new Set(),
+      trustedOperatorMode: true,
+      cwd: "/tmp",
+    });
+    expect(result.allowlistSatisfied).toBe(true);
+    expect(result.allowlistMatches).toEqual([]);
+    expect(result.segmentSatisfiedBy).toEqual(["trustedOperator"]);
+  });
+
+  it("does not satisfy trusted operator mode for mutating git", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "git push origin main",
+          argv: ["git", "push", "origin", "main"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "git",
+              resolvedPath: "/usr/bin/git",
+              executableName: "git",
+            }),
+          }),
+        },
+      ],
+    };
+    const result = evaluateExecAllowlist({
+      analysis,
+      allowlist: [],
+      safeBins: new Set(),
+      trustedOperatorMode: true,
+      cwd: "/tmp",
+    });
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentSatisfiedBy).toEqual([null]);
+  });
+
   it("satisfies allowlist via auto-allow skills", () => {
     const analysis = {
       ok: true,

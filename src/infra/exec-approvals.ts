@@ -124,6 +124,7 @@ export type ExecApprovalsDefaults = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
+  trustedOperatorMode?: boolean;
 };
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
@@ -170,6 +171,7 @@ const DEFAULT_SECURITY: ExecSecurity = "full";
 const DEFAULT_ASK: ExecAsk = "off";
 export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
+const DEFAULT_TRUSTED_OPERATOR_MODE = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
 const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
 
@@ -359,6 +361,7 @@ function sanitizeExecApprovalPolicy(
         ? askFallback
         : undefined,
     autoAllowSkills: policy?.autoAllowSkills,
+    trustedOperatorMode: policy?.trustedOperatorMode,
   };
 }
 
@@ -665,6 +668,7 @@ export type ExecApprovalsDefaultOverrides = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
+  trustedOperatorMode?: boolean;
 };
 
 export function resolveExecApprovals(
@@ -702,6 +706,8 @@ export function resolveExecApprovalsFromFile(params: {
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
   const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
   const fallbackAutoAllowSkills = params.overrides?.autoAllowSkills ?? DEFAULT_AUTO_ALLOW_SKILLS;
+  const fallbackTrustedOperatorMode =
+    params.overrides?.trustedOperatorMode ?? DEFAULT_TRUSTED_OPERATOR_MODE;
   const resolvedDefaults: Required<ExecApprovalsDefaults> = {
     security: normalizeSecurity(defaults.security, fallbackSecurity),
     ask: normalizeAsk(defaults.ask, fallbackAsk),
@@ -710,6 +716,7 @@ export function resolveExecApprovalsFromFile(params: {
       fallbackAskFallback,
     ),
     autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
+    trustedOperatorMode: defaults.trustedOperatorMode ?? fallbackTrustedOperatorMode,
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -746,6 +753,10 @@ export function resolveExecApprovalsFromFile(params: {
     askFallback: resolvedAgentAskFallback.value,
     autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
+    trustedOperatorMode:
+      agent.trustedOperatorMode ??
+      wildcard.trustedOperatorMode ??
+      resolvedDefaults.trustedOperatorMode,
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),

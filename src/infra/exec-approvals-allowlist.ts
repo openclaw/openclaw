@@ -33,6 +33,7 @@ import {
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
+import { isTrustedOperatorAllowedArgv } from "./exec-trusted-operator-policy.js";
 import {
   extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
@@ -122,7 +123,13 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "skills" | "skillPrelude" | null;
+export type ExecSegmentSatisfiedBy =
+  | "allowlist"
+  | "safeBins"
+  | "skills"
+  | "skillPrelude"
+  | "trustedOperator"
+  | null;
 export type SkillBinTrustEntry = {
   name: string;
   resolvedPath: string;
@@ -137,6 +144,7 @@ type ExecAllowlistContext = {
   trustedSafeBinDirs?: ReadonlySet<string>;
   skillBins?: readonly SkillBinTrustEntry[];
   autoAllowSkills?: boolean;
+  trustedOperatorMode?: boolean;
 };
 
 function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistContext {
@@ -150,6 +158,7 @@ function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistCo
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
+    trustedOperatorMode: params.trustedOperatorMode,
   };
 }
 
@@ -511,6 +520,12 @@ function resolveSegmentSatisfaction(params: {
   });
   if (safe) {
     return "safeBins";
+  }
+  if (
+    params.context.trustedOperatorMode === true &&
+    isTrustedOperatorAllowedArgv(params.effectiveArgv)
+  ) {
+    return "trustedOperator";
   }
   const skillAllow = isSkillAutoAllowedSegment({
     segment: params.segment,

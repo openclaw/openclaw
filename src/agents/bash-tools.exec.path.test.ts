@@ -85,12 +85,14 @@ function createExecApprovals(): ExecApprovalsResolved {
       ask: "off",
       askFallback: "full",
       autoAllowSkills: false,
+      trustedOperatorMode: false,
     },
     agent: {
       security: "full",
       ask: "off",
       askFallback: "full",
       autoAllowSkills: false,
+      trustedOperatorMode: false,
     },
     agentSources: {
       security: "defaults.security",

@@ -32,6 +32,7 @@ export function evaluateSystemRunAllowlist(params: {
   env: Record<string, string> | undefined;
   skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
+  trustedOperatorMode: boolean;
 }): SystemRunAllowlistAnalysis {
   if (params.shellCommand) {
     const allowlistEval = evaluateShellAllowlist({
@@ -44,6 +45,7 @@ export function evaluateSystemRunAllowlist(params: {
       trustedSafeBinDirs: params.trustedSafeBinDirs,
       skillBins: params.skillBins,
       autoAllowSkills: params.autoAllowSkills,
+      trustedOperatorMode: params.trustedOperatorMode,
       platform: process.platform,
     });
     return {
@@ -68,6 +70,7 @@ export function evaluateSystemRunAllowlist(params: {
     trustedSafeBinDirs: params.trustedSafeBinDirs,
     skillBins: params.skillBins,
     autoAllowSkills: params.autoAllowSkills,
+    trustedOperatorMode: params.trustedOperatorMode,
   });
   return {
     analysisOk: analysis.ok,

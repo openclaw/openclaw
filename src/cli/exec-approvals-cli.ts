@@ -291,6 +291,9 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     typeof defaults.autoAllowSkills === "boolean"
       ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
       : null,
+    typeof defaults.trustedOperatorMode === "boolean"
+      ? `trustedOperatorMode=${defaults.trustedOperatorMode ? "on" : "off"}`
+      : null,
   ].filter(Boolean) as string[];
   const agents = file.agents ?? {};
   const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
@@ -395,6 +398,7 @@ function isEmptyAgent(agent: ExecApprovalsAgent): boolean {
     !agent.ask &&
     !agent.askFallback &&
     agent.autoAllowSkills === undefined &&
+    agent.trustedOperatorMode === undefined &&
     allowlist.length === 0
   );
 }

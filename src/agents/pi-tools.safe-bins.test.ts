@@ -20,12 +20,14 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
       ask: "off",
       askFallback: "deny",
       autoAllowSkills: false,
+      trustedOperatorMode: false,
     },
     agent: {
       security: "allowlist",
       ask: "off",
       askFallback: "deny",
       autoAllowSkills: false,
+      trustedOperatorMode: false,
     },
     agentSources: {
       security: "defaults.security",
@@ -41,6 +43,7 @@ const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
         ask: "off",
         askFallback: "deny",
         autoAllowSkills: false,
+        trustedOperatorMode: false,
       },
       agents: {},
     },
