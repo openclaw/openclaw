@@ -2865,7 +2865,7 @@ describe("matrix live qa scenarios", () => {
           event: matrixQaMessageEvent({
             kind: "notice",
             eventId: previewEventId,
-            body: "Pearling...\n`📖 Read: from missing-matrix-tool-progress-target.txt`",
+            body: "Pearling...\n`📖 Read: from /tmp/qa/workspace/missing-matrix-tool-progress-target.txt`",
           }),
           since: "driver-sync-preview",
         },
@@ -2896,7 +2896,8 @@ describe("matrix live qa scenarios", () => {
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
         driverEventId: "$tool-progress-error-trigger",
-        previewBodyPreview: "Pearling...\n`📖 Read: from missing-matrix-tool-progress-target.txt`",
+        previewBodyPreview:
+          "Pearling...\n`📖 Read: from /tmp/qa/workspace/missing-matrix-tool-progress-target.txt`",
         previewEventId: "$tool-progress-error-preview",
         reply: {
           eventId: "$tool-progress-error-final",
