@@ -31,6 +31,15 @@ const memoryCoreCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
   ],
 };
 
+const losslessClawToolRegistry: PluginManifestCommandAliasRegistry = {
+  plugins: [
+    {
+      id: "lossless-claw",
+      contracts: { tools: ["lcm_recent", "lcm_search"] },
+    },
+  ],
+};
+
 describe("isGatewayRunFastPathArgv", () => {
   it("matches only plain gateway foreground starts without root options or help", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
@@ -366,5 +375,47 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).not.toBeNull();
     expect(message).toContain('"memory-wiki"');
     expect(message).toContain("plugins.allow");
+  });
+
+  it("identifies an agent tool name and points the user at model tool-use", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "lcm_recent",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      { registry: losslessClawToolRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain('"lcm_recent"');
+    expect(message).toContain('"lossless-claw"');
+    expect(message).toContain("agent tool");
+    expect(message).not.toContain("plugins.allow");
+  });
+
+  it("matches agent tool names case-insensitively", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "LCM_Recent",
+      undefined,
+      { registry: losslessClawToolRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain("agent tool");
+    expect(message).toContain('"lossless-claw"');
+  });
+
+  it("preserves the plugins.allow suggestion when the unknown name is not a registered tool", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "totally-unknown",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      { registry: losslessClawToolRegistry },
+    );
+    expect(message).not.toBeNull();
+    expect(message).toContain('`plugins.allow` excludes "totally-unknown"');
   });
 });

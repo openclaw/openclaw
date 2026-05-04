@@ -61,6 +61,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/router: when `openclaw <name>` does not match a CLI subcommand, check the runtime plugin tool registry first so that names that are actually agent tools (e.g. `lcm_recent`) get a "this is an agent tool registered by the `<plugin>` plugin, not a CLI subcommand" error instead of the misleading suggestion to add the tool name to `plugins.allow`. Fixes #77214.
 - Plugins/loader: do not retry native-loaded JavaScript plugin modules through the source transformer after native evaluation has already reached a missing dependency, avoiding duplicate top-level side effects. Thanks @vincentkoc.
 - Plugins/packages: reject blank `openclaw.runtimeExtensions` entries instead of silently ignoring them and falling back to inferred TypeScript runtime entries. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed npm plugin shadow entries from the managed package lock as well as `package.json` and `node_modules`, so future npm operations do not keep referencing repaired bundled-plugin shadows. Thanks @vincentkoc.

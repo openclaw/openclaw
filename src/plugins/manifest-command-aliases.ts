@@ -20,11 +20,17 @@ export type PluginManifestCommandAliasRecord = PluginManifestCommandAlias & {
   enabledByDefault?: boolean;
 };
 
+export type PluginManifestToolOwnerRecord = {
+  toolName: string;
+  pluginId: string;
+};
+
 export type PluginManifestCommandAliasRegistry = {
   plugins: readonly {
     id: string;
     enabledByDefault?: boolean;
     commandAliases?: readonly PluginManifestCommandAlias[];
+    contracts?: { tools?: readonly string[] };
   }[];
 };
 
@@ -60,6 +66,29 @@ export function normalizeManifestCommandAliases(
     });
   }
   return normalized.length > 0 ? normalized : undefined;
+}
+
+export function resolveManifestToolOwnerInRegistry(params: {
+  toolName: string | undefined;
+  registry: PluginManifestCommandAliasRegistry;
+}): PluginManifestToolOwnerRecord | undefined {
+  const normalizedToolName = normalizeOptionalLowercaseString(params.toolName);
+  if (!normalizedToolName) {
+    return undefined;
+  }
+  for (const plugin of params.registry.plugins) {
+    const tools = plugin.contracts?.tools;
+    if (!tools || tools.length === 0) {
+      continue;
+    }
+    const match = tools.find(
+      (entry) => normalizeOptionalLowercaseString(entry) === normalizedToolName,
+    );
+    if (match) {
+      return { toolName: match, pluginId: plugin.id };
+    }
+  }
+  return undefined;
 }
 
 export function resolveManifestCommandAliasOwnerInRegistry(params: {

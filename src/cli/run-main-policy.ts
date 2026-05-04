@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
+  resolveManifestToolOwnerInRegistry,
   type PluginManifestCommandAliasRecord,
   type PluginManifestCommandAliasRegistry,
+  type PluginManifestToolOwnerRecord,
 } from "../plugins/manifest-command-aliases.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -102,6 +104,11 @@ export function resolveMissingPluginCommandMessage(
       config?: OpenClawConfig;
       registry?: PluginManifestCommandAliasRegistry;
     }) => PluginManifestCommandAliasRecord | undefined;
+    resolveToolOwner?: (params: {
+      toolName: string | undefined;
+      config?: OpenClawConfig;
+      registry?: PluginManifestCommandAliasRegistry;
+    }) => PluginManifestToolOwnerRecord | undefined;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
@@ -166,6 +173,24 @@ export function resolveMissingPluginCommandMessage(
 
   if (isReservedNonPluginCommandRoot(normalizedPluginId)) {
     return null;
+  }
+
+  const toolOwner = options?.registry
+    ? resolveManifestToolOwnerInRegistry({
+        toolName: normalizedPluginId,
+        registry: options.registry,
+      })
+    : options?.resolveToolOwner?.({
+        toolName: normalizedPluginId,
+        config,
+        ...(options?.registry ? { registry: options.registry } : {}),
+      });
+  if (toolOwner) {
+    return (
+      `"${normalizedPluginId}" is an agent tool registered by the "${toolOwner.pluginId}" plugin, ` +
+      `not a CLI subcommand. Use it from an agent turn (model tool-use), not the CLI. ` +
+      "Run `openclaw --help` to see available CLI subcommands."
+    );
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
