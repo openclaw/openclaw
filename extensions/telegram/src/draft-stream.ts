@@ -480,7 +480,9 @@ export function createTelegramDraftStream(params: {
         params.warn?.(
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
-        if (backoffRetryTimer) clearTimeout(backoffRetryTimer);
+        if (backoffRetryTimer) {
+          clearTimeout(backoffRetryTimer);
+        }
         backoffRetryTimer = setTimeout(() => {
           backoffRetryTimer = undefined;
           deferredFlush?.();
