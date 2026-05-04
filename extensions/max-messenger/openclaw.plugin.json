@@ -1,0 +1,15 @@
+{
+  "id": "max-messenger",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["max-messenger"],
+  "channelEnvVars": {
+    "max-messenger": ["MAX_BOT_TOKEN"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

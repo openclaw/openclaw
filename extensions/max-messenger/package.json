@@ -1,0 +1,56 @@
+{
+  "name": "@openclaw/max-messenger",
+  "version": "2026.5.3",
+  "private": true,
+  "description": "OpenClaw MAX channel plugin (Russian messenger by VK)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@maxhub/max-bot-api": "0.2.2",
+    "zod": "^4.4.1"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.3"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "max-messenger",
+      "label": "MAX",
+      "selectionLabel": "MAX (Russian messenger)",
+      "detailLabel": "MAX bot",
+      "docsPath": "/channels/max-messenger",
+      "docsLabel": "max-messenger",
+      "blurb": "Russian messenger MAX (by VK). Phase 1A scaffolding only — polling lands in Phase 1B.",
+      "aliases": [
+        "max"
+      ],
+      "order": 70,
+      "markdownCapable": true,
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "MAX_BOT_TOKEN"
+          ]
+        }
+      }
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.3"
+    }
+  }
+}

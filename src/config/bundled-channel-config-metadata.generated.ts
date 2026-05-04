@@ -8520,6 +8520,443 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     },
   },
   {
+    pluginId: "max-messenger",
+    channelId: "max-messenger",
+    label: "MAX",
+    description:
+      "Russian messenger MAX (by VK). Phase 1A scaffolding only — polling lands in Phase 1B.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+        },
+        enabled: {
+          type: "boolean",
+        },
+        markdown: {
+          type: "object",
+          properties: {
+            tables: {
+              type: "string",
+              enum: ["off", "bullets", "code", "block"],
+            },
+          },
+          additionalProperties: false,
+        },
+        token: {
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
+        },
+        tokenFile: {
+          type: "string",
+        },
+        apiRoot: {
+          type: "string",
+          format: "uri",
+        },
+        transport: {
+          default: "polling",
+          type: "string",
+          enum: ["polling", "webhook"],
+        },
+        webhookUrl: {
+          type: "string",
+          format: "uri",
+        },
+        webhookPort: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
+        webhookHost: {
+          type: "string",
+        },
+        webhookPath: {
+          type: "string",
+        },
+        dmPolicy: {
+          default: "pairing",
+          type: "string",
+          enum: ["pairing", "allowlist", "open", "disabled"],
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        groupPolicy: {
+          default: "allowlist",
+          type: "string",
+          enum: ["open", "disabled", "allowlist"],
+        },
+        groupAllowFrom: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        historyLimit: {
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        dmHistoryLimit: {
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
+        },
+        contextVisibility: {
+          type: "string",
+          enum: ["all", "allowlist", "allowlist_quote"],
+        },
+        dms: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        textChunkLimit: {
+          default: 4000,
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
+        chunkMode: {
+          type: "string",
+          enum: ["length", "newline"],
+        },
+        blockStreaming: {
+          type: "boolean",
+        },
+        blockStreamingCoalesce: {
+          type: "object",
+          properties: {
+            minChars: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            maxChars: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            idleMs: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          additionalProperties: false,
+        },
+        responsePrefix: {
+          type: "string",
+        },
+        mediaMaxMb: {
+          type: "number",
+          exclusiveMinimum: 0,
+        },
+        accounts: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              enabled: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code", "block"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              token: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              tokenFile: {
+                type: "string",
+              },
+              apiRoot: {
+                type: "string",
+                format: "uri",
+              },
+              transport: {
+                default: "polling",
+                type: "string",
+                enum: ["polling", "webhook"],
+              },
+              webhookUrl: {
+                type: "string",
+                format: "uri",
+              },
+              webhookPort: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              webhookHost: {
+                type: "string",
+              },
+              webhookPath: {
+                type: "string",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              historyLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              dmHistoryLimit: {
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              contextVisibility: {
+                type: "string",
+                enum: ["all", "allowlist", "allowlist_quote"],
+              },
+              dms: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    historyLimit: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              textChunkLimit: {
+                default: 4000,
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              mediaMaxMb: {
+                type: "number",
+                exclusiveMinimum: 0,
+              },
+            },
+            required: ["transport", "dmPolicy", "groupPolicy", "textChunkLimit"],
+            additionalProperties: false,
+          },
+        },
+        defaultAccount: {
+          type: "string",
+        },
+      },
+      required: ["transport", "dmPolicy", "groupPolicy", "textChunkLimit"],
+      additionalProperties: false,
+    },
+  },
+  {
     pluginId: "msteams",
     channelId: "msteams",
     label: "Microsoft Teams",
