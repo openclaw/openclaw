@@ -14,7 +14,7 @@
     background var(--duration-fast) ease-out,
     box-shadow var(--duration-fast) ease-out;
   max-height: 120px;
-  overflow: hidden;
+  overflow: auto;
 }
 
 .chat-tool-card--expanded {
