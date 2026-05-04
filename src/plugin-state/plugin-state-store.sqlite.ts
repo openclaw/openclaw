@@ -259,6 +259,7 @@ function createStatements(db: DatabaseSync): PluginStateStatements {
         FROM plugin_state_entries
         WHERE plugin_id = ?
           AND namespace = ?
+          AND entry_key <> ?
           AND (expires_at IS NULL OR expires_at > ?)
         ORDER BY created_at ASC, entry_key ASC
         LIMIT ?
@@ -387,6 +388,7 @@ function enforcePostRegisterLimits(params: {
   namespace: string;
   maxEntries: number;
   now: number;
+  protectedKey: string;
 }): void {
   const namespaceCount = countRow(
     params.store.statements.countLiveNamespace.get(
@@ -399,6 +401,7 @@ function enforcePostRegisterLimits(params: {
     params.store.statements.deleteOldestNamespace.run(
       params.pluginId,
       params.namespace,
+      params.protectedKey,
       params.now,
       namespaceCount - params.maxEntries,
     );
@@ -446,6 +449,7 @@ export function pluginStateRegister(params: {
         namespace: params.namespace,
         maxEntries: params.maxEntries,
         now,
+        protectedKey: params.key,
       });
     });
   } catch (error) {
@@ -488,6 +492,7 @@ export function pluginStateRegisterIfAbsent(params: {
         namespace: params.namespace,
         maxEntries: params.maxEntries,
         now,
+        protectedKey: params.key,
       });
       return true;
     });

@@ -264,6 +264,40 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("keeps the just-registered key when namespace eviction timestamps tie", async () => {
+    await withOpenClawTestState({ label: "plugin-state-eviction-tie-register" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const store = createPluginStateKeyedStore<number>("discord", {
+        namespace: "evict-tie-register",
+        maxEntries: 1,
+      });
+
+      await store.register("z", 1);
+      await store.register("a", 2);
+
+      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
+      await expect(store.lookup("z")).resolves.toBeUndefined();
+    });
+  });
+
+  it("keeps a same-millisecond registerIfAbsent claim during namespace eviction", async () => {
+    await withOpenClawTestState({ label: "plugin-state-eviction-tie-claim" }, async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(1000);
+      const store = createPluginStateKeyedStore<number>("discord", {
+        namespace: "evict-tie-claim",
+        maxEntries: 1,
+      });
+
+      await expect(store.registerIfAbsent("z", 1)).resolves.toBe(true);
+      await expect(store.registerIfAbsent("a", 2)).resolves.toBe(true);
+
+      await expect(store.entries()).resolves.toMatchObject([{ key: "a", value: 2 }]);
+      await expect(store.lookup("z")).resolves.toBeUndefined();
+    });
+  });
+
   it("rejects when the per-plugin live row ceiling would be exceeded without evicting siblings", async () => {
     await withOpenClawTestState({ label: "plugin-state-plugin-limit" }, async () => {
       seedPluginStateEntriesForTests([
