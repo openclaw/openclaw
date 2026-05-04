@@ -157,6 +157,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionPrompt: async (session, prompt) => {
         seen.prompt = prompt;
         seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
         session.messages = [
           ...session.messages,
           { role: "assistant", content: "done", timestamp: 2 },
@@ -181,6 +182,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "OpenClaw runtime context for the immediately preceding user message.",
     );
     expect(JSON.stringify(seen.messages)).not.toContain("not user-authored");
+    expect(seen.systemPrompt).not.toContain("secret runtime context");
+    expect(seen.systemPrompt).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
     const trajectoryEvents = (
       await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
     )
@@ -205,6 +208,49 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
       expect(String(value)).not.toContain("secret runtime context");
     }
+  });
+
+  it("keeps before_prompt_build prependContext out of system prompt on transcriptPrompt runs", async () => {
+    const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "dynamic hook context" }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_prompt_build"),
+      runBeforePromptBuild,
+      runBeforeAgentStart: vi.fn(),
+    });
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages];
+        seen.systemPrompt = session.agent.state.systemPrompt;
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe("visible ask");
+    expect(result.finalPromptText).toBe("visible ask");
+    expect(seen.systemPrompt).not.toContain("dynamic hook context");
+    expect(seen.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          display: false,
+          content: "dynamic hook context",
+        }),
+      ]),
+    );
   });
 
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
