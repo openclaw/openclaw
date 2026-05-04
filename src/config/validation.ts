@@ -13,6 +13,11 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLabel,
+} from "../plugins/official-external-plugin-catalog.js";
+import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -1473,10 +1478,23 @@ function validateConfigObjectWithPluginsBase(
       blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
     );
   };
+  const formatInstallablePluginWarning = (pluginId: string): string | null => {
+    const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
+    if (!catalogEntry) {
+      return null;
+    }
+    const install = resolveOfficialExternalPluginInstall(catalogEntry);
+    const installSpec = install?.npmSpec ?? install?.clawhubSpec;
+    if (!installSpec) {
+      return null;
+    }
+    const label = resolveOfficialExternalPluginLabel(catalogEntry);
+    return `plugin not installed: ${pluginId} (${label}; run openclaw doctor --fix or openclaw plugins install ${installSpec}; config preserved)`;
+  };
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean },
+    opts?: { warnOnly?: boolean; doctorRepairable?: boolean },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1497,9 +1515,14 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     if (opts?.warnOnly) {
+      const installablePluginWarning = opts.doctorRepairable
+        ? formatInstallablePluginWarning(pluginId)
+        : null;
       warnings.push({
         path,
-        message: `plugin not found: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+        message:
+          installablePluginWarning ??
+          `plugin not found: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
       });
       return;
     }
@@ -1516,7 +1539,10 @@ function validateConfigObjectWithPluginsBase(
     for (const pluginId of Object.keys(entries)) {
       if (!knownIds.has(pluginId)) {
         // Keep gateway startup resilient when plugins are removed/renamed across upgrades.
-        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, { warnOnly: true });
+        pushMissingPluginIssue(`plugins.entries.${pluginId}`, pluginId, {
+          warnOnly: true,
+          doctorRepairable: true,
+        });
       }
     }
   }
