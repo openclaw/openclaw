@@ -840,6 +840,31 @@ export function renderChat(props: ChatProps) {
     showToolCalls: props.showToolCalls,
     searchOpen: vs.searchOpen,
     searchQuery: vs.searchQuery,
+    waitingForSubagent: Boolean(
+      (() => {
+        const current = props.sessions?.sessions.find((s) => s.key === props.sessionKey);
+        if (current?.hasActiveSubagentRun) {
+          return true;
+        }
+        const childKeys = current?.childSessions ? new Set(current.childSessions) : null;
+        if (!childKeys || childKeys.size === 0) {
+          return false;
+        }
+        // Only show waiting indicator if a child session is actively running
+        const hasRunningChild = props.sessions?.sessions.some(
+          (s) =>
+            (s.parentSessionKey === props.sessionKey ||
+              s.spawnedBy === props.sessionKey ||
+              childKeys.has(s.key)) &&
+            (s.status === "running" || s.hasActiveRun),
+        );
+        if (hasRunningChild) {
+          return true;
+        }
+        // Fallback: current session is running AND has child sessions (blocked on tool)
+        return current?.status === "running";
+      })(),
+    ),
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);
@@ -945,6 +970,7 @@ export function renderChat(props: ChatProps) {
                 assistantIdentity,
                 props.basePath,
                 props.assistantAttachmentAuthToken ?? null,
+                item.label,
               );
             }
             if (item.kind === "stream") {

@@ -1717,6 +1717,7 @@ export function buildGatewaySessionRow(params: {
     totalTokensFresh,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    hasActiveRun: (subagentRun ? subagentStatus : entry?.status) === "running",
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
     startedAt: subagentRun ? subagentStartedAt : entry?.startedAt,

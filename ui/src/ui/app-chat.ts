@@ -87,7 +87,32 @@ export {
 export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 export function isChatBusy(host: ChatHost) {
-  return host.chatSending || Boolean(host.chatRunId);
+  if (host.chatSending || Boolean(host.chatRunId)) {
+    return true;
+  }
+  const current = host.sessionsResult?.sessions.find((s) => s.key === host.sessionKey);
+  if (current?.hasActiveSubagentRun) {
+    return true;
+  }
+  const childKeys = current?.childSessions ? new Set(current.childSessions) : null;
+  const hasRunningChild = Boolean(
+    host.sessionsResult?.sessions.some(
+      (s) =>
+        (s.parentSessionKey === host.sessionKey ||
+          s.spawnedBy === host.sessionKey ||
+          childKeys?.has(s.key)) &&
+        (s.status === "running" || s.hasActiveRun),
+    ),
+  );
+  if (hasRunningChild) {
+    return true;
+  }
+  // Only treat current session as busy if it has child sessions and is still running
+  // (blocked on a tool call like sessions_yield)
+  if (childKeys && childKeys.size > 0 && current?.status === "running") {
+    return true;
+  }
+  return false;
 }
 
 export function hasAbortableSessionRun(host: {

@@ -17,6 +17,7 @@ export type BuildChatItemsProps = {
   showToolCalls: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
+  waitingForSubagent?: boolean;
 };
 
 function appendCanvasBlockToAssistantMessage(
@@ -356,8 +357,18 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         startedAt: props.streamStartedAt ?? Date.now(),
       });
     } else {
-      items.push({ kind: "reading-indicator", key });
+      items.push({
+        kind: "reading-indicator",
+        key,
+        label: props.waitingForSubagent ? "Agent is working..." : undefined,
+      });
     }
+  } else if (props.waitingForSubagent) {
+    items.push({
+      kind: "reading-indicator",
+      key: `waiting-subagent:${props.sessionKey}`,
+      label: "Agent is working...",
+    });
   }
 
   return groupMessages(collapseSequentialDuplicateMessages(items));

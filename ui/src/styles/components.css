@@ -3311,6 +3311,16 @@ td.data-table-key-col {
 .chat-bubble.chat-reading-indicator {
   width: fit-content;
   padding: 10px 16px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-reading-indicator__label {
+  font-size: 0.85em;
+  color: var(--color-text-dimmed);
+  user-select: none;
 }
 
 .chat-reading-indicator__dots {

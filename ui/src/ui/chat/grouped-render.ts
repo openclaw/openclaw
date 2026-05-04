@@ -324,12 +324,14 @@ export function renderReadingIndicatorGroup(
   assistant?: AssistantIdentity,
   basePath?: string,
   authToken?: string | null,
+  label?: string,
 ) {
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+          ${label ? html`<span class="chat-reading-indicator__label">${label}</span>` : nothing}
           <span class="chat-reading-indicator__dots">
             <span></span><span></span><span></span>
           </span>

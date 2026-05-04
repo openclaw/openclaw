@@ -10,6 +10,10 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
+- Gateway/performance: keep raw channel-config schema parsing from discovering bundled plugin runtime metadata, and add `pnpm gateway:watch --benchmark-no-force` for profiling startup without the default port cleanup.
+- Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
+- Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Plugins/active-memory: skip session-store channel entries that contain `:` when resolving the recall subagent's channel, so QQ c2c agent IDs (e.g. `c2c:10D4F7C2…`) and other scoped conversation IDs do not reach bundled-plugin `dirName` validation and crash the recall run. The same guard already applied to explicit `channelId` params (#76704); this extends it to store-derived channels. (#77396) Thanks @hclsys.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.

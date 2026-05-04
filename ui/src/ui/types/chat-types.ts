@@ -14,7 +14,7 @@ export type ChatItem =
       timestamp: number;
     }
   | { kind: "stream"; key: string; text: string; startedAt: number }
-  | { kind: "reading-indicator"; key: string };
+  | { kind: "reading-indicator"; key: string; label?: string };
 
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
