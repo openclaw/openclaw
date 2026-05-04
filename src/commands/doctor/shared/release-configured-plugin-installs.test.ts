@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   detectPluginAutoEnableCandidates: vi.fn(),
   repairMissingPluginInstallsForIds: vi.fn(),
   resolveProviderInstallCatalogEntries: vi.fn(),
+  getOfficialExternalPluginCatalogEntry: vi.fn(),
 }));
 
 vi.mock("../../../config/plugin-auto-enable.js", () => ({
@@ -18,6 +19,14 @@ vi.mock("./missing-configured-plugin-install.js", () => ({
   repairMissingPluginInstallsForIds: mocks.repairMissingPluginInstallsForIds,
 }));
 
+vi.mock(import("../../../plugins/official-external-plugin-catalog.js"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    getOfficialExternalPluginCatalogEntry: mocks.getOfficialExternalPluginCatalogEntry,
+  };
+});
+
 describe("configured plugin install release step", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -27,6 +36,7 @@ describe("configured plugin install release step", () => {
       changes: [],
       warnings: [],
     });
+    mocks.getOfficialExternalPluginCatalogEntry.mockReturnValue(undefined);
   });
 
   it("runs only for configs last touched before 2026.5.2", async () => {
@@ -371,5 +381,54 @@ describe("configured plugin install release step", () => {
       completed: false,
       touchedConfig: false,
     });
+  });
+
+  it("includes allow-only official plugin ids in the repair set", async () => {
+    mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) => {
+      if (pluginId === "lobster") {
+        return { id: "lobster", name: "@openclaw/lobster" };
+      }
+      return undefined;
+    });
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        plugins: {
+          allow: ["lobster", "unofficial-custom"],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["lobster"]);
+    expect(result.pluginIds).not.toContain("unofficial-custom");
+  });
+
+  it("skips allow-only plugin ids that are already covered by a material entry", async () => {
+    mocks.getOfficialExternalPluginCatalogEntry.mockImplementation((pluginId: string) => {
+      if (pluginId === "lobster") {
+        return { id: "lobster", name: "@openclaw/lobster" };
+      }
+      return undefined;
+    });
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        plugins: {
+          allow: ["lobster"],
+          entries: {
+            lobster: { enabled: true },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["lobster"]);
+    expect(mocks.getOfficialExternalPluginCatalogEntry).not.toHaveBeenCalledWith("lobster");
   });
 });
