@@ -1,6 +1,16 @@
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeFeishuEmoji } from "./reactions-emoji-map.js";
+
+// Re-export the pure emoji map so existing call sites (`import { ... } from "./reactions.js"`)
+// keep working. New call sites that want the lightweight boundary (no `client.ts`
+// side effects on import) should import from `./reactions-emoji-map.js` directly.
+export {
+  FeishuEmoji,
+  normalizeFeishuEmoji,
+  type FeishuEmojiType,
+} from "./reactions-emoji-map.js";
 
 type FeishuReaction = {
   reactionId: string;
@@ -25,7 +35,8 @@ function assertFeishuReactionApiSuccess(response: { code?: number; msg?: string 
 
 /**
  * Add a reaction (emoji) to a message.
- * @param emojiType - Feishu emoji type, e.g., "SMILE", "THUMBSUP", "HEART"
+ * @param emojiType - Feishu emoji type, e.g., "THUMBSUP", "HEART", "Fire", "ThumbsDown".
+ *   Case matters for PascalCase entries; see the documented table.
  * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
  */
 export async function addReactionFeishu(params: {
@@ -36,12 +47,13 @@ export async function addReactionFeishu(params: {
 }): Promise<{ reactionId: string }> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const normalizedEmojiType = normalizeFeishuEmoji(emojiType);
 
   const response = (await client.im.messageReaction.create({
     path: { message_id: messageId },
     data: {
       reaction_type: {
-        emoji_type: emojiType,
+        emoji_type: normalizedEmojiType,
       },
     },
   })) as {
@@ -93,10 +105,11 @@ export async function listReactionsFeishu(params: {
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const normalizedEmojiType = emojiType ? normalizeFeishuEmoji(emojiType) : undefined;
 
   const response = (await client.im.messageReaction.list({
     path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
+    params: normalizedEmojiType ? { reaction_type: normalizedEmojiType } : undefined,
   })) as {
     code?: number;
     msg?: string;
