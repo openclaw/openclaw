@@ -812,7 +812,6 @@ describe("probeChromeRemoteDebuggingViaFiles", () => {
         portListening: true,
         reason: "devtools-active-port-detected",
       });
-      expect(typeof signal.portFileMtimeMs).toBe("number");
     });
   });
 
@@ -918,7 +917,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "c2e9313d-e7ab-452e-962d-ad7465c4764f",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -953,7 +951,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abcdef01-2345-6789-abcd-ef0123456789",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -977,7 +974,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abcdef01-2345-6789-abcd-ef0123456789",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -1001,7 +997,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({ kind: "unknown", reason: "lsof-timeout" }),
@@ -1022,7 +1017,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: null,
         browserUuid: null,
         portListening: false,
-        portFileMtimeMs: null,
         reason: "devtools-active-port-unreadable",
       }),
     });
@@ -1041,7 +1035,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -1067,7 +1060,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: null,
         browserUuid: null,
         portListening: false,
-        portFileMtimeMs: null,
         reason: "user-enabled-false",
       }),
     });
@@ -1086,7 +1078,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -1111,7 +1102,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: false,
-        portFileMtimeMs: Date.now() - 60_000,
         reason: "devtools-active-port-not-listening",
       }),
       portOwnerProbe: async () => ({ kind: "none", reason: "lsof-no-listener" }),
@@ -1132,7 +1122,6 @@ describe("probeChromeMcpHealth confidence levels", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -1153,6 +1142,73 @@ describe("probeChromeMcpHealth confidence levels", () => {
     expect(result.attached).toBe(true);
     expect(result.cacheAttached).toBe(true);
     expect(result.mcpPid).toBe(123);
+  });
+
+  it("partial signal-probe override preserves previously-installed probes", async () => {
+    let portOwnerCalls = 0;
+    let jsonVersionCalls = 0;
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: false,
+        toggleEnabled: false,
+        port: null,
+        browserUuid: null,
+        portListening: false,
+        reason: "user-enabled-false",
+      }),
+      portOwnerProbe: async () => {
+        portOwnerCalls += 1;
+        return {
+          kind: "chrome",
+          process: "Google Chrome",
+          pid: 1,
+          reason: "spy-chrome",
+        };
+      },
+      jsonVersionProbe: async () => {
+        jsonVersionCalls += 1;
+        return { ok: true, reason: "spy-json" };
+      },
+    });
+
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        reason: "devtools-active-port-detected",
+      }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", {
+      userDataDir: "/tmp/chrome-fake",
+    });
+
+    expect(portOwnerCalls).toBe(1);
+    expect(jsonVersionCalls).toBe(1);
+    expect(result.reasons).toContain("owner:spy-chrome");
+    expect(result.reasons).toContain("http:spy-json");
+  });
+
+  it("partial signal-probe override leaves test-disabled stubs in place when only fileProbe changes", async () => {
+    setBrowserAuthSignalProbesForTest({
+      fileProbe: async () => ({
+        enabled: true,
+        toggleEnabled: true,
+        port: 50211,
+        browserUuid: "abc",
+        portListening: true,
+        reason: "devtools-active-port-detected",
+      }),
+    });
+
+    const result = await probeChromeMcpHealth("chrome-live", {
+      userDataDir: "/tmp/chrome-fake",
+    });
+
+    expect(result.reasons).toContain("owner:test-disabled");
   });
 });
 
@@ -1229,7 +1285,6 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({
@@ -1261,7 +1316,6 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async () => ({ kind: "unknown", reason: "lsof-timeout" }),
@@ -1287,7 +1341,6 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
         port: 50211,
         browserUuid: "abc",
         portListening: true,
-        portFileMtimeMs: Date.now(),
         reason: "devtools-active-port-detected",
       }),
       portOwnerProbe: async (): Promise<ChromePortOwnerSignal> => ({
@@ -1318,7 +1371,6 @@ describe("ensureChromeMcpAvailable spawn gate", () => {
         port: null,
         browserUuid: null,
         portListening: false,
-        portFileMtimeMs: null,
         reason: "user-enabled-false",
       }),
       portOwnerProbe: async () => ({ kind: "none", reason: "lsof-no-listener" }),

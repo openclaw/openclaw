@@ -818,12 +818,6 @@ export type ChromeRemoteDebuggingFileSignal = {
   browserUuid: string | null;
   /** TCP loopback connect to `port` succeeded within the probe timeout. */
   portListening: boolean;
-  /**
-   * mtime of the DevToolsActivePort file (epoch ms). Used downstream to
-   * notice ports written by an old Chrome process whose pid has since
-   * exited but left the file behind.
-   */
-  portFileMtimeMs: number | null;
   reason: string;
 };
 
@@ -909,7 +903,6 @@ export async function probeChromeRemoteDebuggingViaFiles(
     port: null,
     browserUuid: null,
     portListening: false,
-    portFileMtimeMs: null,
     reason: "",
   };
   if (input.cdpUrl) {
@@ -933,13 +926,10 @@ export async function probeChromeRemoteDebuggingViaFiles(
   }
   let port: number | null = null;
   let browserUuid: string | null = null;
-  let portFileMtimeMs: number | null = null;
   let portFileReadable = true;
   let portFileParseable = true;
   try {
     const filePath = path.join(dir, "DevToolsActivePort");
-    const stat = await fs.stat(filePath);
-    portFileMtimeMs = stat.mtimeMs;
     const text = await fs.readFile(filePath, "utf8");
     const lines = text.split(/\r?\n/);
     const parsedPort = Number.parseInt(lines[0]?.trim() ?? "", 10);
@@ -985,7 +975,6 @@ export async function probeChromeRemoteDebuggingViaFiles(
     port,
     browserUuid,
     portListening,
-    portFileMtimeMs,
     reason,
   };
 }
@@ -1000,7 +989,6 @@ const CHROME_REMOTE_DEBUGGING_PROBER_DISABLED: ChromeRemoteDebuggingProber = asy
   port: null,
   browserUuid: null,
   portListening: false,
-  portFileMtimeMs: null,
   reason: "test-disabled",
 });
 
@@ -1175,7 +1163,7 @@ export function setBrowserAuthSignalProbesForTest(
     signalProbes = DEFAULT_SIGNAL_PROBES;
     return;
   }
-  signalProbes = { ...DEFAULT_SIGNAL_PROBES, ...probes };
+  signalProbes = { ...signalProbes, ...probes };
 }
 
 export type ChromeBrowserAuthLevel = "high" | "medium" | "low";
