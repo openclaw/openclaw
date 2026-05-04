@@ -401,6 +401,13 @@ describe("fs-safe", () => {
     expect(fileStat.kind).toBe("file");
     expect(fileStat.exists).toBe(true);
     expect(fileStat.size).toBe(5);
+    expect(fileStat.stat).toMatchObject({
+      dev: expect.any(Number),
+      ino: expect.any(Number),
+      nlink: expect.any(Number),
+      uid: expect.any(Number),
+      gid: expect.any(Number),
+    });
 
     const dirStat = await statPathWithinRoot({ rootDir: root, relativePath: "nested" });
     expect(dirStat.kind).toBe("directory");
@@ -501,6 +508,42 @@ describe("fs-safe", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "does not stat raced final symlinks outside root when following symlinks",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const insideTarget = path.join(root, "inside.txt");
+      const outsideTarget = path.join(outside, "inside.txt");
+      const linkPath = path.join(root, "link.txt");
+      await fs.writeFile(insideTarget, "inside");
+      await fs.writeFile(outsideTarget, "secret");
+      await fs.symlink(insideTarget, linkPath);
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "stat") {
+            await fs.rm(insideTarget, { force: true });
+            await fs.symlink(outsideTarget, insideTarget);
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          statPathWithinRoot({
+            rootDir: root,
+            relativePath: "link.txt",
+          }),
+        ).rejects.toMatchObject({ code: "outside-workspace" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not list out-of-root directories when path parents change before pinned readdir",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");
@@ -530,6 +573,37 @@ describe("fs-safe", () => {
       } finally {
         runPinnedPathHelperSpy.mockRestore();
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not clobber a raced destination when overwrite is disabled",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      await fs.writeFile(path.join(root, "from.txt"), "from");
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "rename") {
+            await fs.writeFile(path.join(root, "to.txt"), "existing");
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          renamePathWithinRoot({
+            rootDir: root,
+            fromRelativePath: "from.txt",
+            toRelativePath: "to.txt",
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+      await expect(fs.readFile(path.join(root, "to.txt"), "utf8")).resolves.toBe("existing");
     },
   );
 

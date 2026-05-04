@@ -105,6 +105,14 @@ const OPEN_APPEND_CREATE_FLAGS =
 const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
 
 type PinnedStatPayload = {
+  blocks: number;
+  blksize: number;
+  rdev: number;
+  gid: number;
+  uid: number;
+  nlink: number;
+  ino: number;
+  dev: number;
   mode: number;
   size: number;
   atimeMs: number;
@@ -130,6 +138,14 @@ function statKindFromMode(mode: number): SafePathKind {
 function statsLikeFromPinnedPayload(payload: PinnedStatPayload): Stats {
   const kind = statKindFromMode(payload.mode);
   return {
+    blocks: payload.blocks,
+    blksize: payload.blksize,
+    rdev: payload.rdev,
+    gid: payload.gid,
+    uid: payload.uid,
+    nlink: payload.nlink,
+    ino: payload.ino,
+    dev: payload.dev,
     mode: payload.mode,
     size: payload.size,
     atimeMs: payload.atimeMs,
@@ -143,10 +159,10 @@ function statsLikeFromPinnedPayload(payload: PinnedStatPayload): Stats {
     isFile: () => kind === "file",
     isDirectory: () => kind === "directory",
     isSymbolicLink: () => kind === "symlink",
-    isBlockDevice: () => false,
-    isCharacterDevice: () => false,
-    isFIFO: () => false,
-    isSocket: () => false,
+    isBlockDevice: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFBLK,
+    isCharacterDevice: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFCHR,
+    isFIFO: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFIFO,
+    isSocket: () => (payload.mode & fsConstants.S_IFMT) === fsConstants.S_IFSOCK,
   } as Stats;
 }
 
@@ -155,6 +171,14 @@ function parsePinnedStatPayload(stdout: string): Stats {
   if (
     typeof payload !== "object" ||
     payload === null ||
+    typeof (payload as PinnedStatPayload).dev !== "number" ||
+    typeof (payload as PinnedStatPayload).ino !== "number" ||
+    typeof (payload as PinnedStatPayload).nlink !== "number" ||
+    typeof (payload as PinnedStatPayload).uid !== "number" ||
+    typeof (payload as PinnedStatPayload).gid !== "number" ||
+    typeof (payload as PinnedStatPayload).rdev !== "number" ||
+    typeof (payload as PinnedStatPayload).blksize !== "number" ||
+    typeof (payload as PinnedStatPayload).blocks !== "number" ||
     typeof (payload as PinnedStatPayload).mode !== "number" ||
     typeof (payload as PinnedStatPayload).size !== "number" ||
     typeof (payload as PinnedStatPayload).atimeMs !== "number" ||
@@ -439,6 +463,8 @@ export async function statPathWithinRoot(params: {
       throw err;
     }
   }
+  const expectedFollowedStat =
+    params.followSymlinks !== false ? await fs.stat(realPath) : undefined;
   let stat: Stats;
   try {
     if (process.platform === "win32") {
@@ -454,6 +480,12 @@ export async function statPathWithinRoot(params: {
         overwrite: params.followSymlinks !== false,
       });
       stat = parsePinnedStatPayload(stdout);
+      if (
+        expectedFollowedStat !== undefined &&
+        !sameFileIdentity({ dev: stat.dev, ino: stat.ino }, expectedFollowedStat)
+      ) {
+        throw new SafeOpenError("outside-workspace", "file changed while statting");
+      }
     }
   } catch (err) {
     if (isPinnedPathHelperSpawnError(err) || process.platform === "win32") {
