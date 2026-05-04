@@ -86,6 +86,8 @@ jobs:
             Write-Warning "wsl2_ok=false"
           }
 
+          exit 0
+
       - name: Keep runner alive for SSH inspection
         env:
           KEEPALIVE_MINUTES: ${{ inputs.keepalive_minutes }}
