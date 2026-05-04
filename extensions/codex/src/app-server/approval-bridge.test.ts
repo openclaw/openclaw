@@ -615,6 +615,59 @@ describe("Codex app-server approval bridge", () => {
     expect(description).toContain("readPaths: ~/.ssh/id_rsa, /etc/hosts");
   });
 
+  it("describes current protocol network and filesystem permission grants", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-current-permissions", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-current-permissions", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/permissions/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "perm-current",
+        permissions: {
+          network: { enabled: true },
+          fileSystem: {
+            read: ["/Users/simone/.ssh/id_rsa"],
+            write: ["/"],
+            entries: [
+              { path: "/workspace/project", access: "read" },
+              { path: "/tmp/output", access: "write" },
+              { path: "/ignored", access: "none" },
+            ],
+          },
+        },
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: {
+          read: ["/Users/simone/.ssh/id_rsa"],
+          write: ["/"],
+          entries: [
+            { path: "/workspace/project", access: "read" },
+            { path: "/tmp/output", access: "write" },
+            { path: "/ignored", access: "none" },
+          ],
+        },
+      },
+      scope: "turn",
+    });
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("Network enabled: true");
+    expect(description).toContain("File system read: ~/.ssh/id_rsa; write: /");
+    expect(description).toContain("entries: read /workspace/project, write /tmp/output (+1 more)");
+    expect(description).toContain("High-risk targets: network access, filesystem root");
+  });
+
   it("compacts Windows home paths in permission descriptions", async () => {
     const params = createParams();
     mockCallGatewayTool

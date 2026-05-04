@@ -324,37 +324,57 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
   }
   let networkSummary: string | undefined;
   if (isJsonObject(permissions.network)) {
-    networkSummary = summarizePermissionRecord(permissions.network, risks, [
-      {
-        key: "allowHosts",
-        label: "allowHosts",
-        sanitize: sanitizePermissionHostValue,
-        risksFor: permissionHostRisks,
-      },
-    ]);
+    const summaries = [
+      summarizeNetworkEnabledPermission(permissions.network, risks),
+      summarizePermissionRecord(permissions.network, risks, [
+        {
+          key: "allowHosts",
+          label: "allowHosts",
+          sanitize: sanitizePermissionHostValue,
+          risksFor: permissionHostRisks,
+        },
+      ]),
+    ].filter((summary): summary is string => Boolean(summary));
+    networkSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
   let fileSystemSummary: string | undefined;
   if (isJsonObject(permissions.fileSystem)) {
-    fileSystemSummary = summarizePermissionRecord(permissions.fileSystem, risks, [
-      {
-        key: "roots",
-        label: "roots",
-        sanitize: sanitizePermissionPathValue,
-        risksFor: permissionPathRisks,
-      },
-      {
-        key: "readPaths",
-        label: "readPaths",
-        sanitize: sanitizePermissionPathValue,
-        risksFor: permissionPathRisks,
-      },
-      {
-        key: "writePaths",
-        label: "writePaths",
-        sanitize: sanitizePermissionPathValue,
-        risksFor: permissionPathRisks,
-      },
-    ]);
+    const summaries = [
+      summarizePermissionRecord(permissions.fileSystem, risks, [
+        {
+          key: "read",
+          label: "read",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "write",
+          label: "write",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "roots",
+          label: "roots",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "readPaths",
+          label: "readPaths",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "writePaths",
+          label: "writePaths",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+      ]),
+      summarizeFileSystemEntries(permissions.fileSystem, risks),
+    ].filter((summary): summary is string => Boolean(summary));
+    fileSystemSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
   if (risks.size > 0) {
     lines.push(`High-risk targets: ${[...risks].join(", ")}`);
@@ -374,6 +394,55 @@ type PermissionArrayDescriptor = {
   sanitize: (value: string) => string;
   risksFor: (value: string) => readonly string[];
 };
+
+function summarizeNetworkEnabledPermission(
+  permission: JsonObject,
+  risks: Set<string>,
+): string | undefined {
+  const enabled = permission.enabled;
+  if (typeof enabled !== "boolean") {
+    return undefined;
+  }
+  if (enabled) {
+    risks.add("network access");
+  }
+  return `enabled: ${enabled}`;
+}
+
+function summarizeFileSystemEntries(
+  permission: JsonObject,
+  risks: Set<string>,
+): string | undefined {
+  const entries = permission.entries;
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  const samples: string[] = [];
+  let count = 0;
+  for (const entry of entries) {
+    const item = isJsonObject(entry) ? entry : undefined;
+    const path = typeof item?.path === "string" ? item.path.trim() : "";
+    const access = typeof item?.access === "string" ? item.access.trim() : "";
+    if (!path || !access) {
+      continue;
+    }
+    count += 1;
+    if (access !== "none") {
+      for (const risk of permissionPathRisks(path)) {
+        risks.add(risk);
+      }
+    }
+    if (samples.length < PERMISSION_SAMPLE_LIMIT) {
+      samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
+    }
+  }
+  if (count === 0) {
+    return undefined;
+  }
+  const remaining = count - samples.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `entries: ${samples.join(", ")}${remainderSuffix}`;
+}
 
 function summarizePermissionRecord(
   permission: JsonObject,
