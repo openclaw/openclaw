@@ -93,6 +93,12 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
   managedImageBlobUrlCache.clear();
   managedImageBlobUrlResolvedCache.clear();
   managedImageBlobUrlMissCache.clear();
+  for (const blobUrl of assistantAttachmentBlobUrlResolvedCache.values()) {
+    URL.revokeObjectURL(blobUrl);
+  }
+  assistantAttachmentBlobUrlCache.clear();
+  assistantAttachmentBlobUrlResolvedCache.clear();
+  assistantAttachmentBlobUrlMissCache.clear();
 }
 
 type ImageBlock = {
@@ -119,6 +125,10 @@ const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlMissCache = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
+const assistantAttachmentBlobUrlCache = new Map<string, Promise<string | null>>();
+const assistantAttachmentBlobUrlResolvedCache = new Map<string, string>();
+const assistantAttachmentBlobUrlMissCache = new Map<string, number>();
+const ASSISTANT_ATTACHMENT_BLOB_URL_MISS_RETRY_MS = 5_000;
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -719,7 +729,7 @@ function resolveRenderableMessageImages(
       return [];
     }
     const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
+      ? buildAssistantAttachmentUrl(img.url, opts?.basePath)
       : img.url;
     return [{ ...img, displayUrl }];
   });
@@ -746,6 +756,18 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   `;
 
   const renderImage = (img: RenderableImageBlock) => {
+    if (
+      isLocalAssistantAttachmentSource(img.url) &&
+      img.displayUrl === buildAssistantAttachmentUrl(img.url, opts?.basePath)
+    ) {
+      const preview = resolveAssistantAttachmentBlobUrl(img.url, opts).then((previewUrl) => {
+        if (!previewUrl) {
+          return nothing;
+        }
+        return renderImageElement(img, previewUrl);
+      });
+      return until(preview, nothing);
+    }
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
       return renderImageElement(img, img.displayUrl);
     }
@@ -868,22 +890,23 @@ function isLocalAttachmentPreviewAllowed(
   });
 }
 
-function buildAssistantAttachmentUrl(
-  source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
+function buildAssistantAttachmentUrl(source: string, basePath?: string): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
   }
   const normalizedBasePath =
     basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
   const params = new URLSearchParams({ source });
+  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+}
+
+function buildAssistantAttachmentFetchHeaders(authToken?: string | null): Headers {
+  const headers = new Headers();
   const normalizedToken = authToken?.trim();
   if (normalizedToken) {
-    params.set("token", normalizedToken);
+    headers.set("Authorization", `Bearer ${normalizedToken}`);
   }
-  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+  return headers;
 }
 
 function isManagedOutgoingImageSource(source: string): boolean {
@@ -974,13 +997,53 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
-function buildAssistantAttachmentMetaUrl(
-  source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
+function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+}
+
+async function resolveAssistantAttachmentBlobUrl(
+  source: string,
+  opts?: ImageRenderOptions,
+): Promise<string | null> {
+  const authToken = opts?.authToken?.trim() ?? "";
+  const fetchUrl = buildAssistantAttachmentUrl(source, opts?.basePath);
+  const cacheKey = `${fetchUrl}::${authToken}`;
+  const cached = assistantAttachmentBlobUrlResolvedCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const missAt = assistantAttachmentBlobUrlMissCache.get(cacheKey);
+  if (missAt && Date.now() - missAt < ASSISTANT_ATTACHMENT_BLOB_URL_MISS_RETRY_MS) {
+    return null;
+  }
+  let pending = assistantAttachmentBlobUrlCache.get(cacheKey);
+  if (!pending) {
+    pending = (async () => {
+      const res = await fetch(fetchUrl, {
+        method: "GET",
+        headers: buildAssistantAttachmentFetchHeaders(authToken),
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        assistantAttachmentBlobUrlMissCache.set(cacheKey, Date.now());
+        return null;
+      }
+      const blobUrl = URL.createObjectURL(await res.blob());
+      assistantAttachmentBlobUrlResolvedCache.set(cacheKey, blobUrl);
+      assistantAttachmentBlobUrlMissCache.delete(cacheKey);
+      return blobUrl;
+    })()
+      .catch(() => {
+        assistantAttachmentBlobUrlMissCache.set(cacheKey, Date.now());
+        return null;
+      })
+      .finally(() => {
+        assistantAttachmentBlobUrlCache.delete(cacheKey);
+      });
+    assistantAttachmentBlobUrlCache.set(cacheKey, pending);
+  }
+  return pending;
 }
 
 function resolveAssistantAttachmentAvailability(
@@ -1011,9 +1074,11 @@ function resolveAssistantAttachmentAvailability(
   }
   assistantAttachmentAvailabilityCache.set(cacheKey, { status: "checking" });
   if (typeof fetch === "function") {
-    void fetch(buildAssistantAttachmentMetaUrl(source, basePath, authToken), {
+    const headers = buildAssistantAttachmentFetchHeaders(authToken);
+    headers.set("Accept", "application/json");
+    void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers,
       credentials: "same-origin",
     })
       .then(async (res) => {
@@ -1097,8 +1162,9 @@ function renderAssistantAttachments(
         );
         const attachmentUrl =
           availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
+            ? buildAssistantAttachmentUrl(attachment.url, basePath)
             : null;
+        const shouldFetchProtectedAttachment = isLocalAssistantAttachmentSource(attachment.url);
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -1108,38 +1174,124 @@ function renderAssistantAttachments(
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
-          return html`
-            <img
-              src=${attachmentUrl}
-              alt=${attachment.label}
-              class="chat-message-image"
-              @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
-            />
-          `;
+          if (!shouldFetchProtectedAttachment) {
+            return html`
+              <img
+                src=${attachmentUrl}
+                alt=${attachment.label}
+                class="chat-message-image"
+                @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
+              />
+            `;
+          }
+          const preview = resolveAssistantAttachmentBlobUrl(attachment.url, {
+            localMediaPreviewRoots,
+            basePath,
+            authToken,
+          }).then((previewUrl) => {
+            if (!previewUrl) {
+              return renderAssistantAttachmentStatusCard({
+                kind: "image",
+                label: attachment.label,
+                badge: "Unavailable",
+                reason: "Attachment unavailable",
+              });
+            }
+            return html`
+              <img
+                src=${previewUrl}
+                alt=${attachment.label}
+                class="chat-message-image"
+                @click=${() => openExternalUrlSafe(previewUrl, { allowDataImage: true })}
+              />
+            `;
+          });
+          return until(
+            preview,
+            renderAssistantAttachmentStatusCard({
+              kind: "image",
+              label: attachment.label,
+              badge: "Loading...",
+            }),
+          );
         }
         if (attachment.kind === "audio") {
-          return html`
-            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
-              <div class="chat-assistant-attachment-card__header">
-                <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
-                ${!attachmentUrl
-                  ? html`<span
-                      class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
-                    >`
-                  : attachment.isVoiceNote
-                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
-                    : nothing}
-              </div>
-              ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
-                : availability.status === "unavailable"
+          if (!attachmentUrl) {
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+                <div class="chat-assistant-attachment-card__header">
+                  <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                  <span
+                    class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+                    >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
+                  >
+                </div>
+                ${availability.status === "unavailable"
                   ? html`<div class="chat-assistant-attachment-card__reason">
                       ${availability.reason}
                     </div>`
                   : nothing}
-            </div>
-          `;
+              </div>
+            `;
+          }
+          if (!shouldFetchProtectedAttachment) {
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+                <div class="chat-assistant-attachment-card__header">
+                  <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                  ${attachment.isVoiceNote
+                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    : nothing}
+                </div>
+                <audio controls preload="metadata" src=${attachmentUrl}></audio>
+              </div>
+            `;
+          }
+          const preview = resolveAssistantAttachmentBlobUrl(attachment.url, {
+            localMediaPreviewRoots,
+            basePath,
+            authToken,
+          }).then((previewUrl) => {
+            if (!previewUrl) {
+              return html`
+                <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+                  <div class="chat-assistant-attachment-card__header">
+                    <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                    <span
+                      class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+                      >Unavailable</span
+                    >
+                  </div>
+                  <div class="chat-assistant-attachment-card__reason">Attachment unavailable</div>
+                </div>
+              `;
+            }
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+                <div class="chat-assistant-attachment-card__header">
+                  <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                  ${attachment.isVoiceNote
+                    ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
+                    : nothing}
+                </div>
+                <audio controls preload="metadata" src=${previewUrl}></audio>
+              </div>
+            `;
+          });
+          return until(
+            preview,
+            html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+                <div class="chat-assistant-attachment-card__header">
+                  <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                  <span
+                    class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+                    >Loading...</span
+                  >
+                </div>
+              </div>
+            `,
+          );
         }
         if (attachment.kind === "video") {
           if (!attachmentUrl) {
@@ -1150,9 +1302,67 @@ function renderAssistantAttachments(
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
+          if (!shouldFetchProtectedAttachment) {
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
+                <video controls preload="metadata" src=${attachmentUrl}></video>
+                <a
+                  class="chat-assistant-attachment-card__link"
+                  href=${attachmentUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  >${attachment.label}</a
+                >
+              </div>
+            `;
+          }
+          const preview = resolveAssistantAttachmentBlobUrl(attachment.url, {
+            localMediaPreviewRoots,
+            basePath,
+            authToken,
+          }).then((previewUrl) => {
+            if (!previewUrl) {
+              return renderAssistantAttachmentStatusCard({
+                kind: "video",
+                label: attachment.label,
+                badge: "Unavailable",
+                reason: "Attachment unavailable",
+              });
+            }
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
+                <video controls preload="metadata" src=${previewUrl}></video>
+                <a
+                  class="chat-assistant-attachment-card__link"
+                  href=${previewUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  >${attachment.label}</a
+                >
+              </div>
+            `;
+          });
+          return until(
+            preview,
+            renderAssistantAttachmentStatusCard({
+              kind: "video",
+              label: attachment.label,
+              badge: "Loading...",
+            }),
+          );
+        }
+        if (!attachmentUrl) {
+          return renderAssistantAttachmentStatusCard({
+            kind: "document",
+            label: attachment.label,
+            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
+            reason: availability.status === "unavailable" ? availability.reason : undefined,
+          });
+        }
+        if (!shouldFetchProtectedAttachment) {
           return html`
-            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-              <video controls preload="metadata" src=${attachmentUrl}></video>
+            <div class="chat-assistant-attachment-card">
+              <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
               <a
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
@@ -1163,26 +1373,40 @@ function renderAssistantAttachments(
             </div>
           `;
         }
-        if (!attachmentUrl) {
-          return renderAssistantAttachmentStatusCard({
+        const preview = resolveAssistantAttachmentBlobUrl(attachment.url, {
+          localMediaPreviewRoots,
+          basePath,
+          authToken,
+        }).then((previewUrl) => {
+          if (!previewUrl) {
+            return renderAssistantAttachmentStatusCard({
+              kind: "document",
+              label: attachment.label,
+              badge: "Unavailable",
+              reason: "Attachment unavailable",
+            });
+          }
+          return html`
+            <div class="chat-assistant-attachment-card">
+              <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
+              <a
+                class="chat-assistant-attachment-card__link"
+                href=${previewUrl}
+                target="_blank"
+                rel="noreferrer"
+                >${attachment.label}</a
+              >
+            </div>
+          `;
+        });
+        return until(
+          preview,
+          renderAssistantAttachmentStatusCard({
             kind: "document",
             label: attachment.label,
-            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
-            reason: availability.status === "unavailable" ? availability.reason : undefined,
-          });
-        }
-        return html`
-          <div class="chat-assistant-attachment-card">
-            <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
-            <a
-              class="chat-assistant-attachment-card__link"
-              href=${attachmentUrl}
-              target="_blank"
-              rel="noreferrer"
-              >${attachment.label}</a
-            >
-          </div>
-        `;
+            badge: "Loading...",
+          }),
+        );
       })}
     </div>
   `;

@@ -323,9 +323,10 @@ describe("handleControlUiHttpRequest", () => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
         const { res, handled } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
           method: "GET",
           auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-token" },
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
@@ -342,9 +343,10 @@ describe("handleControlUiHttpRequest", () => {
 
     try {
       const { res, handled } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
+        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(`media://inbound/${id}`)}`,
         method: "GET",
         auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: { authorization: "Bearer test-token" },
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
@@ -362,9 +364,10 @@ describe("handleControlUiHttpRequest", () => {
 
     try {
       const { res, handled, end } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(`media://inbound/${id}`)}&token=test-token`,
+        url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(`media://inbound/${id}`)}`,
         method: "GET",
         auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: { authorization: "Bearer test-token" },
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
@@ -380,9 +383,10 @@ describe("handleControlUiHttpRequest", () => {
       const filePath = path.join(tmp, "photo.png");
       await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
       const { res, handled, end } = await runAssistantMediaRequest({
-        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+        url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
         method: "GET",
         auth: { mode: "token", token: "test-token", allowTailscale: false },
+        headers: { authorization: "Bearer test-token" },
       });
       expectNotFoundResponse({ handled, res, end });
     } finally {
@@ -397,9 +401,10 @@ describe("handleControlUiHttpRequest", () => {
         const filePath = path.join(tmpRoot, "photo.png");
         await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
         const { res, handled, end } = await runAssistantMediaRequest({
-          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+          url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}`,
           method: "GET",
           auth: { mode: "token", token: "test-token", allowTailscale: false },
+          headers: { authorization: "Bearer test-token" },
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
@@ -410,9 +415,10 @@ describe("handleControlUiHttpRequest", () => {
 
   it("reports assistant local media availability failures with a reason", async () => {
     const { res, handled, end } = await runAssistantMediaRequest({
-      url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent("/Users/test/Documents/private.pdf")}&token=test-token`,
+      url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent("/Users/test/Documents/private.pdf")}`,
       method: "GET",
       auth: { mode: "token", token: "test-token", allowTailscale: false },
+      headers: { authorization: "Bearer test-token" },
     });
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
@@ -465,7 +471,7 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("accepts paired operator device tokens in assistant media query auth", async () => {
+  it("rejects paired operator device tokens in assistant media query auth", async () => {
     await withPairedOperatorDeviceToken({
       fn: async (operatorToken) => {
         await withAllowedAssistantMediaRoot({
@@ -473,13 +479,14 @@ describe("handleControlUiHttpRequest", () => {
           fn: async (tmpRoot) => {
             const filePath = path.join(tmpRoot, "photo.png");
             await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
-            const { res, handled } = await runAssistantMediaRequest({
+            const { res, handled, end } = await runAssistantMediaRequest({
               url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=${encodeURIComponent(operatorToken)}`,
               method: "GET",
               auth: { mode: "token", token: "shared-token", allowTailscale: false },
             });
             expect(handled).toBe(true);
-            expect(res.statusCode).toBe(200);
+            expect(res.statusCode).toBe(401);
+            expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
           },
         });
       },
