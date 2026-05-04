@@ -29,7 +29,7 @@ Need to install Node? See [Node setup](/install/node).
     <Tabs>
       <Tab title="macOS / Linux">
         ```bash
-        curl -fsSL https://openclaw.ai/install.sh | bash
+        curl -fsSL https://openclaw.ai/install.sh | bash -s --
         ```
         <img
   src="/assets/install-script.svg"
@@ -45,6 +45,7 @@ Need to install Node? See [Node setup](/install/node).
     </Tabs>
 
     <Note>
+    The `-s --` flags prevent the installer from consuming stdin when piped via `curl | bash`.
     Other install methods (Docker, Nix, npm): [Install](/install).
     </Note>
 
