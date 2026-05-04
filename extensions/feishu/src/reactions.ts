@@ -36,12 +36,13 @@ export async function addReactionFeishu(params: {
 }): Promise<{ reactionId: string }> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const normalizedEmojiType = normalizeFeishuEmoji(emojiType);
 
   const response = (await client.im.messageReaction.create({
     path: { message_id: messageId },
     data: {
       reaction_type: {
-        emoji_type: emojiType,
+        emoji_type: normalizedEmojiType,
       },
     },
   })) as {
@@ -93,10 +94,11 @@ export async function listReactionsFeishu(params: {
 }): Promise<FeishuReaction[]> {
   const { cfg, messageId, emojiType, accountId } = params;
   const client = resolveConfiguredFeishuClient({ cfg, accountId });
+  const normalizedEmojiType = emojiType ? normalizeFeishuEmoji(emojiType) : undefined;
 
   const response = (await client.im.messageReaction.list({
     path: { message_id: messageId },
-    params: emojiType ? { reaction_type: emojiType } : undefined,
+    params: normalizedEmojiType ? { reaction_type: normalizedEmojiType } : undefined,
   })) as {
     code?: number;
     msg?: string;
@@ -120,4 +122,95 @@ export async function listReactionsFeishu(params: {
     operatorId:
       item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
   }));
+}
+
+/**
+ * Common Feishu emoji types for convenience.
+ * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
+ */
+export const FeishuEmoji = {
+  // Common reactions
+  THUMBSUP: "THUMBSUP",
+  THUMBSDOWN: "THUMBSDOWN",
+  HEART: "HEART",
+  SMILE: "SMILE",
+  GRINNING: "GRINNING",
+  LAUGHING: "LAUGHING",
+  CRY: "CRY",
+  ANGRY: "ANGRY",
+  SURPRISED: "SURPRISED",
+  THINKING: "THINKING",
+  CLAP: "CLAP",
+  OK: "OK",
+  FIST: "FIST",
+  PRAY: "PRAY",
+  FIRE: "FIRE",
+  PARTY: "PARTY",
+  CHECK: "CHECK",
+  CROSS: "CROSS",
+  QUESTION: "QUESTION",
+  EXCLAMATION: "EXCLAMATION",
+} as const;
+
+export type FeishuEmojiType = (typeof FeishuEmoji)[keyof typeof FeishuEmoji];
+
+const knownFeishuEmojiTypes = new Set<string>(Object.values(FeishuEmoji));
+
+// Map common unicode emojis to Feishu emoji type strings.
+// The Feishu reactions API requires emoji_type values like "THUMBSUP", not
+// unicode characters like "👍". When the agent sends a raw unicode emoji we
+// convert it here so the API call succeeds.
+const unicodeToFeishuEmoji: Record<string, string> = {
+  "👍": "THUMBSUP",
+  "👎": "THUMBSDOWN",
+  "❤️": "HEART",
+  "❤": "HEART",
+  "😊": "SMILE",
+  "😀": "GRINNING",
+  "😄": "LAUGHING",
+  "😂": "LAUGHING",
+  "😢": "CRY",
+  "😭": "CRY",
+  "😠": "ANGRY",
+  "😡": "ANGRY",
+  "😮": "SURPRISED",
+  "😲": "SURPRISED",
+  "🤔": "THINKING",
+  "👏": "CLAP",
+  "👌": "OK",
+  "✊": "FIST",
+  "👊": "FIST",
+  "🙏": "PRAY",
+  "🔥": "FIRE",
+  "🎉": "PARTY",
+  "🥳": "PARTY",
+  "✅": "CHECK",
+  "✔️": "CHECK",
+  "✔": "CHECK",
+  "❌": "CROSS",
+  "❓": "QUESTION",
+  "❗": "EXCLAMATION",
+  "❕": "EXCLAMATION",
+};
+
+/**
+ * Normalize an emoji value to a Feishu emoji type string.
+ *
+ * Accepts either a Feishu emoji type (e.g. "THUMBSUP") or a unicode emoji
+ * (e.g. "👍") and returns the corresponding Feishu API emoji_type value.
+ * If the input is already a known Feishu type it passes through unchanged.
+ * Unknown values are returned as-is so the API can surface a clear error.
+ */
+export function normalizeFeishuEmoji(emoji: string): string {
+  const trimmed = emoji.trim();
+  if (knownFeishuEmojiTypes.has(trimmed)) {
+    return trimmed;
+  }
+  // Case-insensitive match (e.g. "thumbsup" → "THUMBSUP").
+  const upper = trimmed.toUpperCase();
+  if (knownFeishuEmojiTypes.has(upper)) {
+    return upper;
+  }
+  // Unicode emoji lookup.
+  return unicodeToFeishuEmoji[trimmed] ?? trimmed;
 }
