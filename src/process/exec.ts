@@ -9,6 +9,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -43,6 +44,13 @@ function escapeForCmdExe(arg: string): string {
 
 function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string {
   return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
+}
+
+function resolveTrustedWindowsCmdExe(): string {
+  if (process.platform !== "win32") {
+    return "cmd.exe";
+  }
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
 }
 
 /**
@@ -107,7 +115,7 @@ function resolveChildProcessInvocation(params: {
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
 
   return {
-    command: useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
     args: useCmdWrapper
       ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
