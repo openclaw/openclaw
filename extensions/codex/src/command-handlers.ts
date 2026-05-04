@@ -227,7 +227,7 @@ export async function handleCodexSubcommand(
     return { text: await steerConversationTurn(deps, ctx, options.pluginConfig, rest.join(" ")) };
   }
   if (normalized === "model") {
-    return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest.join(" ")) };
+    return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "fast") {
     return { text: await setConversationFastMode(deps, ctx, options.pluginConfig, rest) };
@@ -507,12 +507,16 @@ async function setConversationModel(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-  model: string,
+  args: string[],
 ): Promise<string> {
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot set Codex model because this command did not include an OpenClaw session file.";
   }
+  if (args.length > 1) {
+    return "Usage: /codex model <model>";
+  }
+  const [model = ""] = args;
   const normalized = model.trim();
   if (!normalized) {
     const binding = await deps.readCodexAppServerBinding(sessionFile);

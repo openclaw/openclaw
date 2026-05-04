@@ -123,6 +123,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: stop the OAuth progress spinner before showing the manual redirect paste prompt, so callback timeouts do not spam `Browser callback did not finish` across terminals.
 - Providers/OpenAI Codex: reject malformed `/codex compact` and `/codex review` commands with extra operands before starting thread actions. Thanks @vincentkoc.
 - Providers/OpenAI Codex: reject malformed `/codex detach` and `/codex stop` commands with extra operands before clearing bindings or interrupting active turns. Thanks @vincentkoc.
+- Providers/OpenAI Codex: reject malformed `/codex model` commands with extra operands before persisting an invalid bound-thread model override. Thanks @vincentkoc.
 - Providers/OpenAI Codex: reject malformed `/codex resume` commands with extra operands before attaching a Codex thread. Thanks @vincentkoc.
 - Providers/OpenAI Codex: reject malformed diagnostics confirm/cancel commands instead of treating `confirm <token> extra` as consent to upload feedback. Thanks @vincentkoc.
 - Providers/DeepSeek: expose DeepSeek V4 `xhigh` and `max` thinking levels through the lightweight provider-policy surface, so Control UI `/think` pickers keep showing the max reasoning options when the runtime plugin registry is not active. Fixes #77139. Thanks @bittoby.

@@ -1811,6 +1811,18 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects malformed model commands before persisting the model", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const setCodexConversationModel = vi.fn();
+
+    await expect(
+      handleCodexCommand(createContext("model gpt-5.4 extra", sessionFile), {
+        deps: createDeps({ setCodexConversationModel }),
+      }),
+    ).resolves.toEqual({ text: "Usage: /codex model <model>" });
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+  });
+
   it("rejects extra fast and permissions arguments", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const setCodexConversationFastMode = vi.fn();
