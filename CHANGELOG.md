@@ -79,6 +79,7 @@ Docs: https://docs.openclaw.ai
 - QA/Matrix: wait for live approval reactions to echo before starting the threaded approval decision timeout. Thanks @vincentkoc.
 - QA/Matrix: reuse the primed driver sync stream when confirming approval reaction echoes, avoiding missed self-reactions in live release runs. Thanks @vincentkoc.
 - Tlon: expose `groupInviteAllowlist` in the channel config schema and clarify that group invite auto-accept fails closed without an invite allowlist. Thanks @vincentkoc.
+- Channels/WhatsApp: apply the shared group/channel visible-reply mode during inbound dispatch so group replies stay message-tool-only by default without overriding direct-chat harness defaults. Refs #75178 and #67394. Thanks @scoootscooob.
 - Control UI/WebChat: collapse duplicate in-flight internal text sends onto the active Gateway run so rapid repeat submits do not start fresh `agent:main:main` dispatches. Fixes #75737. Thanks @dsdsddd1 and @BunsDev.
 - Mattermost: accept the documented `channels.mattermost.streaming` config and honor `streaming: "off"` by disabling draft preview posts. Thanks @vincentkoc.
 - Mattermost: expose streaming progress config labels and help text in generated channel config metadata so Control UI/docs can explain the new `channels.mattermost.streaming.progress.*` fields. Thanks @vincentkoc.
