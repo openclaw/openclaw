@@ -517,6 +517,92 @@ describe("createFollowupRunner runtime config", () => {
     expect(call?.config).toBe(runtimeConfig);
   });
 
+  it("passes runtime-only plugin auth into queued embedded followup runs", async () => {
+    const pluginAuth = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      })),
+    };
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          pluginAuth,
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          pluginAuth?: unknown;
+        }
+      | undefined;
+    expect(call?.pluginAuth).toBe(pluginAuth);
+  });
+
+  it("passes queued chat type into queued embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChatType: "channel",
+        run: {
+          messageChatType: "group",
+        },
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          messageChatType?: unknown;
+        }
+      | undefined;
+    expect(call?.messageChatType).toBe("group");
+  });
+
+  it("falls back to queued originating chat type for queued embedded followup runs", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChatType: "channel",
+      }),
+    );
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | {
+          messageChatType?: unknown;
+        }
+      | undefined;
+    expect(call?.messageChatType).toBe("channel");
+  });
+
   it("resolves queued embedded followups before preflight helpers read config", async () => {
     const sourceConfig: OpenClawConfig = {
       skills: {
