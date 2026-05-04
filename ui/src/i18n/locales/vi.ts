@@ -167,7 +167,7 @@ export const vi: TranslationMap = {
     global: "Toàn cục",
     unknown: "Không rõ",
     showArchived: "Hiển thị đã lưu trữ",
-    activeTooltip: "Đã cập nhật trong N phút gần đây.",
+    activeTooltip: "Đã cập nhật trong {count} phút gần đây.",
     limitTooltip: "Số phiên tối đa cần tải.",
     globalTooltip: "Bao gồm các phiên toàn cục.",
     unknownTooltip: "Bao gồm các phiên không xác định.",

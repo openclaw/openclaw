@@ -304,7 +304,7 @@ export function renderSessions(props: SessionsProps) {
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
   const page = Math.min(props.page, totalPages - 1);
   const paginated = paginateRows(sorted, page, props.pageSize);
-  const activeTooltip = t("sessionsView.activeTooltip");
+  const activeTooltip = t("sessionsView.activeTooltip", { count: props.activeMinutes.trim() });
   const limitTooltip = t("sessionsView.limitTooltip");
   const globalTooltip = t("sessionsView.globalTooltip");
   const unknownTooltip = t("sessionsView.unknownTooltip");

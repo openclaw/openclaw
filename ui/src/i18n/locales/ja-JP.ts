@@ -170,7 +170,7 @@ export const ja_JP: TranslationMap = {
     global: "グローバル",
     unknown: "不明",
     showArchived: "アーカイブ済みを表示",
-    activeTooltip: "過去 N 分以内に更新されました。",
+    activeTooltip: "過去 {count} 分以内に更新されました。",
     limitTooltip: "読み込むセッションの最大数。",
     globalTooltip: "グローバルセッションを含めます。",
     unknownTooltip: "不明なセッションを含めます。",

@@ -928,6 +928,34 @@ describe("discoverOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("rejects blank package runtimeExtensions before falling back to inferred entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "runtime-blank-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/runtime-blank-pack",
+      extensions: ["./src/index.ts"],
+      runtimeExtensions: [" "],
+    });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { absent: ["runtime-blank-pack"] });
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("openclaw.runtimeExtensions[0]") &&
+          entry.message.includes("non-empty string"),
+      ),
+    ).toBe(true);
+  });
+
   it("infers built dist entries for installed TypeScript package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "built-peer-pack");
@@ -1473,6 +1501,39 @@ describe("discoverOpenClawPlugins", () => {
           packageDir: globalExt,
           packageName: "@openclaw/pack",
           extensions: ["./escape.ts"],
+        });
+        return true;
+      },
+    },
+    {
+      name: "rejects hardlinked inferred built runtime entries instead of falling back to source",
+      expectedDiagnostic: "escapes" as const,
+      expectedId: "pack",
+      setup: (stateDir: string) => {
+        if (process.platform === "win32") {
+          return false;
+        }
+        const globalExt = path.join(stateDir, "extensions", "pack");
+        const outsideDir = path.join(stateDir, "outside");
+        const outsideFile = path.join(outsideDir, "index.js");
+        const linkedFile = path.join(globalExt, "dist", "index.js");
+        mkdirSafe(path.join(globalExt, "src"));
+        mkdirSafe(path.dirname(linkedFile));
+        mkdirSafe(outsideDir);
+        fs.writeFileSync(path.join(globalExt, "src", "index.ts"), "export default {}", "utf-8");
+        fs.writeFileSync(outsideFile, "export default {}", "utf-8");
+        try {
+          fs.linkSync(outsideFile, linkedFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return false;
+          }
+          throw err;
+        }
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/pack",
+          extensions: ["./src/index.ts"],
         });
         return true;
       },

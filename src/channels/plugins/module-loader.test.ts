@@ -82,7 +82,7 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("loads TypeScript channel plugin modules through Jiti when no native hook exists", async () => {
+  it("loads TypeScript channel plugin modules through Jiti when native loading is unavailable", async () => {
     const loadWithJiti = vi.fn((target: string) => ({
       loadedBy: "jiti",
       target,
@@ -103,7 +103,7 @@ describe("channel plugin module loader helpers", () => {
     const rootDir = createTempDir();
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-    fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
+    fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
 
     try {
       expect(

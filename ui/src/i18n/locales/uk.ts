@@ -168,7 +168,7 @@ export const uk: TranslationMap = {
     global: "Глобально",
     unknown: "Невідомо",
     showArchived: "Показати архівовані",
-    activeTooltip: "Оновлено за останні N хвилин.",
+    activeTooltip: "Оновлено за останні {count} хвилин.",
     limitTooltip: "Максимальна кількість сеансів для завантаження.",
     globalTooltip: "Включити глобальні сеанси.",
     unknownTooltip: "Включити невідомі сеанси.",
