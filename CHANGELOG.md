@@ -64,6 +64,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
 - Agents/tools: strip reasoning text from visible rich presentation titles, blocks, buttons, and select labels before message-tool sends, so structured channel payloads cannot leak hidden planning. Thanks @vincentkoc.
 - Telegram: keep reply-dispatch lazy provider runtime chunks behind stable dist names and delete `/reasoning stream` previews after final delivery so package updates and live reasoning drafts do not leave Telegram turns broken or noisy. Thanks @BunsDev.
+- Discord: start the gateway monitor without waiting for the startup bot/application probe, so WSL2 hosts with a slow `/users/@me` REST path still bring the channel online while status enrichment finishes asynchronously. Fixes #77103. Thanks @Suited78.
 - Exec approvals: detect `env -S` split-string command-carrier risks when `-S`/`-s` is combined with other env short options, so approval explanations do not miss split payloads hidden behind `env -iS...`. Thanks @vincentkoc.
 - Google Meet: log the concrete agent-mode TTS provider, model, voice, output format, and sample rate after speech synthesis, so Meet logs show which voice backend spoke each reply.
 - Voice Call: mark realtime calls completed when the realtime provider closes normally, so Twilio/OpenAI/Google realtime stop events do not leave active call records behind. Thanks @vincentkoc.
