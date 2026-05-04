@@ -2,7 +2,12 @@ import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
+export type ToolPolicyMatcher = (name: string) => boolean;
+
+export function createToolPolicyMatcher(policy?: SandboxToolPolicy): ToolPolicyMatcher {
+  if (!policy) {
+    return () => true;
+  }
   const deny = compileGlobPatterns({
     raw: expandToolGroups(policy.deny ?? []),
     normalize: normalizeToolName,
@@ -30,10 +35,7 @@ function makeToolPolicyMatcher(policy: SandboxToolPolicy) {
 }
 
 export function isToolAllowedByPolicyName(name: string, policy?: SandboxToolPolicy): boolean {
-  if (!policy) {
-    return true;
-  }
-  return makeToolPolicyMatcher(policy)(name);
+  return createToolPolicyMatcher(policy)(name);
 }
 
 export function isToolAllowedByPolicies(

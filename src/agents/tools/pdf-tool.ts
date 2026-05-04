@@ -13,14 +13,13 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { prepareSimpleCompletionModel } from "../simple-completion-runtime.js";
 import { ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
-  resolveModelFromRegistry,
   resolveMediaToolLocalRoots,
-  resolveModelRuntimeApiKey,
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
 } from "./media-tool-shared.js";
@@ -37,9 +36,6 @@ import {
 import { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 import {
   createSandboxBridgeReadFile,
-  discoverAuthStorage,
-  discoverModels,
-  ensureOpenClawModelsJson,
   resolveSandboxedBridgeMediaPath,
   runWithImageModelFallback,
   type AnyAgentTool,
@@ -142,10 +138,6 @@ async function runPdfPrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.pdfModelConfig);
 
-  await ensureOpenClawModelsJson(effectiveCfg, params.agentDir);
-  const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
-
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {
     if (!extractionCache) {
@@ -158,13 +150,21 @@ async function runPdfPrompt(params: {
     cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
-      const model = resolveModelFromRegistry({ modelRegistry, provider, modelId });
-      const apiKey = await resolveModelRuntimeApiKey({
-        model,
+      const prepared = await prepareSimpleCompletionModel({
         cfg: effectiveCfg,
+        provider,
+        modelId,
         agentDir: params.agentDir,
-        authStorage,
+        skipPiDiscovery: true,
       });
+      if ("error" in prepared) {
+        throw new Error(prepared.error);
+      }
+      const { model } = prepared;
+      const apiKey = prepared.auth.apiKey?.trim();
+      if (!apiKey) {
+        throw new Error(`No API key resolved for provider "${model.provider}".`);
+      }
 
       if (providerSupportsNativePdf(provider)) {
         if (params.pageNumbers && params.pageNumbers.length > 0) {

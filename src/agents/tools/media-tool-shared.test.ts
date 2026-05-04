@@ -147,6 +147,19 @@ describe("hasGenerationToolAvailability", () => {
     expect(loadProviders).not.toHaveBeenCalled();
   });
 
+  it("uses precomputed availability without reloading providers", () => {
+    const loadProviders = vi.fn(() => []);
+
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        providers: loadProviders,
+        precomputedAvailability: true,
+      }),
+    ).toBe(true);
+    expect(loadProviders).not.toHaveBeenCalled();
+  });
+
   it("checks configured runtime providers against the supplied auth store", () => {
     expect(
       hasGenerationToolAvailability({

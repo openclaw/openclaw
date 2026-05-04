@@ -314,7 +314,11 @@ export function hasGenerationToolAvailability(params: {
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
+  precomputedAvailability?: boolean;
 }): boolean {
+  if (params.precomputedAvailability !== undefined) {
+    return params.precomputedAvailability;
+  }
   if (params.cfg?.plugins?.enabled === false) {
     return false;
   }

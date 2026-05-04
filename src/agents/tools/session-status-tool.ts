@@ -27,6 +27,7 @@ import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js"
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
+import { resolveModelCatalogScope } from "../model-catalog-scope.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildAllowedModelSet,
@@ -243,7 +244,24 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     defaultProvider: currentProvider,
   });
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw,
+    defaultProvider: currentProvider,
+    aliasIndex,
+  });
+  if (!resolved) {
+    throw new Error(`Unrecognized model "${raw}".`);
+  }
+
+  const catalog = await loadModelCatalog({
+    config: params.cfg,
+    ...resolveModelCatalogScope({
+      cfg: params.cfg,
+      provider: resolved.ref.provider,
+      model: resolved.ref.model,
+    }),
+  });
   const allowed = buildAllowedModelSet({
     cfg: params.cfg,
     catalog,
@@ -252,14 +270,6 @@ async function resolveModelOverride(params: {
     agentId: params.agentId,
   });
 
-  const resolved = resolveModelRefFromString({
-    raw,
-    defaultProvider: currentProvider,
-    aliasIndex,
-  });
-  if (!resolved) {
-    throw new Error(`Unrecognized model "${raw}".`);
-  }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
   if (allowed.allowedKeys.size > 0 && !allowed.allowedKeys.has(key)) {
     throw new Error(`Model "${key}" is not allowed.`);
@@ -656,7 +666,14 @@ export function createSessionStatusTool(opts?: {
             !configuredSelectedEntry ||
             configuredSelectedEntry.reasoning === undefined;
           const runtimeCatalog = shouldHydrateRuntimeCatalog
-            ? await loadModelCatalog({ config: cfg })
+            ? await loadModelCatalog({
+                config: cfg,
+                ...resolveModelCatalogScope({
+                  cfg,
+                  provider: providerForCard,
+                  model: defaultModelForCard,
+                }),
+              })
             : undefined;
           const runtimeSelectedEntry = runtimeCatalog?.find(
             (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,

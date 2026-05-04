@@ -107,6 +107,22 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
   return Math.min(requestedMaxTokens, modelMaxTokens);
 }
 
+function collectProviderIdsFromModelRefs(refs: Array<string | undefined>): string[] {
+  const providers = new Set<string>();
+  for (const ref of refs) {
+    const trimmed = ref?.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const slash = trimmed.indexOf("/");
+    if (slash <= 0) {
+      continue;
+    }
+    providers.add(trimmed.slice(0, slash).trim().toLowerCase());
+  }
+  return [...providers].filter(Boolean);
+}
+
 /**
  * Resolve the effective image model config for the `image` tool.
  *
@@ -277,7 +293,14 @@ async function runImagePrompt(params: {
 }> {
   const effectiveCfg = applyImageModelConfigDefaults(params.cfg, params.imageModelConfig);
   const providerCfg: OpenClawConfig = effectiveCfg ?? {};
-  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg);
+  const providerIds = collectProviderIdsFromModelRefs([
+    params.modelOverride,
+    params.imageModelConfig.primary,
+    ...(params.imageModelConfig.fallbacks ?? []),
+  ]);
+  const providerRegistry = imageToolProviderDeps.buildProviderRegistry(undefined, providerCfg, {
+    providerIds,
+  });
 
   const result = await runWithImageModelFallback({
     cfg: effectiveCfg,
@@ -409,9 +432,6 @@ export function createImageTool(options?: {
         authStore: options?.authProfileStore,
       })
     : explicitImageModelConfig;
-  if (!resolvedImageModelConfig && !options?.deferAutoModelResolution) {
-    return null;
-  }
   const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
 
   // If model has native vision, images in the prompt are auto-injected
@@ -489,6 +509,26 @@ export function createImageTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const imageModelConfig =
+        resolvedImageModelConfig ??
+        resolveImageModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+          workspaceDir: options?.workspaceDir,
+          authStore: options?.authProfileStore,
+        }) ??
+        (modelOverride?.trim() ? { primary: modelOverride.trim() } : null);
+      if (!imageModelConfig) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Image analysis is unavailable because no image-capable model is configured with usable auth.",
+            },
+          ],
+          details: { error: "image_model_unavailable" },
+        };
+      }
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
@@ -620,19 +660,6 @@ export function createImageTool(options?: {
       }
 
       // MARK: - Run image prompt with all loaded images
-      const imageModelConfig =
-        resolvedImageModelConfig ??
-        resolveImageModelConfigForTool({
-          cfg: options?.config,
-          agentDir,
-          workspaceDir: options?.workspaceDir,
-          authStore: options?.authProfileStore,
-        });
-      if (!imageModelConfig) {
-        throw new Error(
-          "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
-        );
-      }
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,

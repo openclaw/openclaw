@@ -244,6 +244,35 @@ describe("createOpenClawCodingTools", () => {
     expect(stages.indexOf("schema-normalization")).toBeLessThan(stages.indexOf("tool-hooks"));
   });
 
+  it("skips extended tool surface materialization for local-only runtime toolsAllow", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["exec", "read", "group:fs", "bash", "apply-patch"],
+    });
+
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(tools.map((tool) => tool.name)).not.toEqual(expect.arrayContaining(["message"]));
+    expect(applyRuntimeToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name)).toEqual([
+      "read",
+      "exec",
+    ]);
+  });
+
+  it("keeps extended tool planning for non-local runtime toolsAllow entries", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["group:runtime"],
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalled();
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];
@@ -333,7 +362,6 @@ describe("createOpenClawCodingTools", () => {
     const oauthTools = createOpenClawCodingTools({
       config: testConfig,
       modelProvider: "anthropic",
-      modelAuthMode: "oauth",
     });
     const names = new Set(oauthTools.map((tool) => tool.name));
     expect(names.has("exec")).toBe(true);

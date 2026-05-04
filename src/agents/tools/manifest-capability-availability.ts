@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestContractSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import {
   hasNonEmptyManifestEnvCandidate,
@@ -70,24 +67,6 @@ export function getCurrentCapabilityMetadataSnapshot(params: {
     config: params.config,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-}
-
-export function loadCapabilityMetadataSnapshot(params: {
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-}): Pick<PluginMetadataSnapshot, "index" | "plugins"> {
-  return (
-    getCurrentPluginMetadataSnapshot({
-      config: params.config,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }) ??
-    loadManifestContractSnapshot({
-      config: params.config,
-      env: params.env,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    })
-  );
 }
 
 export function hasSnapshotCapabilityAvailability(params: {
