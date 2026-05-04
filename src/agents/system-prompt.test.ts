@@ -6,6 +6,7 @@ import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js"
 import {
   appendAgentBootstrapSystemPromptSupplement,
   buildAgentBootstrapSystemContext,
+  buildAgentBootstrapSystemPromptSections,
   buildAgentBootstrapSystemPromptSupplement,
   buildAgentSystemPrompt,
   buildRuntimeLine,
@@ -1111,6 +1112,22 @@ describe("buildAgentBootstrapSystemContext", () => {
 });
 
 describe("buildAgentBootstrapSystemPromptSupplement", () => {
+  it("can render bootstrap guidance without duplicating Project Context", () => {
+    const sections = buildAgentBootstrapSystemPromptSections({
+      bootstrapMode: "full",
+      bootstrapTruncationNotice: "Bootstrap context was truncated.",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+      includeProjectContext: false,
+    }).join("\n");
+
+    expect(sections).toContain("## Bootstrap Pending");
+    expect(sections).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(sections).toContain("## Bootstrap Context Notice");
+    expect(sections).toContain("Bootstrap context was truncated.");
+    expect(sections).not.toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(sections).not.toContain("Ask who I am.");
+  });
+
   it("adds pending bootstrap guidance and BOOTSTRAP.md contents for override prompts", () => {
     const supplement = buildAgentBootstrapSystemPromptSupplement({
       bootstrapMode: "full",
