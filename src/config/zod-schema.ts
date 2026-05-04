@@ -385,6 +385,20 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        sessionTracing: z
+          .object({
+            enabled: z.boolean().optional(),
+            headers: z
+              .object({
+                sessionId: z.string().optional(),
+                sessionName: z.string().optional(),
+              })
+              .strict()
+              .optional(),
+            sessionName: z.string().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

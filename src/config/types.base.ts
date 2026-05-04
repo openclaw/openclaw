@@ -303,6 +303,17 @@ export type DiagnosticsCacheTraceConfig = {
   includeSystem?: boolean;
 };
 
+export type SessionTracingHeaders = {
+  sessionId?: string;
+  sessionName?: string;
+};
+
+export type SessionTracingConfig = {
+  enabled?: boolean;
+  headers?: SessionTracingHeaders;
+  sessionName?: string;
+};
+
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
@@ -311,6 +322,7 @@ export type DiagnosticsConfig = {
   stuckSessionWarnMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
+  sessionTracing?: SessionTracingConfig;
 };
 
 export type WebReconnectConfig = {

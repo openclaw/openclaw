@@ -122,6 +122,7 @@ import {
   resolveSubagentToolPolicyForSession,
 } from "../../pi-tools.policy.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { wrapStreamFnWithSessionTracing } from "../../observability-session-headers.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
 import { registerProviderStreamForModel } from "../../provider-stream.js";
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -1945,6 +1946,12 @@ export async function runEmbeddedAttempt(
         model: params.model,
         resolvedApiKey: params.resolvedApiKey,
         authStorage: params.authStorage,
+      });
+      activeSession.agent.streamFn = wrapStreamFnWithSessionTracing({
+        streamFn: activeSession.agent.streamFn,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        diagnostics: params.config?.diagnostics,
       });
       const providerTextTransforms = resolveProviderTextTransforms({
         provider: params.provider,
