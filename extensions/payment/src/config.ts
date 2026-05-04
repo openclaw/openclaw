@@ -23,34 +23,57 @@ const mockProviderSchema = z.object({}).strict();
 // ---------------------------------------------------------------------------
 // Providers sub-schema
 //
-// z.preprocess normalises undefined/missing values to {} before the inner
-// schema runs, so that inner .default() calls fire correctly.
-// In zod v4, .default(value) returns the default as-is without re-parsing it
-// through the schema, so we use preprocess to bridge the gap.
+// In zod v4+, .default(value) returns the default as-is without re-parsing it
+// through the inner schema, so inner .default() calls would not fire when a
+// nested key is omitted. zod 4.4 also tightened optionality semantics in
+// z.preprocess, so we pre-fill missing keys at the outer providers level
+// before the inner schemas run — that way each inner schema sees an object
+// (possibly {}) and fires its own defaults.
 // ---------------------------------------------------------------------------
 
-const providersBaseSchema = z
-  .object({
-    "stripe-link": z.preprocess((val) => (val === undefined ? {} : val), stripeLinkProviderSchema),
-    mock: z.preprocess((val) => (val === undefined ? {} : val), mockProviderSchema),
-  })
-  .strict();
+const providersBaseSchema = z.preprocess(
+  (val) => {
+    const obj = val === undefined || val === null ? {} : (val as Record<string, unknown>);
+    return {
+      "stripe-link": obj["stripe-link"] ?? {},
+      mock: obj.mock ?? {},
+    };
+  },
+  z
+    .object({
+      "stripe-link": stripeLinkProviderSchema,
+      mock: mockProviderSchema,
+    })
+    .strict(),
+);
 
 // ---------------------------------------------------------------------------
 // Root config schema
 // ---------------------------------------------------------------------------
 
-const paymentConfigSchema = z
-  .object({
-    enabled: z.boolean().default(false),
-    provider: z.enum(["stripe-link", "mock"], {
-      error: "provider must be one of: stripe-link, mock",
-    }),
-    defaultCurrency: z.string().default("usd"),
-    store: z.string().default("~/.openclaw/payments"),
-    providers: z.preprocess((val) => (val === undefined ? {} : val), providersBaseSchema),
-  })
-  .strict();
+const paymentConfigSchema = z.preprocess(
+  (val) => {
+    if (val === undefined || val === null) return val; // let zod surface the missing-input error
+    if (typeof val !== "object") return val; // let zod surface the wrong-type error
+    const obj = val as Record<string, unknown>;
+    // Pre-fill `providers: {}` if missing so the providers preprocess fires its inner defaults.
+    if (obj.providers === undefined) {
+      return { ...obj, providers: {} };
+    }
+    return obj;
+  },
+  z
+    .object({
+      enabled: z.boolean().default(false),
+      provider: z.enum(["stripe-link", "mock"], {
+        error: "provider must be one of: stripe-link, mock",
+      }),
+      defaultCurrency: z.string().default("usd"),
+      store: z.string().default("~/.openclaw/payments"),
+      providers: providersBaseSchema,
+    })
+    .strict(),
+);
 
 // ---------------------------------------------------------------------------
 // Exported types and functions
