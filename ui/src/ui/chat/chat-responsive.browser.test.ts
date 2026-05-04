@@ -87,11 +87,11 @@ function chatHeaderControlsHtml(hidden = false) {
       <section class="content-header${hidden ? " content-header--chat-hidden" : ""}"${hidden ? ' inert aria-hidden="true"' : ""}>
         <div>
           <div class="chat-controls__session-row">
-            <label class="field chat-controls__session chat-controls__session-picker">
-              <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
-            </label>
             <label class="field chat-controls__session chat-controls__agent">
               <select data-chat-agent-filter="true" aria-label="Filter sessions by agent"><option>Valentina</option></select>
+            </label>
+            <label class="field chat-controls__session chat-controls__session-picker">
+              <select data-chat-session-select="true" aria-label="Chat session"><option>main</option></select>
             </label>
             <label class="field chat-controls__session chat-controls__model">
               <select data-chat-model-select="true" aria-label="Chat model"><option>gpt-5.5</option></select>
@@ -260,7 +260,7 @@ describe("chat responsive browser layout", () => {
       ].filter((value): value is number => typeof value === "number");
       expect(rowY.length).toBe(5);
       expect(Math.max(...rowY) - Math.min(...rowY)).toBeLessThanOrEqual(4);
-      expect(controls.session!.x).toBeLessThan(controls.agent!.x);
+      expect(controls.agent!.x).toBeLessThan(controls.session!.x);
       expect(controls.session!.width / controls.agent!.width).toBeGreaterThan(1.25);
       expect(controls.session!.width / controls.agent!.width).toBeLessThan(1.55);
     } finally {
@@ -342,7 +342,7 @@ describe("chat responsive browser layout", () => {
         expect(mobileControls.agent).not.toBeNull();
         expect(mobileControls.session).not.toBeNull();
         expect(mobileControls.session!.y).toBe(mobileControls.agent!.y);
-        expect(mobileControls.session!.x).toBeLessThan(mobileControls.agent!.x);
+        expect(mobileControls.agent!.x).toBeLessThan(mobileControls.session!.x);
         expect(mobileControls.session!.width / mobileControls.agent!.width).toBeGreaterThan(1.25);
         expect(mobileControls.session!.width / mobileControls.agent!.width).toBeLessThan(1.55);
         expect(mobileControls.thinkingFull?.display).not.toBe("none");

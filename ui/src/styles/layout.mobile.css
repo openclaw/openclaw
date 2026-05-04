@@ -30,9 +30,9 @@
 
   .chat-controls__session-row {
     grid-template-columns:
-      minmax(112px, 7fr) minmax(96px, 5fr) minmax(116px, 5fr)
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
       minmax(112px, 4fr);
-    grid-template-areas: "session agent model thinking";
+    grid-template-areas: "agent session model thinking";
     align-items: center;
     gap: 8px;
     width: 100%;
@@ -441,9 +441,9 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row {
     display: grid;
-    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     grid-template-areas:
-      "session agent"
+      "agent session"
       "model thinking";
     gap: 8px;
     width: 100%;

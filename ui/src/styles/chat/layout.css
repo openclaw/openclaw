@@ -1050,9 +1050,9 @@
 .chat-controls__session-row {
   display: grid;
   grid-template-columns:
-    minmax(132px, 7fr) minmax(116px, 5fr) minmax(132px, 5fr)
+    minmax(116px, 5fr) minmax(132px, 7fr) minmax(132px, 5fr)
     minmax(128px, 4fr);
-  grid-template-areas: "session agent model thinking";
+  grid-template-areas: "agent session model thinking";
   align-items: center;
   gap: 8px;
   width: 100%;
