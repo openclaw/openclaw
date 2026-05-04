@@ -1663,10 +1663,14 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
     });
 
-    it("falls back to medium when no provider thinking hook is active", () => {
+    it("uses bundled provider thinking defaults when no explicit config overrides them", () => {
       const cfg = {} as OpenClawConfig;
 
-      expect(resolveAnthropicOpusThinking(cfg)).toBe("medium");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+    });
+
+    it("falls back to medium when no provider thinking policy is active", () => {
+      const cfg = {} as OpenClawConfig;
 
       expect(
         resolveThinkingDefault({
@@ -1678,6 +1682,22 @@ describe("model-selection", () => {
               provider: "amazon-bedrock",
               id: "us.anthropic.claude-sonnet-4-6-v1:0",
               name: "Claude Sonnet 4.6",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("medium");
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "custom-provider",
+          model: "custom-reasoning-model",
+          catalog: [
+            {
+              provider: "custom-provider",
+              id: "custom-reasoning-model",
+              name: "Custom Reasoning Model",
               reasoning: true,
             },
           ],
