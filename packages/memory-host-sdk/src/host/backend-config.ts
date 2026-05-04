@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { escape as escapeGlobPattern } from "minimatch";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   type MemoryBackend,
@@ -306,7 +307,7 @@ function resolveCustomPaths(
         // parent-directory collection with an exact-filename pattern, regardless
         // of any user-supplied glob (a glob does not apply to a single file).
         collectionPath = path.dirname(resolved);
-        pattern = path.basename(resolved);
+        pattern = escapeGlobPattern(path.basename(resolved));
       }
     } catch {
       // not a file or can't stat, use as-is
