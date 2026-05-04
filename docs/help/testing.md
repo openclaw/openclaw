@@ -144,6 +144,12 @@ inside every shard.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+- `pnpm test:plugins:kitchen-sink-live`
+  - Runs the live OpenAI Kitchen Sink plugin gauntlet through QA Lab. It
+    installs the external Kitchen Sink package, verifies the plugin SDK surface
+    inventory, probes `/healthz` and `/readyz`, records gateway CPU/RSS
+    evidence, runs a live OpenAI turn, and checks adversarial diagnostics.
+    Requires live OpenAI auth such as `OPENAI_API_KEY`.
 - `pnpm test:gateway:cpu-scenarios`
   - Runs the gateway startup bench plus a small mock QA Lab scenario pack
     (`channel-chat-baseline`, `memory-failure-fallback`,
