@@ -24,7 +24,9 @@ const mocks = vi.hoisted(() => {
     }),
   };
   return {
-    callGatewayFromCli: vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
+    callGatewayFromCli: vi.fn<
+      (method: string, _opts: unknown, params?: unknown) => Promise<unknown>
+    >(async (method: string, _opts: unknown, params?: unknown) => {
       if (method.endsWith(".get")) {
         if (method === "config.get") {
           return {
@@ -210,6 +212,65 @@ describe("exec approvals CLI", () => {
       }),
       0,
     );
+  });
+
+  it("lists pending approval requests", async () => {
+    const now = Date.now();
+    callGatewayFromCli.mockImplementation(async (method: string, _opts: unknown) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: "8332daed-1111-4444-8888-000000000000",
+            request: {
+              command: "cat << 'EOF'\nhello\nEOF",
+              commandPreview: "cat << 'EOF' ... EOF",
+              agentId: "main",
+              host: "gateway",
+            },
+            createdAtMs: now - 45_000,
+            expiresAtMs: now + 1_755_000,
+          },
+        ];
+      }
+      return { method };
+    });
+
+    await runApprovalsCommand(["approvals", "pending"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approval.list",
+      expect.objectContaining({ timeout: "10000" }),
+      {},
+    );
+    const output = defaultRuntime.log.mock.calls.map((args) => String(args[0])).join("\n");
+    expect(output).toContain("8332daed");
+    expect(output).toContain("main");
+    expect(output).toContain("gateway");
+    expect(output).toContain("cat << 'EOF' ... EOF");
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("prints pending approval requests as json", async () => {
+    const pending = [
+      {
+        id: "approval-json-1",
+        request: {
+          command: "/usr/bin/file /tmp/media.ogg",
+          agentId: "main",
+          host: "node",
+        },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+    ];
+    callGatewayFromCli.mockImplementation(async (method: string) =>
+      method === "exec.approval.list" ? pending : { method },
+    );
+
+    await runApprovalsCommand(["approvals", "pending", "--json"]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(pending, 0);
+    expect(runtimeErrors).toHaveLength(0);
   });
 
   it("reports wildcard host policy sources in effective policy output", async () => {
