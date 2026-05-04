@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/loader: keep bundled plugin package `test-api.js` aliases behind private QA mode, so source transforms do not expose test-only public surfaces during normal plugin loading. Thanks @vincentkoc.
 - Gateway/startup: start cron and record the post-ready memory trace even when deferred maintenance timers fail after readiness, so a non-fatal timer setup issue does not silently leave scheduled jobs idle. Thanks @vincentkoc.
 - Agents/session status: keep semantic `session_status({ sessionKey: "current" })` on the live run session even before that run has a persisted session-store entry, instead of falling back to the sandbox policy key. Thanks @vincentkoc.
 - QA/Slack: resolve bundled official plugin public-surface package aliases during source-mode QA runs, so release Slack live validation can load `@openclaw/slack/api.js` without workspace symlinks. Thanks @vincentkoc.

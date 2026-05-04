@@ -331,10 +331,23 @@ function readBundledPluginPackageName(packageJsonPath: string): string | null {
   }
 }
 
-function listBundledPluginPublicSurfaceSourceBasenames(extensionSourceRoot: string): string[] {
+function isBundledPluginPublicSurfaceSourceBasename(params: {
+  basename: string;
+  includePrivateQa: boolean;
+}): boolean {
+  if (params.basename === "test-api") {
+    return params.includePrivateQa;
+  }
+  return BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(params.basename);
+}
+
+function listBundledPluginPublicSurfaceSourceBasenames(params: {
+  extensionSourceRoot: string;
+  includePrivateQa: boolean;
+}): string[] {
   try {
     return fs
-      .readdirSync(extensionSourceRoot, { withFileTypes: true })
+      .readdirSync(params.extensionSourceRoot, { withFileTypes: true })
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .flatMap((fileName) => {
@@ -345,7 +358,12 @@ function listBundledPluginPublicSurfaceSourceBasenames(extensionSourceRoot: stri
           return [];
         }
         const basename = fileName.slice(0, -ext.length);
-        return BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN.test(basename) ? [basename] : [];
+        return isBundledPluginPublicSurfaceSourceBasename({
+          basename,
+          includePrivateQa: params.includePrivateQa,
+        })
+          ? [basename]
+          : [];
       })
       .toSorted();
   } catch {
@@ -410,6 +428,7 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
     isProduction: process.env.NODE_ENV === "production",
     pluginSdkResolution: params.pluginSdkResolution,
   });
+  const includePrivateQa = shouldIncludePrivateLocalOnlyPluginSdkSubpaths();
   const aliasMap: Record<string, string> = {};
   for (const entry of extensionDirs) {
     if (!entry.isDirectory()) {
@@ -422,9 +441,10 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
     if (!packageName) {
       continue;
     }
-    for (const basename of listBundledPluginPublicSurfaceSourceBasenames(
-      path.join(extensionsRoot, dirName),
-    )) {
+    for (const basename of listBundledPluginPublicSurfaceSourceBasenames({
+      extensionSourceRoot: path.join(extensionsRoot, dirName),
+      includePrivateQa,
+    })) {
       const target = resolveBundledPluginPublicSurfaceAliasTarget({
         packageRoot,
         dirName,
