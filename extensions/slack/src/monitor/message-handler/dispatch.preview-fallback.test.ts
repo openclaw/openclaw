@@ -231,6 +231,21 @@ vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
+  buildChannelProgressDraftLine: (params: {
+    progressText?: string;
+    summary?: string;
+    title?: string;
+    name?: string;
+  }) => {
+    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+    return text
+      ? {
+          kind: "item",
+          text,
+          label: params.title ?? params.name ?? "Update",
+        }
+      : undefined;
+  },
   createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
     let started = false;
     let workEvents = 0;
@@ -257,12 +272,14 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   },
   formatChannelProgressDraftText: (params: {
     entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
-    lines: string[];
+    lines: Array<string | { text: string }>;
+    formatLine?: (line: string) => string;
   }) => {
     const label = params.entry?.streaming?.progress?.label;
+    const formatLine = params.formatLine ?? ((line: string) => line);
     return [
       label === false ? undefined : (label ?? "Thinking"),
-      ...params.lines.map((line) => `• ${line}`),
+      ...params.lines.map((line) => `• ${formatLine(typeof line === "string" ? line : line.text)}`),
     ]
       .filter((line): line is string => Boolean(line))
       .join("\n");
@@ -276,6 +293,9 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   resolveChannelProgressDraftMaxLines: (entry?: {
     streaming?: { progress?: { maxLines?: number } };
   }) => entry?.streaming?.progress?.maxLines ?? 8,
+  resolveChannelProgressDraftRender: (entry?: {
+    streaming?: { progress?: { render?: "text" | "rich" } };
+  }) => entry?.streaming?.progress?.render ?? "text",
   resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
   resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
   resolveChannelStreamingPreviewToolProgress: (entry?: {
