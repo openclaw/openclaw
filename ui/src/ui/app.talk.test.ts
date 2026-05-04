@@ -28,24 +28,29 @@ describe("OpenClawApp Talk controls", () => {
 
   it("retries Talk immediately when the previous session is already in error state", async () => {
     const { OpenClawApp } = await import("./app.ts");
-    const staleStop = vi.fn();
-    const app: {
+    const app = Object.create(OpenClawApp.prototype) as {
       client: unknown;
       connected: boolean;
       lastError: string | null;
       realtimeTalkActive: boolean;
+      realtimeTalkDetail: string | null;
       realtimeTalkStatus: string;
       realtimeTalkSession: { stop(): void } | null;
+      realtimeTalkTranscript: string | null;
       sessionKey: string;
-    } = {
-      client: { request: vi.fn() },
-      connected: true,
-      lastError: null,
-      realtimeTalkActive: true,
-      realtimeTalkStatus: "error",
-      realtimeTalkSession: { stop: staleStop },
-      sessionKey: "main",
     };
+    const staleStop = vi.fn();
+    Object.defineProperties(app, {
+      client: { value: { request: vi.fn() }, writable: true },
+      connected: { value: true, writable: true },
+      lastError: { value: null, writable: true },
+      realtimeTalkActive: { value: true, writable: true },
+      realtimeTalkDetail: { value: null, writable: true },
+      realtimeTalkSession: { value: { stop: staleStop }, writable: true },
+      realtimeTalkStatus: { value: "error", writable: true },
+      realtimeTalkTranscript: { value: null, writable: true },
+      sessionKey: { value: "main", writable: true },
+    });
 
     await OpenClawApp.prototype.toggleRealtimeTalk.call(app as never);
 
