@@ -405,7 +405,7 @@ describe("Discord native plugin command dispatch", () => {
     });
   });
 
-  it("allows Discord command owners to run scoped plugin commands without gateway scopes", async () => {
+  it("does not treat Discord DM allowlist users as scoped plugin command owners", async () => {
     const cfg = {
       channels: {
         discord: {
@@ -420,9 +420,11 @@ describe("Discord native plugin command dispatch", () => {
 
     await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
 
-    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
     expect(interaction.followUp).toHaveBeenCalledWith(
-      expect.objectContaining({ content: "paired:now" }),
+      expect.objectContaining({
+        content: "⚠️ This command requires gateway scope: operator.pairing.",
+      }),
     );
     expect(interaction.reply).not.toHaveBeenCalled();
   });
@@ -540,6 +542,69 @@ describe("Discord native plugin command dispatch", () => {
     const cfg = {
       commands: {
         ownerAllowFrom: ["telegram:123456789"],
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "234567890123456789": {
+                  enabled: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "pair",
+      description: "Pair",
+      acceptsArgs: true,
+    };
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId: "234567890123456789",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    interaction.user.id = "999999999999999999";
+    interaction.options.getString.mockReturnValue("now");
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "open:now",
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ name: "pair" }),
+        args: "now",
+      }),
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "open:now" }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-matching Discord command owners from restricting guild plugin commands", async () => {
+    const cfg = {
+      commands: {
+        ownerAllowFrom: ["discord:123456789012345678"],
       },
       channels: {
         discord: {

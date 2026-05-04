@@ -323,9 +323,9 @@ async function dispatchDiscordCommandInteraction(params: {
       allowNameMatching,
     });
   const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
-  const ownerAllowListConfigured =
-    discordOwnerAllowList != null || commandOwnerAllowList != null || commandOwnerAllowAll;
-  const ownerOk = discordOwnerOk || commandOwnerOk || commandOwnerAllowAll;
+  const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+  const ownerAllowListConfigured = discordOwnerAllowList != null;
+  const ownerOk = discordOwnerOk;
   const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
     cfg,
     accountId,
@@ -574,7 +574,7 @@ async function dispatchDiscordCommandInteraction(params: {
       channel: "discord",
       channelId,
       isAuthorizedSender: commandAuthorized,
-      senderIsOwner: ownerOk,
+      senderIsOwner: senderIsCommandOwner,
       sessionKey: effectiveRoute.sessionKey,
       commandBody: prompt,
       config: cfg,
@@ -659,7 +659,7 @@ async function dispatchDiscordCommandInteraction(params: {
     commandTargetSessionKey,
     channel: "discord",
     senderId: sender.id,
-    senderIsOwner: ownerOk,
+    senderIsOwner: senderIsCommandOwner,
     isAuthorizedSender: commandAuthorized,
     isGroup: isGuild || isGroupDm,
     defaultGroupActivation: () =>
