@@ -23,6 +23,7 @@ import {
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { getPluginRegistryState } from "../../src/plugins/runtime-state.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -2300,6 +2301,25 @@ function getModelRef(
   return undefined;
 }
 
+/**
+ * Build the toolsAllow list for the recall sub-agent.
+ *
+ * `memory_recall` is only registered when the `memory-lancedb` plugin (or
+ * another plugin that provides the tool) is active. Including it when it is
+ * absent causes the embedded-runner allowlist resolver to throw
+ * "No callable tools remain" and wipe the session context (#77506).
+ */
+function resolveRecallToolsAllow(): string[] {
+  const base = ["memory_search", "memory_get"];
+  const registeredToolNames = new Set(
+    getPluginRegistryState()?.activeRegistry?.tools.map((t) => t.name) ?? [],
+  );
+  if (registeredToolNames.has("memory_recall")) {
+    base.unshift("memory_recall");
+  }
+  return base;
+}
+
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
   config: ResolvedActiveRecallPluginConfig;
@@ -2394,7 +2414,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: ["memory_recall", "memory_search", "memory_get"],
+      toolsAllow: resolveRecallToolsAllow(),
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",

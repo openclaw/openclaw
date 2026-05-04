@@ -1084,7 +1084,10 @@ describe("active-memory plugin", () => {
     expect(runParams?.prompt).toContain(
       "If memory_recall is unavailable, use memory_search and memory_get.",
     );
-    expect(runParams?.toolsAllow).toEqual(["memory_recall", "memory_search", "memory_get"]);
+    // memory_recall is only included when a plugin registers it (e.g. memory-lancedb).
+    // In test environments with no plugin registry, it should be absent.
+    expect(runParams?.toolsAllow).toEqual(expect.arrayContaining(["memory_search", "memory_get"]));
+    expect(runParams?.toolsAllow).not.toContain("memory_recall");
     expect(runParams?.allowGatewaySubagentBinding).toBe(true);
     expect(runParams?.prompt).toContain(
       "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
