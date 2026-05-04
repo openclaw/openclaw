@@ -284,7 +284,6 @@ function createPluginModuleLoader(params: {
     }
     const native = tryNativeRequireJavaScriptModule(target, {
       allowWindows: true,
-      fallbackOnMissingDependency: true,
     });
     if (native.ok) {
       pluginModuleLoaderStats.nativeHits += 1;
