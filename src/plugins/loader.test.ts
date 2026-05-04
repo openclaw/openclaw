@@ -2528,12 +2528,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
   it("preserves corpus supplements that were not re-registered on a second activating load (#77039)", () => {
     useNoBundledPlugins();
-    // Reproduces the service.start() scenario: on first load the plugin registers a corpus
-    // supplement; on second activating load clearActivatedPluginRuntimeState() wipes it and
-    // register(api) does NOT re-add it (module-level flag prevents double registration, just
-    // as service.start() only fires once and register() doesn't call registerMemoryCorpusSupplement
-    // on subsequent loads).  Without the restore loop the supplement stays gone; with it, the
-    // loader detects the still-active plugin didn't re-register and puts the supplement back.
+    // Reproduces the service.start() scenario: the plugin registers a service (idempotent)
+    // and on first load it also registers a corpus supplement. On the second activating load
+    // clearActivatedPluginRuntimeState() wipes the supplement; register() fires again but
+    // the supplement flag prevents double registration (matching service.start() semantics).
+    // The restore loop sees the plugin still has a registered service and puts the supplement back.
     const plugin = writePlugin({
       id: "corpus-supplement-plugin",
       filename: "corpus-supplement-plugin.cjs",
@@ -2542,6 +2541,8 @@ module.exports = {
   id: "corpus-supplement-plugin",
   kind: "memory",
   register(api) {
+    // registerService is idempotent — simulates an always-registered service.
+    api.registerService({ id: "corpus-supplement-plugin-svc", start: async () => {}, stop: async () => {} });
     if (!registered) {
       registered = true;
       api.registerMemoryCorpusSupplement({
@@ -2616,6 +2617,56 @@ module.exports = {
       workspaceDir: plugin.dir,
       config: { plugins: { load: { paths: [] }, allow: [] } },
     });
+    expect(listMemoryCorpusSupplements()).toHaveLength(0);
+  });
+
+  it("does not restore corpus supplement when a loaded plugin drops it between activating loads (#77039)", () => {
+    useNoBundledPlugins();
+    // A plugin that registers a supplement on the first load, but on the second load its
+    // register() runs again and intentionally omits the call (simulated with a counter).
+    // Without the service-ownership guard, the restore loop would incorrectly re-add the
+    // stale supplement because the plugin is still loaded. With the guard it is skipped
+    // because the plugin has no registered service (supplements from service.start() are
+    // the only legitimate restore case).
+    const plugin = writePlugin({
+      id: "corpus-supplement-drop-plugin",
+      filename: "corpus-supplement-drop-plugin.cjs",
+      body: `let calls = 0;
+module.exports = {
+  id: "corpus-supplement-drop-plugin",
+  kind: "memory",
+  register(api) {
+    calls++;
+    if (calls === 1) {
+      api.registerMemoryCorpusSupplement({
+        search: async () => [],
+        get: async () => null,
+      });
+    }
+    // Second call: intentionally no supplement (simulates a plugin update that dropped it).
+  },
+};`,
+    });
+    const pluginConfig = {
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["corpus-supplement-drop-plugin"],
+          slots: { memory: "corpus-supplement-drop-plugin" },
+        },
+      },
+    };
+
+    // First load: supplement registered via register().
+    loadOpenClawPlugins(pluginConfig);
+    expect(listMemoryCorpusSupplements()).toHaveLength(1);
+
+    // Second load: register() fires again, calls === 2, no supplement registered.
+    // The restore loop must NOT bring the stale supplement back because the plugin
+    // has no registered service (service-owned supplements are the only legitimate case).
+    loadOpenClawPlugins(pluginConfig);
     expect(listMemoryCorpusSupplements()).toHaveLength(0);
   });
 

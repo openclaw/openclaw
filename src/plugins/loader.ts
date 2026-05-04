@@ -2424,14 +2424,16 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     }
 
     if (shouldActivate && preLoadCorpusSupplements.length > 0) {
-      // Only restore supplements for plugins that are still active in the new registry.
-      // Disabled, failed, or omitted plugins must not keep their supplements alive.
-      const activePluginIdSet = new Set(
-        registry.plugins.filter((p) => p.status === "loaded").map((p) => p.id),
-      );
+      // Only restore supplements for plugins that are still active in the new registry AND
+      // have a registered service. Supplements registered via service.start() callbacks are
+      // the only legitimate case: register() is idempotent so service.start() only fires
+      // once, but register() itself always runs on every load. A loaded plugin whose
+      // register() ran without calling registerMemoryCorpusSupplement intentionally dropped
+      // it — restoring it would keep a stale adapter alive (#77039, addresses clawsweeper P2).
+      const servicePluginIdSet = new Set(registry.services.map((s) => s.pluginId));
       const reRegisteredPluginIds = new Set(listMemoryCorpusSupplements().map((r) => r.pluginId));
       for (const prev of preLoadCorpusSupplements) {
-        if (activePluginIdSet.has(prev.pluginId) && !reRegisteredPluginIds.has(prev.pluginId)) {
+        if (servicePluginIdSet.has(prev.pluginId) && !reRegisteredPluginIds.has(prev.pluginId)) {
           registerMemoryCorpusSupplement(prev.pluginId, prev.supplement);
         }
       }
