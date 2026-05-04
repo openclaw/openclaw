@@ -8,6 +8,7 @@ import {
   shouldAcquireLocalHeavyCheckLockForOxlint,
 } from "./lib/local-heavy-check-runtime.mjs";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { collectTrackedTypeScriptFiles } from "./lib/run-extension-oxlint.mjs";
 
 const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
 const PREPARE_EXTENSION_BOUNDARY_ARGS = [
@@ -37,6 +38,7 @@ const OXLINT_VALUE_FLAGS = new Set([
   "--tsconfig",
   "--warn",
 ]);
+const TRACKED_DIRECTORY_TARGETS = new Set(["extensions"]);
 
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args) {
   return !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg));
@@ -137,6 +139,57 @@ export function filterSparseMissingOxlintTargets(
   };
 }
 
+export function expandTrackedDirectoryOxlintTargets(
+  args,
+  { cwd = process.cwd(), collectFiles = collectTrackedTypeScriptFiles } = {},
+) {
+  const expandedArgs = [];
+  let expandedTargets = 0;
+  let consumeNextValue = false;
+
+  for (const arg of args) {
+    if (consumeNextValue) {
+      expandedArgs.push(arg);
+      consumeNextValue = false;
+      continue;
+    }
+
+    if (arg === "--") {
+      expandedArgs.push(arg);
+      continue;
+    }
+
+    if (arg.startsWith("--")) {
+      expandedArgs.push(arg);
+      if (!arg.includes("=") && OXLINT_VALUE_FLAGS.has(arg)) {
+        consumeNextValue = true;
+      }
+      continue;
+    }
+
+    if (arg.startsWith("-")) {
+      expandedArgs.push(arg);
+      continue;
+    }
+
+    if (!TRACKED_DIRECTORY_TARGETS.has(arg)) {
+      expandedArgs.push(arg);
+      continue;
+    }
+
+    const trackedFiles = collectFiles(cwd, [arg]);
+    if (trackedFiles.length === 0) {
+      expandedArgs.push(arg);
+      continue;
+    }
+
+    expandedTargets += 1;
+    expandedArgs.push(...trackedFiles);
+  }
+
+  return { args: expandedArgs, expandedTargets };
+}
+
 function getSparseCheckoutEnabled({ cwd }) {
   const result = spawnSync("git", ["config", "--get", "--bool", "core.sparseCheckout"], {
     cwd,
@@ -190,7 +243,8 @@ export async function main(argv = process.argv.slice(2), runtimeEnv = process.en
     resolveLocalHeavyCheckEnv(runtimeEnv),
   );
   const sparseTargets = filterSparseMissingOxlintTargets(policyArgs);
-  const finalArgs = sparseTargets.args;
+  const trackedDirectoryTargets = expandTrackedDirectoryOxlintTargets(sparseTargets.args);
+  const finalArgs = trackedDirectoryTargets.args;
   if (sparseTargets.skippedTargets.length > 0) {
     console.error(
       `[oxlint] sparse checkout is missing tracked target(s); skipping ${sparseTargets.skippedTargets.join(", ")}`,

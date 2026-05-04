@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { collectTrackedTypeScriptFiles } from "../../scripts/lib/run-extension-oxlint.mjs";
 import {
+  expandTrackedDirectoryOxlintTargets,
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
@@ -86,5 +88,70 @@ describe("run-oxlint", () => {
       skippedTargets: [],
       skippedConfigs: [],
     });
+  });
+
+  it("expands extension directory lint targets to tracked files", () => {
+    const result = expandTrackedDirectoryOxlintTargets(
+      ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions", "scripts"],
+      {
+        cwd: "/repo",
+        collectFiles: (cwd: string, roots: string[]) => {
+          expect(cwd).toBe("/repo");
+          expect(roots).toEqual(["extensions"]);
+          return ["extensions/slack/src/index.ts", "extensions/slack/src/runtime.ts"];
+        },
+      },
+    );
+
+    expect(result).toEqual({
+      args: [
+        "--tsconfig",
+        "config/tsconfig/oxlint.extensions.json",
+        "extensions/slack/src/index.ts",
+        "extensions/slack/src/runtime.ts",
+        "scripts",
+      ],
+      expandedTargets: 1,
+    });
+  });
+
+  it("collects extension lint targets from git-tracked files", () => {
+    const spawnCalls: Array<{ bin: string; args: string[]; cwd: string }> = [];
+    const result = collectTrackedTypeScriptFiles("/repo", ["extensions", "test/vitest/channel"], {
+      spawn: (bin: string, args: string[], options: { cwd: string }) => {
+        spawnCalls.push({ bin, args, cwd: options.cwd });
+        return {
+          status: 0,
+          stdout:
+            "extensions/slack/src/index.ts\0" +
+            "extensions/slack/src/readme.md\0" +
+            "extensions/slack/node_modules/stale.ts\0" +
+            "test/vitest/channel/openclaw.test.tsx\0",
+          stderr: "",
+        };
+      },
+    });
+
+    expect(spawnCalls).toEqual([
+      {
+        bin: "git",
+        args: ["ls-files", "-z", "--", "extensions", "test/vitest/channel"],
+        cwd: "/repo",
+      },
+    ]);
+    expect(result).toEqual([
+      "extensions/slack/src/index.ts",
+      "test/vitest/channel/openclaw.test.tsx",
+    ]);
+  });
+
+  it("does not expand an empty root list to the whole repository", () => {
+    const result = collectTrackedTypeScriptFiles("/repo", [], {
+      spawn: () => {
+        throw new Error("git should not be called for empty roots");
+      },
+    });
+
+    expect(result).toEqual([]);
   });
 });
