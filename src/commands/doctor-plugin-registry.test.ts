@@ -104,6 +104,7 @@ function createManagedNpmPlugin(params: {
   id: string;
   packageName: string;
   version: string;
+  peerDependencies?: Record<string, string>;
   packageLock?: boolean;
 }) {
   const npmRoot = path.join(params.stateDir, "npm");
@@ -154,6 +155,7 @@ function createManagedNpmPlugin(params: {
     JSON.stringify({
       name: params.packageName,
       version: params.version,
+      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
       openclaw: {
         extensions: ["."],
       },
@@ -460,5 +462,154 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(packageLock.packages).not.toHaveProperty("node_modules/@openclaw/google-meet");
     expect(packageLock.dependencies).not.toHaveProperty("@openclaw/google-meet");
     expect(packageLock.dependencies).toHaveProperty("other-plugin");
+  });
+
+  it("warns when managed npm plugins are missing the openclaw host peer link", async () => {
+    const stateDir = makeTempDir();
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "codex",
+      packageName: "codex-plugin",
+      version: "2026.5.3",
+      peerDependencies: {
+        openclaw: ">=2026.5.3",
+      },
+    });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "codex",
+        packageName: "codex-plugin",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: false },
+    });
+
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Managed npm plugin packages are missing their OpenClaw host peer link",
+    );
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain("codex: codex-plugin");
+    expect(fs.existsSync(path.join(managed.packageDir, "node_modules", "openclaw"))).toBe(false);
+  });
+
+  it("repairs missing managed npm openclaw host peer links during doctor repair", async () => {
+    const stateDir = makeTempDir();
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "codex",
+      packageName: "codex-plugin",
+      version: "2026.5.3",
+      peerDependencies: {
+        openclaw: ">=2026.5.3",
+      },
+    });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "codex",
+        packageName: "codex-plugin",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
+
+    const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
+    expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Repaired OpenClaw host peer link(s) for managed npm plugins",
+    );
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain("codex: codex-plugin");
+  });
+
+  it("replaces stale managed npm openclaw host peer links during doctor repair", async () => {
+    const stateDir = makeTempDir();
+    const staleTarget = path.join(stateDir, "stale-openclaw");
+    fs.mkdirSync(staleTarget, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "codex",
+      packageName: "codex-plugin",
+      version: "2026.5.3",
+      peerDependencies: {
+        openclaw: ">=2026.5.3",
+      },
+    });
+    const linkPath = path.join(managed.packageDir, "node_modules", "openclaw");
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.symlinkSync(staleTarget, linkPath, "junction");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "codex",
+        packageName: "codex-plugin",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
+
+    expect(fs.realpathSync(linkPath)).toBe(fs.realpathSync(process.cwd()));
+  });
+
+  it("skips managed npm openclaw peer-link repair when dependency keys escape the npm root", async () => {
+    const stateDir = makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const outsidePackageDir = path.join(stateDir, "outside-plugin");
+    fs.mkdirSync(npmRoot, { recursive: true });
+    fs.mkdirSync(outsidePackageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "../../outside-plugin": "2026.5.3",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(outsidePackageDir, "package.json"),
+      JSON.stringify({
+        name: "outside-plugin",
+        version: "2026.5.3",
+        peerDependencies: {
+          openclaw: ">=2026.5.3",
+        },
+      }),
+      "utf8",
+    );
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    });
+
+    expect(fs.existsSync(path.join(outsidePackageDir, "node_modules", "openclaw"))).toBe(false);
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "package path escapes the managed npm root",
+    );
   });
 });
