@@ -32,7 +32,6 @@ import {
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
-  transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -155,7 +154,6 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
-import { appendAgentBootstrapSystemPromptSupplement } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
@@ -213,11 +211,7 @@ import {
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "../stream-resolution.js";
-import {
-  applySystemPromptOverrideToSession,
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "../system-prompt.js";
+import { applySystemPromptOverrideToSession } from "../system-prompt.js";
 import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
@@ -240,20 +234,17 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
-  resolveAttemptWorkspaceBootstrapRouting,
-  shouldStripBootstrapFromEmbeddedContext,
-} from "./attempt-bootstrap-routing.js";
-export { shouldStripBootstrapFromEmbeddedContext } from "./attempt-bootstrap-routing.js";
-import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
+import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
 import { configureEmbeddedAttemptHttpRuntime } from "./attempt-http-runtime.js";
 import {
   createEmbeddedRunStageTracker,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
+import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import {
   assembleAttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -958,7 +949,6 @@ export async function runEmbeddedAttempt(
       hasBootstrapFileAccess: bootstrapHasFileAccess,
     });
     const bootstrapMode = bootstrapRouting.bootstrapMode;
-    const shouldStripBootstrapFromContext = bootstrapRouting.shouldStripBootstrapFromContext;
     const {
       bootstrapFiles: hookAdjustedBootstrapFiles,
       contextFiles: resolvedContextFiles,
@@ -993,12 +983,12 @@ export async function runEmbeddedAttempt(
       sourceWorkspaceDir: resolvedWorkspace,
       targetWorkspaceDir: effectiveWorkspace,
     });
-    const contextFiles = shouldStripBootstrapFromContext
-      ? remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()))
-      : remappedContextFiles;
-    const bootstrapFilesForInjectionStats = shouldStripBootstrapFromContext
-      ? hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME)
-      : hookAdjustedBootstrapFiles;
+    const contextFiles = bootstrapRouting.includeBootstrapInSystemContext
+      ? remappedContextFiles
+      : remappedContextFiles.filter((file) => !/(^|[\\/])BOOTSTRAP\.md$/iu.test(file.path.trim()));
+    const bootstrapFilesForInjectionStats = bootstrapRouting.includeBootstrapInSystemContext
+      ? hookAdjustedBootstrapFiles
+      : hookAdjustedBootstrapFiles.filter((file) => file.name !== DEFAULT_BOOTSTRAP_FILENAME);
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -1291,71 +1281,66 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: sessionAgentId,
     });
-    const builtAppendPrompt = systemPromptOverrideText
-      ? appendAgentBootstrapSystemPromptSupplement({
-          systemPrompt: systemPromptOverrideText,
-          bootstrapMode,
-          bootstrapTruncationNotice,
-          contextFiles,
-        })
-      : buildEmbeddedSystemPrompt({
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel: params.thinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          ownerDisplay: ownerDisplay.ownerDisplay,
-          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-          reasoningTagHint,
-          heartbeatPrompt,
-          skillsPrompt: effectiveSkillsPrompt,
-          docsPath: openClawReferences.docsPath ?? undefined,
-          sourcePath: openClawReferences.sourcePath ?? undefined,
-          ttsHint,
-          workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
-          reactionGuidance,
-          promptMode: effectivePromptMode,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          silentReplyPromptMode: params.silentReplyPromptMode,
-          acpEnabled: isAcpRuntimeSpawnAvailable({
-            config: params.config,
-            sandboxed: sandboxInfo?.enabled === true,
-          }),
-          nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
-          runtimeInfo,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          modelAliasLines: buildModelAliasLines(params.config),
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          bootstrapMode,
-          bootstrapTruncationNotice,
-          includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
-          memoryCitationsMode: params.config?.memory?.citations,
-          promptContribution,
-        });
-    const appendPrompt = isRawModelRun
-      ? ""
-      : transformProviderSystemPrompt({
-          provider: params.provider,
+    const attemptSystemPrompt = buildAttemptSystemPrompt({
+      isRawModelRun,
+      systemPromptOverrideText,
+      embeddedSystemPrompt: {
+        workspaceDir: effectiveWorkspace,
+        defaultThinkLevel: params.thinkLevel,
+        reasoningLevel: params.reasoningLevel ?? "off",
+        extraSystemPrompt: params.extraSystemPrompt,
+        ownerNumbers: params.ownerNumbers,
+        ownerDisplay: ownerDisplay.ownerDisplay,
+        ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+        reasoningTagHint,
+        heartbeatPrompt,
+        skillsPrompt: effectiveSkillsPrompt,
+        docsPath: openClawReferences.docsPath ?? undefined,
+        sourcePath: openClawReferences.sourcePath ?? undefined,
+        ttsHint,
+        workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
+        reactionGuidance,
+        promptMode: effectivePromptMode,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        silentReplyPromptMode: params.silentReplyPromptMode,
+        acpEnabled: isAcpRuntimeSpawnAvailable({
           config: params.config,
+          sandboxed: sandboxInfo?.enabled === true,
+        }),
+        nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
+        runtimeInfo,
+        messageToolHints,
+        sandboxInfo,
+        tools: effectiveTools,
+        modelAliasLines: buildModelAliasLines(params.config),
+        userTimezone,
+        userTime,
+        userTimeFormat,
+        contextFiles,
+        bootstrapMode,
+        bootstrapTruncationNotice,
+        includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
+        memoryCitationsMode: params.config?.memory?.citations,
+        promptContribution,
+      },
+      providerTransform: {
+        provider: params.provider,
+        config: params.config,
+        workspaceDir: effectiveWorkspace,
+        context: {
+          config: params.config,
+          agentDir: params.agentDir,
           workspaceDir: effectiveWorkspace,
-          context: {
-            config: params.config,
-            agentDir: params.agentDir,
-            workspaceDir: effectiveWorkspace,
-            provider: params.provider,
-            modelId: params.modelId,
-            promptMode: effectivePromptMode,
-            runtimeChannel,
-            runtimeCapabilities,
-            agentId: sessionAgentId,
-            systemPrompt: builtAppendPrompt,
-          },
-        });
+          provider: params.provider,
+          modelId: params.modelId,
+          promptMode: effectivePromptMode,
+          runtimeChannel,
+          runtimeCapabilities,
+          agentId: sessionAgentId,
+        },
+      },
+    });
+    const appendPrompt = attemptSystemPrompt.systemPrompt;
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
@@ -1384,7 +1369,7 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools: effectiveTools,
     });
-    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
+    const systemPromptOverride = attemptSystemPrompt.systemPromptOverride;
     let systemPromptText = systemPromptOverride();
     prepStages.mark("system-prompt");
 

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
+import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
 import {
   buildContextEnginePromptCacheInfo,
   buildAfterTurnRuntimeContext,
@@ -24,7 +25,6 @@ import {
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  shouldStripBootstrapFromEmbeddedContext,
   shouldWarnOnOrphanedUserRepair,
   wrapStreamFnRepairMalformedToolCallArguments,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -404,11 +404,20 @@ describe("resolvePromptModeForSession", () => {
   });
 });
 
-describe("shouldStripBootstrapFromEmbeddedContext", () => {
+describe("resolveBootstrapContextTargets", () => {
   it("keeps BOOTSTRAP.md in system Project Context only for full bootstrap turns", () => {
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "full" })).toBe(false);
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "limited" })).toBe(true);
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "none" })).toBe(true);
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
+      includeBootstrapInSystemContext: true,
+      includeBootstrapInRuntimeContext: false,
+    });
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
   });
 });
 

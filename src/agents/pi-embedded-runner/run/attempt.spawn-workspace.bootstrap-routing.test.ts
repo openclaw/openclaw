@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  resolveBootstrapContextTargets,
   resolveAttemptWorkspaceBootstrapRouting,
-  shouldStripBootstrapFromEmbeddedContext,
 } from "./attempt-bootstrap-routing.js";
 
 describe("runEmbeddedAttempt bootstrap routing", () => {
@@ -26,7 +26,8 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     expect(isWorkspaceBootstrapPending).toHaveBeenCalledWith(canonicalWorkspace);
     expect(isWorkspaceBootstrapPending).not.toHaveBeenCalledWith(sandboxWorkspace);
     expect(routing.bootstrapMode).toBe("none");
-    expect(routing.shouldStripBootstrapFromContext).toBe(true);
+    expect(routing.includeBootstrapInSystemContext).toBe(false);
+    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
   it("falls back to limited bootstrap wording when a primary run cannot read files", async () => {
@@ -41,15 +42,25 @@ describe("runEmbeddedAttempt bootstrap routing", () => {
     });
 
     expect(routing.bootstrapMode).toBe("limited");
-    expect(routing.shouldStripBootstrapFromContext).toBe(true);
+    expect(routing.includeBootstrapInSystemContext).toBe(false);
+    expect(routing.includeBootstrapInRuntimeContext).toBe(false);
   });
 
   it("keeps BOOTSTRAP.md in Project Context for full bootstrap turns", () => {
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "full" })).toBe(false);
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "full" })).toEqual({
+      includeBootstrapInSystemContext: true,
+      includeBootstrapInRuntimeContext: false,
+    });
   });
 
-  it("strips BOOTSTRAP.md from Project Context outside full bootstrap turns", () => {
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "limited" })).toBe(true);
-    expect(shouldStripBootstrapFromEmbeddedContext({ bootstrapMode: "none" })).toBe(true);
+  it("excludes BOOTSTRAP.md from every context outside full bootstrap turns", () => {
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "limited" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
+    expect(resolveBootstrapContextTargets({ bootstrapMode: "none" })).toEqual({
+      includeBootstrapInSystemContext: false,
+      includeBootstrapInRuntimeContext: false,
+    });
   });
 });

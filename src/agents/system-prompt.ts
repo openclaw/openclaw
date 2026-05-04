@@ -264,6 +264,21 @@ export function buildAgentBootstrapSystemPromptSupplement(params: {
   bootstrapTruncationNotice?: string;
   contextFiles?: EmbeddedContextFile[];
 }): string | undefined {
+  const supplement = buildAgentBootstrapSystemPromptSections({
+    ...params,
+    includeProjectContext: true,
+  })
+    .join("\n")
+    .trim();
+  return supplement.length > 0 ? supplement : undefined;
+}
+
+export function buildAgentBootstrapSystemPromptSections(params: {
+  bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
+  contextFiles?: EmbeddedContextFile[];
+  includeProjectContext?: boolean;
+}): string[] {
   const bootstrapFiles =
     params.bootstrapMode === "full"
       ? sortContextFilesForPrompt(params.contextFiles ?? []).filter((file) =>
@@ -280,7 +295,7 @@ export function buildAgentBootstrapSystemPromptSupplement(params: {
   if (bootstrapTruncationNotice) {
     lines.push("## Bootstrap Context Notice", bootstrapTruncationNotice, "");
   }
-  if (bootstrapFiles.length > 0) {
+  if (params.includeProjectContext === true && bootstrapFiles.length > 0) {
     lines.push(
       ...buildProjectContextSection({
         files: bootstrapFiles,
@@ -289,8 +304,7 @@ export function buildAgentBootstrapSystemPromptSupplement(params: {
       }),
     );
   }
-  const supplement = lines.join("\n").trim();
-  return supplement.length > 0 ? supplement : undefined;
+  return lines;
 }
 
 export function appendAgentBootstrapSystemPromptSupplement(params: {
@@ -819,14 +833,12 @@ export function buildAgentSystemPrompt(params: {
   const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
   const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
   const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
-  const hasBootstrapFileInProjectContext = orderedContextFiles.some((file) =>
-    isBootstrapContextFile(file.path),
-  );
-  const bootstrapSystemContext = buildAgentBootstrapSystemContext({
+  const bootstrapSystemPromptSections = buildAgentBootstrapSystemPromptSections({
     bootstrapMode: params.bootstrapMode,
-    hasBootstrapFileInProjectContext,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
+    contextFiles: orderedContextFiles,
+    includeProjectContext: false,
   });
-  const bootstrapTruncationNotice = params.bootstrapTruncationNotice?.trim();
   const stablePrefixCacheKey = hashStablePromptInput({
     workspaceDir: params.workspaceDir,
     promptMode,
@@ -853,8 +865,7 @@ export function buildAgentSystemPrompt(params: {
     workspaceGuidance,
     workspaceNotes,
     bootstrapMode: params.bootstrapMode,
-    bootstrapSystemContext,
-    bootstrapTruncationNotice,
+    bootstrapSystemPromptSections,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
@@ -1063,10 +1074,7 @@ export function buildAgentSystemPrompt(params: {
       ...buildTimeSection({
         userTimezone,
       }),
-      ...bootstrapSystemContext,
-      bootstrapTruncationNotice ? "## Bootstrap Context Notice" : "",
-      bootstrapTruncationNotice ?? "",
-      bootstrapTruncationNotice ? "" : "",
+      ...bootstrapSystemPromptSections,
       "## Workspace Files (injected)",
       "These user-editable files are loaded by OpenClaw and included below in Project Context.",
       "",

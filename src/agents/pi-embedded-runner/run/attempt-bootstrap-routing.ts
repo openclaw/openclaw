@@ -15,7 +15,8 @@ export type AttemptBootstrapRoutingInput = {
 
 export type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
-  shouldStripBootstrapFromContext: boolean;
+  includeBootstrapInSystemContext: boolean;
+  includeBootstrapInRuntimeContext: boolean;
 };
 
 export type AttemptWorkspaceBootstrapRoutingInput = Omit<
@@ -25,10 +26,16 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
 };
 
-export function shouldStripBootstrapFromEmbeddedContext(_params: {
+export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
-}): boolean {
-  return _params.bootstrapMode !== "full";
+}): Pick<
+  AttemptBootstrapRouting,
+  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
+> {
+  return {
+    includeBootstrapInSystemContext: params.bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
+  };
 }
 
 function resolveAttemptBootstrapRouting(
@@ -47,9 +54,7 @@ function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
-    shouldStripBootstrapFromContext: shouldStripBootstrapFromEmbeddedContext({
-      bootstrapMode,
-    }),
+    ...resolveBootstrapContextTargets({ bootstrapMode }),
   };
 }
 
