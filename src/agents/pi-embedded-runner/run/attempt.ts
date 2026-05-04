@@ -2783,7 +2783,7 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
             preserveRuntimeContextInPrompt:
-              process.env.OPENCLAW_PRESERVE_RUNTIME_CONTEXT_IN_PROMPT === "1",
+              params.config?.agents?.defaults?.runtimeContextPlacement === "prompt",
           });
           const currentTurnPromptContextSuffix = promptSubmission.runtimeOnly
             ? ""

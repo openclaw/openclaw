@@ -3775,6 +3775,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
               },
+              runtimeContextPlacement: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "system",
+                  },
+                  {
+                    type: "string",
+                    const: "prompt",
+                  },
+                ],
+                title: "Runtime Context Placement",
+                description:
+                  'Controls where runtime-owned per-turn context is placed after OpenClaw separates it from the visible transcript prompt: "system" appends it to the system prompt (default), while "prompt" keeps it in the submitted user prompt for legacy-style local prefix-cache behavior.',
+              },
               bootstrapMaxChars: {
                 type: "integer",
                 exclusiveMinimum: 0,
@@ -26410,6 +26425,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.contextInjection": {
       label: "Context Injection",
       help: 'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
+      tags: ["advanced"],
+    },
+    "agents.defaults.runtimeContextPlacement": {
+      label: "Runtime Context Placement",
+      help: 'Controls where runtime-owned per-turn context is placed after OpenClaw separates it from the visible transcript prompt: "system" appends it to the system prompt (default), while "prompt" keeps it in the submitted user prompt for legacy-style local prefix-cache behavior.',
       tags: ["advanced"],
     },
     "agents.defaults.bootstrapMaxChars": {

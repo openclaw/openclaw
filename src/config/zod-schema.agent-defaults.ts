@@ -100,6 +100,7 @@ export const AgentDefaultsSchema = z
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
+    runtimeContextPlacement: z.union([z.literal("system"), z.literal("prompt")]).optional(),
     bootstrapMaxChars: z.number().int().positive().optional(),
     bootstrapTotalMaxChars: z.number().int().positive().optional(),
     experimental: z

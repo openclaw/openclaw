@@ -17,6 +17,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
+export type AgentRuntimeContextPlacement = "system" | "prompt";
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
@@ -247,6 +248,14 @@ export type AgentDefaultsConfig = {
    *   transcript already contains a completed assistant turn
    */
   contextInjection?: AgentContextInjection;
+  /**
+   * Placement for runtime-owned per-turn context split out of the submitted
+   * prompt:
+   * - system: append to the system prompt for the current turn (default)
+   * - prompt: keep it in the submitted user prompt, preserving legacy-style
+   *   prefix-cache locality for local providers
+   */
+  runtimeContextPlacement?: AgentRuntimeContextPlacement;
   /** Max chars for injected bootstrap files before truncation (default: 20000). */
   bootstrapMaxChars?: number;
   /** Max total chars across all injected bootstrap files (default: 150000). */

@@ -83,6 +83,16 @@ describe("agent defaults schema", () => {
     expect(() => AgentDefaultsSchema.parse({ contextInjection: "unknown" })).toThrow();
   });
 
+  it("accepts runtimeContextPlacement", () => {
+    expect(
+      AgentDefaultsSchema.parse({ runtimeContextPlacement: "system" })?.runtimeContextPlacement,
+    ).toBe("system");
+    expect(
+      AgentDefaultsSchema.parse({ runtimeContextPlacement: "prompt" })?.runtimeContextPlacement,
+    ).toBe("prompt");
+    expect(() => AgentDefaultsSchema.parse({ runtimeContextPlacement: "messages" })).toThrow();
+  });
+
   it("accepts supported optional bootstrap filenames", () => {
     const result = AgentDefaultsSchema.parse({
       skipOptionalBootstrapFiles: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
