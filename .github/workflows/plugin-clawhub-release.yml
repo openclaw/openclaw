@@ -32,7 +32,7 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "06908917813a4e4606ee52377395702a99c265de"
+  CLAWHUB_REF: "facf20ceb6cc459e2872d941e71335a784bbc55c"
 
 jobs:
   preview_plugins_clawhub:
@@ -168,6 +168,12 @@ jobs:
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
 
+      - name: Verify OpenClaw ClawHub package ownership
+        if: steps.plan.outputs.has_candidates == 'true'
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+        run: node --import tsx scripts/plugin-clawhub-owner-preflight.ts .local/plugin-clawhub-release-plan.json
+
   preview_plugin_pack:
     needs: preview_plugins_clawhub
     if: needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
@@ -257,7 +263,7 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 6
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:

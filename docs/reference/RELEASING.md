@@ -167,9 +167,11 @@ the maintainer-only release runbook.
   main-reachable tag), pass the release tag and successful OpenClaw npm
   `preflight_run_id`, and keep the default plugin publish scope
   `all-publishable` unless you are deliberately running a focused repair. The
-  workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw
-  npm publish so the core package is not published before its externalized
-  plugins.
+  workflow serializes plugin npm publish before plugin ClawHub publish and
+  OpenClaw npm publish so the core package is not published before its
+  externalized plugins. ClawHub package publish may run in parallel, but the
+  workflow first verifies that every `@openclaw/*` package candidate already
+  exists under the OpenClaw ClawHub publisher.
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
 - `OpenClaw Release Checks` also runs the QA Lab mock parity lane plus the fast
