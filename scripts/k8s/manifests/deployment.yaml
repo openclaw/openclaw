@@ -29,9 +29,14 @@ spec:
             - sh
             - -c
             - |
-              cp /config/openclaw.json /home/node/.openclaw/openclaw.json
+              set -eu
               mkdir -p /home/node/.openclaw/workspace
-              cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              if [ ! -f /home/node/.openclaw/openclaw.json ]; then
+                cp /config/openclaw.json /home/node/.openclaw/openclaw.json
+              fi
+              if [ ! -f /home/node/.openclaw/workspace/AGENTS.md ]; then
+                cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              fi
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
