@@ -303,12 +303,13 @@ async function runCommand(params: {
   args: readonly string[];
   command: string;
   cwd: string;
+  env: NodeJS.ProcessEnv;
   runner: CommandRunner;
   stdio?: "inherit" | "pipe";
 }) {
   return params.runner(params.command, params.args, {
     cwd: params.cwd,
-    env: process.env,
+    env: params.env,
     stdio: params.stdio ?? "pipe",
   });
 }
@@ -316,6 +317,7 @@ async function runCommand(params: {
 async function warmupCrabbox(params: {
   crabboxBin: string;
   cwd: string;
+  env: NodeJS.ProcessEnv;
   idleTimeout: string;
   machineClass: string;
   provider: string;
@@ -338,6 +340,7 @@ async function warmupCrabbox(params: {
       params.ttl,
     ],
     cwd: params.cwd,
+    env: params.env,
     runner: params.runner,
     stdio: "inherit",
   });
@@ -351,6 +354,7 @@ async function warmupCrabbox(params: {
 async function inspectCrabbox(params: {
   crabboxBin: string;
   cwd: string;
+  env: NodeJS.ProcessEnv;
   leaseId: string;
   provider: string;
   runner: CommandRunner;
@@ -359,6 +363,7 @@ async function inspectCrabbox(params: {
     command: params.crabboxBin,
     args: ["inspect", "--provider", params.provider, "--id", params.leaseId, "--json"],
     cwd: params.cwd,
+    env: params.env,
     runner: params.runner,
   });
   return JSON.parse(result.stdout) as CrabboxInspect;
@@ -366,6 +371,7 @@ async function inspectCrabbox(params: {
 
 async function copyRemoteArtifacts(params: {
   cwd: string;
+  env: NodeJS.ProcessEnv;
   inspect: CrabboxInspect;
   outputDir: string;
   remoteOutputDir: string;
@@ -401,6 +407,7 @@ async function copyRemoteArtifacts(params: {
       `${params.outputDir}/`,
     ],
     cwd: params.cwd,
+    env: params.env,
     runner: params.runner,
   });
 }
@@ -408,6 +415,7 @@ async function copyRemoteArtifacts(params: {
 async function stopCrabbox(params: {
   crabboxBin: string;
   cwd: string;
+  env: NodeJS.ProcessEnv;
   leaseId: string;
   provider: string;
   runner: CommandRunner;
@@ -416,6 +424,7 @@ async function stopCrabbox(params: {
     command: params.crabboxBin,
     args: ["stop", "--provider", params.provider, params.leaseId],
     cwd: params.cwd,
+    env: params.env,
     runner: params.runner,
     stdio: "inherit",
   });
@@ -471,6 +480,7 @@ export async function runMantisDesktopBrowserSmoke(
       (await warmupCrabbox({
         crabboxBin,
         cwd: repoRoot,
+        env,
         idleTimeout,
         machineClass,
         provider,
@@ -480,6 +490,7 @@ export async function runMantisDesktopBrowserSmoke(
     const inspected = await inspectCrabbox({
       crabboxBin,
       cwd: repoRoot,
+      env,
       leaseId,
       provider,
       runner,
@@ -500,11 +511,13 @@ export async function runMantisDesktopBrowserSmoke(
         renderRemoteScript({ browserUrl, htmlBase64, remoteOutputDir }),
       ],
       cwd: repoRoot,
+      env,
       runner,
       stdio: "inherit",
     });
     await copyRemoteArtifacts({
       cwd: repoRoot,
+      env,
       inspect: inspected,
       outputDir,
       remoteOutputDir,
@@ -582,7 +595,7 @@ export async function runMantisDesktopBrowserSmoke(
       await fs.writeFile(reportPath, renderReport(summary), "utf8");
     }
     if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
-      await stopCrabbox({ crabboxBin, cwd: repoRoot, leaseId, provider, runner });
+      await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
     }
   }
 }
