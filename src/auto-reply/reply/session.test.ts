@@ -3676,3 +3676,86 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.accountId).toBe("work");
   });
 });
+
+describe("initSessionState stale model cache on /new (#77322)", () => {
+  it("clears stale implicit model/modelProvider fields when /new resets an existing session", async () => {
+    const root = await makeCaseDir("openclaw-new-stale-model-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:u123";
+    const existingSessionId = "sess-stale-model";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        model: "deepseek-v4-pro",
+        modelProvider: "deepseek",
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.model).toBeUndefined();
+    expect(result.sessionEntry.modelProvider).toBeUndefined();
+  });
+
+  it("preserves user-set modelOverride through /new", async () => {
+    const root = await makeCaseDir("openclaw-new-preserve-override-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:u456";
+    const existingSessionId = "sess-with-override";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        model: "deepseek-v4-pro",
+        modelProvider: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        providerOverride: "deepseek",
+        modelOverrideSource: "user",
+        systemSent: true,
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+        resetTriggers: ["/new"],
+      },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "/new",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionEntry.model).toBeUndefined();
+    expect(result.sessionEntry.modelProvider).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBe("deepseek-v4-flash");
+    expect(result.sessionEntry.providerOverride).toBe("deepseek");
+  });
+});
