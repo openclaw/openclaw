@@ -2,6 +2,10 @@ export type GoogleChatSpace = {
   name?: string;
   displayName?: string;
   type?: string;
+  /** Newer API field that replaces the deprecated `type` field. */
+  spaceType?: string;
+  /** True when the space is a 1:1 DM between a user and the Chat app. */
+  singleUserBotDm?: boolean;
 };
 
 export type GoogleChatUser = {
