@@ -30,6 +30,7 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -403,6 +404,10 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
+  getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
+    namespace: string,
+  ) => T | undefined;
 };
 
 export type PluginHookBeforeToolCallEvent = {
