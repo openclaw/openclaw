@@ -1,5 +1,7 @@
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
@@ -783,6 +785,375 @@ export function getChromeMcpPid(profileName: string): number | null {
   return null;
 }
 
+export type ChromeRemoteDebuggingFileSignal = {
+  /** Toggle present, port file present, port currently listening on loopback. */
+  enabled: boolean;
+  /** Local State `devtools.remote_debugging.user-enabled` was true. */
+  toggleEnabled: boolean;
+  port: number | null;
+  browserUuid: string | null;
+  /** TCP loopback connect to `port` succeeded within the probe timeout. */
+  portListening: boolean;
+  /**
+   * mtime of the DevToolsActivePort file (epoch ms). Used downstream to
+   * notice ports written by an old Chrome process whose pid has since
+   * exited but left the file behind.
+   */
+  portFileMtimeMs: number | null;
+  reason: string;
+};
+
+export type ChromeRemoteDebuggingProbeInput = {
+  userDataDir?: string;
+  cdpUrl?: string;
+};
+
+const CHROME_REMOTE_DEBUGGING_PORT_PROBE_TIMEOUT_MS = 200;
+const CHROME_REMOTE_DEBUGGING_HTTP_PROBE_TIMEOUT_MS = 200;
+const CHROME_REMOTE_DEBUGGING_LSOF_TIMEOUT_MS = 500;
+const CHROME_PROCESS_NAMES_LOWER = [
+  "google chrome",
+  "chromium",
+  "chrome beta",
+  "chrome canary",
+  "chrome dev",
+  "google chrome beta",
+  "google chrome canary",
+  "google chrome dev",
+];
+
+/**
+ * Returns the macOS Chrome user-data directory, or null on other platforms.
+ * Linux (`~/.config/google-chrome`) and Windows
+ * (`%LOCALAPPDATA%\Google\Chrome\User Data`) can be added later behind
+ * platform checks; chrome-devtools-mcp autoConnect targets the same path.
+ */
+export function getChromeUserDataDir(profileUserDataDir?: string): string | null {
+  if (profileUserDataDir) {
+    return profileUserDataDir;
+  }
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const home = process.env.HOME;
+  if (!home) {
+    return null;
+  }
+  return path.join(home, "Library", "Application Support", "Google", "Chrome");
+}
+
+async function probeTcpListening(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    timer.unref?.();
+    socket.once("connect", () => finish(true));
+    socket.once("error", () => finish(false));
+    try {
+      socket.connect(port, host);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+/**
+ * File-based detection for "Chrome is in remote-debugging mode and a CDP
+ * server is bound." Reads the user's `Local State` toggle and the active
+ * `DevToolsActivePort` written by Chrome, and TCP-probes the port to rule
+ * out stale files. The returned record is intentionally granular so the
+ * confidence aggregator can distinguish empty state from contradictory
+ * state without re-reading the same files.
+ */
+export async function probeChromeRemoteDebuggingViaFiles(
+  input: ChromeRemoteDebuggingProbeInput = {},
+): Promise<ChromeRemoteDebuggingFileSignal> {
+  const empty: ChromeRemoteDebuggingFileSignal = {
+    enabled: false,
+    toggleEnabled: false,
+    port: null,
+    browserUuid: null,
+    portListening: false,
+    portFileMtimeMs: null,
+    reason: "",
+  };
+  if (input.cdpUrl) {
+    return { ...empty, reason: "cdp-url-configured" };
+  }
+  const dir = getChromeUserDataDir(input.userDataDir);
+  if (!dir) {
+    return { ...empty, reason: "user-data-dir-unresolved" };
+  }
+  let toggleEnabled = false;
+  let localStateReadable = true;
+  try {
+    const text = await fs.readFile(path.join(dir, "Local State"), "utf8");
+    const parsed = JSON.parse(text) as unknown;
+    const root = asRecord(parsed);
+    const devtools = asRecord(root?.devtools);
+    const remoteDebugging = asRecord(devtools?.remote_debugging);
+    toggleEnabled = remoteDebugging?.["user-enabled"] === true;
+  } catch {
+    localStateReadable = false;
+  }
+  let port: number | null = null;
+  let browserUuid: string | null = null;
+  let portFileMtimeMs: number | null = null;
+  let portFileReadable = true;
+  let portFileParseable = true;
+  try {
+    const filePath = path.join(dir, "DevToolsActivePort");
+    const stat = await fs.stat(filePath);
+    portFileMtimeMs = stat.mtimeMs;
+    const text = await fs.readFile(filePath, "utf8");
+    const lines = text.split(/\r?\n/);
+    const parsedPort = Number.parseInt(lines[0]?.trim() ?? "", 10);
+    if (Number.isFinite(parsedPort) && parsedPort > 0 && parsedPort <= 65535) {
+      port = parsedPort;
+    } else {
+      portFileParseable = false;
+    }
+    const uuidMatch = lines[1]?.trim().match(/^\/devtools\/browser\/(.+)$/);
+    if (uuidMatch?.[1]) {
+      browserUuid = uuidMatch[1];
+    }
+  } catch {
+    portFileReadable = false;
+  }
+  let portListening = false;
+  if (port !== null) {
+    portListening = await probeTcpListening(
+      "127.0.0.1",
+      port,
+      CHROME_REMOTE_DEBUGGING_PORT_PROBE_TIMEOUT_MS,
+    );
+  }
+  let reason: string;
+  if (!localStateReadable) {
+    reason = "local-state-unreadable";
+  } else if (!toggleEnabled && !portFileReadable) {
+    reason = "user-enabled-false";
+  } else if (!toggleEnabled) {
+    reason = "toggle-off-port-file-present";
+  } else if (!portFileReadable) {
+    reason = "devtools-active-port-unreadable";
+  } else if (!portFileParseable) {
+    reason = "devtools-active-port-unparseable";
+  } else if (!portListening) {
+    reason = "devtools-active-port-not-listening";
+  } else {
+    reason = "devtools-active-port-detected";
+  }
+  return {
+    enabled: toggleEnabled && portListening && port !== null,
+    toggleEnabled,
+    port,
+    browserUuid,
+    portListening,
+    portFileMtimeMs,
+    reason,
+  };
+}
+
+type ChromeRemoteDebuggingProber = (
+  input: ChromeRemoteDebuggingProbeInput,
+) => Promise<ChromeRemoteDebuggingFileSignal>;
+
+const CHROME_REMOTE_DEBUGGING_PROBER_DISABLED: ChromeRemoteDebuggingProber = async () => ({
+  enabled: false,
+  toggleEnabled: false,
+  port: null,
+  browserUuid: null,
+  portListening: false,
+  portFileMtimeMs: null,
+  reason: "test-disabled",
+});
+
+let chromeRemoteDebuggingProber: ChromeRemoteDebuggingProber = probeChromeRemoteDebuggingViaFiles;
+
+export function setChromeRemoteDebuggingProberForTest(
+  prober: ChromeRemoteDebuggingProber | null,
+): void {
+  chromeRemoteDebuggingProber = prober ?? probeChromeRemoteDebuggingViaFiles;
+}
+
+export type ChromePortOwnerKind = "chrome" | "other" | "none" | "unknown";
+
+export type ChromePortOwnerSignal = {
+  kind: ChromePortOwnerKind;
+  process?: string;
+  pid?: number;
+  reason: string;
+};
+
+/**
+ * Best-effort port-owner check via `lsof -nP -iTCP:<port> -sTCP:LISTEN`.
+ * macOS only. Returns `unknown` rather than `none` when lsof is unavailable
+ * or the call times out, so the confidence aggregator can downgrade to
+ * MEDIUM instead of falsely concluding the port is free.
+ */
+export async function probeChromePortOwner(port: number): Promise<ChromePortOwnerSignal> {
+  if (process.platform !== "darwin") {
+    return { kind: "unknown", reason: "platform-unsupported" };
+  }
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return { kind: "unknown", reason: "invalid-port" };
+  }
+  let stdout = "";
+  let stderr = "";
+  let exitCode: number | null = null;
+  let timedOut = false;
+  try {
+    await new Promise<void>((resolve) => {
+      const child = spawn("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN"], { stdio: "pipe" });
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, CHROME_REMOTE_DEBUGGING_LSOF_TIMEOUT_MS);
+      timer.unref?.();
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString("utf8");
+      });
+      child.once("error", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      child.once("close", (code) => {
+        exitCode = typeof code === "number" ? code : null;
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  } catch {
+    return { kind: "unknown", reason: "lsof-spawn-failed" };
+  }
+  if (timedOut) {
+    return { kind: "unknown", reason: "lsof-timeout" };
+  }
+  if (exitCode === 1 && stdout.trim() === "") {
+    return { kind: "none", reason: "lsof-no-listener" };
+  }
+  if (exitCode !== 0 && exitCode !== 1) {
+    return { kind: "unknown", reason: `lsof-exit-${exitCode ?? "unknown"}` };
+  }
+  void stderr;
+  // First line is a header. Each subsequent row is whitespace-delimited:
+  // COMMAND  PID  USER  FD  TYPE  DEVICE  SIZE/OFF  NODE  NAME
+  // COMMAND can contain spaces (e.g. "Google Chrome"), so we instead pull
+  // the PID column (right-aligned digits) and infer COMMAND from the prefix.
+  const lines = stdout.split("\n").filter((line) => line.trim().length > 0);
+  const dataLines = lines.slice(1);
+  if (dataLines.length === 0) {
+    return { kind: "none", reason: "lsof-no-listener" };
+  }
+  for (const line of dataLines) {
+    const pidMatch = line.match(/^(.+?)\s+(\d+)\s+\S+\s+\d+u?\s+IPv/);
+    if (!pidMatch) {
+      continue;
+    }
+    const command = pidMatch[1]?.trim() ?? "";
+    const pid = Number.parseInt(pidMatch[2] ?? "", 10);
+    const lower = command.toLowerCase();
+    if (CHROME_PROCESS_NAMES_LOWER.some((name) => lower.startsWith(name))) {
+      return {
+        kind: "chrome",
+        process: command,
+        ...(Number.isFinite(pid) ? { pid } : {}),
+        reason: "lsof-chrome-listener",
+      };
+    }
+    return {
+      kind: "other",
+      process: command,
+      ...(Number.isFinite(pid) ? { pid } : {}),
+      reason: "lsof-non-chrome-listener",
+    };
+  }
+  return { kind: "unknown", reason: "lsof-unparseable" };
+}
+
+export type ChromeJsonVersionSignal = {
+  ok: boolean;
+  reason: string;
+  product?: string;
+};
+
+/**
+ * Best-effort `GET http://127.0.0.1:<port>/json/version`. Used as a
+ * confirmatory signal for HIGH confidence; never used as a primary gate
+ * because some build flavors of Chrome restrict the HTTP endpoint to
+ * loopback-from-127.0.0.1 with `--remote-allow-origins`.
+ */
+export async function probeChromeJsonVersion(port: number): Promise<ChromeJsonVersionSignal> {
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+    return { ok: false, reason: "invalid-port" };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), CHROME_REMOTE_DEBUGGING_HTTP_PROBE_TIMEOUT_MS);
+  timer.unref?.();
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+      signal: controller.signal,
+      headers: { Host: "localhost" },
+    });
+    if (!res.ok) {
+      return { ok: false, reason: `http-${res.status}` };
+    }
+    const body = (await res.json()) as unknown;
+    const record = asRecord(body);
+    const product = typeof record?.["Browser"] === "string" ? record["Browser"] : "";
+    if (/chrome|chromium/i.test(product)) {
+      return { ok: true, reason: "chrome-json-version", product };
+    }
+    return { ok: false, reason: "non-chrome-product", product };
+  } catch (err) {
+    if ((err as Error).name === "AbortError") {
+      return { ok: false, reason: "http-timeout" };
+    }
+    return { ok: false, reason: "http-error" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export type BrowserAuthSignalProbes = {
+  fileProbe: ChromeRemoteDebuggingProber;
+  portOwnerProbe: (port: number) => Promise<ChromePortOwnerSignal>;
+  jsonVersionProbe: (port: number) => Promise<ChromeJsonVersionSignal>;
+};
+
+const DEFAULT_SIGNAL_PROBES: BrowserAuthSignalProbes = {
+  fileProbe: (input) => chromeRemoteDebuggingProber(input),
+  portOwnerProbe: probeChromePortOwner,
+  jsonVersionProbe: probeChromeJsonVersion,
+};
+
+let signalProbes: BrowserAuthSignalProbes = DEFAULT_SIGNAL_PROBES;
+
+export function setBrowserAuthSignalProbesForTest(
+  probes: Partial<BrowserAuthSignalProbes> | null,
+): void {
+  if (!probes) {
+    signalProbes = DEFAULT_SIGNAL_PROBES;
+    return;
+  }
+  signalProbes = { ...DEFAULT_SIGNAL_PROBES, ...probes };
+}
+
 /**
  * Non-spawning health probe for the cached Chrome MCP session.
  *
@@ -1210,6 +1581,15 @@ export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFacto
 
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
+  // Disable the file-based remote-debugging prober by default in tests so that
+  // probeChromeMcpHealth's cache-only behavior is preserved unless a test
+  // opts in via setChromeRemoteDebuggingProberForTest.
+  chromeRemoteDebuggingProber = CHROME_REMOTE_DEBUGGING_PROBER_DISABLED;
+  signalProbes = {
+    fileProbe: (input) => chromeRemoteDebuggingProber(input),
+    portOwnerProbe: async () => ({ kind: "unknown", reason: "test-disabled" }),
+    jsonVersionProbe: async () => ({ ok: false, reason: "test-disabled" }),
+  };
   pendingSessions.clear();
   await stopAllChromeMcpSessions();
 }
