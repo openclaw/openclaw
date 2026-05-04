@@ -179,6 +179,65 @@ async function pollOAuthToken(params: {
   };
 }
 
+export function resolveMiniMaxRegionFromBaseUrl(baseUrl: string): MiniMaxRegion {
+  return baseUrl.includes("minimaxi.com") ? "cn" : "global";
+}
+
+export async function refreshMiniMaxPortalOAuthToken(params: {
+  refreshToken: string;
+  region: MiniMaxRegion;
+}): Promise<MiniMaxOAuthToken> {
+  ensureGlobalUndiciEnvProxyDispatcher();
+  const endpoints = getOAuthEndpoints(params.region);
+  const response = await fetch(endpoints.tokenEndpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: toFormUrlEncoded({
+      grant_type: "refresh_token",
+      client_id: endpoints.clientId,
+      refresh_token: params.refreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(
+      `MiniMax OAuth refresh failed (${response.status}): ${text || response.statusText}`,
+    );
+  }
+
+  const payload = (await response.json()) as {
+    status?: string;
+    access_token?: string | null;
+    refresh_token?: string | null;
+    expired_in?: number | null;
+    resource_url?: string;
+    notification_message?: string;
+    base_resp?: { status_code?: number; status_msg?: string };
+  };
+
+  if (
+    payload.status !== "success" ||
+    !payload.access_token ||
+    !payload.refresh_token ||
+    !payload.expired_in
+  ) {
+    const msg = payload.base_resp?.status_msg ?? payload.status ?? "unknown error";
+    throw new Error(`MiniMax OAuth refresh returned unexpected response: ${msg}`);
+  }
+
+  return {
+    access: payload.access_token,
+    refresh: payload.refresh_token,
+    expires: payload.expired_in,
+    resourceUrl: payload.resource_url,
+    notification_message: payload.notification_message,
+  };
+}
+
 export async function loginMiniMaxPortalOAuth(params: {
   openUrl: (url: string) => Promise<void>;
   note: (message: string, title?: string) => Promise<void>;

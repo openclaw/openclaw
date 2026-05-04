@@ -15,6 +15,14 @@ vi.mock("./oauth.runtime.js", () => ({
     expires: Date.now() + 60_000,
     resourceUrl: "https://api.minimax.io/anthropic",
   })),
+  refreshMiniMaxPortalOAuthToken: vi.fn(async () => ({
+    access: "minimax-oauth-access-token-refreshed",
+    refresh: "minimax-oauth-refresh-token-new",
+    expires: Date.now() + 120_000,
+  })),
+  resolveMiniMaxRegionFromBaseUrl: vi.fn((url: string) =>
+    url.includes("minimaxi.com") ? "cn" : "global",
+  ),
 }));
 
 const minimaxProviderPlugin = {
@@ -323,6 +331,64 @@ describe("minimax provider hooks", () => {
     } as never);
 
     expect(result?.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
+  });
+
+  it("refreshes minimax-portal OAuth credentials using the stored resourceUrl region", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    const now = Date.now();
+    const cred = {
+      type: "oauth" as const,
+      provider: "minimax-portal",
+      access: "old-access",
+      refresh: "old-refresh",
+      expires: now + 60_000,
+      resourceUrl: "https://api.minimax.io/anthropic",
+    };
+
+    const refreshed = await portalProvider.refreshOAuth?.(cred as never);
+
+    expect(refreshed).toMatchObject({
+      type: "oauth",
+      provider: "minimax-portal",
+      access: "minimax-oauth-access-token-refreshed",
+      refresh: "minimax-oauth-refresh-token-new",
+    });
+    expect(refreshed?.expires).toBeGreaterThan(now);
+  });
+
+  it("routes CN credentials to the minimaxi.com refresh endpoint", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    const { refreshMiniMaxPortalOAuthToken } = await import("./oauth.runtime.js");
+    const refreshMock = vi.mocked(refreshMiniMaxPortalOAuthToken);
+    refreshMock.mockClear();
+
+    const cred = {
+      type: "oauth" as const,
+      provider: "minimax-portal",
+      access: "old-access",
+      refresh: "cn-refresh-token",
+      expires: Date.now() + 60_000,
+      resourceUrl: "https://api.minimaxi.com/anthropic",
+    };
+
+    await portalProvider.refreshOAuth?.(cred as never);
+
+    expect(refreshMock).toHaveBeenCalledWith({
+      refreshToken: "cn-refresh-token",
+      region: "cn",
+    });
   });
 
   it("writes api and authHeader into the MiniMax portal OAuth config patch", async () => {

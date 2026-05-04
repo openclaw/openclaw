@@ -19,6 +19,7 @@ import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { isMiniMaxModernModelId, MINIMAX_DEFAULT_MODEL_ID } from "./api.js";
 import type { MiniMaxRegion } from "./oauth.js";
+import { resolveMiniMaxRegionFromBaseUrl } from "./oauth.js";
 import { applyMinimaxApiConfig, applyMinimaxApiConfigCn } from "./onboard.js";
 import { buildMinimaxPortalProvider, buildMinimaxProvider } from "./provider-catalog.js";
 
@@ -150,6 +151,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         access: result.access,
         refresh: result.refresh,
         expires: result.expires,
+        credentialExtra: { resourceUrl: baseUrl },
         configPatch: {
           models: {
             providers: {
@@ -281,5 +283,21 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
     ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
+    refreshOAuth: async (cred) => {
+      const { refreshMiniMaxPortalOAuthToken } = await import("./oauth.runtime.js");
+      const resourceUrl = (cred as typeof cred & { resourceUrl?: string }).resourceUrl;
+      const region = resolveMiniMaxRegionFromBaseUrl(resourceUrl ?? "");
+      const refreshed = await refreshMiniMaxPortalOAuthToken({
+        refreshToken: cred.refresh,
+        region,
+      });
+      return {
+        ...cred,
+        access: refreshed.access,
+        refresh: refreshed.refresh,
+        expires: refreshed.expires,
+        ...(refreshed.resourceUrl ? { resourceUrl: refreshed.resourceUrl } : {}),
+      };
+    },
   });
 }
