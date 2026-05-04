@@ -106,8 +106,6 @@ function createRuntimeLlmFacade(): PluginRuntime["llm"] {
       m.createRuntimeLlm({
         getConfig: getRuntimeConfig,
         authority: {
-          allowAgentIdOverride: true,
-          allowModelOverride: true,
           allowComplete: true,
         },
       }),

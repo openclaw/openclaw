@@ -117,8 +117,6 @@ export type PluginLlmCompleteParams = {
   signal?: AbortSignal;
   /** Human-readable reason for audit/debug output. */
   purpose?: string;
-  /** Optional caller metadata; host/runtime authority still comes from the injected runtime. */
-  caller?: PluginLlmCompleteCaller;
   /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
   agentId?: string;
 };

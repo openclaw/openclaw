@@ -33,7 +33,8 @@ export function resolveContextEngineCapabilities(
           getConfig: () => params.config,
           authority: {
             caller: { kind: "context-engine", id: params.purpose },
-            ...(sessionKey ? { sessionKey, requiresBoundAgent: true } : {}),
+            requiresBoundAgent: true,
+            ...(sessionKey ? { sessionKey } : {}),
             ...(agentId ? { agentId } : {}),
             allowAgentIdOverride: false,
             allowModelOverride: false,

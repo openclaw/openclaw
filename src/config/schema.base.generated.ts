@@ -24169,6 +24169,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Per-plugin subagent runtime controls for model override trust and allowlists. Keep this unset unless a plugin must explicitly steer subagent model selection.",
                 },
+                llm: {
+                  type: "object",
+                  properties: {
+                    allowModelOverride: {
+                      type: "boolean",
+                      title: "Allow Plugin LLM Model Override",
+                      description:
+                        "Explicitly allows this plugin to request model overrides in api.runtime.llm.complete. Keep false unless the plugin is trusted to steer model selection.",
+                    },
+                    allowedModels: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                      title: "Plugin LLM Allowed Models",
+                      description:
+                        'Allowed override targets for trusted plugin LLM completions as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+                    },
+                    allowAgentIdOverride: {
+                      type: "boolean",
+                      title: "Allow Plugin LLM Agent Override",
+                      description:
+                        "Explicitly allows this plugin to request api.runtime.llm.complete against a non-default agent id. Keep false unless the plugin is trusted for cross-agent model access.",
+                    },
+                  },
+                  additionalProperties: false,
+                  title: "Plugin LLM Policy",
+                  description:
+                    "Per-plugin api.runtime.llm.complete controls for model and agent override trust. Keep this unset unless a plugin must explicitly steer host-owned completion calls.",
+                },
                 config: {
                   type: "object",
                   propertyNames: {
@@ -28943,6 +28973,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "plugins.entries.*.subagent.allowedModels": {
       label: "Plugin Subagent Allowed Models",
       help: 'Allowed override targets for trusted plugin subagent runs as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+      tags: ["access"],
+    },
+    "plugins.entries.*.llm": {
+      label: "Plugin LLM Policy",
+      help: "Per-plugin api.runtime.llm.complete controls for model and agent override trust. Keep this unset unless a plugin must explicitly steer host-owned completion calls.",
+      tags: ["advanced"],
+    },
+    "plugins.entries.*.llm.allowModelOverride": {
+      label: "Allow Plugin LLM Model Override",
+      help: "Explicitly allows this plugin to request model overrides in api.runtime.llm.complete. Keep false unless the plugin is trusted to steer model selection.",
+      tags: ["access"],
+    },
+    "plugins.entries.*.llm.allowedModels": {
+      label: "Plugin LLM Allowed Models",
+      help: 'Allowed override targets for trusted plugin LLM completions as canonical "provider/model" refs. Use "*" only when you intentionally allow any model.',
+      tags: ["access"],
+    },
+    "plugins.entries.*.llm.allowAgentIdOverride": {
+      label: "Allow Plugin LLM Agent Override",
+      help: "Explicitly allows this plugin to request api.runtime.llm.complete against a non-default agent id. Keep false unless the plugin is trusted for cross-agent model access.",
       tags: ["access"],
     },
     "plugins.entries.*.apiKey": {
