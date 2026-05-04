@@ -6,21 +6,21 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { createDiscordDnsLookup } from "../network-config.js";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 
-export function resolveDiscordRestFetch(
-  proxyUrl: string | undefined,
-  runtime: RuntimeEnv,
-): typeof fetch {
-  const effectiveProxyUrl = resolveEffectiveDebugProxyUrl(proxyUrl);
-  const fetcher = withValidatedDiscordProxy(effectiveProxyUrl, runtime, (proxy) => {
-    const agent = new ProxyAgent(proxy);
-    return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
+const discordDnsLookup = createDiscordDnsLookup();
+
+type DiscordRestDispatcher = InstanceType<typeof Agent> | InstanceType<typeof ProxyAgent>;
+
+function createDiscordRestFetchWithDispatcher(dispatcher: DiscordRestDispatcher): typeof fetch {
+  return wrapFetchWithAbortSignal(
+    ((input: RequestInfo | URL, init?: RequestInit) =>
       (
         undiciFetch(input as string | URL, {
           ...(init as Record<string, unknown>),
-          dispatcher: agent,
+          dispatcher,
         }) as unknown as Promise<Response>
       ).then((response) => {
         captureHttpExchange({
@@ -33,11 +33,38 @@ export function resolveDiscordRestFetch(
           meta: { subsystem: "discord-rest" },
         });
         return response;
-      })) as typeof fetch);
-  });
+      })) as typeof fetch,
+  );
+}
+
+export function resolveDiscordRestFetch(
+  proxyUrl: string | undefined,
+  runtime: RuntimeEnv,
+): typeof fetch {
+  const effectiveProxyUrl = resolveEffectiveDebugProxyUrl(proxyUrl);
+  if (effectiveProxyUrl) {
+    const fetcher = withValidatedDiscordProxy(effectiveProxyUrl, runtime, (proxy) =>
+      createDiscordRestFetchWithDispatcher(
+        new ProxyAgent({
+          uri: proxy,
+          connect: { lookup: discordDnsLookup },
+        }),
+      ),
+    );
+    if (!fetcher) {
+      return fetch;
+    }
+    runtime.log?.("discord: rest proxy enabled");
+    return fetcher;
+  }
+
+  const fetcher = createDiscordRestFetchWithDispatcher(
+    new Agent({
+      connect: { lookup: discordDnsLookup },
+    }),
+  );
   if (!fetcher) {
     return fetch;
   }
-  runtime.log?.("discord: rest proxy enabled");
   return fetcher;
 }

@@ -33,14 +33,20 @@ const {
   captureWsEventSpy,
   GatewayPlugin,
   globalFetchMock,
+  HttpsAgent,
   HttpsProxyAgent,
   getLastAgent,
+  getLastProxyAgent,
   resolveDebugProxySettingsMock,
   resetLastAgent,
   webSocketSpy,
+  httpsAgentSpy,
+  httpsProxyAgentSpy,
   wsProxyAgentSpy,
 } = vi.hoisted(() => {
   const wsProxyAgentSpy = vi.fn();
+  const httpsAgentSpy = vi.fn();
+  const httpsProxyAgentSpy = vi.fn();
   const globalFetchMock = vi.fn();
   const baseRegisterClientSpy = vi.fn();
   const webSocketSpy = vi.fn();
@@ -78,16 +84,29 @@ const {
     }
   }
 
+  class HttpsAgent {
+    static lastCreated: HttpsAgent | undefined;
+    options: unknown;
+    constructor(options?: unknown) {
+      this.options = options;
+      HttpsAgent.lastCreated = this;
+      httpsAgentSpy(options);
+    }
+  }
+
   class HttpsProxyAgent {
     static lastCreated: HttpsProxyAgent | undefined;
     proxyUrl: string;
-    constructor(proxyUrl: string) {
+    options: unknown;
+    constructor(proxyUrl: string, options?: unknown) {
       if (proxyUrl === "bad-proxy") {
         throw new Error("bad proxy");
       }
       this.proxyUrl = proxyUrl;
+      this.options = options;
       HttpsProxyAgent.lastCreated = this;
       wsProxyAgentSpy(proxyUrl);
+      httpsProxyAgentSpy({ proxyUrl, options });
     }
   }
 
@@ -96,12 +115,17 @@ const {
     GatewayIntents,
     GatewayPlugin,
     globalFetchMock,
+    HttpsAgent,
     HttpsProxyAgent,
-    getLastAgent: () => HttpsProxyAgent.lastCreated,
+    getLastAgent: () => HttpsAgent.lastCreated,
+    getLastProxyAgent: () => HttpsProxyAgent.lastCreated,
     captureHttpExchangeSpy,
     captureWsEventSpy,
+    httpsAgentSpy,
+    httpsProxyAgentSpy,
     resolveDebugProxySettingsMock,
     resetLastAgent: () => {
+      HttpsAgent.lastCreated = undefined;
       HttpsProxyAgent.lastCreated = undefined;
     },
     webSocketSpy,
@@ -113,6 +137,10 @@ const {
 vi.mock("../internal/gateway.js", () => ({
   GatewayIntents,
   GatewayPlugin,
+}));
+
+vi.mock("node:https", () => ({
+  Agent: HttpsAgent,
 }));
 
 vi.mock("../internal/gateway.js", () => ({
@@ -279,6 +307,8 @@ describe("createDiscordGatewayPlugin", () => {
     vi.useRealTimers();
     baseRegisterClientSpy.mockClear();
     globalFetchMock.mockClear();
+    httpsAgentSpy.mockClear();
+    httpsProxyAgentSpy.mockClear();
     wsProxyAgentSpy.mockClear();
     webSocketSpy.mockClear();
     captureHttpExchangeSpy.mockClear();
@@ -321,9 +351,16 @@ describe("createDiscordGatewayPlugin", () => {
       .createWebSocket;
     createWebSocket("wss://gateway.discord.gg");
 
-    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
-      handshakeTimeout: 30_000,
-    });
+    expect(httpsAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ lookup: expect.any(Function) }),
+    );
+    expect(webSocketSpy).toHaveBeenCalledWith(
+      "wss://gateway.discord.gg",
+      expect.objectContaining({
+        agent: getLastAgent(),
+        handshakeTimeout: 30_000,
+      }),
+    );
     expect(wsProxyAgentSpy).not.toHaveBeenCalled();
   });
 
@@ -435,9 +472,15 @@ describe("createDiscordGatewayPlugin", () => {
     createWebSocket("wss://gateway.discord.gg");
 
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://127.0.0.1:8080");
+    expect(httpsProxyAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyUrl: "http://127.0.0.1:8080",
+        options: expect.objectContaining({ lookup: expect.any(Function) }),
+      }),
+    );
     expect(webSocketSpy).toHaveBeenCalledWith(
       "wss://gateway.discord.gg",
-      expect.objectContaining({ agent: getLastAgent(), handshakeTimeout: 30_000 }),
+      expect.objectContaining({ agent: getLastProxyAgent(), handshakeTimeout: 30_000 }),
     );
     expect(runtime.log).toHaveBeenCalledWith("discord: gateway proxy enabled");
     expect(runtime.error).not.toHaveBeenCalled();
@@ -502,6 +545,12 @@ describe("createDiscordGatewayPlugin", () => {
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
 
     expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(httpsProxyAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyUrl: "http://[::1]:8080",
+        options: expect.objectContaining({ lookup: expect.any(Function) }),
+      }),
+    );
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
