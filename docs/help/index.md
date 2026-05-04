@@ -9,6 +9,7 @@ title: "Help"
 Quick "get unstuck" path for the most common problems:
 
 - [Troubleshooting](/help/troubleshooting) — symptom-first decision tree
+- [RAG and agent debugging](/help/rag-debugging) — retrieval-heavy and multi-tool failure checklist
 - [Debugging](/help/debugging) — watch mode, raw streams, dev profile
 - [Install sanity](/install/node#troubleshooting) — Node / npm / PATH checks
 - [Gateway troubleshooting](/gateway/troubleshooting) — gateway-specific issues

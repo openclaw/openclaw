@@ -1735,7 +1735,7 @@
             "groups": [
               {
                 "group": "Start here",
-                "pages": ["help/index", "help/troubleshooting", "help/debugging"]
+                "pages": ["help/index", "help/troubleshooting", "help/rag-debugging", "help/debugging"]
               },
               {
                 "group": "FAQ",
