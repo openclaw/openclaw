@@ -96,9 +96,18 @@ function ensureFalModelPath(model: string | undefined, hasInputImages: boolean):
   if (!hasInputImages) {
     return trimmed;
   }
+  // GPT Image 2 and NanoBanana 2 use /edit; Flux uses /image-to-image
+  if (
+    trimmed.startsWith("openai/gpt-image-") ||
+    trimmed.startsWith("fal-ai/nano-banana-")
+  ) {
+    if (trimmed.endsWith("/edit")) {
+      return trimmed;
+    }
+    return `${trimmed}/edit`;
+  }
   if (
     trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
-    trimmed.endsWith("/edit") ||
     trimmed.includes("/image-to-image/")
   ) {
     return trimmed;
@@ -196,7 +205,10 @@ function resolveFalImageSize(params: {
 
   const normalizedAspectRatio = params.aspectRatio?.trim();
   if (normalizedAspectRatio && params.hasInputImages) {
-    throw new Error("fal image edit endpoint does not support aspectRatio overrides");
+    return (
+      aspectRatioToEnum(normalizedAspectRatio) ??
+      aspectRatioToDimensions(normalizedAspectRatio, 1024)
+    );
   }
 
   const edge = mapResolutionToEdge(params.resolution);
@@ -268,9 +280,9 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       edit: {
         enabled: true,
         maxCount: 4,
-        maxInputImages: 1,
+        maxInputImages: 14,
         supportsSize: true,
-        supportsAspectRatio: false,
+        supportsAspectRatio: true,
         supportsResolution: true,
       },
       geometry: {
@@ -292,8 +304,10 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("fal API key missing");
       }
-      if ((req.inputImages?.length ?? 0) > 1) {
-        throw new Error("fal image generation currently supports at most one reference image");
+      if ((req.inputImages?.length ?? 0) > 14) {
+        throw new Error(
+          `fal image edit supports at most 14 reference images (requested ${req.inputImages?.length})`,
+        );
       }
 
       const hasInputImages = (req.inputImages?.length ?? 0) > 0;
@@ -333,7 +347,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         if (!input) {
           throw new Error("fal image edit request missing reference image");
         }
-        requestBody.image_url = toImageDataUrl(input);
+        requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
       }
       const { response, release } = await falFetchGuard({
         url: `${baseUrl}/${model}`,
