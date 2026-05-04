@@ -197,6 +197,21 @@ describe("shouldDedupeMessagingToolRepliesForRoute", () => {
     ).toBe(true);
   });
 
+  it("preserves string thread ids before plugin reply-suppression matching", () => {
+    installTelegramSuppressionRegistry();
+    const largeThreadId = "9007199254740993";
+
+    expect(
+      shouldDedupeMessagingToolRepliesForRoute({
+        messageProvider: "telegram",
+        originatingTo: `telegram:group:-100123:topic:${largeThreadId}`,
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "-100123", threadId: largeThreadId },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("does not match telegram topic-origin replies when explicit threadId differs", () => {
     expect(
       shouldDedupeMessagingToolRepliesForRoute({

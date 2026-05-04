@@ -88,11 +88,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
-  const normalized = stringifyRouteThreadId(value);
-  if (!normalized) {
-    return undefined;
-  }
-  return /^-?\d+$/.test(normalized) ? String(Number.parseInt(normalized, 10)) : normalized;
+  return stringifyRouteThreadId(value);
 }
 
 function resolveTargetProviderForComparison(params: {
