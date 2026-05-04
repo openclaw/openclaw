@@ -427,6 +427,31 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("allows generic command owners to run scoped Discord plugin commands without gateway scopes", async () => {
+    const cfg = {
+      commands: {
+        ownerAllowFrom: ["discord:123456789012345678"],
+      },
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+    const interaction = createInteraction({ userId: "123456789012345678" });
+    interaction.options.getString.mockReturnValue("now");
+    const handler = registerScopedPairPlugin();
+    const command = await createPluginCommand({ cfg, name: "pair" });
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "paired:now" }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("rejects authorized Discord non-owners for scoped plugin commands without gateway scopes", async () => {
     const cfg = createConfig();
     const interaction = createInteraction({ userId: "authorized-non-owner" });
