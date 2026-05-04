@@ -71,6 +71,18 @@ private func setupCode(from payload: String) -> String {
                 password: nil))
     }
 
+    @Test func setupCodeParsesHostPayloadWithTLSDefaultPort() {
+        let payload = #"{"host":"gateway.tailnet.ts.net","tls":true,"bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "gateway.tailnet.ts.net",
+                port: 443,
+                tls: true,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
     @Test func setupCodeRejectsInsecureHostPayload() {
         let payload = #"{"host":"gateway.tailnet.ts.net","port":18789,"tls":false,"bootstrapToken":"tok"}"#
         #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
