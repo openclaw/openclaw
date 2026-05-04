@@ -138,6 +138,7 @@ function createOpenAIRealtimeTranscriptionSession(
     maxReconnectAttempts: OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS,
     reconnectDelayMs: OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS,
     connectTimeoutMessage: "OpenAI realtime transcription connection timeout",
+    connectClosedBeforeReadyMessage: "OpenAI realtime transcription connection closed before ready",
     reconnectLimitMessage: "OpenAI realtime transcription reconnect limit reached",
     sendAudio: (audio, transport) => {
       transport.sendJson({
