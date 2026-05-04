@@ -908,13 +908,18 @@ export class OpenClawApp extends LitElement {
 
   async toggleRealtimeTalk() {
     if (this.realtimeTalkSession) {
-      this.realtimeTalkSession.stop();
-      this.realtimeTalkSession = null;
-      this.realtimeTalkActive = false;
-      this.realtimeTalkStatus = "idle";
-      this.realtimeTalkDetail = null;
-      this.realtimeTalkTranscript = null;
-      return;
+      if (this.realtimeTalkStatus === "error") {
+        this.realtimeTalkSession.stop();
+        this.realtimeTalkSession = null;
+      } else {
+        this.realtimeTalkSession.stop();
+        this.realtimeTalkSession = null;
+        this.realtimeTalkActive = false;
+        this.realtimeTalkStatus = "idle";
+        this.realtimeTalkDetail = null;
+        this.realtimeTalkTranscript = null;
+        return;
+      }
     }
     if (!this.client || !this.connected) {
       this.lastError = "Gateway not connected";
