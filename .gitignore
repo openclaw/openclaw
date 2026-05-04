@@ -3,8 +3,10 @@ node_modules
 .env
 docker-compose.override.yml
 docker-compose.extra.yml
+docker-compose.sandbox.yml
 dist
 dist-runtime/
+dist-sea/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -12,7 +14,7 @@ coverage
 __openclaw_vitest__/
 __pycache__/
 *.pyc
-.tsbuildinfo
+*.tsbuildinfo
 .pnpm-store
 .worktrees/
 .DS_Store
@@ -36,6 +38,7 @@ apps/android/benchmark/results/
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
+apps/macos-mlx-tts/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/OpenClawKit/Package.resolved
@@ -57,6 +60,7 @@ vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
 apps/macos/.build/**
+apps/macos-mlx-tts/.build/**
 **/*.bun-build
 apps/ios/*.xcfilelist
 
@@ -89,17 +93,57 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
-.tgz
+*.tgz
+*.tar.gz
+*.zip
 .idea
+.vscode/
 
 # local tooling
 .serena/
+
+# Local project-agent skill installs. Only repo-owned skills are visible by
+# default; promoting a new repo skill should require an intentional `git add -f`.
+.agents/skills/*
+!.agents/skills/blacksmith-testbox/
+!.agents/skills/blacksmith-testbox/**
+!.agents/skills/crabbox/
+!.agents/skills/crabbox/**
+!.agents/skills/gitcrawl/
+!.agents/skills/gitcrawl/**
+!.agents/skills/openclaw-ghsa-maintainer/
+!.agents/skills/openclaw-ghsa-maintainer/**
+!.agents/skills/openclaw-parallels-smoke/
+!.agents/skills/openclaw-parallels-smoke/**
+!.agents/skills/openclaw-pr-maintainer/
+!.agents/skills/openclaw-pr-maintainer/**
+!.agents/skills/openclaw-qa-testing/
+!.agents/skills/openclaw-qa-testing/**
+!.agents/skills/openclaw-release-maintainer/
+!.agents/skills/openclaw-release-maintainer/**
+!.agents/skills/openclaw-secret-scanning-maintainer/
+!.agents/skills/openclaw-secret-scanning-maintainer/**
+!.agents/skills/openclaw-test-heap-leaks/
+!.agents/skills/openclaw-test-heap-leaks/**
+!.agents/skills/openclaw-test-performance/
+!.agents/skills/openclaw-test-performance/**
+!.agents/skills/openclaw-testing/
+!.agents/skills/openclaw-testing/**
+!.agents/skills/optimizetests/
+!.agents/skills/optimizetests/**
+!.agents/skills/parallels-discord-roundtrip/
+!.agents/skills/parallels-discord-roundtrip/**
+!.agents/skills/security-triage/
+!.agents/skills/security-triage/**
+!.agents/skills/tag-duplicate-prs-issues/
+!.agents/skills/tag-duplicate-prs-issues/**
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/
 .agent/*.json
 !.agent/workflows/
 /local/
+/client_secret_*.json
 package-lock.json
 .claude/
 .agent/
@@ -111,7 +155,10 @@ apps/ios/LocalSigning.xcconfig
 # Xcode build directories (xcodebuild output)
 apps/ios/build/
 apps/shared/OpenClawKit/build/
-Swabble/build/
+apps/swabble/build/
+*.xcresult
+*.trace
+*.profraw
 
 # Generated protocol schema (produced via pnpm protocol:gen)
 dist/protocol.schema.json
@@ -126,15 +173,14 @@ dist/protocol.schema.json
 # Synthing
 **/.stfolder/
 .dev-state
-docs/superpowers/plans/2026-03-10-collapsed-side-nav.md
-docs/superpowers/specs/2026-03-10-collapsed-side-nav-design.md
+docs/superpowers
+.superpowers/
 .gitignore
 test/config-form.analyze.telegram.test.ts
 ui/src/ui/theme-variants.browser.test.ts
 ui/src/ui/__screenshots__
 ui/src/ui/views/__screenshots__
 ui/.vitest-attachments
-docs/superpowers
 
 # Generated docs baseline artifacts (locally generated, only hashes tracked)
 docs/.generated/*.json
@@ -145,8 +191,31 @@ changelog/fragments/
 
 # Local scratch workspace
 .tmp/
+.cache/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.vmux*
 .artifacts/
+.openclaw-config-doc-cache/
+openclaw-path-alias-*/
+/.pi/
+/C:\\openclaw/
+*.log
+*.tmp
+*.heapsnapshot
+*.cpuprofile
+*.prof
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
 extensions/qa-lab/web/dist/
+
+# Generated bundled plugin runtime dependency manifests
+extensions/**/.openclaw-runtime-deps.json
+extensions/**/.openclaw-runtime-deps-stamp.json
+
+# Output dir for scripts/run-opengrep.sh (local opengrep scans)
+/.opengrep-out/

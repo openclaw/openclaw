@@ -1,27 +1,49 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.4.10",
-  "private": true,
+  "version": "2026.5.3",
   "description": "OpenClaw diff viewer plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "scripts": {
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.10",
+    "@pierre/diffs": "1.1.20",
     "@pierre/theme": "0.0.29",
-    "@sinclair/typebox": "0.34.49",
-    "playwright-core": "1.59.1"
+    "playwright-core": "1.59.1",
+    "typebox": "1.1.37"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/diffs",
+      "localPath": "extensions/diffs",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.30"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.3"
+    },
+    "build": {
+      "openclawVersion": "2026.5.3",
+      "staticAssets": [
+        {
+          "source": "./assets/viewer-runtime.js",
+          "output": "assets/viewer-runtime.js"
+        }
+      ]
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

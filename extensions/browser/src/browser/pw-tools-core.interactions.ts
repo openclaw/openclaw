@@ -10,8 +10,12 @@ import {
   resolveActInteractionTimeoutMs,
   resolveActWaitTimeoutMs,
 } from "./act-policy.js";
-import type { BrowserActRequest, BrowserFormField } from "./client-actions-core.js";
+import type { BrowserActRequest, BrowserFormField } from "./client-actions.types.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
@@ -119,20 +123,84 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
   return frame === page.mainFrame();
 }
 
+async function assertSubframeNavigationAllowed(
+  frameUrl: string,
+  ssrfPolicy?: SsrFPolicy,
+): Promise<void> {
+  if (!ssrfPolicy || (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))) {
+    // Non-network frame URLs like about:blank and about:srcdoc do not cross the
+    // browser SSRF boundary, so they should not trigger the navigation policy.
+    return;
+  }
+
+  await assertBrowserNavigationResultAllowed({
+    url: frameUrl,
+    ...withBrowserNavigationPolicy(ssrfPolicy),
+  });
+}
+
+type ObservedDelayedNavigations = {
+  mainFrameNavigated: boolean;
+  subframes: string[];
+};
+
+function snapshotNetworkFrameUrl(frame: Frame): string | null {
+  try {
+    const frameUrl = frame.url();
+    return frameUrl.startsWith("http://") || frameUrl.startsWith("https://") ? frameUrl : null;
+  } catch {
+    return null;
+  }
+}
+
+async function assertObservedDelayedNavigations(opts: {
+  cdpUrl: string;
+  page: Page;
+  ssrfPolicy?: SsrFPolicy;
+  targetId?: string;
+  observed: ObservedDelayedNavigations;
+}): Promise<void> {
+  let subframeError: unknown;
+  try {
+    for (const frameUrl of opts.observed.subframes) {
+      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+    }
+  } catch (err) {
+    subframeError = err;
+  }
+  if (opts.observed.mainFrameNavigated) {
+    await assertPageNavigationCompletedSafely({
+      cdpUrl: opts.cdpUrl,
+      page: opts.page,
+      response: null,
+      ssrfPolicy: opts.ssrfPolicy,
+      targetId: opts.targetId,
+    });
+  }
+  if (subframeError) {
+    throw subframeError;
+  }
+}
+
 function observeDelayedInteractionNavigation(
   page: NavigationObservablePage,
   previousUrl: string,
-): Promise<boolean> {
+): Promise<ObservedDelayedNavigations> {
   if (didCrossDocumentUrlChange(page, previousUrl)) {
-    return Promise.resolve(true);
+    return Promise.resolve({ mainFrameNavigated: true, subframes: [] });
   }
   if (typeof page.on !== "function" || typeof page.off !== "function") {
-    return Promise.resolve(false);
+    return Promise.resolve({ mainFrameNavigated: false, subframes: [] });
   }
 
-  return new Promise<boolean>((resolve) => {
+  return new Promise<ObservedDelayedNavigations>((resolve) => {
+    const subframes: string[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
+        const frameUrl = snapshotNetworkFrameUrl(frame);
+        if (frameUrl) {
+          subframes.push(frameUrl);
+        }
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -142,11 +210,14 @@ function observeDelayedInteractionNavigation(
         return;
       }
       cleanup();
-      resolve(true);
+      resolve({ mainFrameNavigated: true, subframes });
     };
     const timeout = setTimeout(() => {
       cleanup();
-      resolve(didCrossDocumentUrlChange(page, previousUrl));
+      resolve({
+        mainFrameNavigated: didCrossDocumentUrlChange(page, previousUrl),
+        subframes,
+      });
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -196,8 +267,13 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
       }
       resolve();
     };
+    const subframes: string[] = [];
     const onFrameNavigated = (frame: Frame) => {
       if (!isMainFrameNavigation(page, frame)) {
+        const frameUrl = snapshotNetworkFrameUrl(frame);
+        if (frameUrl) {
+          subframes.push(frameUrl);
+        }
         return;
       }
       // Use isHashOnlyNavigation rather than !didCrossDocumentUrlChange: the
@@ -207,16 +283,26 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         return;
       }
       cleanup();
-      void assertPageNavigationCompletedSafely({
+      void assertObservedDelayedNavigations({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
-        response: null,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
+        observed: { mainFrameNavigated: true, subframes },
       }).then(() => settle(), settle);
     };
     const timeout = setTimeout(() => {
-      settle();
+      cleanup();
+      void assertObservedDelayedNavigations({
+        cdpUrl: opts.cdpUrl,
+        page: opts.page,
+        ssrfPolicy: opts.ssrfPolicy,
+        targetId: opts.targetId,
+        observed: {
+          mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
+          subframes,
+        },
+      }).then(() => settle(), settle);
     }, INTERACTION_NAVIGATION_GRACE_MS);
     const cleanup = () => {
       clearTimeout(timeout);
@@ -248,8 +334,13 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   // slow interactions, silently bypassing the SSRF guard.
   const navPage = opts.page as unknown as NavigationObservablePage;
   let navigatedDuringAction = false;
+  const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {
     if (!isMainFrameNavigation(navPage, frame)) {
+      const frameUrl = snapshotNetworkFrameUrl(frame);
+      if (frameUrl) {
+        subframeNavigationsDuringAction.push(frameUrl);
+      }
       return;
     }
     // Use isHashOnlyNavigation rather than didCrossDocumentUrlChange: the event
@@ -278,6 +369,15 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   const navigationObserved =
     navigatedDuringAction || didCrossDocumentUrlChange(opts.page, opts.previousUrl);
 
+  let subframeError: unknown;
+  try {
+    for (const frameUrl of subframeNavigationsDuringAction) {
+      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+    }
+  } catch (err) {
+    subframeError = err;
+  }
+
   if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
@@ -290,17 +390,14 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
     // Preserve the action-error path semantics: if a rejected click/evaluate still
     // triggers a delayed navigation, the SSRF block must win over the original
     // action error instead of surfacing a stale interaction failure.
-    const delayedNavigationObserved = await observeDelayedInteractionNavigation(
-      opts.page,
-      opts.previousUrl,
-    );
-    if (delayedNavigationObserved) {
-      await assertPageNavigationCompletedSafely({
+    const observed = await observeDelayedInteractionNavigation(opts.page, opts.previousUrl);
+    if (observed.mainFrameNavigated || observed.subframes.length > 0) {
+      await assertObservedDelayedNavigations({
         cdpUrl: opts.cdpUrl,
         page: opts.page,
-        response: null,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
+        observed,
       });
     }
   } else {
@@ -314,6 +411,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
       ssrfPolicy: opts.ssrfPolicy,
       targetId: opts.targetId,
     });
+  }
+
+  if (subframeError) {
+    throw subframeError;
   }
 
   if (actionError) {
@@ -379,25 +480,6 @@ function createAbortPromiseWithListener(
     },
   };
 }
-
-async function assertPostInteractionNavigationSafe(opts: {
-  cdpUrl: string;
-  page: Awaited<ReturnType<typeof getPageForTargetId>>;
-  ssrfPolicy?: SsrFPolicy;
-  targetId?: string;
-}): Promise<void> {
-  if (!opts.ssrfPolicy) {
-    return;
-  }
-  await assertPageNavigationCompletedSafely({
-    cdpUrl: opts.cdpUrl,
-    page: opts.page,
-    response: null,
-    ssrfPolicy: opts.ssrfPolicy,
-    targetId: opts.targetId,
-  });
-}
-
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -423,6 +505,7 @@ export async function clickViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
   const page = await getRestoredPageForTarget(opts);
@@ -432,6 +515,36 @@ export async function clickViaPlaywright(opts: {
     : page.locator(resolved.selector!);
   const timeout = resolveInteractionTimeoutMs(opts.timeoutMs);
   const previousUrl = page.url();
+  const signal = opts.signal;
+  let abortListener: (() => void) | undefined;
+  let abortReject: ((reason: unknown) => void) | undefined;
+  let abortPromise: Promise<never> | undefined;
+  if (signal) {
+    abortPromise = new Promise((_, reject) => {
+      abortReject = reject;
+    });
+    void abortPromise.catch(() => {});
+    const disconnect = () => {
+      void forceDisconnectPlaywrightForTarget({
+        cdpUrl: opts.cdpUrl,
+        targetId: opts.targetId,
+        reason: "click aborted",
+      }).catch(() => {});
+    };
+    if (signal.aborted) {
+      disconnect();
+      throw signal.reason ?? new Error("aborted");
+    }
+    abortListener = () => {
+      disconnect();
+      abortReject?.(signal.reason ?? new Error("aborted"));
+    };
+    signal.addEventListener("abort", abortListener, { once: true });
+    if (signal.aborted) {
+      abortListener();
+      throw signal.reason ?? new Error("aborted");
+    }
+  }
   try {
     await assertInteractionNavigationCompletedSafely({
       action: async () => {
@@ -441,22 +554,28 @@ export async function clickViaPlaywright(opts: {
           ACT_MAX_CLICK_DELAY_MS,
         );
         if (delayMs > 0) {
-          await locator.hover({ timeout });
+          await awaitActionWithAbort(locator.hover({ timeout }), abortPromise);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
         if (opts.doubleClick) {
-          await locator.dblclick({
+          await awaitActionWithAbort(
+            locator.dblclick({
+              timeout,
+              button: opts.button,
+              modifiers: opts.modifiers,
+            }),
+            abortPromise,
+          );
+          return;
+        }
+        await awaitActionWithAbort(
+          locator.click({
             timeout,
             button: opts.button,
             modifiers: opts.modifiers,
-          });
-          return;
-        }
-        await locator.click({
-          timeout,
-          button: opts.button,
-          modifiers: opts.modifiers,
-        });
+          }),
+          abortPromise,
+        );
       },
       cdpUrl: opts.cdpUrl,
       page,
@@ -466,7 +585,40 @@ export async function clickViaPlaywright(opts: {
     });
   } catch (err) {
     throw toAIFriendlyError(err, label);
+  } finally {
+    if (signal && abortListener) {
+      signal.removeEventListener("abort", abortListener);
+    }
   }
+}
+
+export async function clickCoordsViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  x: number;
+  y: number;
+  doubleClick?: boolean;
+  button?: "left" | "right" | "middle";
+  delayMs?: number;
+  timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<void> {
+  const page = await getRestoredPageForTarget(opts);
+  const previousUrl = page.url();
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      await page.mouse.click(opts.x, opts.y, {
+        button: opts.button,
+        clickCount: opts.doubleClick ? 2 : 1,
+        delay: resolveBoundedDelayMs(opts.delayMs, "clickCoords delayMs", ACT_MAX_CLICK_DELAY_MS),
+      });
+    },
+    cdpUrl: opts.cdpUrl,
+    page,
+    previousUrl,
+    ssrfPolicy: opts.ssrfPolicy,
+    targetId: opts.targetId,
+  });
 }
 
 export async function hoverViaPlaywright(opts: {
@@ -559,12 +711,16 @@ export async function pressKeyViaPlaywright(opts: {
   }
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  await page.keyboard.press(key, {
-    delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
-  });
-  await assertPostInteractionNavigationSafe({
+  const previousUrl = page.url();
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      await page.keyboard.press(key, {
+        delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+      });
+    },
     cdpUrl: opts.cdpUrl,
     page,
+    previousUrl,
     ssrfPolicy: opts.ssrfPolicy,
     targetId: opts.targetId,
   });
@@ -582,7 +738,7 @@ export async function typeViaPlaywright(opts: {
   ssrfPolicy?: SsrFPolicy;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
-  const text = String(opts.text ?? "");
+  const text = opts.text ?? "";
   const page = await getRestoredPageForTarget(opts);
   const label = resolved.ref ?? resolved.selector!;
   const locator = resolved.ref
@@ -597,10 +753,14 @@ export async function typeViaPlaywright(opts: {
       await locator.fill(text, { timeout });
     }
     if (opts.submit) {
-      await locator.press("Enter", { timeout });
-      await assertPostInteractionNavigationSafe({
+      const previousUrl = page.url();
+      await assertInteractionNavigationCompletedSafely({
+        action: async () => {
+          await locator.press("Enter", { timeout });
+        },
         cdpUrl: opts.cdpUrl,
         page,
+        previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
         targetId: opts.targetId,
       });
@@ -874,6 +1034,7 @@ export async function takeScreenshotViaPlaywright(opts: {
   element?: string;
   fullPage?: boolean;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -884,7 +1045,7 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = refLocator(page, opts.ref);
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   if (opts.element) {
@@ -892,12 +1053,13 @@ export async function takeScreenshotViaPlaywright(opts: {
       throw new Error("fullPage is not supported for element screenshots");
     }
     const locator = page.locator(opts.element).first();
-    const buffer = await locator.screenshot({ type });
+    const buffer = await locator.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer };
   }
   const buffer = await page.screenshot({
     type,
     fullPage: Boolean(opts.fullPage),
+    timeout: opts.timeoutMs,
   });
   return { buffer };
 }
@@ -908,6 +1070,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   refs: Record<string, { role: string; name?: string; nth?: number }>;
   maxLabels?: number;
   type?: "png" | "jpeg";
+  timeoutMs?: number;
 }): Promise<{ buffer: Buffer; labels: number; skipped: number }> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1017,7 +1180,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
       }, boxes);
     }
 
-    const buffer = await page.screenshot({ type });
+    const buffer = await page.screenshot({ type, timeout: opts.timeoutMs });
     return { buffer, labels: boxes.length, skipped };
   } finally {
     await page
@@ -1105,6 +1268,19 @@ async function executeSingleAction(
         modifiers: action.modifiers as Array<
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
+        delayMs: action.delayMs,
+        timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+      });
+      break;
+    case "clickCoords":
+      await clickCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        doubleClick: action.doubleClick,
+        button: action.button as "left" | "right" | "middle" | undefined,
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,

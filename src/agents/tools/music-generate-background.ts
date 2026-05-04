@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -17,6 +17,7 @@ const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   eventSource: "music_generation",
   announceType: "music generation task",
   completionLabel: "music",
+  directCompletionDelivery: "disabled",
 });
 
 export const createMusicGenerationTaskRun = (

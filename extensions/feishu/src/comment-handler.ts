@@ -1,4 +1,5 @@
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { createFeishuCommentReplyDispatcher } from "./comment-dispatcher.js";
@@ -29,7 +30,8 @@ type HandleFeishuCommentEventParams = {
 function buildCommentSessionKey(params: {
   core: ReturnType<typeof getFeishuRuntime>;
   route: ResolvedAgentRoute;
-  commentTarget: string;
+  fileType: string;
+  fileToken: string;
 }): string {
   return params.core.channel.routing.buildAgentSessionKey({
     agentId: params.route.agentId,
@@ -37,7 +39,7 @@ function buildCommentSessionKey(params: {
     accountId: params.route.accountId,
     peer: {
       kind: "direct",
-      id: params.commentTarget,
+      id: `comment-doc:${params.fileType}:${params.fileToken}`,
     },
     dmScope: "per-account-channel-peer",
   });
@@ -95,7 +97,19 @@ export async function handleFeishuCommentEvent(
     senderId: turn.senderId,
     senderIds: [turn.senderUserId],
   }).allowed;
-  if (dmPolicy !== "open" && !senderAllowed) {
+  const dmAccessAllowed =
+    dmPolicy === "open"
+      ? resolveOpenDmAllowlistAccess({
+          effectiveAllowFrom: effectiveDmAllowFrom,
+          isSenderAllowed: (allowFrom) =>
+            resolveFeishuAllowlistMatch({
+              allowFrom,
+              senderId: turn.senderId,
+              senderIds: [turn.senderUserId],
+            }).allowed,
+        }).decision === "allow"
+      : senderAllowed;
+  if (!dmAccessAllowed) {
     if (dmPolicy === "pairing") {
       const client = createFeishuClient(account);
       await pairing.issueChallenge({
@@ -172,7 +186,8 @@ export async function handleFeishuCommentEvent(
   const commentSessionKey = buildCommentSessionKey({
     core,
     route,
-    commentTarget,
+    fileType: turn.fileType,
+    fileToken: turn.fileToken,
   });
   const bodyForAgent = `[message_id: ${turn.messageId}]\n${turn.prompt}`;
   const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -193,6 +208,9 @@ export async function handleFeishuCommentEvent(
     Provider: "feishu",
     Surface: "feishu-comment",
     MessageSid: turn.messageId,
+    // For Feishu comment turns, MessageThreadId carries the inbound reply_id so
+    // comment-aware tools can clean typing reaction before sending visible output.
+    MessageThreadId: turn.replyId,
     Timestamp: parseTimestampMs(turn.timestamp),
     WasMentioned: turn.isMentioned,
     CommandAuthorized: false,
@@ -203,47 +221,89 @@ export async function handleFeishuCommentEvent(
   const storePath = core.channel.session.resolveStorePath(effectiveCfg.session?.store, {
     agentId: route.agentId,
   });
-  await core.channel.session.recordInboundSession({
-    storePath,
-    sessionKey: commentSessionKey,
-    ctx: ctxPayload,
-    onRecordError: (err) => {
-      error(
-        `feishu[${account.accountId}]: failed to record comment inbound session ${commentSessionKey}: ${String(err)}`,
-      );
-    },
-  });
 
-  const { dispatcher, replyOptions, markDispatchIdle } = createFeishuCommentReplyDispatcher({
-    cfg: effectiveCfg,
-    agentId: route.agentId,
-    runtime,
-    accountId: account.accountId,
-    fileToken: turn.fileToken,
-    fileType: turn.fileType,
-    commentId: turn.commentId,
-    isWholeComment: turn.isWholeComment,
-  });
+  const { dispatcher, replyOptions, markDispatchIdle, markRunComplete, cleanupTypingReaction } =
+    createFeishuCommentReplyDispatcher({
+      cfg: effectiveCfg,
+      agentId: route.agentId,
+      runtime,
+      accountId: account.accountId,
+      fileToken: turn.fileToken,
+      fileType: turn.fileType,
+      commentId: turn.commentId,
+      replyId: turn.replyId,
+      isWholeComment: turn.isWholeComment,
+    });
 
-  log(
-    `feishu[${account.accountId}]: dispatching drive comment to agent ` +
-      `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
-  );
-  const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
-    dispatcher,
-    onSettled: () => {
+  let dispatchSettledBeforeStart = false;
+  try {
+    log(
+      `feishu[${account.accountId}]: dispatching drive comment to agent ` +
+        `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
+    );
+    const turnResult = await core.channel.turn.run({
+      channel: "feishu",
+      accountId: route.accountId,
+      raw: turn,
+      adapter: {
+        ingest: () => ({
+          id: turn.messageId,
+          timestamp: parseTimestampMs(turn.timestamp),
+          rawText: ctxPayload.RawBody ?? "",
+          textForAgent: ctxPayload.BodyForAgent,
+          textForCommands: ctxPayload.CommandBody,
+          raw: turn,
+        }),
+        resolveTurn: () => ({
+          channel: "feishu",
+          accountId: route.accountId,
+          routeSessionKey: commentSessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession: core.channel.session.recordInboundSession,
+          record: {
+            onRecordError: (err) => {
+              error(
+                `feishu[${account.accountId}]: failed to record comment inbound session ${commentSessionKey}: ${String(err)}`,
+              );
+            },
+          },
+          onPreDispatchFailure: async () => {
+            dispatchSettledBeforeStart = true;
+            await core.channel.reply.settleReplyDispatcher({
+              dispatcher,
+              onSettled: () => {
+                markRunComplete();
+                markDispatchIdle();
+              },
+            });
+          },
+          runDispatch: () =>
+            core.channel.reply.withReplyDispatcher({
+              dispatcher,
+              run: () =>
+                core.channel.reply.dispatchReplyFromConfig({
+                  ctx: ctxPayload,
+                  cfg: effectiveCfg,
+                  dispatcher,
+                  replyOptions,
+                }),
+            }),
+        }),
+      },
+    });
+    const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
+    const queuedFinal = dispatchResult?.queuedFinal ?? false;
+    const counts = dispatchResult?.counts ?? { tool: 0, block: 0, final: 0 };
+    log(
+      `feishu[${account.accountId}]: drive comment dispatch complete ` +
+        `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
+    );
+  } finally {
+    if (!dispatchSettledBeforeStart) {
+      markRunComplete();
       markDispatchIdle();
-    },
-    run: () =>
-      core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg: effectiveCfg,
-        dispatcher,
-        replyOptions,
-      }),
-  });
-  log(
-    `feishu[${account.accountId}]: drive comment dispatch complete ` +
-      `(queuedFinal=${queuedFinal}, replies=${counts.final}, session=${commentSessionKey})`,
-  );
+    }
+    void cleanupTypingReaction();
+  }
 }

@@ -1,16 +1,45 @@
-import type { OpenClawConfig } from "../config/config.js";
-import type { GatewayClient } from "../gateway/client.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
+import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
+import { readConnectErrorDetailCode } from "../gateway/protocol/connect-error-details.js";
 import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
+import type {
+  ExecApprovalChannelRuntime,
+  ExecApprovalChannelRuntimeAdapter,
+  ExecApprovalChannelRuntimeEventKind,
+} from "./exec-approval-channel-runtime.types.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
+export type {
+  ExecApprovalChannelRuntime,
+  ExecApprovalChannelRuntimeAdapter,
+  ExecApprovalChannelRuntimeEventKind,
+} from "./exec-approval-channel-runtime.types.js";
 
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
-export type ExecApprovalChannelRuntimeEventKind = "exec" | "plugin";
+export class ExecApprovalChannelRuntimeTerminalStartError extends Error {
+  readonly detailCode: string | null;
+
+  constructor(info: GatewayReconnectPausedInfo, cause?: unknown) {
+    super(
+      `native approval gateway client paused reconnect after startup auth failure` +
+        ` (${info.detailCode ?? "unknown"}): gateway closed (${info.code}): ${info.reason}`,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = "ExecApprovalChannelRuntimeTerminalStartError";
+    this.detailCode = info.detailCode;
+  }
+}
+
+export function isExecApprovalChannelRuntimeTerminalStartError(
+  error: unknown,
+): error is ExecApprovalChannelRuntimeTerminalStartError {
+  return error instanceof ExecApprovalChannelRuntimeTerminalStartError;
+}
 
 type PendingApprovalEntry<
   TPending,
@@ -24,42 +53,6 @@ type PendingApprovalEntry<
   pendingResolution: TResolved | null;
 };
 
-export type ExecApprovalChannelRuntimeAdapter<
-  TPending,
-  TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
-  TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
-> = {
-  label: string;
-  clientDisplayName: string;
-  cfg: OpenClawConfig;
-  gatewayUrl?: string;
-  eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
-  isConfigured: () => boolean;
-  shouldHandle: (request: TRequest) => boolean;
-  deliverRequested: (request: TRequest) => Promise<TPending[]>;
-  beforeGatewayClientStart?: () => Promise<void> | void;
-  finalizeResolved: (params: {
-    request: TRequest;
-    resolved: TResolved;
-    entries: TPending[];
-  }) => Promise<void>;
-  finalizeExpired?: (params: { request: TRequest; entries: TPending[] }) => Promise<void>;
-  onStopped?: () => Promise<void> | void;
-  nowMs?: () => number;
-};
-
-export type ExecApprovalChannelRuntime<
-  TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
-  TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,
-> = {
-  start: () => Promise<void>;
-  stop: () => Promise<void>;
-  handleRequested: (request: TRequest) => Promise<void>;
-  handleResolved: (resolved: TResolved) => Promise<void>;
-  handleExpired: (approvalId: string) => Promise<void>;
-  request: <T = unknown>(method: string, params: Record<string, unknown>) => Promise<T>;
-};
-
 function resolveApprovalReplayMethods(
   eventKinds: ReadonlySet<ExecApprovalChannelRuntimeEventKind>,
 ): string[] {
@@ -71,6 +64,13 @@ function resolveApprovalReplayMethods(
     methods.push("plugin.approval.list");
   }
   return methods;
+}
+
+function readGatewayConnectErrorDetailCode(error: unknown): string | null {
+  if (!error || typeof error !== "object") {
+    return null;
+  }
+  return readConnectErrorDetailCode((error as { details?: unknown }).details);
 }
 
 export function createExecApprovalChannelRuntime<
@@ -88,6 +88,7 @@ export function createExecApprovalChannelRuntime<
   let started = false;
   let shouldRun = false;
   let startPromise: Promise<void> | null = null;
+  let replayPromise: Promise<void> | null = null;
 
   const shouldKeepRunning = (): boolean => shouldRun;
 
@@ -241,6 +242,53 @@ export function createExecApprovalChannelRuntime<
     }
   };
 
+  const replayPendingApprovals = async (client: GatewayClient): Promise<void> => {
+    try {
+      for (const method of resolveApprovalReplayMethods(eventKinds)) {
+        if (stopClientIfInactive(client)) {
+          return;
+        }
+        const pendingRequests = await client.request<Array<TRequest>>(method, {});
+        if (stopClientIfInactive(client)) {
+          return;
+        }
+        for (const request of pendingRequests) {
+          if (stopClientIfInactive(client)) {
+            return;
+          }
+          await handleRequested(request, { ignoreIfInactive: true });
+        }
+      }
+    } catch (error) {
+      if (!shouldKeepRunning()) {
+        return;
+      }
+      throw error;
+    }
+  };
+
+  const startPendingApprovalReplay = (client: GatewayClient): void => {
+    const promise = replayPendingApprovals(client)
+      .catch((err: unknown) => {
+        const message = formatErrorMessage(err);
+        log.error(`error replaying pending approvals: ${message}`);
+      })
+      .finally(() => {
+        if (replayPromise === promise) {
+          replayPromise = null;
+        }
+      });
+    replayPromise = promise;
+  };
+
+  const waitForPendingApprovalReplay = async (): Promise<void> => {
+    const replay = replayPromise;
+    if (!replay) {
+      return;
+    }
+    await replay.catch(() => {});
+  };
+
   return {
     async start(): Promise<void> {
       if (started) {
@@ -265,6 +313,7 @@ export function createExecApprovalChannelRuntime<
           resolveReady = resolve;
           rejectReady = reject;
         });
+        let lastConnectError: unknown = null;
         const settleReady = (fn: () => void) => {
           if (readySettled) {
             return;
@@ -284,11 +333,22 @@ export function createExecApprovalChannelRuntime<
           },
           onConnectError: (err) => {
             log.error(`connect error: ${err.message}`);
+            lastConnectError = err;
+            if (readGatewayConnectErrorDetailCode(err)) {
+              return;
+            }
             settleReady(() => rejectReady(err));
+          },
+          onReconnectPaused: (info) => {
+            settleReady(() =>
+              rejectReady(new ExecApprovalChannelRuntimeTerminalStartError(info, lastConnectError)),
+            );
           },
           onClose: (code, reason) => {
             log.debug(`gateway closed: ${code} ${reason}`);
-            settleReady(() => rejectReady(new Error(`gateway closed: ${code} ${reason}`)));
+            settleReady(() =>
+              rejectReady(lastConnectError ?? new Error(`gateway closed: ${code} ${reason}`)),
+            );
           },
         });
 
@@ -299,27 +359,20 @@ export function createExecApprovalChannelRuntime<
         await adapter.beforeGatewayClientStart?.();
         gatewayClient = client;
         try {
-          client.start();
+          const readiness = await startGatewayClientWhenEventLoopReady(client, {
+            clientOptions: {
+              preauthHandshakeTimeoutMs: adapter.cfg.gateway?.handshakeTimeoutMs,
+            },
+          });
+          if (!readiness.ready) {
+            throw new Error("gateway event loop readiness timeout");
+          }
           await ready;
           if (stopClientIfInactive(client)) {
             return;
           }
-          for (const method of resolveApprovalReplayMethods(eventKinds)) {
-            if (stopClientIfInactive(client)) {
-              return;
-            }
-            const pendingRequests = await client.request<Array<TRequest>>(method, {});
-            if (stopClientIfInactive(client)) {
-              return;
-            }
-            for (const request of pendingRequests) {
-              if (stopClientIfInactive(client)) {
-                return;
-              }
-              await handleRequested(request, { ignoreIfInactive: true });
-            }
-          }
           started = true;
+          startPendingApprovalReplay(client);
         } catch (error) {
           gatewayClient = null;
           started = false;
@@ -338,19 +391,21 @@ export function createExecApprovalChannelRuntime<
       if (startPromise) {
         await startPromise.catch(() => {});
       }
-      if (!started && !gatewayClient) {
+      const wasActive = started || gatewayClient !== null || replayPromise !== null;
+      started = false;
+      gatewayClient?.stop();
+      gatewayClient = null;
+      await waitForPendingApprovalReplay();
+      if (!wasActive) {
         await adapter.onStopped?.();
         return;
       }
-      started = false;
       for (const entry of pending.values()) {
         if (entry.timeoutId) {
           clearTimeout(entry.timeoutId);
         }
       }
       pending.clear();
-      gatewayClient?.stop();
-      gatewayClient = null;
       await adapter.onStopped?.();
       log.debug("stopped");
     },

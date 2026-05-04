@@ -1,7 +1,13 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import {
+  channelRouteTargetsMatchExact,
+  stringifyRouteThreadId,
+  type ChannelRouteTargetInput,
+} from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -17,7 +23,12 @@ export function filterMessagingToolDuplicates(params: {
   if (sentTexts.length === 0) {
     return payloads;
   }
-  return payloads.filter((payload) => !isMessagingToolDuplicate(payload.text ?? "", sentTexts));
+  return payloads.filter((payload) => {
+    if (payload.mediaUrl || payload.mediaUrls?.length) {
+      return true;
+    }
+    return !isMessagingToolDuplicate(payload.text ?? "", sentTexts);
+  });
 }
 
 export function filterMessagingToolMediaDuplicates(params: {
@@ -56,11 +67,10 @@ export function filterMessagingToolMediaDuplicates(params: {
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload;
     }
-    return {
-      ...payload,
+    return Object.assign({}, payload, {
       mediaUrl: stripSingle ? undefined : mediaUrl,
       mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
-    };
+    });
   });
 }
 
@@ -70,7 +80,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
     return undefined;
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const normalizedChannel = normalizeChannelId(trimmed);
+  const normalizedChannel = normalizeAnyChannelId(trimmed);
   if (normalizedChannel) {
     return normalizedChannel;
   }
@@ -78,14 +88,7 @@ function normalizeProviderForComparison(value?: string): string | undefined {
 }
 
 function normalizeThreadIdForComparison(value?: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-  if (/^-?\d+$/.test(trimmed)) {
-    return String(Number.parseInt(trimmed, 10));
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed);
+  return stringifyRouteThreadId(value);
 }
 
 function resolveTargetProviderForComparison(params: {
@@ -99,7 +102,30 @@ function resolveTargetProviderForComparison(params: {
   return targetProvider;
 }
 
-function targetsMatchForSuppression(params: {
+type MessagingToolDedupeRouteTarget = ChannelRouteTargetInput & {
+  channel: string;
+  to: string;
+};
+
+function normalizeRouteTargetForDedupe(params: {
+  provider: string;
+  rawTarget?: string;
+  accountId?: string;
+  threadId?: string;
+}): MessagingToolDedupeRouteTarget | null {
+  const to = normalizeTargetForProvider(params.provider, params.rawTarget);
+  if (!to) {
+    return null;
+  }
+  return {
+    channel: params.provider,
+    to,
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(params.threadId != null ? { threadId: params.threadId } : {}),
+  };
+}
+
+function targetsMatchForDedupe(params: {
   provider: string;
   originTarget: string;
   targetKey: string;
@@ -116,26 +142,32 @@ function targetsMatchForSuppression(params: {
   return params.targetKey === params.originTarget;
 }
 
-export function shouldSuppressMessagingToolReplies(params: {
+export function shouldDedupeMessagingToolRepliesForRoute(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
 }): boolean {
+  return getMatchingMessagingToolReplyTargets(params).length > 0;
+}
+
+export function getMatchingMessagingToolReplyTargets(params: {
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  accountId?: string;
+}): MessagingToolSend[] {
   const provider = normalizeProviderForComparison(params.messageProvider);
   if (!provider) {
-    return false;
+    return [];
   }
-  const originTarget = normalizeTargetForProvider(provider, params.originatingTo);
-  if (!originTarget) {
-    return false;
-  }
+  const originRawTarget = normalizeOptionalString(params.originatingTo);
   const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
-    return false;
+    return [];
   }
-  return sentTargets.some((target) => {
+  return sentTargets.filter((target) => {
     const targetProvider = resolveTargetProviderForComparison({
       currentProvider: provider,
       targetProvider: target?.provider,
@@ -143,19 +175,89 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (targetProvider !== provider) {
       return false;
     }
-    const targetKey = normalizeTargetForProvider(targetProvider, target.to);
-    if (!targetKey) {
-      return false;
-    }
     const targetAccount = normalizeOptionalAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }
-    return targetsMatchForSuppression({
+    const targetRaw = normalizeOptionalString(target.to);
+    const routeAccount = originAccount ?? targetAccount;
+    const originRoute = normalizeRouteTargetForDedupe({
       provider,
-      originTarget,
-      targetKey,
+      rawTarget: originRawTarget,
+      accountId: routeAccount,
+    });
+    if (!originRoute) {
+      return false;
+    }
+    const targetRoute = normalizeRouteTargetForDedupe({
+      provider: targetProvider,
+      rawTarget: targetRaw,
+      accountId: routeAccount,
+      threadId: target.threadId,
+    });
+    if (!targetRoute) {
+      return false;
+    }
+    if (channelRouteTargetsMatchExact({ left: originRoute, right: targetRoute })) {
+      return true;
+    }
+    return targetsMatchForDedupe({
+      provider,
+      originTarget: originRoute.to,
+      targetKey: targetRoute.to,
       targetThreadId: target.threadId,
     });
   });
+}
+
+export type MessagingToolPayloadDedupeDecision = {
+  shouldDedupePayloads: boolean;
+  matchingRoute: boolean;
+  routeSentTexts: string[];
+  routeSentMediaUrls: string[];
+  useGlobalSentTextEvidenceFallback: boolean;
+  useGlobalSentMediaUrlEvidenceFallback: boolean;
+};
+
+export function resolveMessagingToolPayloadDedupe(params: {
+  messageProvider?: string;
+  messagingToolSentTargets?: MessagingToolSend[];
+  originatingTo?: string;
+  accountId?: string;
+}): MessagingToolPayloadDedupeDecision {
+  const sentTargets = params.messagingToolSentTargets ?? [];
+  const matchingTargets = getMatchingMessagingToolReplyTargets({
+    messageProvider: params.messageProvider,
+    messagingToolSentTargets: sentTargets,
+    originatingTo: params.originatingTo,
+    accountId: params.accountId,
+  });
+  const matchingRoute = matchingTargets.length > 0;
+  const routeSentTexts = matchingTargets.flatMap((target) =>
+    typeof target.text === "string" && target.text.trim() ? [target.text] : [],
+  );
+  const routeSentMediaUrls = matchingTargets.flatMap((target) =>
+    Array.isArray(target.mediaUrls)
+      ? target.mediaUrls.filter(
+          (url): url is string => typeof url === "string" && Boolean(url.trim()),
+        )
+      : [],
+  );
+  const hasTargetTextEvidence = sentTargets.some(
+    (target) => typeof target.text === "string" && Boolean(target.text.trim()),
+  );
+  const hasTargetMediaUrlEvidence = sentTargets.some(
+    (target) =>
+      Array.isArray(target.mediaUrls) &&
+      target.mediaUrls.some((url) => typeof url === "string" && Boolean(url.trim())),
+  );
+
+  return {
+    shouldDedupePayloads: matchingRoute || sentTargets.length === 0,
+    matchingRoute,
+    routeSentTexts,
+    routeSentMediaUrls,
+    useGlobalSentTextEvidenceFallback: matchingRoute && !hasTargetTextEvidence,
+    useGlobalSentMediaUrlEvidenceFallback: matchingRoute && !hasTargetMediaUrlEvidence,
+  };
 }

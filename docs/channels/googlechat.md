@@ -5,9 +5,21 @@ read_when:
 title: "Google Chat"
 ---
 
-# Google Chat (Chat API)
+Status: downloadable plugin for DMs + spaces via Google Chat API webhooks (HTTP only).
 
-Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
+## Install
+
+Install Google Chat before configuring the channel:
+
+```bash
+openclaw plugins install @openclaw/googlechat
+```
+
+Local checkout (when running from a git repo):
+
+```bash
+openclaw plugins install ./path/to/local/googlechat-plugin
+```
 
 ## Quick setup (beginner)
 
@@ -35,7 +47,7 @@ Status: ready for DMs + spaces via Google Chat API webhooks (HTTP only).
    - Under **Connection settings**, select **HTTP endpoint URL**.
    - Under **Triggers**, select **Use a common HTTP endpoint URL for all triggers** and set it to your gateway's public URL followed by `/googlechat`.
      - _Tip: Run `openclaw status` to find your gateway's public URL._
-   - Under **Visibility**, check **Make this Chat app available to specific people and groups in &lt;Your Domain&gt;**.
+   - Under **Visibility**, check **Make this Chat app available to specific people and groups in `<Your Domain>`**.
    - Enter your email address (e.g. `user@example.com`) in the text box.
    - Click **Save** at the bottom.
 6. **Enable the app status**:
@@ -180,7 +192,7 @@ Use these identifiers for delivery and allowlists:
       groupPolicy: "allowlist",
       groups: {
         "spaces/AAAA": {
-          allow: true,
+          enabled: true,
           requireMention: true,
           users: ["users/1234567890"],
           systemPrompt: "Short answers only.",

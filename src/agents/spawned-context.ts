@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
@@ -15,10 +15,11 @@ export type SpawnedToolContext = {
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;
+  agentMemberRoleIds?: string[];
   workspaceDir?: string;
 };
 
-export type NormalizedSpawnedRunMetadata = {
+type NormalizedSpawnedRunMetadata = {
   spawnedBy?: string;
   groupId?: string;
   groupChannel?: string;

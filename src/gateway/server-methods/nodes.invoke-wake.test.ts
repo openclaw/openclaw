@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../protocol/index.js";
-import { maybeWakeNodeWithApns, nodeHandlers } from "./nodes.js";
+import {
+  clearNodeWakeState,
+  maybeSendNodeWakeNudge,
+  maybeWakeNodeWithApns,
+  nodeHandlers,
+} from "./nodes.js";
 
 type MockNodeCommandPolicyParams = {
   command: string;
@@ -9,7 +14,7 @@ type MockNodeCommandPolicyParams = {
 };
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveNodeCommandAllowlist: vi.fn<() => Set<string>>(() => new Set()),
   isNodeCommandAllowed: vi.fn<
     (params: MockNodeCommandPolicyParams) => { ok: true } | { ok: false; reason: string }
@@ -27,8 +32,8 @@ const mocks = vi.hoisted(() => ({
   shouldClearStoredApnsRegistration: vi.fn(() => false),
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+vi.mock("../../config/io.js", () => ({
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../node-command-policy.js", () => ({
@@ -129,7 +134,7 @@ function mockDirectWakeConfig(nodeId: string, overrides: WakeResultOverrides = {
 }
 
 function mockRelayWakeConfig(nodeId: string, overrides: WakeResultOverrides = {}) {
-  mocks.loadConfig.mockReturnValue({
+  mocks.getRuntimeConfig.mockReturnValue({
     gateway: {
       push: {
         apns: {
@@ -195,6 +200,7 @@ async function invokeNode(params: {
       nodeRegistry: params.nodeRegistry,
       execApprovalManager: undefined,
       logGateway,
+      getRuntimeConfig: () => mocks.getRuntimeConfig(),
     } as never,
     client: null,
     req: { type: "req", id: "req-node-invoke", method: "node.invoke" },
@@ -224,7 +230,7 @@ async function pullPending(nodeId: string, commands?: string[]) {
   await nodeHandlers["node.pending.pull"]({
     params: {},
     respond: respond as never,
-    context: {} as never,
+    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending", method: "node.pending.pull" },
     isWebchatConnect: () => false,
@@ -237,7 +243,7 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
   await nodeHandlers["node.pending.ack"]({
     params: { ids },
     respond: respond as never,
-    context: {} as never,
+    context: { getRuntimeConfig: () => mocks.getRuntimeConfig() } as never,
     client: createNodeClient(nodeId, commands) as never,
     req: { type: "req", id: "req-node-pending-ack", method: "node.pending.ack" },
     isWebchatConnect: () => false,
@@ -247,8 +253,8 @@ async function ackPending(nodeId: string, ids: string[], commands?: string[]) {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    mocks.loadConfig.mockClear();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockClear();
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.resolveNodeCommandAllowlist.mockClear();
     mocks.resolveNodeCommandAllowlist.mockReturnValue(new Set());
     mocks.isNodeCommandAllowed.mockClear();
@@ -311,6 +317,48 @@ describe("node.invoke APNs wake path", () => {
     });
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+  });
+
+  it("clears wake and nudge throttle state when a node disconnects", async () => {
+    mockDirectWakeConfig("ios-node-clear-wake");
+    mocks.sendApnsAlert.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+
+    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+      path: "sent",
+      throttled: false,
+    });
+    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+      sent: true,
+      throttled: false,
+    });
+    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+      path: "throttled",
+      throttled: true,
+    });
+    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+      sent: false,
+      throttled: true,
+    });
+
+    clearNodeWakeState("ios-node-clear-wake");
+
+    await expect(maybeWakeNodeWithApns("ios-node-clear-wake")).resolves.toMatchObject({
+      path: "sent",
+      throttled: false,
+    });
+    await expect(maybeSendNodeWakeNudge("ios-node-clear-wake")).resolves.toMatchObject({
+      sent: true,
+      throttled: false,
+    });
+    expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
+    expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
   });
 
   it("wakes and retries invoke after the node reconnects", async () => {

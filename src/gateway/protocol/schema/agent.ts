@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import {
   AGENT_INTERNAL_EVENT_SOURCES,
   AGENT_INTERNAL_EVENT_STATUSES,
@@ -30,7 +30,57 @@ export const AgentEventSchema = Type.Object(
     seq: Type.Integer({ minimum: 0 }),
     stream: NonEmptyString,
     ts: Type.Integer({ minimum: 0 }),
+    spawnedBy: Type.Optional(NonEmptyString),
     data: Type.Record(Type.String(), Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const MessageActionToolContextSchema = Type.Object(
+  {
+    currentChannelId: Type.Optional(Type.String()),
+    currentGraphChannelId: Type.Optional(Type.String()),
+    currentChannelProvider: Type.Optional(Type.String()),
+    currentThreadTs: Type.Optional(Type.String()),
+    currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+    replyToMode: Type.Optional(
+      Type.Union([
+        Type.Literal("off"),
+        Type.Literal("first"),
+        Type.Literal("all"),
+        Type.Literal("batched"),
+      ]),
+    ),
+    hasRepliedRef: Type.Optional(
+      Type.Object(
+        {
+          value: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    skipCrossContextDecoration: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const MessageActionParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    action: NonEmptyString,
+    params: Type.Record(Type.String(), Type.Unknown()),
+    accountId: Type.Optional(Type.String()),
+    requesterSenderId: Type.Optional(Type.String()),
+    // Honored only when the RPC caller has the full operator scope set
+    // (shared-secret bearer or `operator.admin`). For narrowly-scoped
+    // callers (e.g. `operator.write`-only) the gateway forces this to
+    // `false` regardless of the value sent here.
+    senderIsOwner: Type.Optional(Type.Boolean()),
+    sessionKey: Type.Optional(Type.String()),
+    sessionId: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    toolContext: Type.Optional(MessageActionToolContextSchema),
+    idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -41,11 +91,14 @@ export const SendParamsSchema = Type.Object(
     message: Type.Optional(Type.String()),
     mediaUrl: Type.Optional(Type.String()),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
+    asVoice: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     channel: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
     /** Optional agent id for per-agent media root resolution on gateway sends. */
     agentId: Type.Optional(Type.String()),
+    /** Reply target message id for native quoted/threaded sends where supported. */
+    replyToId: Type.Optional(Type.String()),
     /** Thread id (channel-specific meaning, e.g. Telegram forum topic id). */
     threadId: Type.Optional(Type.String()),
     /** Optional session key for mirroring delivered output back into the transcript. */
@@ -101,6 +154,13 @@ export const AgentParamsSchema = Type.Object(
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     bestEffortDeliver: Type.Optional(Type.Boolean()),
     lane: Type.Optional(Type.String()),
+    // Backward-compatible no-op. Older CLI clients sent this field on gateway
+    // agent requests; the gateway accepts but intentionally ignores it.
+    cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
+    modelRun: Type.Optional(Type.Boolean()),
+    promptMode: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
+    ),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
@@ -108,8 +168,10 @@ export const AgentParamsSchema = Type.Object(
     bootstrapContextRunKind: Type.Optional(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),
+    acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },
@@ -129,6 +191,9 @@ export const AgentIdentityResultSchema = Type.Object(
     agentId: NonEmptyString,
     name: Type.Optional(NonEmptyString),
     avatar: Type.Optional(NonEmptyString),
+    avatarSource: Type.Optional(NonEmptyString),
+    avatarStatus: Type.Optional(Type.String({ enum: ["none", "local", "remote", "data"] })),
+    avatarReason: Type.Optional(NonEmptyString),
     emoji: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
@@ -147,5 +212,5 @@ export const WakeParamsSchema = Type.Object(
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
   },
-  { additionalProperties: false },
+  { additionalProperties: true }, // external wake senders may attach opaque metadata
 );

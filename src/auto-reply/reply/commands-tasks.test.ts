@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -7,15 +7,24 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
+import {
+  baseCommandTestConfig,
+  buildCommandTestParams,
+  configureInMemoryTaskRegistryStoreForTests,
+} from "./commands.test-harness.js";
 
-const baseCfg = {
-  commands: { text: true },
-  channels: { whatsapp: { allowFrom: ["*"] } },
-  session: { mainKey: "main", scope: "per-sender" },
-} as OpenClawConfig;
+vi.mock("../../agents/agent-scope.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
+    "../../agents/agent-scope.js",
+  );
+  return {
+    ...actual,
+    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
+  };
+});
+
+const baseCfg = baseCommandTestConfig;
 
 async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   const commandParams = buildCommandTestParams("/tasks", baseCfg);
@@ -25,27 +34,9 @@ async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
   });
 }
 
-function configureInMemoryTaskRegistryStoreForTests(): void {
-  configureTaskRegistryRuntime({
-    store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
-      saveSnapshot: () => {},
-      upsertTaskWithDeliveryState: () => {},
-      upsertTask: () => {},
-      deleteTaskWithDeliveryState: () => {},
-      deleteTask: () => {},
-      upsertDeliveryState: () => {},
-      deleteDeliveryState: () => {},
-      close: () => {},
-    },
-  });
-}
-
 describe("buildTasksReply", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();
   });
@@ -91,6 +82,29 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("🟡 queued background task");
     expect(reply.text).toContain("🔴 failed background task");
     expect(reply.text).toContain("approval denied");
+  });
+
+  it("lists session-backed video generation tasks for the current session", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:openai",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:main",
+      runId: "tool:video_generate:tasks-visible",
+      label: "Video generation",
+      task: "friendly lobster surfing",
+      progressSummary: "Queued video generation",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("Current session: 1 active · 1 total");
+    expect(reply.text).toContain("🟢 Video generation");
+    expect(reply.text).toContain("CLI · running");
+    expect(reply.text).toContain("Queued video generation");
   });
 
   it("sanitizes leaked internal runtime context from visible task details", async () => {
@@ -144,7 +158,9 @@ describe("buildTasksReply", () => {
 
     const reply = await buildTasksReplyForTest();
 
-    expect(reply.text).toContain("[Mon 2026-04-06 02:42 GMT+1]");
+    expect(reply.text).toContain("Background task");
+    expect(reply.text).toContain("Finished.");
+    expect(reply.text).not.toContain("[Mon 2026-04-06 02:42 GMT+1]");
     expect(reply.text).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
     expect(reply.text).not.toContain("OpenClaw runtime context (internal):");
   });
@@ -189,6 +205,55 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Agent-local: 1 active · 1 total");
     expect(reply.text).not.toContain("hidden background task");
     expect(reply.text).not.toContain("hidden progress detail");
+  });
+
+  it("counts session-backed video generation tasks in agent-local fallback", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:openai",
+      requesterSessionKey: "agent:main:other-session",
+      childSessionKey: "agent:main:other-session",
+      runId: "tool:video_generate:tasks-agent-fallback",
+      label: "Video generation",
+      task: "hidden video background task",
+      progressSummary: "Queued video generation",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const reply = await buildTasksReplyForTest({
+      sessionKey: "agent:main:empty-session",
+    });
+
+    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Agent-local: 1 active · 1 total");
+    expect(reply.text).not.toContain("hidden video background task");
+    expect(reply.text).not.toContain("Queued video generation");
+  });
+
+  it("uses the canonical target session agent for agent-local fallback counts", async () => {
+    createRunningTaskRun({
+      runtime: "subagent",
+      requesterSessionKey: "agent:target:other-session",
+      childSessionKey: "agent:target:subagent:tasks-target-fallback",
+      runId: "run-tasks-target-fallback",
+      agentId: "target",
+      task: "target hidden background task",
+      progressSummary: "hidden target progress detail",
+    });
+    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
+
+    const commandParams = buildCommandTestParams("/tasks", baseCfg);
+    const reply = await buildTasksReply({
+      ...commandParams,
+      agentId: "main",
+      sessionKey: "agent:target:empty-session",
+    });
+
+    expect(reply.text).toContain("All clear - nothing linked to this session right now.");
+    expect(reply.text).toContain("Agent-local: 1 active · 1 total");
+    expect(reply.text).not.toContain("target hidden background task");
   });
 });
 

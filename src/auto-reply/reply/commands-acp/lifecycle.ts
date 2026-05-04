@@ -30,10 +30,11 @@ import {
   resolveThreadBindingPlacementForCurrentContext,
   resolveThreadBindingSpawnPolicy,
 } from "../../../channels/thread-bindings-policy.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import { updateSessionStore } from "../../../config/sessions.js";
 import type { SessionAcpMeta } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import {
   getSessionBindingService,
   type ConversationRef,
@@ -42,6 +43,7 @@ import {
   type SessionBindingService,
 } from "../../../infra/outbound/session-binding-service.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
+import type { ReplyPayload } from "../../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import {
   resolveAcpCommandAccountId,
@@ -76,20 +78,19 @@ function resolveAcpBindingLabelNoun(params: {
   return params.conversationId === params.threadId ? "thread" : "conversation";
 }
 
-async function resolveBoundReplyChannelData(params: {
+async function resolveBoundReplyPayload(params: {
   binding: SessionBindingRecord;
   placement: "current" | "child";
-}): Promise<Record<string, unknown> | undefined> {
+}): Promise<Pick<ReplyPayload, "channelData" | "delivery" | "presentation"> | undefined> {
   const channelId = normalizeChannelId(params.binding.conversation.channel);
   if (!channelId) {
     return undefined;
   }
-  const buildChannelData =
-    getChannelPlugin(channelId)?.conversationBindings?.buildBoundReplyChannelData;
-  if (!buildChannelData) {
+  const buildPayload = getChannelPlugin(channelId)?.conversationBindings?.buildBoundReplyPayload;
+  if (!buildPayload) {
     return undefined;
   }
-  const resolved = await buildChannelData({
+  const resolved = await buildPayload({
     operation: "acp-spawn",
     placement: params.placement,
     conversation: params.binding.conversation,
@@ -250,15 +251,12 @@ async function bindSpawnedAcpSessionToCurrentConversation(params: {
   }
 
   const senderId = normalizeOptionalString(params.commandParams.command.senderId) ?? "";
-  const parentConversationId = normalizeOptionalString(bindingContext.parentConversationId);
-  const conversationRef = {
+  const conversationRef = normalizeConversationRef({
     channel: bindingPolicy.channel,
     accountId: bindingPolicy.accountId,
     conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: bindingContext.parentConversationId,
+  });
   const existingBinding = bindingService.resolveByConversation(conversationRef);
   const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
   if (existingBinding && boundBy && boundBy !== "system" && senderId && senderId !== boundBy) {
@@ -393,15 +391,12 @@ async function bindSpawnedAcpSessionToThread(params: {
   }
 
   const senderId = normalizeOptionalString(commandParams.command.senderId) ?? "";
-  const parentConversationId = normalizeOptionalString(bindingContext.parentConversationId);
-  const conversationRef = {
+  const conversationRef = normalizeConversationRef({
     channel: spawnPolicy.channel,
     accountId: spawnPolicy.accountId,
     conversationId: currentConversationId,
-    ...(parentConversationId && parentConversationId !== currentConversationId
-      ? { parentConversationId }
-      : {}),
-  };
+    parentConversationId: bindingContext.parentConversationId,
+  });
   if (placement === "current") {
     const existingBinding = bindingService.resolveByConversation(conversationRef);
     const boundBy = normalizeOptionalString(existingBinding?.metadata?.boundBy) ?? "";
@@ -626,16 +621,16 @@ export async function handleAcpSpawnAction(
     } else {
       parts.push(`Created ${placementLabel} ${boundConversationId} and bound it to ${sessionKey}.`);
     }
-    const channelData = await resolveBoundReplyChannelData({
+    const boundReplyPayload = await resolveBoundReplyPayload({
       binding,
       placement: bindingPlacement,
     });
-    if (channelData) {
+    if (boundReplyPayload) {
       return {
         shouldContinue: false,
         reply: {
           text: parts.join(" "),
-          channelData,
+          ...boundReplyPayload,
         },
       };
     }

@@ -16,8 +16,6 @@ import { resolveMSTeamsAllowlistMatch, resolveMSTeamsRouteConfig } from "../poli
 import { getMSTeamsRuntime } from "../runtime.js";
 import type { MSTeamsTurnContext } from "../sdk-types.js";
 
-export type MSTeamsResolvedSenderAccess = Awaited<ReturnType<typeof resolveMSTeamsSenderAccess>>;
-
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
   activity: MSTeamsTurnContext["activity"];
@@ -43,7 +41,7 @@ export async function resolveMSTeamsSenderAccess(params: {
     dmPolicy,
     readStore: pairing.readStoreForDmPolicy,
   });
-  const configuredDmAllowFrom = (msteamsCfg?.allowFrom ?? []).map((entry) => String(entry));
+  const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];
   const groupAllowFrom = msteamsCfg?.groupAllowFrom;
   const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
     allowFrom: configuredDmAllowFrom,

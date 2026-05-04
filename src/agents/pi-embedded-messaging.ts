@@ -1,14 +1,6 @@
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type MessagingToolSend = {
-  tool: string;
-  provider: string;
-  accountId?: string;
-  to?: string;
-  threadId?: string;
-};
-
 const CORE_MESSAGING_TOOLS = new Set(["sessions_send", "message"]);
 
 // Provider docking: any plugin with `actions` opts into messaging tool handling.

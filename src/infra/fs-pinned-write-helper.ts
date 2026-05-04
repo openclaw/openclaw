@@ -7,7 +7,7 @@ import type { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { FileIdentityStat } from "./file-identity.js";
 
-export type PinnedWriteInput =
+type PinnedWriteInput =
   | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
   | { kind: "stream"; stream: Readable };
 
@@ -138,8 +138,7 @@ function parsePinnedIdentity(stdout: string): FileIdentityStat {
     .trim()
     .split(/\r?\n/)
     .map((value) => value.trim())
-    .filter(Boolean)
-    .at(-1);
+    .findLast(Boolean);
   if (!line) {
     throw new Error("Pinned write helper returned no identity");
   }

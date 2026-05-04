@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
@@ -46,15 +46,10 @@ export function resolveEffectiveToolFsRootExpansionAllowed(params: {
   const profile = agentTools?.profile ?? globalTools?.profile;
   const profileAlsoAllow = new Set(agentTools?.alsoAllow ?? globalTools?.alsoAllow ?? []);
   const fsConfig = resolveToolFsConfig(params);
-  const hasExplicitFsConfig = agentTools?.fs !== undefined || globalTools?.fs !== undefined;
   if (fsConfig.workspaceOnly === true) {
     return false;
   }
-  if (hasExplicitFsConfig) {
-    profileAlsoAllow.add("read");
-    profileAlsoAllow.add("write");
-    profileAlsoAllow.add("edit");
-  }
+  // tools.fs presence does not grant access; require profile or alsoAllow (#47487).
   const profilePolicy = mergeAlsoAllowPolicy(
     resolveToolProfilePolicy(profile),
     profileAlsoAllow.size > 0 ? Array.from(profileAlsoAllow) : undefined,

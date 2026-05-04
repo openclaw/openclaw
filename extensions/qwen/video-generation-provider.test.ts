@@ -1,13 +1,14 @@
-import { beforeAll, describe, expect, it } from "vitest";
-import {
-  expectDashscopeVideoTaskPoll,
-  expectSuccessfulDashscopeVideoResult,
-  mockSuccessfulDashscopeVideoTask,
-} from "../../test/helpers/media-generation/dashscope-video-provider.js";
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
-} from "../../test/helpers/media-generation/provider-http-mocks.js";
+} from "openclaw/plugin-sdk/provider-http-test-mocks";
+import {
+  expectDashscopeVideoTaskPoll,
+  expectExplicitVideoGenerationCapabilities,
+  expectSuccessfulDashscopeVideoResult,
+  mockSuccessfulDashscopeVideoTask,
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { beforeAll, describe, expect, it } from "vitest";
 
 const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
 
@@ -20,6 +21,10 @@ beforeAll(async () => {
 installProviderHttpMockCleanup();
 
 describe("qwen video generation provider", () => {
+  it("declares explicit mode capabilities", () => {
+    expectExplicitVideoGenerationCapabilities(buildQwenVideoGenerationProvider());
+  });
+
   it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 

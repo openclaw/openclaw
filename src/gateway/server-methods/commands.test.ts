@@ -79,7 +79,7 @@ vi.mock("../../auto-reply/commands-registry.js", () => ({
 vi.mock("../../auto-reply/skill-commands.js", () => ({
   listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
 }));
-vi.mock("../../plugins/command-registry-state.js", () => ({
+vi.mock("../../plugins/command-specs.js", () => ({
   getPluginCommandSpecs: vi.fn((provider?: string) => {
     if (provider === "whatsapp") {
       return [];
@@ -101,13 +101,34 @@ vi.mock("../../plugins/commands.js", () => ({
   ]),
 }));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(() => ["main", "dev"]),
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
 vi.mock("../../channels/plugins/index.js", () => ({
+  getLoadedChannelPlugin: vi.fn((provider: string) => {
+    if (provider === "discord") {
+      return {
+        commands: {
+          resolveNativeCommandName: ({
+            commandKey,
+            defaultName,
+          }: {
+            commandKey: string;
+            defaultName: string;
+          }) => {
+            if (commandKey === "model") {
+              return "set_model";
+            }
+            return defaultName;
+          },
+        },
+      };
+    }
+    return undefined;
+  }),
   getChannelPlugin: vi.fn((provider: string) => {
     if (provider === "discord") {
       return {
@@ -132,6 +153,14 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 import { ErrorCodes, errorShape } from "../protocol/index.js";
+import {
+  COMMAND_ALIAS_MAX_ITEMS,
+  COMMAND_ARG_CHOICES_MAX_ITEMS,
+  COMMAND_ARGS_MAX_ITEMS,
+  COMMAND_DESCRIPTION_MAX_LENGTH,
+  COMMAND_LIST_MAX_ITEMS,
+  COMMAND_NAME_MAX_LENGTH,
+} from "../protocol/schema/commands.js";
 import { commandsHandlers, buildCommandsListResult } from "./commands.js";
 
 function callHandler(params: Record<string, unknown> = {}) {
@@ -139,13 +168,13 @@ function callHandler(params: Record<string, unknown> = {}) {
   const respond = (ok: boolean, payload?: unknown, error?: unknown) => {
     result = { ok, payload, error };
   };
-  commandsHandlers["commands.list"]({
+  void commandsHandlers["commands.list"]({
     params,
     respond,
     req: {} as never,
     client: null,
     isWebchatConnect: () => false,
-    context: {} as never,
+    context: { getRuntimeConfig: () => ({}) } as never,
   });
   return result!;
 }
@@ -342,6 +371,58 @@ describe("commands.list handler", () => {
     const { commands } = payload as { commands: Array<Record<string, unknown>> };
     const model = commands.find((c) => c.name === "model");
     expect(model!.args).toBeUndefined();
+  });
+
+  it("caps serialized command payload size and field lengths", () => {
+    const originalCommands = [...mockChatCommands];
+    const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
+    const aliasBase = "alias".repeat(20);
+    const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
+      name: `${longToken}-${argIndex}`,
+      description: longDescription,
+      type: "string" as const,
+      choices: Array.from({ length: COMMAND_ARG_CHOICES_MAX_ITEMS + 5 }, (_, choiceIndex) => ({
+        value: `${longToken}-${choiceIndex}`,
+        label: `${longToken}-${choiceIndex}`,
+      })),
+    }));
+    try {
+      mockChatCommands.length = 0;
+      for (let index = 0; index < COMMAND_LIST_MAX_ITEMS + 25; index += 1) {
+        const isFirst = index === 0;
+        mockChatCommands.push({
+          key: isFirst ? longToken : `cmd-${index}`,
+          description: isFirst ? longDescription : "short",
+          textAliases: isFirst
+            ? Array.from(
+                { length: COMMAND_ALIAS_MAX_ITEMS + 5 },
+                (_, aliasIndex) => `/${aliasBase}-${index}-${aliasIndex}`,
+              )
+            : [`/cmd-${index}`],
+          acceptsArgs: isFirst,
+          args: isFirst ? oversizedArgs : undefined,
+          scope: "both",
+          category: "tools",
+        });
+      }
+
+      const { payload } = callHandler();
+      const { commands } = payload as { commands: Array<Record<string, unknown>> };
+      expect(commands).toHaveLength(COMMAND_LIST_MAX_ITEMS);
+      const first = commands[0];
+      expect((first.name as string).length).toBeLessThanOrEqual(COMMAND_NAME_MAX_LENGTH);
+      expect((first.description as string).length).toBeLessThanOrEqual(
+        COMMAND_DESCRIPTION_MAX_LENGTH,
+      );
+      expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
+      expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
+      const firstArg = (first.args as Array<Record<string, unknown>>)[0];
+      expect(firstArg.choices as unknown[]).toHaveLength(COMMAND_ARG_CHOICES_MAX_ITEMS);
+    } finally {
+      mockChatCommands.length = 0;
+      mockChatCommands.push(...originalCommands);
+    }
   });
 
   it("rejects unknown agentId", () => {

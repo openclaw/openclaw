@@ -1,4 +1,6 @@
-import { isRecord } from "./attachments/shared.js";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
@@ -147,9 +149,9 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-export type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
+type MSTeamsSendErrorKind = "auth" | "throttled" | "transient" | "permanent" | "unknown";
 
-export type MSTeamsSendErrorClassification = {
+type MSTeamsSendErrorClassification = {
   kind: MSTeamsSendErrorKind;
   statusCode?: number;
   retryAfterMs?: number;

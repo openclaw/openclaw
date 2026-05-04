@@ -41,6 +41,15 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
   });
 });
 
+describe("statusSummaryRuntime.classifySessionKey", () => {
+  it("classifies cron history sessions distinctly", () => {
+    expect(statusSummaryRuntime.classifySessionKey("agent:main:cron:daily-digest")).toBe("cron");
+    expect(
+      statusSummaryRuntime.classifySessionKey("agent:avery:cron:daily-digest:run:abc123"),
+    ).toBe("cron");
+  });
+});
+
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   const cfg = {
     agents: {
@@ -79,17 +88,17 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
         {
           agents: {
             defaults: {
-              model: { primary: "openai/gpt-5.4" },
+              model: { primary: "openai/gpt-5.5" },
             },
           },
         } as never,
         {
-          model: "gpt-5.4",
+          model: "gpt-5.5",
         },
       ),
     ).toEqual({
       provider: "openai",
-      model: "gpt-5.4",
+      model: "gpt-5.5",
     });
   });
 
@@ -104,6 +113,20 @@ describe("statusSummaryRuntime.resolveSessionModelRef", () => {
     ).toEqual({
       provider: "openai-codex",
       model: "gpt-5.4",
+    });
+  });
+
+  it("falls back to configured defaults when persisted session model fields are malformed", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionModelRef(cfg, {
+        modelProvider: { provider: "openai" },
+        model: false,
+        providerOverride: ["anthropic"],
+        modelOverride: 123,
+      } as never),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
     });
   });
 });

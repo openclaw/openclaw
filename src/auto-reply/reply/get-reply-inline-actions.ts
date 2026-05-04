@@ -3,11 +3,12 @@ import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -27,15 +28,48 @@ import {
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
+import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
-import { isDirectiveOnly } from "./directive-handling.parse.js";
 import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
+type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
+type OpenClawToolsRuntime = typeof import("../../agents/openclaw-tools.runtime.js");
+type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
+type CommandsRuntime = typeof import("./commands.runtime.js");
+
+const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
+  () => import("../skill-commands.runtime.js"),
+);
+const openClawToolsRuntimeLoader = createLazyImportLoader<OpenClawToolsRuntime>(
+  () => import("../../agents/openclaw-tools.runtime.js"),
+);
+const abortCutoffRuntimeLoader = createLazyImportLoader<AbortCutoffRuntime>(
+  () => import("./abort-cutoff.runtime.js"),
+);
+const commandsRuntimeLoader = createLazyImportLoader<CommandsRuntime>(
+  () => import("./commands.runtime.js"),
+);
 let builtinSlashCommands: Set<string> | null = null;
+
+function loadSkillCommandsRuntime(): Promise<SkillCommandsRuntime> {
+  return skillCommandsRuntimeLoader.load();
+}
+
+function loadOpenClawToolsRuntime(): Promise<OpenClawToolsRuntime> {
+  return openClawToolsRuntimeLoader.load();
+}
+
+function loadAbortCutoffRuntime(): Promise<AbortCutoffRuntime> {
+  return abortCutoffRuntimeLoader.load();
+}
+
+function loadCommandsRuntime(): Promise<CommandsRuntime> {
+  return commandsRuntimeLoader.load();
+}
 
 function getBuiltinSlashCommands(): Set<string> {
   if (builtinSlashCommands) {
@@ -74,6 +108,17 @@ function expandBundleCommandPromptTemplate(template: string, args?: string): str
     return rendered.trim();
   }
   return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
+}
+
+function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
+  if (wasMentioned !== true) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
 export type InlineActionResult =
@@ -194,7 +239,7 @@ export async function handleInlineActions(params: {
     shouldLoadSkillCommands && params.skillCommands
       ? params.skillCommands
       : shouldLoadSkillCommands
-        ? (await import("../skill-commands.runtime.js")).listSkillCommandsForWorkspace({
+        ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
             workspaceDir,
             cfg,
             agentId,
@@ -226,7 +271,7 @@ export async function handleInlineActions(params: {
         resolveGatewayMessageChannel(ctx.Provider) ??
         undefined;
 
-      const { createOpenClawTools } = await import("../../agents/openclaw-tools.runtime.js");
+      const { createOpenClawTools } = await loadOpenClawToolsRuntime();
       const tools = createOpenClawTools({
         agentSessionKey: sessionKey,
         agentChannel: channel,
@@ -239,6 +284,7 @@ export async function handleInlineActions(params: {
         workspaceDir,
         config: cfg,
         allowGatewaySubagentBinding: true,
+        senderIsOwner: command.senderIsOwner,
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
@@ -296,8 +342,9 @@ export async function handleInlineActions(params: {
   };
 
   const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && sessionEntry) {
-    const cutoff = readAbortCutoffFromSessionEntry(sessionEntry);
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+  if (!isStopLikeInbound && targetSessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
     const incoming = resolveAbortCutoffFromContext(ctx);
     const shouldSkip = cutoff
       ? shouldSkipMessageByAbortCutoff({
@@ -313,9 +360,9 @@ export async function handleInlineActions(params: {
     }
     if (cutoff) {
       await (
-        await import("./abort-cutoff.runtime.js")
+        await loadAbortCutoffRuntime()
       ).clearAbortCutoffInSessionRuntime({
-        sessionEntry,
+        sessionEntry: targetSessionEntry,
         sessionStore,
         sessionKey,
         storePath,
@@ -345,17 +392,19 @@ export async function handleInlineActions(params: {
     }) && inlineStatusRequested;
   let didSendInlineStatus = false;
   if (handleInlineStatus) {
-    const { buildStatusReply } = await import("./commands.runtime.js");
+    const { buildStatusReply } = await loadCommandsRuntime();
     const inlineStatusReply = await buildStatusReply({
       cfg,
       command,
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       sessionKey,
-      parentSessionKey: ctx.ParentSessionKey,
+      parentSessionKey: targetSessionEntry?.parentSessionKey ?? ctx.ParentSessionKey,
       sessionScope,
+      storePath,
       provider,
       model,
       contextTokens,
+      workspaceDir,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -371,7 +420,7 @@ export async function handleInlineActions(params: {
   }
 
   const runCommands = async (commandInput: typeof command) => {
-    const { handleCommands } = await import("./commands.runtime.js");
+    const { handleCommands } = await loadCommandsRuntime();
     return handleCommands({
       // Pass sessionCtx so command handlers can mutate stripped body for same-turn continuation.
       ctx: sessionCtx,
@@ -387,7 +436,7 @@ export async function handleInlineActions(params: {
         allowed: elevatedAllowed,
         failures: elevatedFailures,
       },
-      sessionEntry,
+      sessionEntry: targetSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,
@@ -471,7 +520,11 @@ export async function handleInlineActions(params: {
     }
     return stripMentions(stripped, ctx, cfg, agentId).trim();
   })();
-  if (didSendInlineStatus && remainingBodyAfterInlineStatus.length === 0) {
+  if (
+    didSendInlineStatus &&
+    (remainingBodyAfterInlineStatus.length === 0 ||
+      isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
+  ) {
     typing.cleanup();
     return { kind: "reply", reply: undefined };
   }

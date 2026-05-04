@@ -1,12 +1,10 @@
 ---
-title: Lobster
 summary: "Typed workflow runtime for OpenClaw with resumable approval gates."
+title: Lobster
 read_when:
   - You want deterministic multi-step workflows with explicit approvals
   - You need to resume a workflow without re-running earlier steps
 ---
-
-# Lobster
 
 Lobster is a workflow shell that lets OpenClaw run multi-step tool sequences as a single, deterministic operation with explicit approval checkpoints.
 
@@ -95,7 +93,7 @@ Enable the tool:
     "list": [
       {
         "id": "main",
-        "tools": { "allow": ["llm-task"] }
+        "tools": { "alsoAllow": ["llm-task"] }
       }
     ]
   }
@@ -192,9 +190,9 @@ Or per-agent:
 
 Avoid using `tools.allow: ["lobster"]` unless you intend to run in restrictive allowlist mode.
 
-Note: allowlists are opt-in for optional plugins. If your allowlist only names
-plugin tools (like `lobster`), OpenClaw keeps core tools enabled. To restrict core
-tools, include the core tools or groups you want in the allowlist too.
+<Note>
+Allowlists are opt-in for optional plugins. `alsoAllow` enables only the named optional plugin tools while preserving the normal core tool set. To restrict core tools, use `tools.allow` with the core tools or groups you want.
+</Note>
 
 ## Example: Email triage
 

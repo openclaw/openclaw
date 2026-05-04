@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
+
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+}));
 
 type SecretRegistryEntry = {
   id: string;
@@ -38,23 +42,25 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
     "secretref-user-supplied-credentials-matrix.json",
   );
   const matrix = JSON.parse(fs.readFileSync(matrixPath, "utf8")) as SecretRefCredentialMatrix;
-  return matrix.entries.map((entry) => ({
-    id: entry.id,
-    configFile: entry.configFile,
-    pathPattern: entry.path,
-    ...(entry.refPath ? { refPathPattern: entry.refPath } : {}),
-    secretShape: entry.secretShape,
-    expectedResolvedValue: "string",
-    ...(entry.when?.type ? { authProfileType: entry.when.type } : {}),
-  }));
+  return matrix.entries.map((entry) =>
+    Object.assign(
+      { id: entry.id, configFile: entry.configFile, pathPattern: entry.path },
+      entry.refPath ? { refPathPattern: entry.refPath } : {},
+      { secretShape: entry.secretShape, expectedResolvedValue: "string" as const },
+      entry.when?.type ? { authProfileType: entry.when.type } : {},
+    ),
+  );
 }
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
+const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
   "channels.googlechat.accounts.*.serviceAccount",
+  // Doctor migrates legacy web search config into plugin-owned webSearch config.
+  "tools.web.search.apiKey",
   "tools.web.fetch.firecrawl.apiKey",
 ]);
 
@@ -231,6 +237,17 @@ function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): bo
         (entry.id.startsWith("plugins.entries.") &&
           (entry.id.includes(".config.webSearch.") || entry.id.includes(".config.webFetch."))),
     )
+  );
+}
+
+function collectOpenClawCoverageEntries(options: {
+  includePluginEntries: boolean;
+}): SecretRegistryEntry[] {
+  return COVERAGE_REGISTRY_ENTRIES.filter(
+    (entry) =>
+      entry.configFile === "openclaw.json" &&
+      entry.id.startsWith("plugins.entries.") === options.includePluginEntries &&
+      !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
   );
 }
 
@@ -416,7 +433,7 @@ async function prepareConfigCoverageSnapshot(params: {
   skipConfigCollectors?: boolean;
 }) {
   await ensureConfigCoverageRuntimeLoaded();
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = params.config;
   const resolvedConfig = structuredClone(params.config);
   const context = createResolverContext({
     sourceConfig,
@@ -468,7 +485,7 @@ async function prepareAuthCoverageSnapshot(params: {
   loadAuthStore: (agentDir?: string) => AuthProfileStore;
 }) {
   await ensureAuthCoverageRuntimeLoaded();
-  const sourceConfig = structuredClone(params.config);
+  const sourceConfig = params.config;
   const context = createResolverContext({
     sourceConfig,
     env: params.env,
@@ -505,6 +522,39 @@ async function prepareAuthCoverageSnapshot(params: {
   };
 }
 
+async function expectOpenClawCoverageEntriesResolved(
+  label: string,
+  entries: readonly SecretRegistryEntry[],
+): Promise<void> {
+  for (const batch of buildCoverageBatches(entries)) {
+    logCoverageBatch(label, batch);
+    const config = {} as OpenClawConfig;
+    const env: Record<string, string> = {};
+    for (const [index, entry] of batch.entries()) {
+      const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
+      const runtimeEnvId = resolveCoverageEnvId(entry, envId);
+      const expectedValue = `resolved-${entry.id}`;
+      const wildcardToken = resolveCoverageWildcardToken(index);
+      env[runtimeEnvId] = expectedValue;
+      applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
+    }
+    const snapshot = await prepareConfigCoverageSnapshot({
+      config,
+      env,
+      loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
+      includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
+      skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
+    });
+    for (const [index, entry] of batch.entries()) {
+      const resolved = getPath(
+        snapshot.config,
+        resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
+      );
+      expect(resolved).toBe(`resolved-${entry.id}`);
+    }
+  }
+}
+
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
     const [sharedRuntime, resolver] = await Promise.all([
@@ -515,40 +565,27 @@ describe("secrets runtime target coverage", () => {
     ({ resolveSecretRefValues } = resolver);
   });
 
-  it("handles every openclaw.json registry target when configured as active", async () => {
-    const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) =>
-        entry.configFile === "openclaw.json" &&
-        !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
-    );
-    for (const batch of buildCoverageBatches(entries)) {
-      logCoverageBatch("openclaw.json", batch);
-      const config = {} as OpenClawConfig;
-      const env: Record<string, string> = {};
-      for (const [index, entry] of batch.entries()) {
-        const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
-        const runtimeEnvId = resolveCoverageEnvId(entry, envId);
-        const expectedValue = `resolved-${entry.id}`;
-        const wildcardToken = resolveCoverageWildcardToken(index);
-        env[runtimeEnvId] = expectedValue;
-        applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
-      }
-      const snapshot = await prepareConfigCoverageSnapshot({
-        config,
-        env,
-        loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
-        includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
-        skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
-      });
-      for (const [index, entry] of batch.entries()) {
-        const resolved = getPath(
-          snapshot.config,
-          resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
-        );
-        expect(resolved).toBe(`resolved-${entry.id}`);
-      }
-    }
-  });
+  it(
+    "handles every core and channel openclaw.json registry target when configured as active",
+    async () => {
+      await expectOpenClawCoverageEntriesResolved(
+        "openclaw.json core",
+        collectOpenClawCoverageEntries({ includePluginEntries: false }),
+      );
+    },
+    RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "handles every plugin openclaw.json registry target when configured as active",
+    async () => {
+      await expectOpenClawCoverageEntriesResolved(
+        "openclaw.json plugins",
+        collectOpenClawCoverageEntries({ includePluginEntries: true }),
+      );
+    },
+    RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
+  );
 
   it("handles every auth-profiles registry target", async () => {
     const entries = COVERAGE_REGISTRY_ENTRIES.filter(

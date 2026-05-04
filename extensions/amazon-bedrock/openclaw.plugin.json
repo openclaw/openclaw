@@ -1,7 +1,13 @@
 {
   "id": "amazon-bedrock",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["amazon-bedrock"],
+  "contracts": {
+    "memoryEmbeddingProviders": ["bedrock"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

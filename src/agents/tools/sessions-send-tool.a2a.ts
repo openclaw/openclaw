@@ -1,25 +1,33 @@
 import crypto from "node:crypto";
-import { callGateway } from "../../gateway/call.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
-import { AGENT_LANE_NESTED } from "../lanes.js";
-import { readLatestAssistantReply, waitForAgentRun } from "../run-wait.js";
+import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import {
+  type AssistantReplySnapshot,
+  readLatestAssistantReplySnapshot,
+  waitForAgentRun,
+} from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
+  isNonDeliverableSessionsReply,
   isReplySkip,
 } from "./sessions-send-helpers.js";
 
 const log = createSubsystemLogger("agents/sessions-send");
 
-type GatewayCaller = typeof callGateway;
+type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
 
 const defaultSessionsSendA2ADeps = {
-  callGateway,
+  callGateway: async <T = unknown>(opts: CallGatewayOptions): Promise<T> => {
+    const { callGateway } = await import("../../gateway/call.js");
+    return callGateway<T>(opts);
+  },
 };
 
 let sessionsSendA2ADeps: {
@@ -34,6 +42,7 @@ export async function runSessionsSendA2AFlow(params: {
   maxPingPongTurns: number;
   requesterSessionKey?: string;
   requesterChannel?: GatewayMessageChannel;
+  baseline?: AssistantReplySnapshot;
   roundOneReply?: string;
   waitRunId?: string;
 }) {
@@ -48,13 +57,23 @@ export async function runSessionsSendA2AFlow(params: {
         callGateway: sessionsSendA2ADeps.callGateway,
       });
       if (wait.status === "ok") {
-        primaryReply = await readLatestAssistantReply({
+        const latestSnapshot = await readLatestAssistantReplySnapshot({
           sessionKey: params.targetSessionKey,
+          callGateway: sessionsSendA2ADeps.callGateway,
         });
+        const baselineFingerprint = params.baseline?.fingerprint;
+        primaryReply =
+          latestSnapshot.text &&
+          (!baselineFingerprint || latestSnapshot.fingerprint !== baselineFingerprint)
+            ? latestSnapshot.text
+            : undefined;
         latestReply = primaryReply;
       }
     }
     if (!latestReply) {
+      return;
+    }
+    if (isNonDeliverableSessionsReply(latestReply)) {
       return;
     }
 
@@ -89,13 +108,13 @@ export async function runSessionsSendA2AFlow(params: {
           message: incomingMessage,
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
-          lane: AGENT_LANE_NESTED,
+          lane: resolveNestedAgentLaneForSession(currentSessionKey),
           sourceSessionKey: nextSessionKey,
           sourceChannel:
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText)) {
+        if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
           break;
         }
         latestReply = replyText;
@@ -120,12 +139,19 @@ export async function runSessionsSendA2AFlow(params: {
       message: "Agent-to-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.announceTimeoutMs,
-      lane: AGENT_LANE_NESTED,
+      lane: resolveNestedAgentLaneForSession(params.targetSessionKey),
+      transcriptMessage: "",
       sourceSessionKey: params.requesterSessionKey,
       sourceChannel: params.requesterChannel,
       sourceTool: "sessions_send",
     });
-    if (announceTarget && announceReply && announceReply.trim() && !isAnnounceSkip(announceReply)) {
+    if (
+      announceTarget &&
+      announceReply &&
+      announceReply.trim() &&
+      !isAnnounceSkip(announceReply) &&
+      !isNonDeliverableSessionsReply(announceReply)
+    ) {
       try {
         await sessionsSendA2ADeps.callGateway({
           method: "send",

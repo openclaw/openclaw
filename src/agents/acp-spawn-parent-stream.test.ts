@@ -2,7 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
-const requestHeartbeatNowMock = vi.fn();
+const requestHeartbeatMock = vi.fn();
 const readAcpSessionEntryMock = vi.fn();
 const resolveSessionFilePathMock = vi.fn();
 const resolveSessionFilePathOptionsMock = vi.fn();
@@ -17,7 +17,7 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
       "../infra/heartbeat-wake.js",
     ),
     () => ({
-      requestHeartbeatNow: (...args: unknown[]) => requestHeartbeatNowMock(...args),
+      requestHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
     }),
   );
 });
@@ -63,7 +63,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     readAcpSessionEntryMock.mockReset();
     resolveSessionFilePathMock.mockReset();
     resolveSessionFilePathOptionsMock.mockReset();
@@ -78,7 +78,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
   it("relays assistant progress and completion to the parent session", () => {
     const deliveryContext = {
-      channel: "telegram",
+      channel: "forum",
       to: "-1001234567890",
       accountId: "default",
       threadId: 1122,
@@ -129,7 +129,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
         trusted: false,
       }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "acp:spawn:stream",
         sessionKey: "agent:main:main",
@@ -255,7 +255,7 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
 
     expect(collectedTexts()).toEqual([]);
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
     relay.dispose();
   });
 
@@ -287,6 +287,66 @@ describe("startAcpSpawnParentStreamRelay", () => {
 
     const texts = collectedTexts();
     expect(texts.some((text) => text.includes("codex: hello world"))).toBe(true);
+    relay.dispose();
+  });
+
+  it("suppresses commentary-phase assistant relay text", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-commentary",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-commentary",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-commentary",
+      stream: "assistant",
+      data: {
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
+    expect(texts.some((text) => text.includes("post a tight progress reply here"))).toBe(false);
+    relay.dispose();
+  });
+
+  it("still relays final_answer assistant text after suppressed commentary", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-final",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-final",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-final",
+      stream: "assistant",
+      data: {
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-final",
+      stream: "assistant",
+      data: {
+        delta: "final answer ready",
+        phase: "final_answer",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    const texts = collectedTexts();
+    expect(texts.some((text) => text.includes("checking thread context"))).toBe(false);
+    expect(texts.some((text) => text.includes("codex: final answer ready"))).toBe(true);
     relay.dispose();
   });
 

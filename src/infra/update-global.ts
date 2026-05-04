@@ -5,8 +5,14 @@ import path from "node:path";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
+import {
+  collectPackageDistInventory,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  readPackageDistInventoryIfPresent,
+} from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
+import { parseSemver } from "./runtime-guard.js";
 
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
@@ -15,7 +21,7 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-export type ResolvedGlobalInstallCommand = {
+type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
   command: string;
 };
@@ -29,11 +35,24 @@ const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
+const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
 const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
   "--omit=optional",
   ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
 ] as const;
+const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
+const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
+  "dist/extensions/qa-channel",
+  "dist/extensions/qa-lab",
+  "dist/extensions/qa-matrix",
+]);
+
+export type NpmGlobalPrefixLayout = {
+  prefix: string;
+  globalRoot: string;
+  binDir: string;
+};
 
 function normalizePackageTarget(value: string): string {
   return value.trim();
@@ -82,15 +101,166 @@ export async function collectInstalledGlobalPackageErrors(params: {
   expectedVersion?: string | null;
 }): Promise<string[]> {
   const errors: string[] = [];
+  errors.push(...(await collectSourceCheckoutInstallErrors(params.packageRoot)));
   const installedVersion = await readPackageVersion(params.packageRoot);
   if (params.expectedVersion && installedVersion !== params.expectedVersion) {
     errors.push(
       `expected installed version ${params.expectedVersion}, found ${installedVersion ?? "<missing>"}`,
     );
   }
-  for (const relativePath of BUNDLED_RUNTIME_SIDECAR_PATHS) {
-    if (!(await pathExists(path.join(params.packageRoot, relativePath)))) {
-      errors.push(`missing bundled runtime sidecar ${relativePath}`);
+  errors.push(
+    ...(await collectInstalledPackageDistErrors({
+      packageRoot: params.packageRoot,
+      installedVersion,
+      expectedVersion: params.expectedVersion,
+    })),
+  );
+  return errors;
+}
+
+async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
+  const realPackageRoot = await tryRealpath(packageRoot);
+  const hasSourceCheckoutShape =
+    ((await pathExists(path.join(realPackageRoot, ".git"))) ||
+      (await pathExists(path.join(realPackageRoot, "pnpm-workspace.yaml")))) &&
+    (await pathExists(path.join(realPackageRoot, "src"))) &&
+    (await pathExists(path.join(realPackageRoot, "extensions")));
+  return hasSourceCheckoutShape
+    ? [`global package root resolves to source checkout: ${realPackageRoot}`]
+    : [];
+}
+
+function shouldRequirePackagedDistInventory(version: string | null | undefined): boolean {
+  const parsed = parseSemver(version ?? null);
+  if (!parsed) {
+    return false;
+  }
+  if (parsed.major !== FIRST_PACKAGED_DIST_INVENTORY_VERSION.major) {
+    return parsed.major > FIRST_PACKAGED_DIST_INVENTORY_VERSION.major;
+  }
+  if (parsed.minor !== FIRST_PACKAGED_DIST_INVENTORY_VERSION.minor) {
+    return parsed.minor > FIRST_PACKAGED_DIST_INVENTORY_VERSION.minor;
+  }
+  return parsed.patch >= FIRST_PACKAGED_DIST_INVENTORY_VERSION.patch;
+}
+
+async function collectInstalledPackageDistErrors(params: {
+  packageRoot: string;
+  installedVersion: string | null;
+  expectedVersion?: string | null;
+}): Promise<string[]> {
+  const criticalPaths = await collectCriticalInstalledPackageDistPaths(params.packageRoot);
+  let inventoryFiles: string[] | null = null;
+  let inventoryError: string | null = null;
+  try {
+    inventoryFiles = await readPackageDistInventoryIfPresent(params.packageRoot);
+  } catch {
+    inventoryError = `invalid package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`;
+  }
+
+  if (inventoryFiles !== null) {
+    const actualFiles = await collectPackageDistInventory(params.packageRoot);
+    const inventoryErrors = await collectInstalledPathErrors({
+      packageRoot: params.packageRoot,
+      expectedFiles: inventoryFiles,
+      actualFiles,
+      missingMessage: (relativePath) => `missing packaged dist file ${relativePath}`,
+      unexpectedMessage: (relativePath) => `unexpected packaged dist file ${relativePath}`,
+    });
+    const inventorySet = new Set(inventoryFiles);
+    const supplementalCriticalPaths = criticalPaths.filter(
+      (relativePath) => !inventorySet.has(relativePath),
+    );
+    if (supplementalCriticalPaths.length === 0) {
+      return inventoryErrors;
+    }
+    return [
+      ...inventoryErrors,
+      ...(await collectInstalledPathErrors({
+        packageRoot: params.packageRoot,
+        expectedFiles: supplementalCriticalPaths,
+        actualFiles,
+        missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
+      })),
+    ];
+  }
+
+  const criticalErrors = await collectInstalledPathErrors({
+    packageRoot: params.packageRoot,
+    expectedFiles: await collectLegacyInstalledPackageDistPaths(params.packageRoot),
+    actualFiles: null,
+    missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
+  });
+  if (inventoryError) {
+    return [inventoryError, ...criticalErrors];
+  }
+  if (
+    shouldRequirePackagedDistInventory(params.installedVersion) ||
+    shouldRequirePackagedDistInventory(params.expectedVersion)
+  ) {
+    return [
+      `missing package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`,
+      ...criticalErrors,
+    ];
+  }
+  return criticalErrors;
+}
+
+async function collectLegacyInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
+  return await collectCriticalInstalledPackageDistPaths(packageRoot);
+}
+
+async function collectCriticalInstalledPackageDistPaths(packageRoot: string): Promise<string[]> {
+  const expectedFiles = new Set<string>();
+  await Promise.all(
+    BUNDLED_RUNTIME_SIDECAR_PATHS.map(async (relativePath) => {
+      const pluginRoot = resolveBundledPluginRoot(relativePath);
+      if (pluginRoot === null) {
+        return;
+      }
+      if (OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS.has(pluginRoot)) {
+        return;
+      }
+      if (
+        (await pathExists(path.join(packageRoot, pluginRoot, "package.json"))) ||
+        (await pathExists(path.join(packageRoot, pluginRoot, "openclaw.plugin.json")))
+      ) {
+        expectedFiles.add(relativePath);
+      }
+    }),
+  );
+  return [...expectedFiles].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveBundledPluginRoot(relativePath: string): string | null {
+  const match = /^dist\/extensions\/[^/]+/u.exec(relativePath);
+  return match ? match[0] : null;
+}
+
+async function collectInstalledPathErrors(params: {
+  packageRoot: string;
+  expectedFiles: string[];
+  actualFiles: string[] | null;
+  missingMessage: (relativePath: string) => string;
+  unexpectedMessage?: ((relativePath: string) => string) | undefined;
+}): Promise<string[]> {
+  const errors: string[] = [];
+  const actualSet = params.actualFiles ? new Set(params.actualFiles) : null;
+  for (const relativePath of params.expectedFiles) {
+    const exists =
+      actualSet !== null
+        ? actualSet.has(relativePath)
+        : await pathExists(path.join(params.packageRoot, relativePath));
+    if (!exists) {
+      errors.push(params.missingMessage(relativePath));
+    }
+  }
+  if (actualSet !== null && params.unexpectedMessage) {
+    const expectedSet = new Set(params.expectedFiles);
+    for (const relativePath of params.actualFiles ?? []) {
+      if (!expectedSet.has(relativePath)) {
+        errors.push(params.unexpectedMessage(relativePath));
+      }
     }
   }
   return errors;
@@ -140,6 +310,13 @@ function applyWindowsPackageInstallEnv(env: Record<string, string>) {
   env.NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1";
 }
 
+function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
+  const current = env.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim();
+  if (!current) {
+    env.COREPACK_ENABLE_DOWNLOAD_PROMPT = COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT;
+  }
+}
+
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -165,16 +342,23 @@ export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend(env);
-  if (pathPrepend.length === 0 && process.platform !== "win32") {
+  const sourceEnv = env ?? process.env;
+  const hasCorepackDownloadPromptSetting = Boolean(
+    sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),
+  );
+  const requiresMergedEnv =
+    pathPrepend.length > 0 || process.platform === "win32" || !hasCorepackDownloadPromptSetting;
+  if (!requiresMergedEnv) {
     return env;
   }
   const merged = Object.fromEntries(
-    Object.entries(env ?? process.env)
+    Object.entries(sourceEnv)
       .filter(([, value]) => value != null)
       .map(([key, value]) => [key, String(value)]),
   ) as Record<string, string>;
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
+  applyCorepackDownloadPromptEnv(merged);
   return merged;
 }
 
@@ -212,6 +396,52 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
     return parentDir;
   }
   return null;
+}
+
+export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
+  globalRoot?: string | null,
+): NpmGlobalPrefixLayout | null {
+  const trimmed = globalRoot?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = path.resolve(trimmed);
+  if (path.basename(normalized) !== "node_modules") {
+    return null;
+  }
+  const parentDir = path.dirname(normalized);
+  if (path.basename(parentDir) === "lib") {
+    const prefix = path.dirname(parentDir);
+    return {
+      prefix,
+      globalRoot: normalized,
+      binDir: path.join(prefix, "bin"),
+    };
+  }
+  if (process.platform === "win32") {
+    return {
+      prefix: parentDir,
+      globalRoot: normalized,
+      binDir: parentDir,
+    };
+  }
+  return null;
+}
+
+export function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGlobalPrefixLayout {
+  const resolvedPrefix = path.resolve(prefix);
+  if (process.platform === "win32") {
+    return {
+      prefix: resolvedPrefix,
+      globalRoot: path.join(resolvedPrefix, "node_modules"),
+      binDir: resolvedPrefix,
+    };
+  }
+  return {
+    prefix: resolvedPrefix,
+    globalRoot: path.join(resolvedPrefix, "lib", "node_modules"),
+    binDir: path.join(resolvedPrefix, "bin"),
+  };
 }
 
 function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
@@ -385,6 +615,7 @@ export function globalInstallArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
   pkgRoot?: string | null,
+  installPrefix?: string | null,
 ): string[] {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager === "pnpm") {
@@ -393,19 +624,34 @@ export function globalInstallArgs(
   if (resolved.manager === "bun") {
     return [resolved.command, "add", "-g", spec];
   }
-  return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
+  return [
+    resolved.command,
+    "i",
+    "-g",
+    ...(installPrefix ? ["--prefix", installPrefix] : []),
+    spec,
+    ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
+  ];
 }
 
 export function globalInstallFallbackArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
   pkgRoot?: string | null,
+  installPrefix?: string | null,
 ): string[] | null {
   const resolved = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
   if (resolved.manager !== "npm") {
     return null;
   }
-  return [resolved.command, "i", "-g", spec, ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS];
+  return [
+    resolved.command,
+    "i",
+    "-g",
+    ...(installPrefix ? ["--prefix", installPrefix] : []),
+    spec,
+    ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS,
+  ];
 }
 
 export async function cleanupGlobalRenameDirs(params: {

@@ -23,6 +23,7 @@ import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { validateIPv4AddressInput } from "../shared/net/ipv4.js";
+import { maskApiKey } from "../utils/mask-api-key.js";
 import type { WizardPrompter } from "./prompts.js";
 import { resolveSetupSecretInputString } from "./setup.secret-input.js";
 import type {
@@ -47,6 +48,10 @@ type ConfigureGatewayResult = {
   settings: GatewayWizardSettings;
 };
 
+function normalizeWizardTextInput(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export async function configureGatewayForSetup(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
@@ -57,7 +62,7 @@ export async function configureGatewayForSetup(
     flow === "quickstart"
       ? quickstartGateway.port
       : Number.parseInt(
-          String(
+          normalizeWizardTextInput(
             await prompter.text({
               message: "Gateway port",
               initialValue: String(localPort),
@@ -132,12 +137,10 @@ export async function configureGatewayForSetup(
   let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = Boolean(
-      await prompter.confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
-        initialValue: false,
-      }),
-    );
+    tailscaleResetOnExit = await prompter.confirm({
+      message: "Reset Tailscale serve/funnel on exit?",
+      initialValue: false,
+    });
   }
 
   // Safety + constraints:
@@ -207,14 +210,28 @@ export async function configureGatewayForSetup(
         randomToken();
       gatewayTokenInput = gatewayToken;
     } else {
-      const tokenInput = await prompter.text({
-        message: "Gateway token (blank to generate)",
-        placeholder: "Needed for multi-machine or non-loopback access",
-        initialValue:
-          quickstartTokenString ??
-          normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN) ??
-          "",
-      });
+      const existingToken =
+        quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
+      let tokenInput: string | undefined;
+      if (existingToken) {
+        const keep = await prompter.confirm({
+          message: `Use existing gateway token (${maskApiKey(existingToken)})?`,
+          initialValue: true,
+        });
+        tokenInput = keep
+          ? existingToken
+          : await prompter.text({
+              message: "Gateway token (blank to generate)",
+              placeholder: "Needed for multi-machine or non-loopback access",
+              sensitive: true,
+            });
+      } else {
+        tokenInput = await prompter.text({
+          message: "Gateway token (blank to generate)",
+          placeholder: "Needed for multi-machine or non-loopback access",
+          sensitive: true,
+        });
+      }
       gatewayToken = normalizeGatewayTokenInput(tokenInput) || randomToken();
       gatewayTokenInput = gatewayToken;
     }
@@ -246,12 +263,13 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        password = String(
-          (await prompter.text({
+        password = normalizeWizardTextInput(
+          await prompter.text({
             message: "Gateway password",
             validate: validateGatewayPasswordInput,
-          })) ?? "",
-        ).trim();
+            sensitive: true,
+          }),
+        );
       }
     }
     nextConfig = {

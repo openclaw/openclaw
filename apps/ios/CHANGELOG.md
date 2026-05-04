@@ -1,12 +1,66 @@
 # OpenClaw iOS Changelog
 
-## Unreleased
+## 2026.5.3 - 2026-05-03
 
-### Added
+Maintenance update for the current OpenClaw development release.
 
-### Changed
+## 2026.5.2 - 2026-05-02
 
-### Fixed
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.30 - 2026-04-30
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.27 - 2026-04-27
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.26 - 2026-04-26
+
+Maintenance update for the current OpenClaw development release.
+
+- Refreshed build hygiene for the iOS app, Share extension, Activity widget, Watch app, and curated shared Swift sources; relay registration now uses StoreKit app transaction JWS data instead of deprecated receipt APIs.
+
+## 2026.4.25 - 2026-04-25
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.23 - 2026-04-23
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.22 - 2026-04-22
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.21 - 2026-04-21
+
+Maintenance update for the current OpenClaw development release.
+
+## 2026.4.20 - 2026-04-20
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.4.19 - 2026-04-19
+
+Maintenance update for the current OpenClaw beta release.
+
+## 2026.4.18 - 2026-04-18
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.4.15 - 2026-04-15
+
+Maintenance update for the current OpenClaw beta release.
+
+## 2026.4.14 - 2026-04-14
+
+Maintenance update for the current OpenClaw beta release.
+
+## 2026.4.12 - 2026-04-12
+
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.10 - 2026-04-10
 

@@ -2,17 +2,17 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
   spyRuntimeJson,
   spyRuntimeLogs,
-} from "../../../src/cli/test-runtime-capture.js";
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
-const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -34,7 +34,7 @@ vi.mock("./cli.host.runtime.js", async () => {
     getMemorySearchManager,
     isRich: runtimeCli.isRich,
     listMemoryFiles: runtimeFiles.listMemoryFiles,
-    loadConfig,
+    getRuntimeConfig,
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
@@ -73,7 +73,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   getMemorySearchManager.mockReset();
-  loadConfig.mockReset().mockReturnValue({});
+  getRuntimeConfig.mockReset().mockReturnValue({});
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -105,6 +105,7 @@ describe("memory cli", () => {
 
   function makeMemoryStatus(overrides: Record<string, unknown> = {}) {
     return {
+      backend: "builtin",
       files: 0,
       chunks: 0,
       dirty: false,
@@ -113,7 +114,7 @@ describe("memory cli", () => {
       provider: "openai",
       model: "text-embedding-3-small",
       requestedProvider: "openai",
-      vector: { enabled: true, available: true },
+      vector: { enabled: true, storeAvailable: true, semanticAvailable: true, available: true },
       ...overrides,
     };
   }
@@ -215,8 +216,9 @@ describe("memory cli", () => {
 
   it("prints vector status when available", async () => {
     const close = vi.fn(async () => {});
+    const probeVectorAvailability = vi.fn(async () => true);
     mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
+      probeVectorAvailability,
       status: () =>
         makeMemoryStatus({
           files: 2,
@@ -225,6 +227,8 @@ describe("memory cli", () => {
           fts: { enabled: true, available: true },
           vector: {
             enabled: true,
+            storeAvailable: true,
+            semanticAvailable: true,
             available: true,
             extensionPath: "/opt/sqlite-vec.dylib",
             dims: 1024,
@@ -236,7 +240,9 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status"]);
 
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
+    expect(probeVectorAvailability).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: ready"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: ready"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector dims: 1024"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector path: /opt/sqlite-vec.dylib"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("FTS: ready"));
@@ -246,8 +252,38 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
+  it("keeps plain status from probing vector or embeddings", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector probe");
+    });
+    const probeEmbeddingAvailability = vi.fn(async () => {
+      throw new Error("unexpected embedding probe");
+    });
+    mockManager({
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          provider: "auto",
+          requestedProvider: "auto",
+          vector: { enabled: true },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status"]);
+
+    expect(probeVectorAvailability).not.toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Provider: auto"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: unknown"));
+    expect(close).toHaveBeenCalled();
+  });
+
   it("resolves configured memory SecretRefs through gateway snapshot", async () => {
-    loadConfig.mockReturnValue({
+    getRuntimeConfig.mockReturnValue({
       agents: {
         defaults: {
           memorySearch: {
@@ -318,6 +354,8 @@ describe("memory cli", () => {
           dirty: true,
           vector: {
             enabled: true,
+            storeAvailable: false,
+            semanticAvailable: false,
             available: false,
             loadError: "load failed",
           },
@@ -328,16 +366,20 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--agent", "main"]);
 
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: unavailable"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: unavailable"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: unavailable"));
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector error: load failed"));
     expect(close).toHaveBeenCalled();
   });
 
   it("prints embeddings status when deep", async () => {
     const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => true);
+    const probeVectorAvailability = vi.fn(async () => true);
     const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
     mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
       probeEmbeddingAvailability,
       status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
       close,
@@ -346,8 +388,86 @@ describe("memory cli", () => {
     const log = spyRuntimeLogs(defaultRuntime);
     await runMemoryCli(["status", "--deep"]);
 
+    expect(probeVectorStoreAvailability).toHaveBeenCalled();
+    expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: ready"));
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("prints vector store separately from embedding readiness when deep", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => true);
+    const probeVectorAvailability = vi.fn(async () => false);
+    const probeEmbeddingAvailability = vi.fn(async () => ({
+      ok: false,
+      error: "No embedding provider available",
+    }));
+    mockManager({
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          provider: "none",
+          requestedProvider: "auto",
+          vector: {
+            enabled: true,
+            storeAvailable: true,
+            semanticAvailable: false,
+            available: false,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(probeVectorStoreAvailability).toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(probeVectorAvailability).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector store: ready"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Semantic vectors: unavailable"));
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Embeddings: unavailable"));
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("Embeddings error: No embedding provider available"),
+    );
+    expect(close).toHaveBeenCalled();
+  });
+
+  it("keeps non-builtin deep status on the semantic vector probe", async () => {
+    const close = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => true);
+    const probeVectorAvailability = vi.fn(async () => true);
+    const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
+    mockManager({
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
+      status: () =>
+        makeMemoryStatus({
+          backend: "qmd",
+          provider: "qmd",
+          model: "qmd",
+          requestedProvider: "qmd",
+          vector: {
+            enabled: true,
+            semanticAvailable: true,
+            available: true,
+          },
+        }),
+      close,
+    });
+
+    const log = spyRuntimeLogs(defaultRuntime);
+    await runMemoryCli(["status", "--deep"]);
+
+    expect(probeVectorStoreAvailability).not.toHaveBeenCalled();
+    expect(probeVectorAvailability).toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("Vector: ready"));
+    expect(log).not.toHaveBeenCalledWith(expect.stringContaining("Vector store:"));
     expect(close).toHaveBeenCalled();
   });
 
@@ -474,6 +594,50 @@ describe("memory cli", () => {
     });
   });
 
+  it("repairs contaminated dreaming artifacts during status --fix", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
+      await fs.mkdir(sessionCorpusDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionCorpusDir, "2026-04-11.txt"),
+        [
+          "[main/dreaming-main.jsonl#L3] ordinary session line",
+          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
+        ].join("\n"),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json"),
+        JSON.stringify({ version: 3, files: {}, seenMessages: {} }, null, 2),
+        "utf-8",
+      );
+      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        probeVectorAvailability: vi.fn(async () => true),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const log = spyRuntimeLogs(defaultRuntime);
+      await runMemoryCli(["status", "--fix"]);
+
+      expect(log).toHaveBeenCalledWith(
+        expect.stringContaining("Dream repair: archived session corpus"),
+      );
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("Dream archive:"));
+      await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
+        "# Dream Diary",
+      );
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("enables verbose logging with --verbose", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -500,9 +664,12 @@ describe("memory cli", () => {
   it("reindexes on status --index", async () => {
     const close = vi.fn(async () => {});
     const sync = vi.fn(async () => {});
+    const probeVectorStoreAvailability = vi.fn(async () => true);
+    const probeVectorAvailability = vi.fn(async () => true);
     const probeEmbeddingAvailability = vi.fn(async () => ({ ok: true }));
     mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
+      probeVectorStoreAvailability,
+      probeVectorAvailability,
       probeEmbeddingAvailability,
       sync,
       status: () => makeMemoryStatus({ files: 1, chunks: 1 }),
@@ -513,7 +680,14 @@ describe("memory cli", () => {
     await runMemoryCli(["status", "--index"]);
 
     expectCliSync(sync);
+    expect(probeVectorStoreAvailability).toHaveBeenCalled();
+    expect(probeVectorAvailability).toHaveBeenCalled();
     expect(probeEmbeddingAvailability).toHaveBeenCalled();
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
   });
 
@@ -526,6 +700,11 @@ describe("memory cli", () => {
     await runMemoryCli(["index"]);
 
     expectCliSync(sync);
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+    });
     expect(close).toHaveBeenCalled();
     expect(log).toHaveBeenCalledWith("Memory index updated (main).");
   });
@@ -669,8 +848,15 @@ describe("memory cli", () => {
 
   it("prints status json output when requested", async () => {
     const close = vi.fn(async () => {});
+    const probeVectorAvailability = vi.fn(async () => {
+      throw new Error("unexpected vector probe");
+    });
+    const probeEmbeddingAvailability = vi.fn(async () => {
+      throw new Error("unexpected embedding probe");
+    });
     mockManager({
-      probeVectorAvailability: vi.fn(async () => true),
+      probeVectorAvailability,
+      probeEmbeddingAvailability,
       status: () => makeMemoryStatus({ workspaceDir: undefined }),
       close,
     });
@@ -685,6 +871,8 @@ describe("memory cli", () => {
     }
     expect(Array.isArray(payload)).toBe(true);
     expect((payload[0] as Record<string, unknown>)?.agentId).toBe("main");
+    expect(probeVectorAvailability).not.toHaveBeenCalled();
+    expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalled();
   });
 
@@ -740,6 +928,11 @@ describe("memory cli", () => {
       maxResults: undefined,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
+    });
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
@@ -913,13 +1106,15 @@ describe("memory cli", () => {
 
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
       await recordShortTermRecalls({
         workspaceDir,
         query: "weather plans",
-        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        nowMs,
         results: [
           {
-            path: "memory/2026-04-03.md",
+            path: `memory/${isoDay}.md`,
             startLine: 2,
             endLine: 3,
             score: 0.92,
@@ -1467,10 +1662,12 @@ describe("memory cli", () => {
 
   it("prints conceptual promotion signals", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      const dayMs = 24 * 60 * 60 * 1000;
+      const nowMs = Date.now();
       await recordShortTermRecalls({
         workspaceDir,
         query: "router vlan",
-        nowMs: Date.parse("2026-04-01T00:00:00.000Z"),
+        nowMs: nowMs - 2 * dayMs,
         results: [
           {
             path: "memory/2026-04-01.md",
@@ -1485,7 +1682,7 @@ describe("memory cli", () => {
       await recordShortTermRecalls({
         workspaceDir,
         query: "glacier backup",
-        nowMs: Date.parse("2026-04-03T00:00:00.000Z"),
+        nowMs: nowMs - dayMs,
         results: [
           {
             path: "memory/2026-04-01.md",

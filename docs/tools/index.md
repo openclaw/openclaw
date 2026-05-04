@@ -4,10 +4,8 @@ read_when:
   - You want to understand what tools OpenClaw provides
   - You need to configure, allow, or deny tools
   - You are deciding between built-in tools, skills, and plugins
-title: "Tools and Plugins"
+title: "Tools and plugins"
 ---
-
-# Tools and Plugins
 
 Everything the agent does beyond generating text happens through **tools**.
 Tools are how the agent reads files, runs commands, browses the web, sends
@@ -53,24 +51,24 @@ OpenClaw has three layers that work together:
 
 These tools ship with OpenClaw and are available without installing any plugins:
 
-| Tool                                       | What it does                                                          | Page                                        |
-| ------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------- |
-| `exec` / `process`                         | Run shell commands, manage background processes                       | [Exec](/tools/exec)                         |
-| `code_execution`                           | Run sandboxed remote Python analysis                                  | [Code Execution](/tools/code-execution)     |
-| `browser`                                  | Control a Chromium browser (navigate, click, screenshot)              | [Browser](/tools/browser)                   |
-| `web_search` / `x_search` / `web_fetch`    | Search the web, search X posts, fetch page content                    | [Web](/tools/web)                           |
-| `read` / `write` / `edit`                  | File I/O in the workspace                                             |                                             |
-| `apply_patch`                              | Multi-hunk file patches                                               | [Apply Patch](/tools/apply-patch)           |
-| `message`                                  | Send messages across all channels                                     | [Agent Send](/tools/agent-send)             |
-| `canvas`                                   | Drive node Canvas (present, eval, snapshot)                           |                                             |
-| `nodes`                                    | Discover and target paired devices                                    |                                             |
-| `cron` / `gateway`                         | Manage scheduled jobs; inspect, patch, restart, or update the gateway |                                             |
-| `image` / `image_generate`                 | Analyze or generate images                                            | [Image Generation](/tools/image-generation) |
-| `music_generate`                           | Generate music tracks                                                 | [Music Generation](/tools/music-generation) |
-| `video_generate`                           | Generate videos                                                       | [Video Generation](/tools/video-generation) |
-| `tts`                                      | One-shot text-to-speech conversion                                    | [TTS](/tools/tts)                           |
-| `sessions_*` / `subagents` / `agents_list` | Session management, status, and sub-agent orchestration               | [Sub-agents](/tools/subagents)              |
-| `session_status`                           | Lightweight `/status`-style readback and session model override       | [Session Tools](/concepts/session-tool)     |
+| Tool                                       | What it does                                                          | Page                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `exec` / `process`                         | Run shell commands, manage background processes                       | [Exec](/tools/exec), [Exec Approvals](/tools/exec-approvals) |
+| `code_execution`                           | Run sandboxed remote Python analysis                                  | [Code Execution](/tools/code-execution)                      |
+| `browser`                                  | Control a Chromium browser (navigate, click, screenshot)              | [Browser](/tools/browser)                                    |
+| `web_search` / `x_search` / `web_fetch`    | Search the web, search X posts, fetch page content                    | [Web](/tools/web), [Web Fetch](/tools/web-fetch)             |
+| `read` / `write` / `edit`                  | File I/O in the workspace                                             |                                                              |
+| `apply_patch`                              | Multi-hunk file patches                                               | [Apply Patch](/tools/apply-patch)                            |
+| `message`                                  | Send messages across all channels                                     | [Agent Send](/tools/agent-send)                              |
+| `canvas`                                   | Drive node Canvas (present, eval, snapshot)                           |                                                              |
+| `nodes`                                    | Discover and target paired devices                                    |                                                              |
+| `cron` / `gateway`                         | Manage scheduled jobs; inspect, patch, restart, or update the gateway |                                                              |
+| `image` / `image_generate`                 | Analyze or generate images                                            | [Image Generation](/tools/image-generation)                  |
+| `music_generate`                           | Generate music tracks                                                 | [Music Generation](/tools/music-generation)                  |
+| `video_generate`                           | Generate videos                                                       | [Video Generation](/tools/video-generation)                  |
+| `tts`                                      | One-shot text-to-speech conversion                                    | [TTS](/tools/tts)                                            |
+| `sessions_*` / `subagents` / `agents_list` | Session management, status, and sub-agent orchestration               | [Sub-agents](/tools/subagents)                               |
+| `session_status`                           | Lightweight `/status`-style readback and session model override       | [Session Tools](/concepts/session-tool)                      |
 
 For image work, use `image` for analysis and `image_generate` for generation or editing. If you target `openai/*`, `google/*`, `fal/*`, or another non-default image provider, configure that provider's auth/API key first.
 
@@ -97,6 +95,8 @@ active runtime model label from the latest transcript usage entry.
 
 For partial changes, prefer `config.schema.lookup` then `config.patch`. Use
 `config.apply` only when you intentionally replace the entire config.
+For broader config docs, read [Configuration](/gateway/configuration) and
+[Configuration reference](/gateway/configuration-reference).
 The tool also refuses to change `tools.exec.ask` or `tools.exec.security`;
 legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
@@ -104,11 +104,18 @@ legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 Plugins can register additional tools. Some examples:
 
-- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
-- [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
-- [Music Generation](/tools/music-generation) — shared `music_generate` tool with workflow-backed providers
 - [Diffs](/tools/diffs) — diff viewer and renderer
+- [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
+- [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
+- [Music Generation](/tools/music-generation) — shared `music_generate` tool with workflow-backed providers
 - [OpenProse](/prose) — markdown-first workflow orchestration
+- [Tokenjuice](/tools/tokenjuice) — compact noisy `exec` and `bash` tool results
+
+Plugin tools are still authored with `api.registerTool(...)` and declared in
+the plugin manifest's `contracts.tools` list. OpenClaw captures the validated
+tool descriptor during discovery and caches it by plugin source and contract, so
+later tool planning can skip plugin runtime loading. Tool execution still loads
+the owning plugin and calls the live registered implementation.
 
 ## Tool configuration
 
@@ -126,6 +133,12 @@ config. Deny always wins over allow.
 }
 ```
 
+OpenClaw fails closed when an explicit allowlist resolves to no callable tools.
+For example, `tools.allow: ["query_db"]` only works if a loaded plugin actually
+registers `query_db`. If no built-in, plugin, or bundled MCP tool matches the
+allowlist, the run stops before the model call instead of continuing as a
+text-only run that could hallucinate tool results.
+
 ### Tool profiles
 
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.
@@ -133,10 +146,43 @@ Per-agent override: `agents.list[].tools.profile`.
 
 | Profile     | What it includes                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | No restriction (same as unset)                                                                                                                    |
+| `full`      | All core and optional plugin tools; unrestricted baseline for broader command/control access                                                      |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
+
+<Note>
+`tools.profile: "messaging"` is intentionally narrow for channel-focused
+agents. It leaves out broader command/control tools such as filesystem, runtime,
+browser, canvas, nodes, cron, and gateway control. Use `tools.profile: "full"`
+as the unrestricted baseline for broader command/control access, then trim
+access with `tools.allow` / `tools.deny` when needed.
+</Note>
+
+`coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
+but not the full browser-control tool. Browser automation can drive real
+sessions and logged-in profiles, so add it explicitly with
+`tools.alsoAllow: ["browser"]` or a per-agent
+`agents.list[].tools.alsoAllow: ["browser"]`.
+
+<Note>
+Configuring `tools.exec` or `tools.fs` under a restrictive profile (`messaging`, `minimal`) does not implicitly widen the profile's allowlist. Add explicit `tools.alsoAllow` entries (for example `["exec", "process"]` for exec, or `["read", "write", "edit"]` for fs) when you want a restrictive profile to use those configured sections. OpenClaw logs a startup warning when a config section is present without a matching `alsoAllow` grant.
+</Note>
+
+The `coding` and `messaging` profiles also allow configured bundle MCP tools
+under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
+want a profile to keep its normal built-ins but hide all configured MCP tools.
+The `minimal` profile does not include bundle MCP tools.
+
+Example (broadest tool surface by default):
+
+```json5
+{
+  tools: {
+    profile: "full",
+  },
+}
+```
 
 ### Tool groups
 

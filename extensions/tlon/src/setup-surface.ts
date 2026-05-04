@@ -21,8 +21,6 @@ function parseList(value: string): string[] {
     .filter(Boolean);
 }
 
-export { tlonSetupAdapter } from "./setup-core.js";
-
 export const tlonSetupWizard = createTlonSetupWizardBase({
   resolveConfigured: async ({ cfg, accountId }) => await resolveTlonSetupConfigured(cfg, accountId),
   resolveStatusLines: async ({ cfg, accountId }) =>
@@ -66,7 +64,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
       next = applyTlonSetupConfig({
         cfg: next,
         accountId,
-        input: { groupChannels: parseList(String(entry ?? "")) },
+        input: { groupChannels: parseList(entry ?? "") },
       });
     }
 
@@ -85,7 +83,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
         cfg: next,
         accountId,
         input: {
-          dmAllowlist: parseList(String(entry ?? "")).map((ship) => normalizeShip(ship)),
+          dmAllowlist: parseList(entry ?? "").map((ship) => normalizeShip(ship)),
         },
       });
     }

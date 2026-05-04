@@ -1,4 +1,4 @@
-import { escapeRegExp } from "../utils.js";
+import { escapeRegExp } from "../shared/regexp.js";
 
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
@@ -24,7 +24,7 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`);
+  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }
@@ -43,7 +43,7 @@ export function isSilentReplyText(
 
 type SilentReplyActionEnvelope = { action?: unknown };
 
-export function isSilentReplyEnvelopeText(
+function isSilentReplyEnvelopeText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
 ): boolean {

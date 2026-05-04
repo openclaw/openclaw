@@ -8,6 +8,8 @@ import {
   DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  readCronRunLogEntriesPage,
+  readCronRunLogEntriesSync,
   resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
@@ -92,6 +94,36 @@ describe("cron run log", () => {
       expect(lines.length).toBe(3);
       const last = JSON.parse(lines[2] ?? "{}") as { ts?: number };
       expect(last.ts).toBe(1009);
+    });
+  });
+
+  it("reads run-log entries synchronously for task reconciliation", async () => {
+    await withRunLogDir("openclaw-cron-log-sync-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1000,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        runAtMs: 900,
+        durationMs: 100,
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2000,
+        jobId: "job-2",
+        action: "finished",
+        status: "error",
+      });
+
+      expect(readCronRunLogEntriesSync(logPath, { jobId: "job-1" })).toEqual([
+        expect.objectContaining({
+          jobId: "job-1",
+          status: "ok",
+          runAtMs: 900,
+          durationMs: 100,
+        }),
+      ]);
+      expect(readCronRunLogEntriesSync(path.join(dir, "runs", "missing.jsonl"))).toEqual([]);
     });
   });
 
@@ -209,6 +241,13 @@ describe("cron run log", () => {
             delivered: true,
             deliveryStatus: "not-delivered",
             deliveryError: "announce failed",
+            delivery: {
+              intended: { channel: "last", to: null, source: "last" },
+              resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+              messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+              fallbackUsed: false,
+              delivered: true,
+            },
           }),
         ].join("\n") + "\n",
         "utf-8",
@@ -220,6 +259,55 @@ describe("cron run log", () => {
       expect(entries[0]?.delivered).toBe(true);
       expect(entries[0]?.deliveryStatus).toBe("not-delivered");
       expect(entries[0]?.deliveryError).toBe("announce failed");
+      expect(entries[0]?.delivery).toEqual({
+        intended: { channel: "last", to: null, source: "last" },
+        resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+        messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+        fallbackUsed: false,
+        delivered: true,
+      });
+    });
+  });
+
+  it("does not include raw delivery targets in run-log search", async () => {
+    await withRunLogDir("openclaw-cron-log-target-query-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        JSON.stringify({
+          ts: 2,
+          jobId: "job-1",
+          action: "finished",
+          status: "ok",
+          summary: "done",
+          delivery: {
+            intended: { channel: "last", to: null, source: "last" },
+            resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
+            messageToolSentTo: [{ channel: "telegram", to: "-100" }],
+          },
+        }) + "\n",
+        "utf-8",
+      );
+
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "telegram",
+          })
+        ).entries,
+      ).toHaveLength(1);
+      expect(
+        (
+          await readCronRunLogEntriesPage(logPath, {
+            limit: 10,
+            jobId: "job-1",
+            query: "-100",
+          })
+        ).entries,
+      ).toEqual([]);
     });
   });
 

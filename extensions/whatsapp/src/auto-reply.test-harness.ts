@@ -1,18 +1,25 @@
 import "./test-helpers.js";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
+import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
-export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./test-helpers.js";
+export {
+  resetLoadConfigMock,
+  setLoadConfigMock,
+  setRuntimeConfigSourceSnapshotMock,
+} from "./test-helpers.js";
 
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyExport = any;
@@ -20,9 +27,9 @@ type MockWebListener = {
   close: () => Promise<void>;
   onClose: Promise<WebListenerCloseReason>;
   signalClose: () => void;
-  sendMessage: () => Promise<{ messageId: string }>;
-  sendPoll: () => Promise<{ messageId: string }>;
-  sendReaction: () => Promise<void>;
+  sendMessage: () => Promise<WhatsAppSendResult>;
+  sendPoll: () => Promise<WhatsAppSendResult>;
+  sendReaction: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -37,8 +44,61 @@ type WebAutoReplyMonitorHarness = {
   controller: AbortController;
   run: Promise<unknown>;
 };
+type MockSessionSocket = {
+  ev: {
+    on: ReturnType<typeof vi.fn>;
+    off: ReturnType<typeof vi.fn>;
+  };
+  ws: EventEmitter & {
+    close: ReturnType<typeof vi.fn>;
+  };
+  user: { id: string };
+};
 
-export const TEST_NET_IP = "203.0.113.10";
+const TEST_NET_IP = "93.184.216.34";
+const WEB_AUTO_REPLY_SOCKETS_KEY = Symbol.for("openclaw:webAutoReplySessionSockets");
+
+function getSessionSockets(): MockSessionSocket[] {
+  const store = globalThis as Record<PropertyKey, unknown>;
+  if (!Array.isArray(store[WEB_AUTO_REPLY_SOCKETS_KEY])) {
+    store[WEB_AUTO_REPLY_SOCKETS_KEY] = [];
+  }
+  return store[WEB_AUTO_REPLY_SOCKETS_KEY] as MockSessionSocket[];
+}
+
+vi.mock("./session.js", async () => {
+  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
+  return {
+    ...actual,
+    createWaSocket: vi.fn(async () => {
+      const ws = new EventEmitter() as MockSessionSocket["ws"];
+      ws.close = vi.fn();
+      const socket: MockSessionSocket = {
+        ev: {
+          on: vi.fn(),
+          off: vi.fn(),
+        },
+        ws,
+        user: { id: "123@s.whatsapp.net" },
+      };
+      getSessionSockets().push(socket);
+      return socket;
+    }),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+  };
+});
+
+export function getLastWebAutoReplySessionSocket(): MockSessionSocket {
+  const last = getSessionSockets().at(-1);
+  if (!last) {
+    throw new Error("No WhatsApp Web auto-reply test socket created");
+  }
+  return last;
+}
+
+function resetWebAutoReplySessionSockets() {
+  getSessionSockets().length = 0;
+}
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -54,7 +114,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   runEmbeddedPiAgent: vi.fn(),
 }));
 
-export async function rmDirWithRetries(
+async function rmDirWithRetries(
   dir: string,
   opts?: { attempts?: number; delayMs?: number },
 ): Promise<void> {
@@ -145,22 +205,11 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    resetWebAutoReplySessionSockets();
     _resetBaileysMocks();
     _resetLoadConfigMock();
     if (opts?.pinDns) {
-      const ssrf = await import("../../../src/infra/net/ssrf.js");
-      resolvePinnedHostnameSpy = vi
-        .spyOn(ssrf, "resolvePinnedHostname")
-        .mockImplementation(async (hostname) => {
-          // SSRF guard pins DNS; stub resolution to avoid live lookups in unit tests.
-          const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
-          const addresses = [TEST_NET_IP];
-          return {
-            hostname: normalized,
-            addresses,
-            lookup: ssrf.createPinnedLookup({ hostname: normalized, addresses }),
-          };
-        });
+      resolvePinnedHostnameSpy = mockPinnedHostnameResolution([TEST_NET_IP]);
     }
   });
 
@@ -175,16 +224,27 @@ export function installWebAutoReplyUnitTestHooks(opts?: { pinDns?: boolean }) {
 
 export function createWebListenerFactoryCapture(): AnyExport {
   let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+  let capturedOptions:
+    | {
+        onMessage: (msg: WebInboundMessage) => Promise<void>;
+        debounceMs?: number;
+        selfChatMode?: boolean;
+      }
+    | undefined;
   const listenerFactory = async (opts: {
     onMessage: (msg: WebInboundMessage) => Promise<void>;
+    debounceMs?: number;
+    selfChatMode?: boolean;
   }) => {
     capturedOnMessage = opts.onMessage;
+    capturedOptions = opts;
     return { close: vi.fn() };
   };
 
   return {
     listenerFactory,
     getOnMessage: () => capturedOnMessage,
+    getLastOptions: () => capturedOptions,
   };
 }
 
@@ -193,10 +253,23 @@ export function createMockWebListener(): MockWebListener {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: vi.fn(),
-    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
-    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
-    sendReaction: vi.fn(async () => undefined),
+    sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
+    sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
+    sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
     sendComposingTo: vi.fn(async () => undefined),
+  };
+}
+
+export function createAcceptedWhatsAppSendResult(
+  kind: WhatsAppSendKind,
+  id: string,
+): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
   };
 }
 
@@ -234,13 +307,13 @@ export function createScriptedWebListenerFactory(): AnyExport {
 
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
-    sendMedia: vi.fn(),
-    reply: vi.fn().mockResolvedValue(undefined),
+    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
+    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
     sendComposing: vi.fn(),
   };
 }
 
-export function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
+function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
   return {
     log: vi.fn(),
     error: vi.fn(),
@@ -254,9 +327,12 @@ export function startWebAutoReplyMonitor(params: {
   sleep: UnknownMock | AsyncUnknownMock;
   signal?: AbortSignal;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
+  accountId?: string;
+  statusSink?: (status: WebChannelStatus) => void;
 }): WebAutoReplyMonitorHarness {
   const runtime = createWebAutoReplyRuntime();
   const controller = new AbortController();
@@ -269,10 +345,13 @@ export function startWebAutoReplyMonitor(params: {
     params.signal ?? controller.signal,
     {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      transportTimeoutMs: params.transportTimeoutMs,
       messageTimeoutMs: params.messageTimeoutMs,
       watchdogCheckMs: params.watchdogCheckMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
       sleep: params.sleep,
+      accountId: params.accountId,
+      statusSink: params.statusSink,
     },
   );
 

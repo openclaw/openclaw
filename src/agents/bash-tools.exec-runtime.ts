@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type } from "@sinclair/typebox";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -8,7 +8,7 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -28,12 +28,17 @@ import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
 import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import {
   addSession,
   appendOutput,
   createSessionSlug,
   markExited,
   tail,
 } from "./bash-process-registry.js";
+import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -42,6 +47,8 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
+
+export { execSchema } from "./bash-tools.schemas.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
@@ -122,54 +129,6 @@ export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS +
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
-export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
-  yieldMs: Type.Optional(
-    Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
-    }),
-  ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
-    Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
-    }),
-  ),
-  pty: Type.Optional(
-    Type.Boolean({
-      description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
-    }),
-  ),
-  elevated: Type.Optional(
-    Type.Boolean({
-      description: "Run on the host with elevated permissions (if allowed)",
-    }),
-  ),
-  host: Type.Optional(
-    Type.String({
-      description: "Exec host/target (auto|sandbox|gateway|node).",
-    }),
-  ),
-  security: Type.Optional(
-    Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
-    }),
-  ),
-  ask: Type.Optional(
-    Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
-    }),
-  ),
-  node: Type.Optional(
-    Type.String({
-      description: "Node id/name for host=node.",
-    }),
-  ),
-});
-
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
@@ -207,7 +166,43 @@ export type ExecProcessHandle = {
   pid?: number;
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
+  /** Immediately suppress all future `onUpdate` calls for this handle. */
+  disableUpdates: () => void;
 };
+
+function normalizeExecExitSignal(signal: NodeJS.Signals | number | null): string | undefined {
+  if (signal === null) {
+    return undefined;
+  }
+  return String(signal);
+}
+
+function emitExecProcessCompleted(params: {
+  command: string;
+  mode: "child" | "pty";
+  outcome: ExecProcessOutcome;
+  sessionKey?: string;
+  target: "host" | "sandbox";
+}): void {
+  const exitSignal = normalizeExecExitSignal(params.outcome.exitSignal);
+  emitDiagnosticEvent({
+    type: "exec.process.completed",
+    target: params.target,
+    mode: params.mode,
+    outcome: params.outcome.status,
+    durationMs: params.outcome.durationMs,
+    commandLength: params.command.length,
+    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
+    ...(typeof params.outcome.exitCode === "number" ? { exitCode: params.outcome.exitCode } : {}),
+    ...(exitSignal ? { exitSignal } : {}),
+    ...(params.outcome.status === "failed"
+      ? {
+          timedOut: params.outcome.timedOut,
+          failureKind: params.outcome.failureKind,
+        }
+      : {}),
+  });
+}
 
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
@@ -226,7 +221,10 @@ export function isRequestedExecTargetAllowed(params: {
     return true;
   }
   if (params.configuredTarget === "auto") {
-    if (params.sandboxAvailable && params.requestedTarget === "gateway") {
+    if (
+      params.sandboxAvailable &&
+      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
+    ) {
       return false;
     }
     return true;
@@ -252,9 +250,13 @@ export function resolveExecTarget(params: {
   ) {
     const allowedConfig = Array.from(
       new Set(
-        requestedTarget === "gateway" && !params.sandboxAvailable
-          ? ["gateway", "auto"]
-          : [renderExecTargetLabel(requestedTarget), "auto"],
+        configuredTarget === "auto" &&
+          params.sandboxAvailable &&
+          (requestedTarget === "gateway" || requestedTarget === "node")
+          ? [renderExecTargetLabel(requestedTarget)]
+          : requestedTarget === "gateway" && !params.sandboxAvailable
+            ? ["gateway", "auto"]
+            : [renderExecTargetLabel(requestedTarget), "auto"],
       ),
     ).join(" or ");
     throw new Error(
@@ -328,14 +330,28 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
+    return;
+  }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, { sessionKey, trusted: false });
-  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+  enqueueSystemEvent(summary, {
+    sessionKey,
+    deliveryContext: session.notifyDeliveryContext,
+    trusted: false,
+  });
+  requestHeartbeat(
+    scopedHeartbeatWakeOptions(sessionKey, {
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    }),
+  );
 }
 
 export function createApprovalSlug(id: string) {
@@ -400,15 +416,29 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string },
+  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
-  enqueueSystemEvent(text, { sessionKey, contextKey: opts.contextKey });
-  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+  enqueueSystemEvent(text, {
+    sessionKey,
+    contextKey: opts.contextKey,
+    deliveryContext: opts.deliveryContext,
+    trusted: false,
+  });
+  requestHeartbeat(
+    scopedHeartbeatWakeOptions(sessionKey, {
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    }),
+  );
 }
+
+export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
@@ -456,6 +486,7 @@ export function formatExecFailureReason(params: {
     case "aborted":
       return "Command aborted before exit code was captured";
   }
+  throw new Error("Unsupported exec failure kind");
 }
 
 export function buildExecExitOutcome(params: {
@@ -537,12 +568,14 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
 }): Promise<ExecProcessHandle> {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
+  const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
   const shellRuntimeEnv: Record<string, string> = {
     ...opts.env,
@@ -554,6 +587,7 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
     exitNotified: false,
@@ -580,17 +614,34 @@ export async function runExecProcess(opts: {
   };
   addSession(session);
 
+  // Tracks whether the exec run's promise has settled (process exited or
+  // spawn failed).  Once settled the agent-loop no longer expects
+  // tool_execution_update events, so emitUpdate must become a no-op to
+  // prevent calling into a disposed agent run (the "Agent listener invoked
+  // outside active run" crash — see #62520).
+  let updatesDisabled = false;
+
   const emitUpdate = () => {
     if (!opts.onUpdate) {
       return;
     }
-    if (session.backgrounded || session.exited) {
+    if (session.backgrounded || session.exited || updatesDisabled) {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
+    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // internally pushes Promise.resolve(emit(event)) into an updateEvents
+    // array.  Because emit → processEvents is async, any failure (e.g.
+    // activeRun cleared) produces a *rejected Promise*, not a synchronous
+    // throw — so a try-catch here would be ineffective.  Instead we rely
+    // on the `updatesDisabled` flag being set proactively: by the promise
+    // chain on process exit (Layer 1) and by `disableUpdates()` on abort
+    // signal (Layer 2) — both of which prevent this call from ever being
+    // reached after the agent run has ended.
     opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
+      content: [
+        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
+      ],
       details: {
         status: "running",
         sessionId,
@@ -603,7 +654,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStdout = (data: string) => {
-    const raw = data.toString();
+    const raw = data;
     // Detect smkx/rmkx BEFORE sanitizeBinaryOutput strips ESC sequences.
     // Note: PTY chunking is arbitrary, but smkx/rmkx sequences are typically short (4-5 bytes)
     // and sent atomically by terminals. Split across chunks is rare in practice.
@@ -619,7 +670,7 @@ export async function runExecProcess(opts: {
   };
 
   const handleStderr = (data: string) => {
-    const str = sanitizeBinaryOutput(data.toString());
+    const str = sanitizeBinaryOutput(data);
     for (const chunk of chunkString(str)) {
       appendOutput(session, "stderr", chunk);
       emitUpdate();
@@ -762,11 +813,33 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        emitExecProcessCompleted({
+          command: opts.command,
+          mode: "child",
+          outcome: buildExecRuntimeErrorOutcome({
+            error: retryErr,
+            aggregated: session.aggregated.trim(),
+            durationMs: Date.now() - startedAt,
+          }),
+          sessionKey: opts.sessionKey,
+          target: diagnosticTarget,
+        });
         throw retryErr;
       }
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: spawnSpec.mode,
+        outcome: buildExecRuntimeErrorOutcome({
+          error: err,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        }),
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
       throw err;
     }
   }
@@ -776,6 +849,11 @@ export async function runExecProcess(opts: {
   const promise = managedRun
     .wait()
     .then(async (exit): Promise<ExecProcessOutcome> => {
+      // Disable updates *before* markExited so that any late stdout/stderr
+      // data events queued in the same event-loop tick cannot sneak through
+      // the `session.exited` guard before it flips to true.
+      updatesDisabled = true;
+
       const durationMs = Date.now() - startedAt;
       const outcome = buildExecExitOutcome({
         exit,
@@ -784,7 +862,7 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
+      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
@@ -797,16 +875,32 @@ export async function runExecProcess(opts: {
           token: sandboxFinalizeToken,
         });
       }
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: usingPty ? "pty" : "child",
+        outcome,
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
       return outcome;
     })
     .catch((err): ExecProcessOutcome => {
+      updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
-      return buildExecRuntimeErrorOutcome({
+      const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: usingPty ? "pty" : "child",
+        outcome,
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
+      return outcome;
     });
 
   return {
@@ -816,6 +910,9 @@ export async function runExecProcess(opts: {
     promise,
     kill: () => {
       managedRun?.cancel("manual-cancel");
+    },
+    disableUpdates: () => {
+      updatesDisabled = true;
     },
   };
 }

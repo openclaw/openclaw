@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
@@ -32,6 +32,26 @@ const synologyChatSetupPlugin = {
 
 const synologyChatConfigure = createPluginSetupWizardConfigure(synologyChatSetupPlugin);
 const originalEnv = { ...process.env };
+
+function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
+  return createTestWizardPrompter({
+    text: vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Enter Synology Chat outgoing webhook token") {
+        return "synology-token";
+      }
+      if (message === "Incoming webhook URL") {
+        return "https://nas.example.com/webapi/entry.cgi?token=incoming";
+      }
+      if (message === "Outgoing webhook path (optional)") {
+        return "";
+      }
+      if (params.allowedUserIds && message === "Allowed Synology Chat user ids") {
+        return params.allowedUserIds;
+      }
+      throw new Error(`Unexpected prompt: ${message}`);
+    }) as WizardPrompter["text"],
+  });
+}
 
 describe("synology-chat core", () => {
   beforeEach(() => {
@@ -83,20 +103,7 @@ describe("synology-chat core", () => {
   });
 
   it("configures token and incoming webhook for the default account", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Enter Synology Chat outgoing webhook token") {
-          return "synology-token";
-        }
-        if (message === "Incoming webhook URL") {
-          return "https://nas.example.com/webapi/entry.cgi?token=incoming";
-        }
-        if (message === "Outgoing webhook path (optional)") {
-          return "";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
-    });
+    const prompter = createSynologySetupPrompter();
 
     const result = await runSetupWizardConfigure({
       configure: synologyChatConfigure,
@@ -114,22 +121,8 @@ describe("synology-chat core", () => {
   });
 
   it("records allowed user ids when setup forces allowFrom", async () => {
-    const prompter = createTestWizardPrompter({
-      text: vi.fn(async ({ message }: { message: string }) => {
-        if (message === "Enter Synology Chat outgoing webhook token") {
-          return "synology-token";
-        }
-        if (message === "Incoming webhook URL") {
-          return "https://nas.example.com/webapi/entry.cgi?token=incoming";
-        }
-        if (message === "Outgoing webhook path (optional)") {
-          return "";
-        }
-        if (message === "Allowed Synology Chat user ids") {
-          return "123456, synology-chat:789012";
-        }
-        throw new Error(`Unexpected prompt: ${message}`);
-      }) as WizardPrompter["text"],
+    const prompter = createSynologySetupPrompter({
+      allowedUserIds: "123456, synology-chat:789012",
     });
 
     const result = await runSetupWizardConfigure({
@@ -324,7 +317,12 @@ describe("synology-chat security helpers", () => {
     expect(checkUserAllowed("user1", ["user1", "user2"])).toBe(true);
     expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
 
-    expect(authorizeUserForDm("user1", "open", [])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", [])).toEqual({
+      allowed: false,
+      reason: "not-allowlisted",
+    });
+    expect(authorizeUserForDm("user1", "open", ["*"])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", ["user1"])).toEqual({ allowed: true });
     expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
       allowed: false,
       reason: "disabled",

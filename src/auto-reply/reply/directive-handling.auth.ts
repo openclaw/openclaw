@@ -11,7 +11,7 @@ import {
   resolveUsableCustomProviderApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { shortenHomePath } from "../../utils.js";
@@ -56,6 +56,7 @@ export const resolveAuthLabel = async (
   modelsPath: string,
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
+  workspaceDir?: string,
 ): Promise<{ label: string; source: string }> => {
   const formatPath = (value: string) => shortenHomePath(value);
   const store = ensureAuthProfileStore(agentDir, {
@@ -193,7 +194,7 @@ export const resolveAuthLabel = async (
     };
   }
 
-  const envKey = resolveEnvApiKey(provider);
+  const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
   if (envKey) {
     const isOAuthEnv =
       envKey.source.includes("ANTHROPIC_OAUTH_TOKEN") ||
@@ -217,5 +218,3 @@ export const formatAuthLabel = (auth: { label: string; source: string }) => {
   }
   return `${auth.label} (${auth.source})`;
 };
-
-export { resolveProfileOverride } from "./directive-handling.auth-profile.js";

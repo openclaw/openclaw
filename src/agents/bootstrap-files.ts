@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../config/config.js";
+import path from "node:path";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
@@ -15,16 +16,40 @@ import {
 import {
   DEFAULT_HEARTBEAT_FILENAME,
   filterBootstrapFilesForSession,
+  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
-export type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
+type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
 export const FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE = "openclaw:bootstrap-context:full";
+const BOOTSTRAP_WARNING_DEDUPE_LIMIT = 1024;
+const seenBootstrapWarnings = new Set<string>();
+const bootstrapWarningOrder: string[] = [];
+
+function rememberBootstrapWarning(key: string): boolean {
+  if (seenBootstrapWarnings.has(key)) {
+    return false;
+  }
+  if (seenBootstrapWarnings.size >= BOOTSTRAP_WARNING_DEDUPE_LIMIT) {
+    const oldest = bootstrapWarningOrder.shift();
+    if (oldest) {
+      seenBootstrapWarnings.delete(oldest);
+    }
+  }
+  seenBootstrapWarnings.add(key);
+  bootstrapWarningOrder.push(key);
+  return true;
+}
+
+export function _resetBootstrapWarningCacheForTest(): void {
+  seenBootstrapWarnings.clear();
+  bootstrapWarningOrder.length = 0;
+}
 
 export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
   return config?.agents?.defaults?.contextInjection ?? "always";
@@ -103,18 +128,30 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
 
 export function makeBootstrapWarn(params: {
   sessionLabel: string;
+  workspaceDir?: string;
   warn?: (message: string) => void;
 }): ((message: string) => void) | undefined {
-  if (!params.warn) {
+  const warn = params.warn;
+  if (!warn) {
     return undefined;
   }
-  return (message: string) => params.warn?.(`${message} (sessionKey=${params.sessionLabel})`);
+  const workspacePrefix = params.workspaceDir ?? "";
+  return (message: string) => {
+    const key = `${workspacePrefix}\u0000${params.sessionLabel}\u0000${message}`;
+    if (!rememberBootstrapWarning(key)) {
+      return;
+    }
+    warn(`${message} (sessionKey=${params.sessionLabel})`);
+  };
 }
 
 function sanitizeBootstrapFiles(
   files: WorkspaceBootstrapFile[],
+  workspaceDir: string,
   warn?: (message: string) => void,
 ): WorkspaceBootstrapFile[] {
+  const workspaceRoot = path.resolve(workspaceDir);
+  const seenPaths = new Set<string>();
   const sanitized: WorkspaceBootstrapFile[] = [];
   for (const file of files) {
     const pathValue = normalizeOptionalString(file.path) ?? "";
@@ -124,7 +161,15 @@ function sanitizeBootstrapFiles(
       );
       continue;
     }
-    sanitized.push({ ...file, path: pathValue });
+    const resolvedPath = path.isAbsolute(pathValue)
+      ? path.resolve(pathValue)
+      : path.resolve(workspaceRoot, pathValue);
+    const dedupeKey = path.normalize(path.relative(workspaceRoot, resolvedPath));
+    if (seenPaths.has(dedupeKey)) {
+      continue;
+    }
+    seenPaths.add(dedupeKey);
+    sanitized.push({ ...file, path: resolvedPath });
   }
   return sanitized;
 }
@@ -215,6 +260,7 @@ export async function resolveBootstrapFilesForRun(params: {
   });
   return sanitizeBootstrapFiles(
     filterHeartbeatBootstrapFile(updated, excludeHeartbeatBootstrapFile),
+    params.workspaceDir,
     params.warn,
   );
 }
@@ -240,3 +286,5 @@ export async function resolveBootstrapContextForRun(params: {
   });
   return { bootstrapFiles, contextFiles };
 }
+
+export { isWorkspaceBootstrapPending };

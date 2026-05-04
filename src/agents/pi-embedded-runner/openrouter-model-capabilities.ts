@@ -171,10 +171,10 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       model.max_output_tokens ??
       8192,
     cost: {
-      input: parseFloat(model.pricing?.prompt || "0") * 1_000_000,
-      output: parseFloat(model.pricing?.completion || "0") * 1_000_000,
-      cacheRead: parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
-      cacheWrite: parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
+      input: Number.parseFloat(model.pricing?.prompt || "0") * 1_000_000,
+      output: Number.parseFloat(model.pricing?.completion || "0") * 1_000_000,
+      cacheRead: Number.parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
+      cacheWrite: Number.parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
     },
   };
 }
@@ -238,7 +238,7 @@ function triggerFetch(): void {
  * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
-export function ensureOpenRouterModelCache(): void {
+function ensureOpenRouterModelCache(): void {
   if (cache) {
     return;
   }

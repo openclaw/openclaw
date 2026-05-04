@@ -1,25 +1,22 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  type ConfigFileSnapshot,
-  type GatewayAuthConfig,
-  type GatewayTailscaleConfig,
-  type OpenClawConfig,
-  applyConfigOverrides,
-  isNixMode,
-  readConfigFileSnapshot,
-  writeConfigFile,
-} from "../config/config.js";
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
+  readConfigFileSnapshotWithPluginMetadata,
+} from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+import { resolveGatewayAuth } from "./auth.js";
+import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
   ensureGatewayStartupAuth,
   mergeGatewayAuthConfig,
@@ -37,18 +34,43 @@ type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOA
 export type ActivateRuntimeSecrets = (
   config: OpenClawConfig,
   params: { reason: "startup" | "reload" | "restart-check"; activate: boolean },
-) => Promise<Awaited<ReturnType<typeof prepareSecretsRuntimeSnapshot>>>;
+) => Promise<
+  Awaited<ReturnType<typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot>>
+>;
+
+type PrepareRuntimeSecretsSnapshot =
+  typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;
+type ActivateRuntimeSecretsSnapshot =
+  typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
 
 type GatewayStartupConfigOverrides = {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
 };
 
+type GatewayStartupConfigMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+
+export type GatewayStartupConfigSnapshotLoadResult = {
+  snapshot: ConfigFileSnapshot;
+  wroteConfig: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+};
+
 export async function loadGatewayStartupConfigSnapshot(params: {
   minimalTestGateway: boolean;
   log: GatewayStartupLog;
-}): Promise<ConfigFileSnapshot> {
-  let configSnapshot = await readConfigFileSnapshot();
+  measure?: GatewayStartupConfigMeasure;
+  initialSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
+}): Promise<GatewayStartupConfigSnapshotLoadResult> {
+  const measure = params.measure ?? (async (_name, run) => await run());
+  let snapshotRead =
+    params.initialSnapshotRead ??
+    (await measure("config.snapshot.read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
+    ));
+  let configSnapshot = snapshotRead.snapshot;
+  let pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
+  let wroteConfig = false;
   if (configSnapshot.legacyIssues.length > 0 && isNixMode) {
     throw new Error(
       "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
@@ -60,14 +82,35 @@ export async function loadGatewayStartupConfigSnapshot(params: {
 
   const autoEnable = params.minimalTestGateway
     ? { config: configSnapshot.config, changes: [] as string[] }
-    : applyPluginAutoEnable({ config: configSnapshot.config, env: process.env });
+    : await measure("config.snapshot.auto-enable", () =>
+        applyPluginAutoEnable({
+          config: configSnapshot.sourceConfig,
+          env: process.env,
+          ...(pluginMetadataSnapshot?.manifestRegistry
+            ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
+            : {}),
+        }),
+      );
   if (autoEnable.changes.length === 0) {
-    return configSnapshot;
+    return {
+      snapshot: configSnapshot,
+      wroteConfig,
+      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+    };
   }
 
   try {
-    await writeConfigFile(autoEnable.config);
-    configSnapshot = await readConfigFileSnapshot();
+    const { replaceConfigFile } = await import("../config/mutate.js");
+    await replaceConfigFile({
+      nextConfig: autoEnable.config,
+      afterWrite: { mode: "auto" },
+    });
+    wroteConfig = true;
+    snapshotRead = await measure("config.snapshot.auto-enable-read", () =>
+      readConfigFileSnapshotWithPluginMetadata({ measure }),
+    );
+    configSnapshot = snapshotRead.snapshot;
+    pluginMetadataSnapshot = snapshotRead.pluginMetadataSnapshot;
     assertValidGatewayStartupConfigSnapshot(configSnapshot);
     params.log.info(
       `gateway: auto-enabled plugins:\n${autoEnable.changes.map((entry) => `- ${entry}`).join("\n")}`,
@@ -76,7 +119,11 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     params.log.warn(`gateway: failed to persist plugin auto-enable changes: ${String(err)}`);
   }
 
-  return configSnapshot;
+  return {
+    snapshot: configSnapshot,
+    wroteConfig,
+    ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+  };
 }
 
 export function createRuntimeSecretsActivator(params: {
@@ -86,9 +133,21 @@ export function createRuntimeSecretsActivator(params: {
     message: string,
     cfg: OpenClawConfig,
   ) => void;
+  prepareRuntimeSecretsSnapshot?: PrepareRuntimeSecretsSnapshot;
+  activateRuntimeSecretsSnapshot?: ActivateRuntimeSecretsSnapshot;
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
+  let secretsRuntimePromise: Promise<typeof import("../secrets/runtime.js")> | null = null;
+  let authProfilesPromise: Promise<typeof import("../agents/auth-profiles.js")> | null = null;
+  const loadSecretsRuntime = () => {
+    secretsRuntimePromise ??= import("../secrets/runtime.js");
+    return secretsRuntimePromise;
+  };
+  const loadAuthProfiles = () => {
+    authProfilesPromise ??= import("../agents/auth-profiles.js");
+    return authProfilesPromise;
+  };
 
   const runWithSecretsActivationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
     const run = secretsActivationTail.then(operation, operation);
@@ -102,11 +161,26 @@ export function createRuntimeSecretsActivator(params: {
   return async (config, activationParams) =>
     await runWithSecretsActivationLock(async () => {
       try {
-        const prepared = await prepareSecretsRuntimeSnapshot({
+        const secretsRuntime =
+          params.prepareRuntimeSecretsSnapshot && params.activateRuntimeSecretsSnapshot
+            ? null
+            : await loadSecretsRuntime();
+        const prepareRuntimeSecretsSnapshot =
+          params.prepareRuntimeSecretsSnapshot ?? secretsRuntime!.prepareSecretsRuntimeSnapshot;
+        const activateRuntimeSecretsSnapshot =
+          params.activateRuntimeSecretsSnapshot ?? secretsRuntime!.activateSecretsRuntimeSnapshot;
+        const startupPreflight =
+          activationParams.reason === "startup" || activationParams.reason === "restart-check";
+        const loadAuthStore = startupPreflight
+          ? (await loadAuthProfiles()).loadAuthProfileStoreWithoutExternalProfiles
+          : undefined;
+        const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
+          ...(loadAuthStore ? { loadAuthStore } : {}),
         });
+        assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {
-          activateSecretsRuntimeSnapshot(prepared);
+          activateRuntimeSecretsSnapshot(prepared);
           logGatewayAuthSurfaceDiagnostics(prepared, params.logSecrets);
         }
         for (const warning of prepared.warnings) {
@@ -167,6 +241,7 @@ export async function prepareGatewayStartupConfig(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   activateRuntimeSecrets: ActivateRuntimeSecrets;
+  persistStartupAuth?: boolean;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
   assertValidGatewayStartupConfigSnapshot(params.configSnapshot);
 
@@ -175,12 +250,15 @@ export async function prepareGatewayStartupConfig(params: {
     auth: params.authOverride,
     tailscale: params.tailscaleOverride,
   });
-  const preflightConfig = (
-    await params.activateRuntimeSecrets(startupPreflightConfig, {
-      reason: "startup",
-      activate: false,
-    })
-  ).config;
+  const needsAuthSecretPreflight = hasActiveGatewayAuthSecretRef(startupPreflightConfig);
+  const preflightConfig = needsAuthSecretPreflight
+    ? (
+        await params.activateRuntimeSecrets(startupPreflightConfig, {
+          reason: "startup",
+          activate: false,
+        })
+      ).config
+    : startupPreflightConfig;
   const preflightAuthOverride =
     typeof preflightConfig.gateway?.auth?.token === "string" ||
     typeof preflightConfig.gateway?.auth?.password === "string"
@@ -200,7 +278,7 @@ export async function prepareGatewayStartupConfig(params: {
     env: process.env,
     authOverride: preflightAuthOverride,
     tailscaleOverride: params.tailscaleOverride,
-    persist: true,
+    persist: params.persistStartupAuth ?? true,
     baseHash: params.configSnapshot.hash,
   });
   const runtimeStartupConfig = applyGatewayAuthOverridesForStartupPreflight(authBootstrap.cfg, {
@@ -219,6 +297,18 @@ export async function prepareGatewayStartupConfig(params: {
   };
 }
 
+function hasActiveGatewayAuthSecretRef(config: OpenClawConfig): boolean {
+  const states = evaluateGatewayAuthSurfaceStates({
+    config,
+    defaults: config.secrets?.defaults,
+    env: process.env,
+  });
+  return GATEWAY_AUTH_SURFACE_PATHS.some((path) => {
+    const state = states[path];
+    return state.hasSecretRef && state.active;
+  });
+}
+
 function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConfig {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
@@ -230,6 +320,16 @@ function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConf
     ...config,
     channels: undefined,
   };
+}
+
+function assertRuntimeGatewayAuthNotKnownWeak(config: OpenClawConfig): void {
+  assertGatewayAuthNotKnownWeak(
+    resolveGatewayAuth({
+      authConfig: config.gateway?.auth,
+      env: process.env,
+      tailscaleMode: config.gateway?.tailscale?.mode ?? "off",
+    }),
+  );
 }
 
 function logGatewayAuthSurfaceDiagnostics(

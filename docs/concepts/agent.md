@@ -2,12 +2,13 @@
 summary: "Agent runtime, workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
-title: "Agent Runtime"
+title: "Agent runtime"
 ---
 
-# Agent Runtime
-
-OpenClaw runs a single embedded agent runtime.
+OpenClaw runs a **single embedded agent runtime** — one agent process per
+Gateway, with its own workspace, bootstrap files, and session store. This page
+covers that runtime contract: what the workspace must contain, which files get
+injected, and how sessions bootstrap against it.
 
 ## Workspace (required)
 
@@ -32,18 +33,18 @@ Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
 - `IDENTITY.md` — agent name/vibe/emoji
 - `USER.md` — user profile + preferred address
 
-On the first turn of a new session, OpenClaw injects the contents of these files directly into the agent context.
+On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context.
 
 Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
 
 If a file is missing, OpenClaw injects a single “missing file” marker line (and `openclaw setup` will create a safe default template).
 
-`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.
+`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it should not be recreated on later restarts.
 
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 ```json5
-{ agent: { skipBootstrap: true } }
+{ agents: { defaults: { skipBootstrap: true } } }
 ```
 
 ## Built-in tools
@@ -85,13 +86,15 @@ Legacy session folders from other tools are not read.
 
 When queue mode is `steer`, inbound messages are injected into the current run.
 Queued steering is delivered **after the current assistant turn finishes
-executing its tool calls**, before the next LLM call. Steering no longer skips
-remaining tool calls from the current assistant message; it injects the queued
-message at the next model boundary instead.
+executing its tool calls**, before the next LLM call. Pi drains all pending
+steering messages together for `steer`; legacy `queue` drains one message per
+model boundary. Steering no longer skips remaining tool calls from the current
+assistant message.
 
 When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
-[Queue](/concepts/queue) for mode + debounce/cap behavior.
+[Queue](/concepts/queue) and [Steering queue](/concepts/queue-steering) for mode
+and boundary behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; it is
 **off by default** (`agents.defaults.blockStreamingDefault: "off"`).
@@ -127,3 +130,9 @@ At minimum, set:
 ---
 
 _Next: [Group Chats](/channels/group-messages)_ 🦞
+
+## Related
+
+- [Agent workspace](/concepts/agent-workspace)
+- [Multi-agent routing](/concepts/multi-agent)
+- [Session management](/concepts/session)

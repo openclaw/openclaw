@@ -9,17 +9,19 @@ import {
   createBrowserControlContext,
   createBrowserRouteDispatcher,
   errorShape,
+  getRuntimeConfig,
   isNodeCommandAllowed,
   isPersistentBrowserProfileMutation,
-  loadConfig,
   persistBrowserProxyFiles,
   resolveNodeCommandAllowlist,
   resolveRequestedBrowserProfile,
   respondUnavailableOnNodeInvokeError,
   safeParseJson,
   startBrowserControlServiceFromConfig,
+  withTimeout,
   type GatewayRequestHandlers,
   type NodeSession,
+  type OpenClawConfig,
 } from "../core-api.js";
 
 type BrowserRequestParams = {
@@ -87,7 +89,7 @@ function resolveBrowserNode(nodes: NodeSession[], query: string): NodeSession | 
 }
 
 function resolveBrowserNodeTarget(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   nodes: NodeSession[];
 }): NodeSession | null {
   const policy = params.cfg.gateway?.nodes?.browser;
@@ -170,7 +172,7 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   let nodeTarget: NodeSession | null = null;
   try {
     nodeTarget = resolveBrowserNodeTarget({
@@ -246,12 +248,31 @@ export async function handleBrowserGatewayRequest({
     return;
   }
 
-  const result = await dispatcher.dispatch({
-    method: methodRaw,
-    path,
-    query,
-    body,
-  });
+  let result;
+  try {
+    result = timeoutMs
+      ? await withTimeout(
+          (signal) =>
+            dispatcher.dispatch({
+              method: methodRaw,
+              path,
+              query,
+              body,
+              signal,
+            }),
+          timeoutMs,
+          "browser request",
+        )
+      : await dispatcher.dispatch({
+          method: methodRaw,
+          path,
+          query,
+          body,
+        });
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+    return;
+  }
 
   if (result.status >= 400) {
     const message =

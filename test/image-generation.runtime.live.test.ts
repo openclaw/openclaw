@@ -1,13 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "./helpers/media-generation/bundled-provider-builders.js";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "./helpers/plugins/provider-registration.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it } from "vitest";
 import { resolveOpenClawAgentDir } from "../src/agents/agent-paths.js";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../src/agents/live-test-helpers.js";
 import { resolveApiKeyForProvider } from "../src/agents/model-auth.js";
+import { isBillingErrorMessage } from "../src/agents/pi-embedded-helpers/failover-matches.js";
 import { loadConfig, type OpenClawConfig } from "../src/config/config.js";
 import {
   DEFAULT_LIVE_IMAGE_MODELS,
@@ -19,9 +19,10 @@ import {
   resolveLiveImageAuthStore,
 } from "../src/image-generation/live-test-helpers.js";
 import { isTruthyEnvValue } from "../src/infra/env.js";
-import { getShellEnvAppliedKeys, loadShellEnvFallback } from "../src/infra/shell-env.js";
+import { getShellEnvAppliedKeys } from "../src/infra/shell-env.js";
 import { encodePngRgba, fillPixel } from "../src/media/png-encode.js";
-import { getProviderEnvVars } from "../src/secrets/provider-env-vars.js";
+import { maybeLoadShellEnvForGenerationProviders } from "../src/test-utils/generation-live-test-helpers.js";
+import { loadBundledProviderPlugin as loadBundledProviderPluginFromTestHelper } from "./helpers/media-generation/bundled-provider-builders.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -30,6 +31,11 @@ const describeLive = LIVE ? describe : describe.skip;
 const providerFilter = parseCsvFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS);
 const caseFilter = parseCaseFilter(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_CASES);
 const envModelMap = parseProviderModelMap(process.env.OPENCLAW_LIVE_IMAGE_GENERATION_MODELS);
+const DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS = 120_000;
+const LIVE_IMAGE_GENERATION_TIMEOUT_MS = resolvePositiveIntegerEnv(
+  process.env.OPENCLAW_LIVE_IMAGE_GENERATION_TIMEOUT_MS,
+  DEFAULT_LIVE_IMAGE_GENERATION_TIMEOUT_MS,
+);
 
 type LiveProviderCase = {
   pluginId: string;
@@ -47,6 +53,14 @@ type LiveImageCase = {
   inputImages?: Array<{ buffer: Buffer; mimeType: string; fileName?: string }>;
 };
 
+function resolvePositiveIntegerEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
 function loadBundledProviderPlugin(
   pluginId: string,
 ): ReturnType<typeof loadBundledProviderPluginFromTestHelper> {
@@ -54,6 +68,11 @@ function loadBundledProviderPlugin(
 }
 
 const PROVIDER_CASES: LiveProviderCase[] = [
+  {
+    pluginId: "deepinfra",
+    pluginName: "DeepInfra Provider",
+    providerId: "deepinfra",
+  },
   {
     pluginId: "fal",
     pluginName: "fal Provider",
@@ -75,9 +94,19 @@ const PROVIDER_CASES: LiveProviderCase[] = [
     providerId: "openai",
   },
   {
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
+  },
+  {
     pluginId: "vydra",
     pluginName: "Vydra Provider",
     providerId: "vydra",
+  },
+  {
+    pluginId: "xai",
+    pluginName: "xAI Provider",
+    providerId: "xai",
   },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
@@ -119,21 +148,6 @@ function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function maybeLoadShellEnvForImageProviders(providerIds: string[]): void {
-  const expectedKeys = [
-    ...new Set(providerIds.flatMap((providerId) => getProviderEnvVars(providerId))),
-  ];
-  if (expectedKeys.length === 0) {
-    return;
-  }
-  loadShellEnvFallback({
-    enabled: true,
-    env: process.env,
-    expectedKeys,
-    logger: { warn: (message: string) => console.warn(message) },
-  });
-}
-
 function resolveProviderModelForLiveTest(providerId: string, modelRef: string): string {
   const slash = modelRef.indexOf("/");
   if (slash <= 0 || slash === modelRef.length - 1) {
@@ -166,7 +180,7 @@ function buildLiveCases(params: {
       providerId: params.providerId,
       modelRef: params.modelRef,
       prompt: editPrompt,
-      resolution: "2K",
+      resolution: "1K",
       inputImages: [
         {
           buffer: createEditReferencePng(),
@@ -190,7 +204,7 @@ describeLive("image generation live (provider sweep)", () => {
       const skipped: string[] = [];
       const failures: string[] = [];
 
-      maybeLoadShellEnvForImageProviders(PROVIDER_CASES.map((entry) => entry.providerId));
+      maybeLoadShellEnvForGenerationProviders(PROVIDER_CASES.map((entry) => entry.providerId));
 
       for (const providerCase of PROVIDER_CASES) {
         const modelRef =
@@ -254,7 +268,7 @@ describeLive("image generation live (provider sweep)", () => {
               size: testCase.size,
               resolution: testCase.resolution,
               inputImages: testCase.inputImages,
-              timeoutMs: 60_000,
+              timeoutMs: LIVE_IMAGE_GENERATION_TIMEOUT_MS,
             });
 
             expect(result.images.length).toBeGreaterThan(0);
@@ -266,6 +280,13 @@ describeLive("image generation live (provider sweep)", () => {
             );
           } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
+            if (isBillingErrorMessage(message)) {
+              skipped.push(`${testCase.id} (${authLabel}): billing drift`);
+              console.warn(
+                `[live:image-generation] skip ${testCase.id} ms=${Date.now() - startedAt} reason=billing drift error=${message}`,
+              );
+              continue;
+            }
             failures.push(`${testCase.id} (${authLabel}): ${message}`);
             console.error(
               `[live:image-generation] failed ${testCase.id} ms=${Date.now() - startedAt} error=${message}`,
@@ -285,6 +306,6 @@ describeLive("image generation live (provider sweep)", () => {
       }
       expect(failures).toEqual([]);
     },
-    10 * 60_000,
+    15 * 60_000,
   );
 });

@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
+import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
 import { extractAssistantVisibleText } from "../../pi-embedded-utils.js";
 import { derivePromptTokens, normalizeUsage } from "../../usage.js";
 import type { EmbeddedPiAgentMeta } from "../types.js";
@@ -15,6 +16,7 @@ type UsageSnapshot = {
 };
 
 export type RuntimeAuthState = {
+  generation: number;
   sourceApiKey: string;
   authMode: string;
   profileId?: string;
@@ -27,9 +29,9 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-export const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
-export const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
-export const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
+const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
+const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
+const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
@@ -77,13 +79,45 @@ export function resolveMaxRunRetryIterations(profileCandidateCount: number): num
 }
 
 export function resolveActiveErrorContext(params: {
-  lastAssistant: { provider?: string; model?: string } | undefined;
   provider: string;
   model: string;
-}): { provider: string; model: string } {
+  assistant?: { provider?: string; model?: string };
+}): {
+  provider: string;
+  model: string;
+} {
+  return resolveReportedModelRef(params);
+}
+
+function isEmbeddedHarnessProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "pi";
+}
+
+export function resolveReportedModelRef(params: {
+  provider: string;
+  model: string;
+  assistant?: { provider?: string; model?: string } | null;
+}): {
+  provider: string;
+  model: string;
+} {
+  const assistantProvider = params.assistant?.provider?.trim();
+  const assistantModel = params.assistant?.model?.trim();
+  if (!assistantProvider) {
+    return {
+      provider: params.provider,
+      model: assistantModel || params.model,
+    };
+  }
+  if (isEmbeddedHarnessProvider(assistantProvider)) {
+    return {
+      provider: params.provider,
+      model: params.model,
+    };
+  }
   return {
-    provider: params.lastAssistant?.provider ?? params.provider,
-    model: params.lastAssistant?.model ?? params.model,
+    provider: assistantProvider,
+    model: assistantModel || params.model,
   };
 }
 
@@ -117,6 +151,7 @@ export function buildErrorAgentMeta(params: {
   sessionId: string;
   provider: string;
   model: string;
+  contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
@@ -132,6 +167,7 @@ export function buildErrorAgentMeta(params: {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
+    ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),
@@ -146,4 +182,15 @@ export function resolveFinalAssistantVisibleText(
   }
   const visibleText = extractAssistantVisibleText(lastAssistant).trim();
   return visibleText || undefined;
+}
+
+export function resolveFinalAssistantRawText(
+  lastAssistant: AssistantMessage | undefined,
+): string | undefined {
+  if (!lastAssistant) {
+    return undefined;
+  }
+  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" });
+  const rawText = (finalAnswerText ?? extractAssistantTextForPhase(lastAssistant) ?? "").trim();
+  return rawText || undefined;
 }

@@ -4,7 +4,7 @@ import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export const WIKI_AGING_DAYS = 30;
-export const WIKI_STALE_DAYS = 90;
+const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
 
@@ -66,7 +66,7 @@ function normalizeClaimTextKey(text: string): string {
 
 function normalizeTextKey(text: string): string {
   return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
     .replace(/\s+/g, " ");
 }
 
@@ -143,7 +143,7 @@ export function assessClaimFreshness(params: {
   return buildFreshnessFromTimestamp({ timestamp: latestTimestamp, now: params.now });
 }
 
-export function buildWikiClaimHealth(params: {
+function buildWikiClaimHealth(params: {
   page: WikiPageSummary;
   claim: WikiClaim;
   index: number;

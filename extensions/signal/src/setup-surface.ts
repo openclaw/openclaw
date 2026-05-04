@@ -8,12 +8,9 @@ import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
 import {
   createSignalCliPathTextInput,
-  normalizeSignalAccountInput,
-  parseSignalAllowFromEntries,
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
-  signalSetupAdapter,
 } from "./setup-core.js";
 
 const channel = "signal" as const;
@@ -42,7 +39,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
   }),
   prepare: async ({ cfg, accountId, credentialValues, runtime, prompter, options }) => {
     if (!options?.allowSignalInstall) {
-      return;
+      return undefined;
     }
     const currentCliPath =
       (typeof credentialValues.cliPath === "string" ? credentialValues.cliPath : undefined) ??
@@ -56,7 +53,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
       initialValue: !cliDetected,
     });
     if (!wantsInstall) {
-      return;
+      return undefined;
     }
     try {
       const result = await installSignalCli(runtime);
@@ -74,6 +71,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
     } catch (error) {
       await prompter.note(`signal-cli install failed: ${String(error)}`, "Signal");
     }
+    return undefined;
   },
   credentials: [],
   textInputs: [
@@ -86,5 +84,3 @@ export const signalSetupWizard: ChannelSetupWizard = {
   dmPolicy: signalDmPolicy,
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
-
-export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };

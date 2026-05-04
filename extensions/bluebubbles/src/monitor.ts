@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
@@ -23,6 +23,7 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -193,7 +194,7 @@ export async function handleBlueBubblesWebhookRequest(
         targets,
         res,
         isMatch: (target) => {
-          const token = target.account.config.password?.trim() ?? "";
+          const token = normalizeSecretInputString(target.account.config.password) ?? "";
           return safeEqualAuthToken(guid, token);
         },
       });
@@ -248,11 +249,22 @@ export async function handleBlueBubblesWebhookRequest(
         return true;
       }
       const reaction = normalizeWebhookReaction(payload);
+      // Normalize the webhook message early so the attachment-update detection
+      // below sees attachments under any supported wrapper format (`payload.data`,
+      // `payload.message`, `payload.data.message`, JSON-string payloads), not just
+      // raw `payload.data.attachments`. (#65430, #67510)
+      const message = reaction ? null : normalizeWebhookMessage(payload, { eventType });
+      // BlueBubbles fires `updated-message` when attachments are indexed after the
+      // initial `new-message` (which may arrive with attachments: []). Let those
+      // through so the agent can ingest the image. (#65430)
+      const isAttachmentUpdate =
+        eventType === "updated-message" && (message?.attachments?.length ?? 0) > 0;
       if (
         (eventType === "updated-message" ||
           eventType === "message-reaction" ||
           eventType === "reaction") &&
-        !reaction
+        !reaction &&
+        !isAttachmentUpdate
       ) {
         res.statusCode = 200;
         res.end("ok");
@@ -260,12 +272,11 @@ export async function handleBlueBubblesWebhookRequest(
           logVerbose(
             firstTarget.core,
             firstTarget.runtime,
-            `webhook ignored ${eventType || "event"} without reaction`,
+            `webhook ignored ${eventType || "event"} (no reaction or attachment update)`,
           );
         }
         return true;
       }
-      const message = reaction ? null : normalizeWebhookMessage(payload);
       if (!message && !reaction) {
         res.statusCode = 400;
         res.end("invalid payload");
@@ -343,14 +354,15 @@ export async function monitorBlueBubblesProvider(
     );
   }
 
-  const unregister = registerBlueBubblesWebhookTarget({
+  const target: WebhookTarget = {
     account,
     config,
     runtime,
     core,
     path,
     statusSink,
-  });
+  };
+  const unregister = registerBlueBubblesWebhookTarget(target);
 
   return await new Promise((resolve) => {
     const stop = () => {
@@ -367,6 +379,19 @@ export async function monitorBlueBubblesProvider(
     runtime.log?.(
       `[${account.accountId}] BlueBubbles webhook listening on ${normalizeWebhookPath(path)}`,
     );
+
+    // Kick off a catchup pass for messages delivered while the webhook
+    // target wasn't reachable. Fire-and-forget; the catchup runs through the
+    // same processMessage path webhooks use, and #66230's inbound dedupe
+    // drops any GUID that was already handled, so this is safe even if a
+    // live webhook raced the startup replay. See #66721.
+    import("./catchup.js")
+      .then(({ runBlueBubblesCatchup }) => runBlueBubblesCatchup(target))
+      .catch((err) => {
+        runtime.error?.(
+          `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
+        );
+      });
   });
 }
 

@@ -1,75 +1,62 @@
-import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { describeFailoverError, isFailoverError } from "../agents/failover-error.js";
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
+  recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
+import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
-import type {
-  GeneratedMusicAsset,
-  MusicGenerationIgnoredOverride,
-  MusicGenerationNormalization,
-  MusicGenerationOutputFormat,
-  MusicGenerationResult,
-  MusicGenerationSourceImage,
-} from "./types.js";
+import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
+import type { MusicGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("music-generation");
 
-export type GenerateMusicParams = {
-  cfg: OpenClawConfig;
-  prompt: string;
-  agentDir?: string;
-  authStore?: AuthProfileStore;
-  modelOverride?: string;
-  lyrics?: string;
-  instrumental?: boolean;
-  durationSeconds?: number;
-  format?: MusicGenerationOutputFormat;
-  inputImages?: MusicGenerationSourceImage[];
+export type MusicGenerationRuntimeDeps = {
+  getProvider?: typeof getMusicGenerationProvider;
+  listProviders?: typeof listMusicGenerationProviders;
+  getProviderEnvVars?: typeof getProviderEnvVars;
+  log?: Pick<typeof log, "debug">;
 };
 
-export type GenerateMusicRuntimeResult = {
-  tracks: GeneratedMusicAsset[];
-  provider: string;
-  model: string;
-  attempts: FallbackAttempt[];
-  lyrics?: string[];
-  normalization?: MusicGenerationNormalization;
-  metadata?: Record<string, unknown>;
-  ignoredOverrides: MusicGenerationIgnoredOverride[];
-};
+export type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 
-export function listRuntimeMusicGenerationProviders(params?: { config?: OpenClawConfig }) {
-  return listMusicGenerationProviders(params?.config);
+export function listRuntimeMusicGenerationProviders(
+  params?: { config?: OpenClawConfig },
+  deps: MusicGenerationRuntimeDeps = {},
+) {
+  return (deps.listProviders ?? listMusicGenerationProviders)(params?.config);
 }
 
 export async function generateMusic(
   params: GenerateMusicParams,
+  deps: MusicGenerationRuntimeDeps = {},
 ): Promise<GenerateMusicRuntimeResult> {
+  const getProvider = deps.getProvider ?? getMusicGenerationProvider;
+  const listProviders = deps.listProviders ?? listMusicGenerationProviders;
+  const logger = deps.log ?? log;
   const candidates = resolveCapabilityModelCandidates({
     cfg: params.cfg,
     modelConfig: params.cfg.agents?.defaults?.musicGenerationModel,
     modelOverride: params.modelOverride,
     parseModelRef: parseMusicGenerationModelRef,
     agentDir: params.agentDir,
-    listProviders: listMusicGenerationProviders,
+    listProviders,
+    autoProviderFallback: params.autoProviderFallback,
   });
   if (candidates.length === 0) {
     throw new Error(
       buildNoCapabilityModelConfiguredMessage({
         capabilityLabel: "music-generation",
         modelConfigKey: "musicGenerationModel",
-        providers: listMusicGenerationProviders(params.cfg),
+        providers: listProviders(params.cfg),
         fallbackSampleRef: "google/lyria-3-clip-preview",
+        getProviderEnvVars: deps.getProviderEnvVars,
       }),
     );
   }
@@ -78,7 +65,7 @@ export async function generateMusic(
   let lastError: unknown;
 
   for (const candidate of candidates) {
-    const provider = getMusicGenerationProvider(candidate.provider, params.cfg);
+    const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
       const error = `No music-generation provider registered for ${candidate.provider}`;
       attempts.push({
@@ -112,6 +99,7 @@ export async function generateMusic(
         durationSeconds: sanitized.durationSeconds,
         format: sanitized.format,
         inputImages: params.inputImages,
+        ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");
@@ -133,20 +121,17 @@ export async function generateMusic(
       };
     } catch (err) {
       lastError = err;
-      const described = isFailoverError(err) ? describeFailoverError(err) : undefined;
-      attempts.push({
+      recordCapabilityCandidateFailure({
+        attempts,
         provider: candidate.provider,
         model: candidate.model,
-        error: described?.message ?? formatErrorMessage(err),
-        reason: described?.reason,
-        status: described?.status,
-        code: described?.code,
+        error: err,
       });
-      log.debug(`music-generation candidate failed: ${candidate.provider}/${candidate.model}`);
+      logger.debug(`music-generation candidate failed: ${candidate.provider}/${candidate.model}`);
     }
   }
 
-  throwCapabilityGenerationFailure({
+  return throwCapabilityGenerationFailure({
     capabilityLabel: "music generation",
     attempts,
     lastError,

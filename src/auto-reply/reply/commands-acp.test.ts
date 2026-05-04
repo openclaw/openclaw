@@ -90,6 +90,13 @@ vi.mock("../../acp/runtime/session-meta.js", () => ({
   resolveSessionStorePathForAcp: (args: unknown) => hoisted.resolveSessionStorePathForAcpMock(args),
 }));
 
+vi.mock("../../agents/acp-spawn.js", () => ({
+  resolveAcpSpawnRuntimePolicyError: (params: { cfg?: OpenClawConfig }) =>
+    params.cfg?.agents?.defaults?.sandbox?.mode === "all"
+      ? 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.'
+      : undefined,
+}));
+
 vi.mock("../../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions.js")>(
     "../../config/sessions.js",
@@ -174,6 +181,42 @@ function parseDiscordParentChannelFromSessionKeyForTest(raw?: string | null): st
   return match?.[1] ? `channel:${match[1]}` : undefined;
 }
 
+function resolveFirstConversationTargetForTest(params: {
+  channel?: string;
+  commandTo?: string;
+  fallbackTo?: string;
+  originatingTo?: string;
+}): string | null {
+  for (const rawTarget of [params.originatingTo, params.commandTo, params.fallbackTo]) {
+    const target = rawTarget?.trim();
+    if (!target) {
+      continue;
+    }
+    return params.channel && target.toLowerCase().startsWith(`${params.channel}:`)
+      ? target.slice(params.channel.length + 1)
+      : target;
+  }
+  return null;
+}
+
+function parsePrefixedConversationIdForTest(
+  raw: string | undefined | null,
+  channel: "bluebubbles" | "imessage",
+): string | undefined {
+  const trimmed = raw
+    ?.trim()
+    .replace(new RegExp(`^${channel}:`, "i"), "")
+    .replace(/^chat_guid:/i, "");
+  return trimmed || undefined;
+}
+
+function resolvePrefixedConversationIdForTest(
+  targets: Array<string | undefined | null>,
+  channel: "bluebubbles" | "imessage",
+): string | undefined {
+  return targets.map((target) => parsePrefixedConversationIdForTest(target, channel)).find(Boolean);
+}
+
 function setMinimalAcpCommandRegistryForTests(): void {
   setActivePluginRegistry(
     createTestRegistry([
@@ -184,7 +227,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
           ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
           conversationBindings: {
             defaultTopLevelPlacement: "current",
-            buildBoundReplyChannelData: ({
+            buildBoundReplyPayload: ({
               operation,
               conversation,
             }: {
@@ -192,7 +235,7 @@ function setMinimalAcpCommandRegistryForTests(): void {
               conversation: { conversationId: string };
             }) =>
               operation === "acp-spawn" && conversation.conversationId.includes(":topic:")
-                ? { telegram: { pin: true } }
+                ? { delivery: { pin: { enabled: true } } }
                 : null,
           },
           bindings: {
@@ -276,6 +319,54 @@ function setMinimalAcpCommandRegistryForTests(): void {
         },
       },
       {
+        pluginId: "bluebubbles",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolvePrefixedConversationIdForTest(
+                [originatingTo, commandTo, fallbackTo],
+                "bluebubbles",
+              );
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
+        pluginId: "imessage",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "imessage", label: "iMessage" }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolvePrefixedConversationIdForTest(
+                [originatingTo, commandTo, fallbackTo],
+                "imessage",
+              );
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      },
+      {
         pluginId: "slack",
         source: "test",
         plugin: {
@@ -332,6 +423,32 @@ function setMinimalAcpCommandRegistryForTests(): void {
           },
         },
       },
+      ...(["bluebubbles", "imessage", "feishu", "line"] as const).map((channelId) => ({
+        pluginId: channelId,
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: channelId, label: channelId }),
+          bindings: {
+            resolveCommandConversation: ({
+              originatingTo,
+              commandTo,
+              fallbackTo,
+            }: {
+              originatingTo?: string;
+              commandTo?: string;
+              fallbackTo?: string;
+            }) => {
+              const conversationId = resolveFirstConversationTargetForTest({
+                channel: channelId,
+                originatingTo,
+                commandTo,
+                fallbackTo,
+              });
+              return conversationId ? { conversationId } : null;
+            },
+          },
+        },
+      })),
     ]),
   );
 }
@@ -388,7 +505,7 @@ const baseCfg = {
     discord: {
       threadBindings: {
         enabled: true,
-        spawnAcpSessions: true,
+        spawnSessions: true,
       },
     },
   },
@@ -1061,7 +1178,7 @@ describe("/acp command", () => {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -1135,7 +1252,7 @@ describe("/acp command", () => {
 
     expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
     expect(result?.reply?.text).toContain("Bound this conversation to");
-    expect(result?.reply?.channelData).toEqual({ telegram: { pin: true } });
+    expect(result?.reply?.delivery).toEqual({ pin: { enabled: true } });
     expect(hoisted.sessionBindingBindMock).toHaveBeenCalledWith(
       expect.objectContaining({
         placement: "current",
@@ -1173,7 +1290,7 @@ describe("/acp command", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -1188,7 +1305,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -1201,7 +1318,7 @@ describe("/acp command", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
+            spawnSessions: true,
           },
         },
       },
@@ -1216,7 +1333,7 @@ describe("/acp command", () => {
         conversation: expect.objectContaining({
           channel: "matrix",
           accountId: "default",
-          conversationId: "room:!room:example.org",
+          conversationId: "!room:example.org",
         }),
       }),
     );
@@ -1229,7 +1346,7 @@ describe("/acp command", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
+            spawnSessions: true,
           },
         },
       },
@@ -1300,14 +1417,14 @@ describe("/acp command", () => {
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
-  it("rejects thread-bound ACP spawn when spawnAcpSessions is disabled", async () => {
+  it("rejects thread-bound ACP spawn when spawnSessions is disabled", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -1315,7 +1432,7 @@ describe("/acp command", () => {
 
     const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
 
-    expect(result?.reply?.text).toContain("spawnAcpSessions=true");
+    expect(result?.reply?.text).toContain("spawnSessions=true");
     expect(hoisted.closeMock).toHaveBeenCalledTimes(2);
     expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.delete" }),
@@ -1325,13 +1442,14 @@ describe("/acp command", () => {
     );
   });
 
-  it("rejects Matrix thread-bound ACP spawn when spawnAcpSessions is unset", async () => {
+  it("rejects Matrix thread-bound ACP spawn when spawnSessions is disabled", async () => {
     const cfg = {
       ...baseCfg,
       channels: {
         matrix: {
           threadBindings: {
             enabled: true,
+            spawnSessions: false,
           },
         },
       },
@@ -1339,7 +1457,7 @@ describe("/acp command", () => {
 
     const result = await runMatrixAcpCommand("/acp spawn codex", cfg);
 
-    expect(result?.reply?.text).toContain("spawnAcpSessions=true");
+    expect(result?.reply?.text).toContain("spawnSessions=true");
     expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
   });
 
@@ -1501,6 +1619,35 @@ describe("/acp command", () => {
     expect(hoisted.runTurnMock).not.toHaveBeenCalled();
   });
 
+  it("falls through to thread-bound resolution when explicit session token is unresolvable", async () => {
+    // callGateway returns null for sessions.resolve (unresolvable token)
+    // but a thread-bound session exists — should use thread-bound, not error out
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return null; // token lookup fails
+      }
+      return { ok: true };
+    });
+    mockBoundThreadSession();
+    hoisted.readAcpSessionEntryMock.mockReturnValue(createAcpSessionEntry());
+    hoisted.runTurnMock.mockImplementation(async function* () {
+      yield { type: "text_delta", text: "Steered." };
+      yield { type: "done" };
+    });
+
+    const result = await runThreadAcpCommand(
+      `/acp steer --session unresolvable-token-xyz tighten logging`,
+    );
+
+    expect(hoisted.runTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "steer",
+        sessionKey: defaultAcpSessionKey,
+      }),
+    );
+    expect(result?.reply?.text).toContain("Steered.");
+  });
+
   it("closes an ACP session, unbinds thread targets, and clears metadata", async () => {
     mockBoundThreadSession();
     hoisted.sessionBindingUnbindMock.mockResolvedValue([
@@ -1517,6 +1664,74 @@ describe("/acp command", () => {
       }),
     );
     expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(result?.reply?.text).toContain("Removed 1 binding");
+  });
+
+  it("closes the bound thread ACP session when an explicit session token is unresolvable", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return null;
+      }
+      return { ok: true };
+    });
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await runThreadAcpCommand("/acp close not-a-session-target");
+
+    expect(hoisted.closeMock).toHaveBeenCalledWith({
+      cfg: baseCfg,
+      sessionKey: defaultAcpSessionKey,
+      reason: "manual-close",
+      allowBackendUnavailable: true,
+      clearMeta: true,
+    });
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
+    expect(result?.reply?.text).toContain(`Closed ACP session ${defaultAcpSessionKey}`);
+  });
+
+  it("reports an explicit bad ACP session token before requester fallback", async () => {
+    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "sessions.resolve") {
+        return null;
+      }
+      return { ok: true };
+    });
+    const params = createConversationParams("/acp close not-a-session-target", {
+      channel: "discord",
+      originatingTo: "channel:parent-1",
+      sessionKey: "requester-session",
+    });
+
+    const result = await handleAcpCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Unable to resolve session target: not-a-session-target");
+    expect(hoisted.closeMock).not.toHaveBeenCalled();
+    expect(hoisted.readAcpSessionEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("handles /acp close in a bound thread when text commands are disabled", async () => {
+    mockBoundThreadSession();
+    hoisted.sessionBindingUnbindMock.mockResolvedValue([
+      createBoundThreadSession() as SessionBindingRecord,
+    ]);
+
+    const result = await handleAcpCommand(createThreadParams("/acp close", baseCfg), false);
+
+    expect(hoisted.closeMock).toHaveBeenCalledTimes(1);
+    expect(hoisted.sessionBindingUnbindMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetSessionKey: defaultAcpSessionKey,
+        reason: "manual",
+      }),
+    );
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
@@ -1792,6 +2007,25 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("ACP doctor:");
     expect(result?.reply?.text).toContain("healthy: no");
     expect(result?.reply?.text).toContain("next:");
+  });
+
+  it("explains when acpx is blocked by plugins.allow", async () => {
+    hoisted.getAcpRuntimeBackendMock.mockReturnValue(null);
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      throw new AcpRuntimeError(
+        "ACP_BACKEND_MISSING",
+        "ACP runtime backend is not configured. Install and enable the acpx runtime plugin.",
+      );
+    });
+
+    const result = await runDiscordAcpCommand("/acp doctor", {
+      ...baseCfg,
+      plugins: { allow: ["discord"] },
+    });
+
+    expect(result?.reply?.text).toContain("pluginActivation: blocked");
+    expect(result?.reply?.text).toContain("acpx");
+    expect(result?.reply?.text).toContain('add "acpx" to plugins.allow');
   });
 
   it("shows deterministic install instructions via /acp install", async () => {

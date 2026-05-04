@@ -2,9 +2,18 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { resolveQaNodeExecPath } from "./node-exec.js";
+import {
+  isPreferredQaLiveFrontierCatalogModel,
+  QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
+  QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+  QA_FRONTIER_PROVIDER_IDS,
+} from "./providers/live-frontier/catalog.js";
+import {
+  createQaChannelGatewayConfig,
+  QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+} from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
-
-const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
 
 type ModelRow = {
   key: string;
@@ -43,7 +52,7 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
         name: row.name,
         provider: parsed?.provider ?? "unknown",
         input: row.input,
-        preferred: row.key === "openai/gpt-5.4",
+        preferred: isPreferredQaLiveFrontierCatalogModel(row.key),
       } satisfies QaRunnerModelOption;
     });
 
@@ -59,7 +68,32 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
   });
 }
 
-export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
+const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
+
+function createCatalogAbortError() {
+  return new Error(CATALOG_ABORT_ERROR_MESSAGE);
+}
+
+function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
+  if (pid === undefined) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      process.kill(pid, signal);
+      return;
+    }
+    process.kill(-pid, signal);
+  } catch {
+    try {
+      process.kill(pid, signal);
+    } catch {
+      // The process already exited.
+    }
+  }
+}
+
+export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-model-catalog-"),
   );
@@ -78,40 +112,71 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string }) {
       bind: "loopback",
       gatewayPort: 0,
       gatewayToken: "qa-model-catalog",
-      qaBusBaseUrl: "http://127.0.0.1:9",
       workspaceDir,
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "anthropic/claude-sonnet-4-6",
+      primaryModel: QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+      alternateModel: QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
       enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
       imageGenerationModel: null,
       controlUiEnabled: false,
+      transportPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
+      transportConfig: createQaChannelGatewayConfig({
+        baseUrl: "http://127.0.0.1:9",
+      }),
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
+    const nodeExecPath = await resolveQaNodeExecPath();
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(
-        process.execPath,
-        ["dist/index.js", "models", "list", "--all", "--json"],
-        {
-          cwd: params.repoRoot,
-          env: {
-            ...process.env,
-            HOME: homeDir,
-            OPENCLAW_HOME: homeDir,
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
-          },
-          stdio: ["ignore", "pipe", "pipe"],
+      let aborted = params.signal?.aborted === true;
+      let forceKillTimer: NodeJS.Timeout | undefined;
+      const child = spawn(nodeExecPath, ["dist/index.js", "models", "list", "--all", "--json"], {
+        cwd: params.repoRoot,
+        env: {
+          ...process.env,
+          HOME: homeDir,
+          OPENCLAW_HOME: homeDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+          OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
         },
-      );
+        detached: process.platform !== "win32",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const cleanup = () => {
+        params.signal?.removeEventListener("abort", abortCatalogLoad);
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+        }
+      };
+      const abortCatalogLoad = () => {
+        aborted = true;
+        killProcessTree(child.pid, "SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          killProcessTree(child.pid, "SIGKILL");
+        }, 1_000);
+        forceKillTimer.unref();
+      };
+      if (aborted) {
+        abortCatalogLoad();
+      } else {
+        params.signal?.addEventListener("abort", abortCatalogLoad, { once: true });
+      }
       child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
       child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-      child.once("error", reject);
+      child.once("error", (error) => {
+        cleanup();
+        reject(aborted ? createCatalogAbortError() : error);
+      });
       child.once("exit", (code) => {
+        cleanup();
+        if (aborted) {
+          reject(createCatalogAbortError());
+          return;
+        }
         if (code === 0) {
           resolve();
           return;

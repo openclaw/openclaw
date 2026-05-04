@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  baseStatusExpectedUpdateChannelInfo,
+  baseStatusExpectedUpdateChannelLabel,
+} from "../status.test-support.ts";
+import {
   buildStatusGatewaySurfaceValues,
   buildStatusOverviewRows,
   buildStatusOverviewSurfaceRows,
@@ -78,12 +82,8 @@ describe("status-all format", () => {
         } as never,
       }),
     ).toEqual({
-      channelInfo: {
-        channel: "stable",
-        source: "config",
-        label: "stable (config)",
-      },
-      channelLabel: "stable (config)",
+      channelInfo: baseStatusExpectedUpdateChannelInfo,
+      channelLabel: baseStatusExpectedUpdateChannelLabel,
       gitLabel: "main · tag v1.2.3",
       updateLine: `git main · ↔ origin/main · behind 2 · npm update ${newerRegistryVersion}`,
       updateAvailable: true,
@@ -101,6 +101,16 @@ describe("status-all format", () => {
         },
       }),
     ).toBe("http://127.0.0.1:18789/ui/");
+    expect(
+      resolveStatusDashboardUrl({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            tls: { enabled: true },
+          },
+        },
+      }),
+    ).toBe("https://127.0.0.1:18789/");
     expect(
       resolveStatusDashboardUrl({
         cfg: {
@@ -135,7 +145,7 @@ describe("status-all format", () => {
         includeBackendStateWhenOff: true,
         includeDnsNameWhenOff: true,
       }),
-    ).toBe("off · Stopped · box.tail.ts.net");
+    ).toBe("off · daemon Stopped · box.tail.ts.net");
   });
 
   it("formats service values across short and detailed runtime surfaces", () => {
@@ -291,7 +301,7 @@ describe("status-all format", () => {
     ).toEqual([
       { Item: "Version", Value: "1.0.0" },
       { Item: "Dashboard", Value: "https://openclaw.local" },
-      { Item: "Tailscale", Value: "serve · https://tail.example" },
+      { Item: "Tailscale exposure", Value: "serve · https://tail.example" },
       { Item: "Channel", Value: "stable" },
       { Item: "Git", Value: "main @ v1.0.0" },
       { Item: "Update", Value: "up to date" },
@@ -363,8 +373,8 @@ describe("status-all format", () => {
     ).toEqual([
       { Item: "Version", Value: "1.0.0" },
       { Item: "Dashboard", Value: "http://127.0.0.1:18789/" },
-      { Item: "Tailscale", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
-      { Item: "Channel", Value: "stable (config)" },
+      { Item: "Tailscale exposure", Value: "serve · box.tail.ts.net · https://box.tail.ts.net" },
+      { Item: "Channel", Value: baseStatusExpectedUpdateChannelLabel },
       { Item: "Git", Value: "main · tag v1.2.3" },
       { Item: "Update", Value: "available · custom update" },
       {

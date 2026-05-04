@@ -59,6 +59,9 @@ const mocks = vi.hoisted(() => {
       runtimeStdout.push(JSON.stringify(value, null, space > 0 ? space : undefined));
     }),
     exit: vi.fn((code: number) => {
+      if (code === 0) {
+        return;
+      }
       throw new Error(`__exit__:${code}`);
     }),
   };
@@ -69,8 +72,11 @@ const mocks = vi.hoisted(() => {
   });
   return {
     loadConfigMock: vi.fn(() => ({})),
-    resolveDefaultAgentIdMock: vi.fn(() => "main"),
-    resolveAgentWorkspaceDirMock: vi.fn(() => "/tmp/workspace"),
+    resolveDefaultAgentIdMock: vi.fn((_config: unknown) => "main"),
+    resolveAgentIdByWorkspacePathMock: vi.fn(
+      (_config: unknown, _workspacePath: string): string | undefined => undefined,
+    ),
+    resolveAgentWorkspaceDirMock: vi.fn((_config: unknown, _agentId: string) => "/tmp/workspace"),
     searchSkillsFromClawHubMock: vi.fn(),
     installSkillFromClawHubMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
@@ -87,6 +93,7 @@ const mocks = vi.hoisted(() => {
 const {
   loadConfigMock,
   resolveDefaultAgentIdMock,
+  resolveAgentIdByWorkspacePathMock,
   resolveAgentWorkspaceDirMock,
   searchSkillsFromClawHubMock,
   installSkillFromClawHubMock,
@@ -105,12 +112,16 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => mocks.loadConfigMock(),
   loadConfig: () => mocks.loadConfigMock(),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
-  resolveDefaultAgentId: () => mocks.resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => mocks.resolveAgentWorkspaceDirMock(),
+  resolveAgentIdByWorkspacePath: (config: unknown, workspacePath: string) =>
+    mocks.resolveAgentIdByWorkspacePathMock(config, workspacePath),
+  resolveDefaultAgentId: (config: unknown) => mocks.resolveDefaultAgentIdMock(config),
+  resolveAgentWorkspaceDir: (config: unknown, agentId: string) =>
+    mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
 
 vi.mock("../agents/skills-clawhub.js", () => ({
@@ -134,7 +145,16 @@ describe("skills cli commands", () => {
     return program;
   };
 
-  const runCommand = (argv: string[]) => createProgram().parseAsync(argv, { from: "user" });
+  const runCommand = async (argv: string[]) => {
+    try {
+      await createProgram().parseAsync(argv, { from: "user" });
+    } catch (error) {
+      if (error instanceof Error && error.message === "__exit__:0") {
+        return;
+      }
+      throw error;
+    }
+  };
 
   beforeEach(() => {
     runtimeLogs.length = 0;
@@ -142,6 +162,7 @@ describe("skills cli commands", () => {
     runtimeErrors.length = 0;
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
+    resolveAgentIdByWorkspacePathMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     searchSkillsFromClawHubMock.mockReset();
     installSkillFromClawHubMock.mockReset();
@@ -151,6 +172,7 @@ describe("skills cli commands", () => {
 
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
+    resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     searchSkillsFromClawHubMock.mockResolvedValue([]);
     installSkillFromClawHubMock.mockResolvedValue({
@@ -166,6 +188,21 @@ describe("skills cli commands", () => {
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
   });
+
+  async function withCwd(cwd: string, run: () => Promise<void>) {
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+    try {
+      await run();
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  }
+
+  function routeWorkspaceByAgent() {
+    resolveAgentWorkspaceDirMock.mockImplementation(
+      (_config: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
+  }
 
   it("searches ClawHub skills from the native CLI", async () => {
     searchSkillsFromClawHubMock.mockResolvedValue([
@@ -210,6 +247,73 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("installs a skill into the cwd-inferred agent workspace", async () => {
+    routeWorkspaceByAgent();
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace-writer/skills/calendar",
+    });
+
+    await withCwd("/tmp/workspace-writer/project", async () => {
+      await runCommand(["skills", "install", "calendar"]);
+    });
+
+    expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith(
+      {},
+      "/tmp/workspace-writer/project",
+    );
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-writer",
+      }),
+    );
+  });
+
+  it("lets --agent override cwd-inferred workspace for installs", async () => {
+    routeWorkspaceByAgent();
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace-main/skills/calendar",
+    });
+
+    await withCwd("/tmp/workspace-writer", async () => {
+      await runCommand(["skills", "install", "calendar", "--agent", "main"]);
+    });
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "main");
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-main",
+      }),
+    );
+  });
+
+  it("honors parent --agent for subcommands", async () => {
+    routeWorkspaceByAgent();
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace-writer/skills/calendar",
+    });
+
+    await runCommand(["skills", "--agent", "writer", "install", "calendar"]);
+
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "writer");
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-writer",
+      }),
+    );
+  });
+
   it("updates all tracked ClawHub skills", async () => {
     readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
     updateSkillsFromClawHubMock.mockResolvedValue([
@@ -235,6 +339,60 @@ describe("skills cli commands", () => {
       true,
     );
     expect(runtimeErrors).toEqual([]);
+  });
+
+  it("updates tracked ClawHub skills in the cwd-inferred agent workspace", async () => {
+    routeWorkspaceByAgent();
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace-writer/skills/calendar",
+      },
+    ]);
+
+    await withCwd("/tmp/workspace-writer", async () => {
+      await runCommand(["skills", "update", "--all"]);
+    });
+
+    expect(readTrackedClawHubSkillSlugsMock).toHaveBeenCalledWith("/tmp/workspace-writer");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace-writer",
+      slug: undefined,
+      logger: expect.any(Object),
+    });
+  });
+
+  it("lets --agent override cwd-inferred workspace for updates", async () => {
+    routeWorkspaceByAgent();
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace-main/skills/calendar",
+      },
+    ]);
+
+    await withCwd("/tmp/workspace-writer", async () => {
+      await runCommand(["skills", "update", "calendar", "--agent", "main"]);
+    });
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace-main",
+      slug: "calendar",
+      logger: expect.any(Object),
+    });
   });
 
   it.each([
@@ -268,9 +426,10 @@ describe("skills cli commands", () => {
   ])("routes skills $label JSON output through stdout", async ({ argv, assert }) => {
     await runCommand(argv);
 
-    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith("/tmp/workspace", {
-      config: {},
-    });
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace",
+      expect.objectContaining({ config: {} }),
+    );
     expect(
       defaultRuntime.writeStdout.mock.calls.length + defaultRuntime.writeJson.mock.calls.length,
     ).toBeGreaterThan(0);
@@ -280,6 +439,62 @@ describe("skills cli commands", () => {
 
     const payload = JSON.parse(runtimeStdout.at(-1) ?? "{}") as Record<string, unknown>;
     assert(payload);
+  });
+
+  it.each([
+    ["list", ["skills", "list", "--json"]],
+    ["info", ["skills", "info", "calendar", "--json"]],
+    ["check", ["skills", "check", "--json"]],
+    ["default", ["skills"]],
+  ])("routes skills %s through the cwd-inferred agent workspace", async (_label, argv) => {
+    routeWorkspaceByAgent();
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("writer");
+
+    await withCwd("/tmp/workspace-writer", async () => {
+      await runCommand(argv);
+    });
+
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace-writer",
+      expect.objectContaining({ config: {} }),
+    );
+  });
+
+  it.each([
+    ["list", ["skills", "list", "--agent", "writer", "--json"]],
+    ["info", ["skills", "info", "calendar", "--agent", "writer", "--json"]],
+    ["check", ["skills", "check", "--agent", "writer", "--json"]],
+    ["default", ["skills", "--agent", "writer"]],
+  ])("routes skills %s through the explicit agent workspace", async (_label, argv) => {
+    routeWorkspaceByAgent();
+    resolveAgentIdByWorkspacePathMock.mockReturnValue("main");
+
+    await withCwd("/tmp/workspace-main", async () => {
+      await runCommand(argv);
+    });
+
+    expect(resolveAgentIdByWorkspacePathMock).not.toHaveBeenCalled();
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace-writer",
+      expect.objectContaining({ config: {} }),
+    );
+  });
+
+  it("falls back to the default agent outside configured workspaces", async () => {
+    routeWorkspaceByAgent();
+    resolveDefaultAgentIdMock.mockReturnValue("main");
+    resolveAgentIdByWorkspacePathMock.mockReturnValue(undefined);
+
+    await withCwd("/tmp/unrelated", async () => {
+      await runCommand(["skills", "list", "--json"]);
+    });
+
+    expect(resolveAgentIdByWorkspacePathMock).toHaveBeenCalledWith({}, "/tmp/unrelated");
+    expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith({});
+    expect(buildWorkspaceSkillStatusMock).toHaveBeenCalledWith(
+      "/tmp/workspace-main",
+      expect.objectContaining({ config: {} }),
+    );
   });
 
   it("keeps non-JSON skills list output on stdout with human-readable formatting", async () => {

@@ -1,5 +1,8 @@
 {
   "id": "active-memory",
+  "activation": {
+    "onStartup": true
+  },
   "name": "Active Memory",
   "description": "Runs a bounded blocking memory sub-agent before eligible conversational replies and injects relevant memory into prompt context.",
   "configSchema": {
@@ -12,6 +15,7 @@
         "items": { "type": "string" }
       },
       "model": { "type": "string" },
+      "modelFallback": { "type": "string" },
       "modelFallbackPolicy": {
         "type": "string",
         "enum": ["default-remote", "resolved-only"]
@@ -20,14 +24,23 @@
         "type": "array",
         "items": {
           "type": "string",
-          "enum": ["direct", "group", "channel"]
+          "enum": ["direct", "group", "channel", "explicit"]
         }
+      },
+      "allowedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "deniedChatIds": {
+        "type": "array",
+        "items": { "type": "string" }
       },
       "thinking": {
         "type": "string",
         "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
       },
-      "timeoutMs": { "type": "integer", "minimum": 250 },
+      "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 120000 },
+      "setupGraceTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
       "queryMode": {
         "type": "string",
         "enum": ["message", "recent", "full"]
@@ -53,7 +66,19 @@
       "logging": { "type": "boolean" },
       "persistTranscripts": { "type": "boolean" },
       "transcriptDir": { "type": "string" },
-      "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 }
+      "cacheTtlMs": { "type": "integer", "minimum": 1000, "maximum": 120000 },
+      "circuitBreakerMaxTimeouts": { "type": "integer", "minimum": 1, "maximum": 20 },
+      "circuitBreakerCooldownMs": { "type": "integer", "minimum": 5000, "maximum": 600000 },
+      "qmd": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "searchMode": {
+            "type": "string",
+            "enum": ["inherit", "search", "vsearch", "query"]
+          }
+        }
+      }
     }
   },
   "uiHints": {
@@ -69,16 +94,32 @@
       "label": "Memory Model",
       "help": "Provider/model used for the blocking memory sub-agent."
     },
+    "modelFallback": {
+      "label": "Fallback Memory Model",
+      "help": "Optional provider/model to use if no explicit plugin model, session model, or agent primary model resolves."
+    },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Choose whether Active Memory falls back to the built-in remote default model when no explicit or inherited model is available."
+      "help": "Deprecated compatibility field. modelFallback is only the chain-resolution last resort when no explicit plugin model, session model, or agent primary model resolves; it is not runtime failover."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
-      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only."
+      "help": "Choose which session types may run Active Memory. Defaults to direct-message style sessions only, but explicit portal/webchat sessions can also be enabled."
+    },
+    "allowedChatIds": {
+      "label": "Allowed Chat IDs",
+      "help": "Optional explicit allowlist of chat/user IDs (e.g. Feishu chat_id oc_xxx, open_id ou_xxx, Telegram chat id, Slack channel id). When non-empty, Active Memory only runs for sessions whose conversation id is in the list, across **every** chat type at once (direct, group, channel). Setting this narrows every allowed chat type simultaneously — if you want 'all directs + only specific groups', use allowedChatTypes: ['group'] + allowedChatIds: [<group ids>] and rely on direct chats being matched via the direct session id (e.g. the user's open_id) instead. Leave empty to fall back to allowedChatTypes alone."
+    },
+    "deniedChatIds": {
+      "label": "Denied Chat IDs",
+      "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
     },
     "timeoutMs": {
       "label": "Timeout (ms)"
+    },
+    "setupGraceTimeoutMs": {
+      "label": "Setup Grace Timeout (ms)",
+      "help": "Advanced: extra blocking budget for cold embedded-run setup before the recall timeout is considered exhausted. Defaults to 0 so timeoutMs remains the main-lane hook budget unless you opt in."
     },
     "queryMode": {
       "label": "Query Mode",
@@ -108,6 +149,14 @@
       "label": "Enable Logging",
       "help": "Emit active memory timing and result logs."
     },
+    "circuitBreakerMaxTimeouts": {
+      "label": "Circuit Breaker Max Timeouts",
+      "help": "Skip recall after this many consecutive timeouts for the same agent/model. Resets on a successful recall or after the cooldown expires. Default: 3."
+    },
+    "circuitBreakerCooldownMs": {
+      "label": "Circuit Breaker Cooldown (ms)",
+      "help": "How long to skip recall after the circuit breaker trips, in milliseconds. Default: 60000 (1 minute)."
+    },
     "persistTranscripts": {
       "label": "Persist Transcripts",
       "help": "Keep blocking memory sub-agent session transcripts on disk in a separate plugin-owned directory."
@@ -115,6 +164,10 @@
     "transcriptDir": {
       "label": "Transcript Directory",
       "help": "Relative directory under the agent sessions folder used when transcript persistence is enabled."
+    },
+    "qmd.searchMode": {
+      "label": "QMD Search Mode",
+      "help": "Override the QMD search mode used by the blocking memory sub-agent. Defaults to fast lexical search; use inherit to match the main memory backend setting."
     }
   }
 }

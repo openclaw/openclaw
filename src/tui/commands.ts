@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
+const TRACE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
@@ -20,6 +21,8 @@ export type SlashCommandOptions = {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  thinkingLevels?: Array<{ id: string; label: string }>;
+  local?: boolean;
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
@@ -53,8 +56,11 @@ export function parseCommand(input: string): ParsedCommand {
 }
 
 export function getSlashCommands(options: SlashCommandOptions = {}): SlashCommand[] {
-  const thinkLevels = listThinkingLevelLabels(options.provider, options.model);
+  const thinkLevels = options.thinkingLevels?.length
+    ? options.thinkingLevels.map((level) => level.label)
+    : listThinkingLevelLabels(options.provider, options.model);
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
+  const traceCompletions = createLevelCompletion(TRACE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
   const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
   const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
@@ -64,8 +70,10 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     { name: "help", description: "Show slash command help" },
     { name: "gateway-status", description: "Show gateway status summary" },
     { name: "gwstatus", description: "Alias for /gateway-status" },
+    ...(options.local ? [{ name: "auth", description: "Run provider auth/login flow" }] : []),
     { name: "agent", description: "Switch agent (or open picker)" },
     { name: "agents", description: "Open agent picker" },
+    { name: "crestodian", description: "Return to Crestodian" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -90,6 +98,11 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
       name: "verbose",
       description: "Set verbose on/off",
       getArgumentCompletions: verboseCompletions,
+    },
+    {
+      name: "trace",
+      description: "Set trace on/off",
+      getArgumentCompletions: traceCompletions,
     },
     {
       name: "reasoning",
@@ -150,12 +163,15 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/status",
     "/gateway-status",
     "/gwstatus",
+    ...(options.local ? ["/auth [provider]"] : []),
     "/agent <id> (or /agents)",
+    "/crestodian [request]",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
     "/fast <status|on|off>",
     "/verbose <on|off>",
+    "/trace <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
     "/elevated <on|off|ask|full>",

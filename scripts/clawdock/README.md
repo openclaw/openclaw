@@ -145,7 +145,7 @@ The Docker setup uses three config files on the host. The container never stores
 | -------------------------- | -------------------------------------------------------------------------- |
 | `Dockerfile`               | Builds the `openclaw:local` image (Node 22, pnpm, non-root `node` user)    |
 | `docker-compose.yml`       | Defines `openclaw-gateway` and `openclaw-cli` services, bind-mounts, ports |
-| `docker-setup.sh`          | First-time setup — builds image, creates `.env` from `.env.example`        |
+| `scripts/docker/setup.sh`  | First-time setup — builds image, creates `.env` from `.env.example`        |
 | `.env.example`             | Template for `<project>/.env` with all supported vars and docs             |
 | `docker-compose.extra.yml` | Optional overrides — auto-loaded by ClawDock helpers if present            |
 
@@ -161,14 +161,14 @@ The Docker setup uses three config files on the host. The container never stores
 
 ### Initial Setup
 
-`./docker-setup.sh` (in the project root) handles first-time Docker configuration:
+`./scripts/docker/setup.sh` handles first-time Docker configuration:
 
 - Builds the `openclaw:local` image from `Dockerfile`
 - Creates `<project>/.env` from `.env.example` with a generated gateway token
 - Sets up `~/.openclaw` directories if they don't exist
 
 ```bash
-./docker-setup.sh
+./scripts/docker/setup.sh
 ```
 
 After setup, add your API keys:
@@ -198,6 +198,7 @@ This means:
 
 - `~/.openclaw/.env` is available inside the container at `/home/node/.openclaw/.env` — OpenClaw loads it automatically as the global env fallback
 - `~/.openclaw/openclaw.json` is available at `/home/node/.openclaw/openclaw.json` — the gateway watches it and hot-reloads most changes
+- Downloadable plugin packages and install records live under the mounted OpenClaw home
 - No need to add API keys to `docker-compose.yml` or configure anything inside the container
 - Keys survive `clawdock-update`, `clawdock-rebuild`, and `clawdock-clean` because they live on the host
 

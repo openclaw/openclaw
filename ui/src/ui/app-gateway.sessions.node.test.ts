@@ -1,10 +1,14 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
+const loadChatHistoryMock = vi.fn();
+const applySessionsChangedEventMock = vi.fn();
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   flushChatQueueForEvent: vi.fn(),
+  refreshChatAvatar: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
@@ -24,7 +28,7 @@ vi.mock("./controllers/assistant-identity.ts", () => ({
   loadAssistantIdentity: vi.fn(),
 }));
 vi.mock("./controllers/chat.ts", () => ({
-  loadChatHistory: vi.fn(),
+  loadChatHistory: loadChatHistoryMock,
   handleChatEvent: vi.fn(() => "idle"),
 }));
 vi.mock("./controllers/devices.ts", () => ({
@@ -40,11 +44,12 @@ vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: vi.fn(),
 }));
 vi.mock("./controllers/sessions.ts", () => ({
+  applySessionsChangedEvent: applySessionsChangedEventMock,
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
 }));
 vi.mock("./gateway.ts", () => ({
-  GatewayBrowserClient: class {},
+  GatewayBrowserClient: function GatewayBrowserClient() {},
   resolveGatewayErrorDetailCode: () => null,
 }));
 
@@ -110,6 +115,7 @@ function createHost() {
 describe("handleGatewayEvent sessions.changed", () => {
   it("reloads sessions when the gateway pushes a sessions.changed event", () => {
     loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
     const host = createHost();
 
     handleGatewayEvent(host, {
@@ -121,6 +127,146 @@ describe("handleGatewayEvent sessions.changed", () => {
 
     expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+
+  it("does not reload sessions for applied message-phase session patches to existing rows", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:main:main",
+        phase: "message",
+        updatedAt: 123,
+        totalTokens: 456,
+      },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reload sessions when a message-phase event inserts a session row", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock
+      .mockReset()
+      .mockReturnValue({ applied: true, change: "inserted" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:main:new",
+        phase: "message",
+        updatedAt: 123,
+        totalTokens: 456,
+      },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reload sessions when a message-phase event cannot patch local state", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", phase: "message" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reload sessions for chat lifecycle events", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", phase: "start", runId: "run-1" },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reload sessions for chat send acknowledgement events", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: { sessionKey: "agent:main:main", reason: "send" },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleGatewayEvent session.message", () => {
+  it("reloads chat history for the active session", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("skips history reload while a chat run is active", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+    host.chatRunId = "run-123";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("ignores transcript updates for other sessions", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:other" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 });
 

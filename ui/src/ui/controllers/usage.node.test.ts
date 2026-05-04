@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __test,
@@ -207,7 +208,7 @@ function createStorageMock() {
       return store.get(key) ?? null;
     },
     setItem(key: string, value: string) {
-      store.set(key, String(value));
+      store.set(key, value);
     },
     removeItem(key: string) {
       store.delete(key);

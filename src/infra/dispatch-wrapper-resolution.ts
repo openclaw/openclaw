@@ -1,31 +1,15 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  envInvocationUsesModifiers,
+  parseEnvInvocationPrelude,
+  unwrapEnvInvocation,
+} from "./command-carriers.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
+
+export { unwrapEnvInvocation } from "./command-carriers.js";
 
 export const MAX_DISPATCH_WRAPPER_DEPTH = 4;
 
-const ENV_OPTIONS_WITH_VALUE = new Set([
-  "-u",
-  "--unset",
-  "-c",
-  "--chdir",
-  "-s",
-  "--split-string",
-  "--default-signal",
-  "--ignore-signal",
-  "--block-signal",
-]);
-const ENV_INLINE_VALUE_PREFIXES = [
-  "-u",
-  "-c",
-  "-s",
-  "--unset=",
-  "--chdir=",
-  "--split-string=",
-  "--default-signal=",
-  "--ignore-signal=",
-  "--block-signal=",
-] as const;
-const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const CAFFEINATE_OPTIONS_WITH_VALUE = new Set(["-t", "-w"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
@@ -82,28 +66,6 @@ function isKnownArchNameToken(token: string): boolean {
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
 
-function withWindowsExeAliases(names: readonly string[]): string[] {
-  const expanded = new Set<string>();
-  for (const name of names) {
-    expanded.add(name);
-    expanded.add(`${name}.exe`);
-  }
-  return Array.from(expanded);
-}
-
-export function isEnvAssignment(token: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
-}
-
-function hasEnvInlineValuePrefix(lower: string): boolean {
-  for (const prefix of ENV_INLINE_VALUE_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function scanWrapperInvocation(
   argv: string[],
   params: {
@@ -151,73 +113,26 @@ function scanWrapperInvocation(
   return argv.slice(commandIndex);
 }
 
-export function unwrapEnvInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--", "-"]),
-    onToken: (token, lower) => {
-      if (isEnvAssignment(token)) {
-        return "continue";
-      }
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      const [flag] = lower.split("=", 2);
-      if (ENV_FLAG_OPTIONS.has(flag)) {
-        return "continue";
-      }
-      if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
-      }
-      if (hasEnvInlineValuePrefix(lower)) {
-        return "continue";
-      }
-      return "invalid";
-    },
-  });
-}
-
-function envInvocationUsesModifiers(argv: string[]): boolean {
-  let idx = 1;
-  let expectsOptionValue = false;
-  while (idx < argv.length) {
-    const token = argv[idx]?.trim() ?? "";
-    if (!token) {
-      idx += 1;
-      continue;
-    }
-    if (expectsOptionValue) {
-      return true;
-    }
-    if (token === "--" || token === "-") {
-      idx += 1;
+export function extractEnvAssignmentKeysFromDispatchWrappers(
+  argv: string[],
+  maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
+): string[] {
+  let current = argv;
+  const assignmentKeys: string[] = [];
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    const unwrap = unwrapKnownDispatchWrapperInvocation(current);
+    if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
     }
-    if (isEnvAssignment(token)) {
-      return true;
-    }
-    if (!token.startsWith("-") || token === "-") {
-      break;
-    }
-    const lower = normalizeLowercaseStringOrEmpty(token);
-    const [flag] = lower.split("=", 2);
-    if (ENV_FLAG_OPTIONS.has(flag)) {
-      return true;
-    }
-    if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
-      if (lower.includes("=")) {
-        return true;
+    if (unwrap.wrapper === "env") {
+      const parsed = parseEnvInvocationPrelude(current);
+      if (parsed) {
+        assignmentKeys.push(...parsed.assignmentKeys);
       }
-      expectsOptionValue = true;
-      idx += 1;
-      continue;
     }
-    if (hasEnvInlineValuePrefix(lower)) {
-      return true;
-    }
-    return true;
+    current = unwrap.argv;
   }
-
-  return false;
+  return Array.from(new Set(assignmentKeys)).toSorted((a, b) => a.localeCompare(b));
 }
 
 function unwrapDashOptionInvocation(
@@ -471,16 +386,12 @@ const DISPATCH_WRAPPER_SPEC_BY_NAME = new Map(
   DISPATCH_WRAPPER_SPECS.map((spec) => [spec.name, spec] as const),
 );
 
-export const DISPATCH_WRAPPER_EXECUTABLES = new Set(
-  withWindowsExeAliases(DISPATCH_WRAPPER_SPECS.map((spec) => spec.name)),
-);
-
-export type DispatchWrapperUnwrapResult =
+type DispatchWrapperUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
-export type DispatchWrapperTrustPlan = {
+type DispatchWrapperTrustPlan = {
   argv: string[];
   wrappers: string[];
   policyBlocked: boolean;

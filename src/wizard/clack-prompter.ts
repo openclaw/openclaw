@@ -1,4 +1,5 @@
 import {
+  autocomplete,
   autocompleteMultiselect,
   cancel,
   confirm,
@@ -7,6 +8,7 @@ import {
   multiselect,
   type Option,
   outro,
+  password,
   select,
   spinner,
   text,
@@ -62,17 +64,34 @@ export function createClackPrompter(): WizardPrompter {
     note: async (message, title) => {
       emitNote(message, title);
     },
-    select: async (params) =>
-      guardCancel(
+    plain: async (message) => {
+      process.stdout.write(message.endsWith("\n") ? message : `${message}\n`);
+    },
+    select: async (params) => {
+      const options = params.options.map((opt) => {
+        const base = { value: opt.value, label: opt.label };
+        return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
+      }) as Option<(typeof params.options)[number]["value"]>[];
+
+      if (params.searchable) {
+        return guardCancel(
+          await autocomplete({
+            message: stylePromptMessage(params.message),
+            options,
+            initialValue: params.initialValue,
+            filter: tokenizedOptionFilter,
+          }),
+        );
+      }
+
+      return guardCancel(
         await select({
           message: stylePromptMessage(params.message),
-          options: params.options.map((opt) => {
-            const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: stylePromptHint(opt.hint) };
-          }) as Option<(typeof params.options)[number]["value"]>[],
+          options,
           initialValue: params.initialValue,
         }),
-      ),
+      );
+    },
     multiselect: async (params) => {
       const options = params.options.map((opt) => {
         const base = { value: opt.value, label: opt.label };
@@ -100,6 +119,14 @@ export function createClackPrompter(): WizardPrompter {
     },
     text: async (params) => {
       const validate = params.validate;
+      if (params.sensitive) {
+        return guardCancel(
+          await password({
+            message: stylePromptMessage(params.message),
+            validate: validate ? (value) => validate(value ?? "") : undefined,
+          }),
+        );
+      }
       return guardCancel(
         await text({
           message: stylePromptMessage(params.message),
@@ -132,7 +159,11 @@ export function createClackPrompter(): WizardPrompter {
         },
         stop: (message) => {
           osc.done();
-          spin.stop(message);
+          if (message === undefined) {
+            spin.clear();
+          } else {
+            spin.stop(message);
+          }
         },
       };
     },

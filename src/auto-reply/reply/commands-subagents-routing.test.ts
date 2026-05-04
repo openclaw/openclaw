@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   COMMAND,
   COMMAND_KILL,
-  COMMAND_STEER,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
@@ -22,6 +21,9 @@ function buildParams(
     SessionKey: "agent:main:main",
     ...ctxOverrides,
   };
+  const surface = ctx.Surface ?? "whatsapp";
+  const sessionKey = ctx.SessionKey ?? "agent:main:main";
+  const provider = ctx.Provider ?? "whatsapp";
 
   return {
     cfg: {},
@@ -32,22 +34,22 @@ function buildParams(
       isAuthorizedSender: true,
       senderIsOwner: true,
       senderId: "owner",
-      channel: String(ctx.Surface ?? "whatsapp"),
-      channelId: String(ctx.Surface ?? "whatsapp"),
-      surface: String(ctx.Surface ?? "whatsapp"),
+      channel: surface,
+      channelId: surface,
+      surface,
       ownerList: [],
       from: "test-user",
       to: "test-bot",
     },
     directives: {} as HandleCommandsParams["directives"],
     elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: String(ctx.SessionKey ?? "agent:main:main"),
+    sessionKey,
     workspaceDir: "/tmp/openclaw-commands-subagents",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",
     resolvedReasoningLevel: "off",
     resolveDefaultThinkingLevel: async () => undefined,
-    provider: String(ctx.Provider ?? "whatsapp"),
+    provider,
     model: "test-model",
     contextTokens: 0,
     isGroup: false,
@@ -76,7 +78,7 @@ describe("subagents command dispatch", () => {
   it("maps slash aliases to the right handled prefix", () => {
     expect(resolveHandledPrefix("/subagents list")).toBe(COMMAND);
     expect(resolveHandledPrefix("/kill 1")).toBe(COMMAND_KILL);
-    expect(resolveHandledPrefix("/steer 1 continue")).toBe(COMMAND_STEER);
+    expect(resolveHandledPrefix("/steer 1 continue")).toBeNull();
     expect(resolveHandledPrefix("/unknown")).toBeNull();
   });
 
@@ -91,10 +93,11 @@ describe("subagents command dispatch", () => {
     );
     expect(killTokens).toEqual(["1"]);
 
-    const steerTokens = ["1", "continue"];
-    expect(resolveSubagentsAction({ handledPrefix: COMMAND_STEER, restTokens: steerTokens })).toBe(
+    const steerTokens = ["steer", "1", "continue"];
+    expect(resolveSubagentsAction({ handledPrefix: COMMAND, restTokens: steerTokens })).toBe(
       "steer",
     );
+    expect(steerTokens).toEqual(["1", "continue"]);
   });
 
   it("returns null for invalid /subagents actions", () => {

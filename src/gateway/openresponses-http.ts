@@ -10,7 +10,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/pi-embedded-runner/run/params.js";
+import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
@@ -30,7 +32,6 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { wrapExternalContent } from "../security/external-content.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -54,6 +55,7 @@ import {
   type StreamingEvent,
   type Usage,
 } from "./open-responses.schema.js";
+import { wrapUntrustedFileContent } from "./openresponses-file-content.js";
 import { buildAgentPrompt } from "./openresponses-prompt.js";
 import { createAssistantOutputItem, createFunctionCallOutputItem } from "./openresponses-shape.js";
 
@@ -68,13 +70,6 @@ type OpenResponsesHttpOptions = {
 
 const DEFAULT_BODY_BYTES = 20 * 1024 * 1024;
 const DEFAULT_MAX_URL_PARTS = 8;
-
-function wrapUntrustedFileContent(content: string): string {
-  return wrapExternalContent(content, {
-    source: "unknown",
-    includeWarning: false,
-  });
-}
 
 // In-memory map from responseId -> sessionKey for previous_response_id continuity.
 // Entries are evicted after 30 minutes to bound memory usage.
@@ -406,7 +401,7 @@ async function runResponsesAgentCommand(params: {
   runId: string;
   messageChannel: string;
   senderIsOwner: boolean;
-  deps: ReturnType<typeof createDefaultDeps>;
+  deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
   return agentCommandFromIngress(
@@ -710,11 +705,12 @@ export async function handleOpenResponsesHttpRequest(
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
-      // If agent called a client tool, return function_call (and any assistant text) to caller
+      // If the agent invoked client tools, return one `function_call`
+      // output item per call (in arrival order) plus any assistant text the
+      // model produced before the tool calls. Pre-#52288 only the first
+      // pending call was emitted, so multi-tool turns lost every call but
+      // the leading one.
       if (stopReason === "tool_calls" && pendingToolCalls && pendingToolCalls.length > 0) {
-        const functionCall = pendingToolCalls[0];
-        const functionCallItemId = `call_${randomUUID()}`;
-
         const assistantText =
           Array.isArray(payloads) && payloads.length > 0
             ? payloads
@@ -734,14 +730,16 @@ export async function handleOpenResponsesHttpRequest(
             }),
           );
         }
-        output.push(
-          createFunctionCallOutputItem({
-            id: functionCallItemId,
-            callId: functionCall.id,
-            name: functionCall.name,
-            arguments: functionCall.arguments,
-          }),
-        );
+        for (const functionCall of pendingToolCalls) {
+          output.push(
+            createFunctionCallOutputItem({
+              id: `call_${randomUUID()}`,
+              callId: functionCall.id,
+              name: functionCall.name,
+              arguments: functionCall.arguments,
+            }),
+          );
+        }
 
         const response = createResponseResource({
           id: responseId,
@@ -785,6 +783,17 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
+      if (isClientToolNameConflictError(err)) {
+        const response = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+        });
+        sendJson(res, 400, response);
+        return true;
+      }
       const response = createResponseResource({
         id: responseId,
         model,
@@ -992,7 +1001,6 @@ export async function handleOpenResponsesHttpRequest(
         pendingToolCalls &&
         pendingToolCalls.length > 0
       ) {
-        const functionCall = pendingToolCalls[0];
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
           accumulatedText ||
@@ -1030,36 +1038,49 @@ export async function handleOpenResponsesHttpRequest(
           item: completedItem,
         });
 
-        const functionCallItemId = `call_${randomUUID()}`;
-        const functionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.added",
-          output_index: 1,
-          item: functionCallItem,
-        });
-        const completedFunctionCallItem = createFunctionCallOutputItem({
-          id: functionCallItemId,
-          callId: functionCall.id,
-          name: functionCall.name,
-          arguments: functionCall.arguments,
-          status: "completed",
-        });
-        writeSseEvent(res, {
-          type: "response.output_item.done",
-          output_index: 1,
-          item: completedFunctionCallItem,
-        });
+        // Emit one `function_call` output item per pending call, preserving
+        // arrival order. `output_index` continues past the assistant
+        // message at index 0 so the SSE stream keeps a single, monotonic
+        // index per response. Pre-#52288 the streaming path read only
+        // `pendingToolCalls[0]` and hard-coded `output_index: 1`, so a turn
+        // with multiple client tool calls dropped every call past the
+        // first.
+        const functionCallItems: OutputItem[] = [];
+        let nextStreamOutputIndex = 1;
+        for (const functionCall of pendingToolCalls) {
+          const functionCallItemId = `call_${randomUUID()}`;
+          const functionCallItem = createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.added",
+            output_index: nextStreamOutputIndex,
+            item: functionCallItem,
+          });
+          const completedFunctionCallItem = createFunctionCallOutputItem({
+            id: functionCallItemId,
+            callId: functionCall.id,
+            name: functionCall.name,
+            arguments: functionCall.arguments,
+            status: "completed",
+          });
+          writeSseEvent(res, {
+            type: "response.output_item.done",
+            output_index: nextStreamOutputIndex,
+            item: completedFunctionCallItem,
+          });
+          functionCallItems.push(functionCallItem);
+          nextStreamOutputIndex += 1;
+        }
 
         const incompleteResponse = createResponseResource({
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: [completedItem, ...functionCallItems],
           usage,
         });
         closed = true;
@@ -1107,6 +1128,24 @@ export async function handleOpenResponsesHttpRequest(
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
       finalUsage = finalUsage ?? createEmptyUsage();
+      if (isClientToolNameConflictError(err)) {
+        const errorResponse = createResponseResource({
+          id: responseId,
+          model,
+          status: "failed",
+          output: [],
+          error: { code: "invalid_request_error", message: "invalid tool configuration" },
+          usage: finalUsage,
+        });
+
+        writeSseEvent(res, { type: "response.failed", response: errorResponse });
+        emitAgentEvent({
+          runId: responseId,
+          stream: "lifecycle",
+          data: { phase: "error" },
+        });
+        return;
+      }
       const errorResponse = createResponseResource({
         id: responseId,
         model,

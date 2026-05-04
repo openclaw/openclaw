@@ -1,7 +1,35 @@
 import type { Agent } from "node:https";
+import { createRequire } from "node:module";
 import * as Lark from "@larksuiteoapi/node-sdk";
-import { resolveAmbientNodeProxyAgent } from "openclaw/plugin-sdk/extension-shared";
+import {
+  readPluginPackageVersion,
+  resolveAmbientNodeProxyAgent,
+} from "openclaw/plugin-sdk/extension-shared";
+import {
+  FEISHU_HTTP_TIMEOUT_ENV_VAR,
+  FEISHU_HTTP_TIMEOUT_MAX_MS,
+  FEISHU_HTTP_TIMEOUT_MS,
+  resolveConfiguredHttpTimeoutMs,
+} from "./client-timeout.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const pluginVersion = readPluginPackageVersion({ require });
+
+export { pluginVersion };
+
+const FEISHU_USER_AGENT = `openclaw-feishu-builtin/${pluginVersion}/${process.platform}`;
+export { FEISHU_USER_AGENT };
+
+const FEISHU_WS_CONFIG = {
+  PingInterval: 30,
+  PingTimeout: 3,
+} as const;
+
+/** User-Agent header value for all Feishu API requests. */
+export function getFeishuUserAgent(): string {
+  return FEISHU_USER_AGENT;
+}
 
 type FeishuClientSdk = Pick<
   typeof Lark,
@@ -26,17 +54,43 @@ const defaultFeishuClientSdk: FeishuClientSdk = {
 
 let feishuClientSdk: FeishuClientSdk = defaultFeishuClientSdk;
 
-/** Default HTTP timeout for Feishu API requests (30 seconds). */
-export const FEISHU_HTTP_TIMEOUT_MS = 30_000;
-export const FEISHU_HTTP_TIMEOUT_MAX_MS = 300_000;
-export const FEISHU_HTTP_TIMEOUT_ENV_VAR = "OPENCLAW_FEISHU_HTTP_TIMEOUT_MS";
+// Override the SDK's default User-Agent interceptor.
+// The Lark SDK registers an axios request interceptor that sets
+// 'oapi-node-sdk/1.0.0'. Axios request interceptors execute in LIFO order
+// (last-registered runs first), so simply appending ours doesn't work — the
+// SDK's interceptor would run last and overwrite our UA. We must clear
+// handlers[] first, then register our own as the sole interceptor.
+//
+// Risk is low: the SDK only registers one interceptor (UA) at init time, and
+// we clear it at module load before any other code can register handlers.
+// If a future SDK version adds more interceptors, the upgrade will need
+// compatibility verification regardless.
+{
+  const inst = Lark.defaultHttpInstance as {
+    interceptors?: {
+      request: { handlers: unknown[]; use: (fn: (req: unknown) => unknown) => void };
+    };
+  };
+  if (inst.interceptors?.request) {
+    inst.interceptors.request.handlers = [];
+    inst.interceptors.request.use((req: unknown) => {
+      const r = req as { headers?: Record<string, string> };
+      if (r.headers) {
+        r.headers["User-Agent"] = getFeishuUserAgent();
+      }
+      return req;
+    });
+  }
+}
+
+export { FEISHU_HTTP_TIMEOUT_ENV_VAR, FEISHU_HTTP_TIMEOUT_MAX_MS, FEISHU_HTTP_TIMEOUT_MS };
 
 type FeishuHttpInstanceLike = Pick<
   typeof feishuClientSdk.defaultHttpInstance,
   "request" | "get" | "post" | "put" | "patch" | "delete" | "head" | "options"
 >;
 
-async function getWsProxyAgent(): Promise<Agent | undefined> {
+async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
 
@@ -61,8 +115,8 @@ function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
 
 /**
  * Create an HTTP instance that delegates to the Lark SDK's default instance
- * but injects a default request timeout to prevent indefinite hangs
- * (e.g. when the Feishu API is slow, causing per-chat queue deadlocks).
+ * but injects a default request timeout and User-Agent header to prevent
+ * indefinite hangs and set a standardized User-Agent per OAPI best practices.
  */
 function createTimeoutHttpInstance(defaultTimeoutMs: number): Lark.HttpInstance {
   const base: FeishuHttpInstanceLike = feishuClientSdk.defaultHttpInstance;
@@ -95,37 +149,6 @@ export type FeishuClientCredentials = {
   httpTimeoutMs?: number;
   config?: Pick<FeishuConfig, "httpTimeoutMs">;
 };
-
-function resolveConfiguredHttpTimeoutMs(creds: FeishuClientCredentials): number {
-  const clampTimeout = (value: number): number => {
-    const rounded = Math.floor(value);
-    return Math.min(Math.max(rounded, 1), FEISHU_HTTP_TIMEOUT_MAX_MS);
-  };
-
-  const fromDirectField = creds.httpTimeoutMs;
-  if (
-    typeof fromDirectField === "number" &&
-    Number.isFinite(fromDirectField) &&
-    fromDirectField > 0
-  ) {
-    return clampTimeout(fromDirectField);
-  }
-
-  const envRaw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  if (envRaw) {
-    const envValue = Number(envRaw);
-    if (Number.isFinite(envValue) && envValue > 0) {
-      return clampTimeout(envValue);
-    }
-  }
-
-  const fromConfig = creds.config?.httpTimeoutMs;
-  const timeout = fromConfig;
-  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
-    return FEISHU_HTTP_TIMEOUT_MS;
-  }
-  return clampTimeout(timeout);
-}
 
 /**
  * Create or get a cached Feishu client for an account.
@@ -169,11 +192,19 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
   return client;
 }
 
+export type FeishuWsClientCallbacks = Pick<
+  ConstructorParameters<typeof feishuClientSdk.WSClient>[0],
+  "onError" | "onReady" | "onReconnected" | "onReconnecting"
+>;
+
 /**
  * Create a Feishu WebSocket client for an account.
  * Note: WSClient is not cached since each call creates a new connection.
  */
-export async function createFeishuWSClient(account: ResolvedFeishuAccount): Promise<Lark.WSClient> {
+export async function createFeishuWSClient(
+  account: ResolvedFeishuAccount,
+  callbacks: FeishuWsClientCallbacks = {},
+): Promise<Lark.WSClient> {
   const { accountId, appId, appSecret, domain } = account;
 
   if (!appId || !appSecret) {
@@ -185,8 +216,12 @@ export async function createFeishuWSClient(account: ResolvedFeishuAccount): Prom
     appId,
     appSecret,
     domain: resolveDomain(domain),
+    ...callbacks,
     loggerLevel: feishuClientSdk.LoggerLevel.info,
+    wsConfig: FEISHU_WS_CONFIG,
     ...(agent ? { agent } : {}),
+  } as ConstructorParameters<typeof feishuClientSdk.WSClient>[0] & {
+    wsConfig: typeof FEISHU_WS_CONFIG;
   });
 }
 

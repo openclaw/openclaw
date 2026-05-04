@@ -229,7 +229,7 @@ export function resolveApprovalAuditCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
-// Legacy alias kept while callers migrate to explicit target naming.
+/** @deprecated Use resolveExecutionTargetCandidatePath. */
 export function resolveAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -315,6 +315,30 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   }
 }
 
+function hasPathSelector(value: string): boolean {
+  return value.includes("/") || value.includes("\\") || value.includes("~");
+}
+
+function matchesExecutableBasenamePattern(
+  pattern: string,
+  resolution: ExecutableResolution,
+): boolean {
+  // Bare command-name allowlist entries are for PATH-resolved commands. A raw
+  // path such as ./rg or /tmp/rg must use a path allowlist entry so a workspace
+  // binary cannot inherit trust from a global command-name entry.
+  if (hasPathSelector(resolution.rawExecutable)) {
+    return false;
+  }
+  const candidates = new Set<string>();
+  if (resolution.executableName) {
+    candidates.add(resolution.executableName);
+  }
+  if (resolution.resolvedPath) {
+    candidates.add(path.basename(resolution.resolvedPath));
+  }
+  return [...candidates].some((candidate) => matchesExecAllowlistPattern(pattern, candidate));
+}
+
 export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: ExecutableResolution | null,
@@ -341,20 +365,17 @@ export function matchAllowlist(
   // Use the caller-supplied target platform rather than process.platform so that
   // a Linux gateway evaluating a Windows node command applies argPattern correctly.
   const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = normalizeLowercaseStringOrEmpty(String(effectivePlatform)).startsWith(
-    "win",
-  );
+  const useArgPattern = normalizeLowercaseStringOrEmpty(effectivePlatform).startsWith("win");
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
     if (!pattern) {
       continue;
     }
-    const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
-    if (!hasPath) {
-      continue;
-    }
-    if (!matchesExecAllowlistPattern(pattern, resolvedPath)) {
+    const patternMatches = hasPathSelector(pattern)
+      ? matchesExecAllowlistPattern(pattern, resolvedPath)
+      : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
+    if (!patternMatches) {
       continue;
     }
     if (!useArgPattern) {

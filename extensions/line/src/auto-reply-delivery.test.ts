@@ -26,7 +26,9 @@ const createLocationMessage = (location: {
 });
 
 describe("deliverLineAutoReply", () => {
+  const LINE_TEST_CFG = { channels: { line: { accounts: { acc: {} } } } };
   const baseDeliveryParams = {
+    cfg: LINE_TEST_CFG,
     to: "line:user:1",
     replyToken: "token",
     replyTokenUsed: false,
@@ -89,13 +91,14 @@ describe("deliverLineAutoReply", () => {
     expect(result.replyTokenUsed).toBe(true);
     expect(replyMessageLine).toHaveBeenCalledTimes(1);
     expect(replyMessageLine).toHaveBeenCalledWith("token", [{ type: "text", text: "hello" }], {
+      cfg: LINE_TEST_CFG,
       accountId: "acc",
     });
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
       [createFlexMessage("Card", { type: "bubble" })],
-      { accountId: "acc" },
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(createQuickReplyItems).not.toHaveBeenCalled();
   });
@@ -128,10 +131,46 @@ describe("deliverLineAutoReply", () => {
           quickReply: { items: ["A"] },
         },
       ],
-      { accountId: "acc" },
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(pushMessagesLine).not.toHaveBeenCalled();
     expect(createQuickReplyItems).toHaveBeenCalledWith(["A"]);
+  });
+
+  it("uses fallback text for quick-reply-only payloads", async () => {
+    const createTextMessageWithQuickReplies = vi.fn((text: string, _quickReplies: string[]) => ({
+      type: "text" as const,
+      text,
+      quickReply: { items: ["A", "B"] },
+    }));
+    const lineData = {
+      quickReplies: ["A", "B"],
+    };
+    const { deps, replyMessageLine, pushMessagesLine } = createDeps({
+      createTextMessageWithQuickReplies:
+        createTextMessageWithQuickReplies as LineAutoReplyDeps["createTextMessageWithQuickReplies"],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { text: "", channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    expect(result.replyTokenUsed).toBe(true);
+    expect(replyMessageLine).toHaveBeenCalledWith(
+      "token",
+      [
+        {
+          type: "text",
+          text: "Options:\n- A\n- B",
+          quickReply: { items: ["A", "B"] },
+        },
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+    expect(pushMessagesLine).not.toHaveBeenCalled();
   });
 
   it("sends rich messages before quick-reply text so quick replies remain visible", async () => {
@@ -160,7 +199,7 @@ describe("deliverLineAutoReply", () => {
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
       [createFlexMessage("Card", { type: "bubble" })],
-      { accountId: "acc" },
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     expect(replyMessageLine).toHaveBeenCalledWith(
       "token",
@@ -171,7 +210,7 @@ describe("deliverLineAutoReply", () => {
           quickReply: { items: ["A"] },
         },
       ],
-      { accountId: "acc" },
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
     const pushOrder = pushMessagesLine.mock.invocationCallOrder[0];
     const replyOrder = replyMessageLine.mock.invocationCallOrder[0];
@@ -203,7 +242,7 @@ describe("deliverLineAutoReply", () => {
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
       [createFlexMessage("Card", { type: "bubble" })],
-      { accountId: "acc" },
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });
 });

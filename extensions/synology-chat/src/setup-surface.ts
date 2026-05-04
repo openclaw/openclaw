@@ -11,7 +11,6 @@ import {
   type ChannelSetupWizard,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import type { SynologyChatAccountRaw, SynologyChatChannelConfig } from "./types.js";
 
@@ -34,6 +33,14 @@ const SYNOLOGY_ALLOW_FROM_HELP_LINES = [
   "Multiple entries: comma-separated.",
   `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
 ];
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
 
 function getChannelConfig(cfg: OpenClawConfig): SynologyChatChannelConfig {
   return (cfg.channels?.[channel] as SynologyChatChannelConfig | undefined) ?? {};
@@ -123,16 +130,28 @@ function validateWebhookPath(value: string): string | undefined {
 }
 
 function parseSynologyUserId(value: string): string | null {
-  const cleaned = value.replace(/^synology-chat:/i, "").trim();
+  const cleaned = value.replace(/^synology(?:[-_]?chat)?:/i, "").trim();
   return /^\d+$/.test(cleaned) ? cleaned : null;
+}
+
+function normalizeSynologyAllowedUserId(value: unknown): string {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return `${value}`.trim();
+  }
+  return "";
 }
 
 function resolveExistingAllowedUserIds(cfg: OpenClawConfig, accountId: string): string[] {
   const raw = getRawAccountConfig(cfg, accountId).allowedUserIds;
   if (Array.isArray(raw)) {
-    return raw.map((value) => String(value).trim()).filter(Boolean);
+    return raw.map(normalizeSynologyAllowedUserId).filter(Boolean);
   }
-  return String(raw ?? "")
+  return normalizeSynologyAllowedUserId(raw)
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
@@ -310,7 +329,7 @@ export const synologyChatSetupWizard: ChannelSetupWizard = {
     title: "Synology Chat access control",
     lines: [
       `Default outgoing webhook path: ${DEFAULT_WEBHOOK_PATH}`,
-      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` for public DMs.',
+      'Set allowed user IDs, or manually switch `channels.synology-chat.dmPolicy` to `"open"` with `allowedUserIds: ["*"]` for public DMs.',
       'With `dmPolicy="allowlist"`, an empty allowedUserIds list blocks the route from starting.',
       `Docs: ${formatDocsLink("/channels/synology-chat", "channels/synology-chat")}`,
     ],

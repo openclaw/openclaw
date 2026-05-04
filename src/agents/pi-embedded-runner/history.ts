@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { normalizeProviderId } from "../provider-id.js";
 
@@ -116,9 +116,3 @@ export function getHistoryLimitFromSessionKey(
 
   return undefined;
 }
-
-/**
- * @deprecated Use getHistoryLimitFromSessionKey instead.
- * Alias for backward compatibility.
- */
-export const getDmHistoryLimitFromSessionKey = getHistoryLimitFromSessionKey;

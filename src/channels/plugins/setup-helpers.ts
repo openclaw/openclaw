@@ -1,9 +1,6 @@
 import { z, type ZodType } from "zod";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getBundledChannelPlugin } from "./bundled.js";
-import { getChannelPlugin } from "./registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
 
@@ -11,6 +8,81 @@ type ChannelSectionBase = {
   name?: string;
   defaultAccount?: string;
   accounts?: Record<string, Record<string, unknown>>;
+};
+
+const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
+  "name",
+  "token",
+  "tokenFile",
+  "botToken",
+  "appToken",
+  "account",
+  "signalNumber",
+  "authDir",
+  "cliPath",
+  "dbPath",
+  "httpUrl",
+  "httpHost",
+  "httpPort",
+  "webhookPath",
+  "webhookUrl",
+  "webhookSecret",
+  "service",
+  "region",
+  "homeserver",
+  "userId",
+  "accessToken",
+  "password",
+  "deviceName",
+  "url",
+  "code",
+  "dmPolicy",
+  "allowFrom",
+  "groupPolicy",
+  "groupAllowFrom",
+  "defaultTo",
+  "streaming",
+  "deviceId",
+  "avatarUrl",
+  "initialSyncLimit",
+  "encryption",
+  "allowlistOnly",
+  "allowBots",
+  "blockStreaming",
+  "replyToMode",
+  "threadReplies",
+  "textChunkLimit",
+  "chunkMode",
+  "responsePrefix",
+  "ackReaction",
+  "ackReactionScope",
+  "reactionNotifications",
+  "threadBindings",
+  "startupVerification",
+  "startupVerificationCooldownHours",
+  "mediaMaxMb",
+  "autoJoin",
+  "autoJoinAllowlist",
+  "dm",
+  "groups",
+  "rooms",
+  "actions",
+]);
+
+const NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL: Record<string, readonly string[]> = {
+  matrix: [
+    "name",
+    "homeserver",
+    "userId",
+    "accessToken",
+    "password",
+    "deviceId",
+    "deviceName",
+    "avatarUrl",
+    "initialSyncLimit",
+    "encryption",
+  ],
+  telegram: ["botToken", "tokenFile"],
 };
 
 function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
@@ -151,8 +223,6 @@ export function prepareScopedSetupConfig(params: {
     alwaysUseAccounts: params.alwaysUseAccounts,
   });
 }
-
-export function clearSetupPromotionRuntimeModuleCache(): void {}
 
 export function applySetupAccountConfigPatch(params: {
   cfg: OpenClawConfig;
@@ -377,136 +447,6 @@ type ChannelSectionRecord = Record<string, unknown> & {
   accounts?: Record<string, Record<string, unknown>>;
 };
 
-const COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE = new Set([
-  "name",
-  "token",
-  "tokenFile",
-  "botToken",
-  "appToken",
-  "account",
-  "signalNumber",
-  "authDir",
-  "cliPath",
-  "dbPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "webhookPath",
-  "webhookUrl",
-  "webhookSecret",
-  "service",
-  "region",
-  "homeserver",
-  "userId",
-  "accessToken",
-  "password",
-  "deviceName",
-  "url",
-  "code",
-  "dmPolicy",
-  "allowFrom",
-  "groupPolicy",
-  "groupAllowFrom",
-  "defaultTo",
-]);
-
-const BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Some setup/migration paths run before the channel setup surface has been loaded.
-  telegram: ["streaming"],
-};
-
-const BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS: Record<string, readonly string[]> = {
-  // Keep top-level Telegram policy fallback intact when only auth needs seeding.
-  telegram: ["botToken", "tokenFile"],
-};
-
-type ChannelSetupPromotionSurface = {
-  singleAccountKeysToMove?: readonly string[];
-  namedAccountPromotionKeys?: readonly string[];
-  resolveSingleAccountPromotionTarget?: (params: {
-    channel: ChannelSectionBase;
-  }) => string | undefined;
-};
-
-function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
-  const setup = getChannelPlugin(channelKey)?.setup ?? getBundledChannelPlugin(channelKey)?.setup;
-  if (!setup || typeof setup !== "object") {
-    return null;
-  }
-  return setup as ChannelSetupPromotionSurface;
-}
-
-export function shouldMoveSingleAccountChannelKey(params: {
-  channelKey: string;
-  key: string;
-}): boolean {
-  if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(params.key)) {
-    return true;
-  }
-  const contractKeys = getChannelSetupPromotionSurface(params.channelKey)?.singleAccountKeysToMove;
-  if (contractKeys?.includes(params.key)) {
-    return true;
-  }
-  const fallbackKeys = BUNDLED_SINGLE_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  if (fallbackKeys?.includes(params.key)) {
-    return true;
-  }
-  return false;
-}
-
-export function resolveSingleAccountKeysToMove(params: {
-  channelKey: string;
-  channel: Record<string, unknown>;
-}): string[] {
-  const hasNamedAccounts =
-    Object.keys((params.channel.accounts as Record<string, unknown>) ?? {}).filter(Boolean).length >
-    0;
-  const namedAccountPromotionKeys =
-    getChannelSetupPromotionSurface(params.channelKey)?.namedAccountPromotionKeys ??
-    BUNDLED_NAMED_ACCOUNT_PROMOTION_FALLBACKS[params.channelKey];
-  return Object.entries(params.channel)
-    .filter(([key, value]) => {
-      if (key === "accounts" || key === "enabled" || value === undefined) {
-        return false;
-      }
-      if (!shouldMoveSingleAccountChannelKey({ channelKey: params.channelKey, key })) {
-        return false;
-      }
-      if (
-        hasNamedAccounts &&
-        namedAccountPromotionKeys &&
-        !namedAccountPromotionKeys.includes(key)
-      ) {
-        return false;
-      }
-      return true;
-    })
-    .map(([key]) => key);
-}
-
-export function resolveSingleAccountPromotionTarget(params: {
-  channelKey: string;
-  channel: ChannelSectionBase;
-}): string {
-  const accounts = params.channel.accounts ?? {};
-  const resolveExistingAccountId = (targetAccountId: string): string => {
-    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
-    const matchedAccountId = Object.keys(accounts).find(
-      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
-    );
-    return matchedAccountId ?? normalizedTargetAccountId;
-  };
-  const surface = getChannelSetupPromotionSurface(params.channelKey);
-  const resolved = surface?.resolveSingleAccountPromotionTarget?.({
-    channel: params.channel,
-  });
-  const normalizedResolved = normalizeOptionalString(resolved);
-  if (normalizedResolved) {
-    return resolveExistingAccountId(normalizedResolved);
-  }
-  return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
-}
-
 function cloneIfObject<T>(value: T): T {
   if (value && typeof value === "object") {
     return structuredClone(value);
@@ -558,6 +498,46 @@ function resolveExistingAccountKey(
   return targetAccountId;
 }
 
+function resolveSingleAccountKeysToMove(params: {
+  channelKey: string;
+  channel: Record<string, unknown>;
+}): string[] {
+  const hasNamedAccounts = Object.keys(
+    (params.channel.accounts as Record<string, unknown>) ?? {},
+  ).some(Boolean);
+  const entries = Object.entries(params.channel)
+    .filter(
+      ([key, value]) =>
+        key !== "accounts" && key !== "defaultAccount" && key !== "enabled" && value !== undefined,
+    )
+    .map(([key]) => key);
+  const keysToMove = entries.filter((key) => COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key));
+  if (!hasNamedAccounts || keysToMove.length === 0) {
+    return keysToMove;
+  }
+  const namedAccountPromotionKeys = NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL[params.channelKey];
+  return namedAccountPromotionKeys
+    ? keysToMove.filter((key) => namedAccountPromotionKeys.includes(key))
+    : keysToMove;
+}
+
+function resolveSingleAccountPromotionTarget(params: { channel: ChannelSectionBase }): string {
+  const accounts = params.channel.accounts ?? {};
+  const normalizedDefaultAccount =
+    typeof params.channel.defaultAccount === "string" && params.channel.defaultAccount.trim()
+      ? normalizeAccountId(params.channel.defaultAccount)
+      : undefined;
+  if (normalizedDefaultAccount) {
+    return (
+      Object.keys(accounts).find(
+        (accountId) => normalizeAccountId(accountId) === normalizedDefaultAccount,
+      ) ?? DEFAULT_ACCOUNT_ID
+    );
+  }
+  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
+}
+
 // When promoting a single-account channel config to multi-account,
 // move top-level account settings into accounts.default so the original
 // account keeps working without duplicate account values at channel root.
@@ -584,7 +564,6 @@ export function moveSingleAccountChannelSectionToDefaultAccount(params: {
     }
 
     const targetAccountId = resolveSingleAccountPromotionTarget({
-      channelKey: params.channelKey,
       channel: base,
     });
     const resolvedTargetAccountKey = resolveExistingAccountKey(accounts, targetAccountId);

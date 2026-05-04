@@ -1,5 +1,5 @@
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
-import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -95,7 +95,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       if (ingressDebugEnabled && ingressReceivedAtMs && ingressContextStartMs) {
         logVerbose(
           `telegram ingress: chatId=${primaryCtx.message.chat.id} dropped after ${Date.now() - ingressReceivedAtMs}ms` +
-            (options?.ingressBuffer ? ` buffer=${String(options.ingressBuffer)}` : ""),
+            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
       return;
@@ -104,9 +104,12 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       logVerbose(
         `telegram ingress: chatId=${context.chatId} contextReadyMs=${Date.now() - ingressReceivedAtMs}` +
           ` preDispatchMs=${Date.now() - ingressContextStartMs}` +
-          (options?.ingressBuffer ? ` buffer=${String(options.ingressBuffer)}` : ""),
+          (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
+    void context.sendTyping().catch((err) => {
+      logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+    });
     try {
       await dispatchTelegramMessage({
         context,
@@ -123,7 +126,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       if (ingressDebugEnabled && ingressReceivedAtMs) {
         logVerbose(
           `telegram ingress: chatId=${context.chatId} dispatchCompleteMs=${Date.now() - ingressReceivedAtMs}` +
-            (options?.ingressBuffer ? ` buffer=${String(options.ingressBuffer)}` : ""),
+            (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
         );
       }
     } catch (err) {

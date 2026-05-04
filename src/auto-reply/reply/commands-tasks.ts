@@ -78,7 +78,7 @@ function formatVisibleTask(task: TaskRecord, index: number): string {
   return lines.join("\n");
 }
 
-export function buildTasksText(params: { sessionKey: string; agentId: string }): string {
+function buildTasksText(params: { sessionKey: string; agentId: string }): string {
   const sessionSnapshot = buildTaskStatusSnapshot(
     listTasksForSessionKeyForStatus(params.sessionKey),
   );
@@ -108,12 +108,10 @@ export function buildTasksText(params: { sessionKey: string; agentId: string }):
 }
 
 export async function buildTasksReply(params: HandleCommandsParams): Promise<ReplyPayload> {
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
+  const agentId = resolveSessionAgentId({
+    sessionKey: params.sessionKey,
+    config: params.cfg,
+  });
   return {
     text: buildTasksText({
       sessionKey: params.sessionKey,

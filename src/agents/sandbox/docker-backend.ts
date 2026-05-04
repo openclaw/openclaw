@@ -1,10 +1,10 @@
 import { buildDockerExecArgs } from "../bash-tools.shared.js";
+import type { SandboxBackendCommandParams } from "./backend-handle.types.js";
 import type {
   CreateSandboxBackendParams,
-  SandboxBackendManager,
-  SandboxBackendCommandParams,
   SandboxBackendHandle,
-} from "./backend.js";
+  SandboxBackendManager,
+} from "./backend.types.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   dockerContainerState,
@@ -46,7 +46,7 @@ export async function createDockerSandboxBackend(
   });
 }
 
-export function createDockerSandboxBackendHandle(params: {
+function createDockerSandboxBackendHandle(params: {
   containerName: string;
   workdir: string;
   env?: Record<string, string>;
