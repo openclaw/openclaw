@@ -105,6 +105,76 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("strips internal execution trace lines at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "📊 Session Status: current",
+            "🛠️ Exec: run git status",
+            "📖 Read: lines 1-40 from secret.md",
+            "Visible reply.",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Visible reply." }],
+      }),
+    );
+  });
+
+  it("drops pure internal trace text while preserving media-only delivery", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "commentary: calling tool\nanalysis: inspect private state",
+          mediaUrl: "https://example.com/result.png",
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ mediaUrl: "https://example.com/result.png", text: undefined }],
+      }),
+    );
+  });
+
+  it("does not strip ordinary code-fenced examples of tool-call labels", async () => {
+    const text = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
+
+    await deliverDiscordReply({
+      replies: [{ text }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text }],
+      }),
+    );
+  });
+
   it("passes resolved Discord formatting options as explicit delivery options", async () => {
     const baseCfg = {
       channels: {
