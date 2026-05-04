@@ -32,6 +32,9 @@ export function resolvePluginSkillDirs(params: {
   });
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
+    publishPluginSkills([], {
+      pluginSkillsDir: params.pluginSkillsDir,
+    });
     return [];
   }
   const normalizedPlugins = normalizePluginsConfigWithResolver(
@@ -113,7 +116,7 @@ function resolveDefaultPluginSkillsDir(): string {
  * Otherwise child subdirectories that contain SKILL.md are expanded.
  */
 function collectSkillTargets(dir: string, targets: Map<string, string>): void {
-  if (fs.existsSync(path.join(dir, "SKILL.md"))) {
+  if (hasPublishableSkillFile({ skillDir: dir, rootDir: dir })) {
     const basename = path.basename(dir);
     const existing = targets.get(basename);
     if (existing) {
@@ -136,7 +139,7 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const childPath = path.join(dir, entry.name);
-    if (!fs.existsSync(path.join(childPath, "SKILL.md"))) continue;
+    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) continue;
     const basename = entry.name;
     const existing = targets.get(basename);
     if (existing) {
@@ -148,6 +151,25 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
     }
     targets.set(basename, childPath);
   }
+}
+
+function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }): boolean {
+  const skillMd = path.join(params.skillDir, "SKILL.md");
+  let skillMdStat: fs.Stats;
+  try {
+    skillMdStat = fs.lstatSync(skillMd);
+  } catch {
+    return false;
+  }
+  if (!skillMdStat.isFile() || skillMdStat.isSymbolicLink()) {
+    log.warn(`plugin skill SKILL.md is not a regular file: ${skillMd}`);
+    return false;
+  }
+  if (!isPathInsideWithRealpath(params.rootDir, skillMd, { requireRealpath: true })) {
+    log.warn(`plugin skill SKILL.md escapes declared skill root: ${skillMd}`);
+    return false;
+  }
+  return true;
 }
 
 /**

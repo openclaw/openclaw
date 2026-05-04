@@ -281,6 +281,31 @@ describe("resolvePluginSkillDirs", () => {
     expect(dirs).toEqual([]);
   });
 
+  it("cleans up generated plugin skill links when the plugin registry is empty", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const staleRoot = await tempDirs.make("stale-plugin-skills-");
+    const staleSkill = path.join(staleRoot, "stale-skill");
+    await fs.mkdir(staleSkill, { recursive: true });
+    fsSync.symlinkSync(staleSkill, path.join(pluginSkillsDir, "stale-skill"), "dir");
+
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    });
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir,
+      config: {} as OpenClawConfig,
+      pluginSkillsDir,
+    });
+
+    expect(dirs).toEqual([]);
+    await expect(fs.lstat(path.join(pluginSkillsDir, "stale-skill"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("resolves Claude bundle command roots through the normal plugin skill path", async () => {
     const workspaceDir = await tempDirs.make("openclaw-");
     const pluginRoot = await tempDirs.make("openclaw-claude-bundle-");
@@ -437,6 +462,29 @@ describe("publishPluginSkills", () => {
     // Broken symlink pointing to nonexistent target should be removed.
     expect(fsSync.existsSync(path.join(managedDir, "broken-skill"))).toBe(false);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "skips child skill directories whose SKILL.md symlinks outside the declared root",
+    async () => {
+      const skillParent = await tempDirs.make("plugin-skills-");
+      const managedDir = await tempDirs.make("managed-skills-");
+      const outsideDir = await tempDirs.make("outside-skill-file-");
+      const parentDir = path.join(skillParent, "skills");
+      const leakDir = path.join(parentDir, "leak");
+      await fs.mkdir(leakDir, { recursive: true });
+      await fs.writeFile(
+        path.join(outsideDir, "SKILL.md"),
+        "---\nname: leak\ndescription: Outside\n---\n",
+      );
+      await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(leakDir, "SKILL.md"));
+      const validDir = await writeSkillDir(parentDir, "valid");
+
+      publishPluginSkills([parentDir], { pluginSkillsDir: managedDir });
+
+      expect(fsSync.existsSync(path.join(managedDir, "leak"))).toBe(false);
+      expect(fsSync.readlinkSync(path.join(managedDir, "valid"))).toBe(validDir);
+    },
+  );
 
   it("does not create managed skills dir when skill dirs list is empty", async () => {
     const parent = await tempDirs.make("parent-");
