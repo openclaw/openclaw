@@ -65,6 +65,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
+const { SUBSYSTEM_STOP_TIMEOUT_MS } = await import("./shutdown-timeout.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
 
@@ -260,6 +261,61 @@ describe("createGatewayCloseHandler", () => {
 
     expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
     expect(stopChannel.mock.calls.map(([id]) => id)).toEqual(["telegram", "discord"]);
+  });
+
+  it("continues after a subsystem timeout and observes late rejections", async () => {
+    vi.useFakeTimers();
+    let rejectBonjour: ((err: Error) => void) | undefined;
+    const stopTaskRegistryMaintenance = vi.fn();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        bonjourStop: vi.fn(
+          () =>
+            new Promise<void>((_resolve, reject) => {
+              rejectBonjour = reject;
+            }),
+        ),
+        stopTaskRegistryMaintenance,
+      }),
+    );
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(SUBSYSTEM_STOP_TIMEOUT_MS);
+    const result = await closePromise;
+    rejectBonjour?.(new Error("late mdns failure"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(result.warnings).toContain("bonjour");
+    expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("bonjour: late mdns failure"),
+      ),
+    ).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("continues shutdown when agent harness disposal times out", async () => {
+    vi.useFakeTimers();
+    mocks.disposeAgentHarnesses.mockReturnValue(new Promise(() => undefined));
+    const stopTaskRegistryMaintenance = vi.fn();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ stopTaskRegistryMaintenance }),
+    );
+
+    const closePromise = close({ reason: "test shutdown" });
+    await vi.advanceTimersByTimeAsync(SUBSYSTEM_STOP_TIMEOUT_MS);
+    const result = await closePromise;
+
+    expect(result.warnings).toContain("agent-harnesses");
+    expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("agent-harnesses exceeded 5000ms during shutdown"),
+      ),
+    ).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
