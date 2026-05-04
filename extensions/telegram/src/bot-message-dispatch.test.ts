@@ -1096,6 +1096,131 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
+  it("falls back to per-agent reasoningDefault when session has no stored reasoning level", async () => {
+    loadSessionStore.mockReturnValue({});
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s-no-stored" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          list: [{ id: "default", reasoningDefault: "on" }],
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: false,
+        }),
+      }),
+    );
+  });
+
+  it("falls back to global agents.defaults.reasoningDefault when no per-agent default is set", async () => {
+    loadSessionStore.mockReturnValue({});
+    const reasoningDraftStream = createDraftStream(222);
+    createTelegramDraftStream.mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "Reasoning:\n_step_" });
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s-no-stored" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "stream" },
+        },
+      } as unknown as OpenClawConfig,
+      streamMode: "off",
+    });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Reasoning:\n_step_");
+  });
+
+  it("prefers per-agent reasoningDefault over global agents.defaults.reasoningDefault", async () => {
+    loadSessionStore.mockReturnValue({});
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s-no-stored" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "stream" },
+          list: [{ id: "default", reasoningDefault: "on" }],
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    // per-agent "on" wins over global "stream", which means block streaming, not draft streaming.
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: false,
+        }),
+      }),
+    );
+  });
+
+  it("session-stored reasoningLevel still wins over configured defaults", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Reasoning:\n_step_" }, { kind: "block" });
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      // Both configured defaults set, but stored "on" should still take precedence.
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "stream" },
+          list: [{ id: "default", reasoningDefault: "stream" }],
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          disableBlockStreaming: false,
+        }),
+      }),
+    );
+  });
+
   it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {
     let seenReasoningCallback: unknown;
     const answerDraftStream = createDraftStream(999);
