@@ -71,6 +71,9 @@ export type GoogleMeetChromeHealth = {
   realtimeReady?: boolean;
   audioInputActive?: boolean;
   audioOutputActive?: boolean;
+  audioOutputRouted?: boolean;
+  audioOutputDeviceLabel?: string;
+  audioOutputRouteError?: string;
   lastInputAt?: string;
   lastOutputAt?: string;
   lastSuppressedInputAt?: string;
@@ -100,6 +103,7 @@ export type GoogleMeetSession = {
   participantIdentity: string;
   realtime: {
     enabled: boolean;
+    strategy?: string;
     provider?: string;
     model?: string;
     toolPolicy: string;

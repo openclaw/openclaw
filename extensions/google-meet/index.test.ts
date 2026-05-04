@@ -371,6 +371,7 @@ describe("google-meet plugin", () => {
         postDtmfSpeechDelayMs: 5000,
       },
       realtime: {
+        strategy: "agent",
         provider: "openai",
         introMessage: "Say exactly: I'm here and listening.",
         toolPolicy: "safe-read-only",
@@ -2253,7 +2254,7 @@ describe("google-meet plugin", () => {
     );
   });
 
-  it("retries caption enable until the captions button is available", () => {
+  it("retries caption enable until the captions button is available", async () => {
     const makeButton = (label: string) => ({
       disabled: false,
       innerText: "",
@@ -2302,23 +2303,23 @@ describe("google-meet plugin", () => {
         captureCaptions: true,
         guestName: "OpenClaw Agent",
       })})`,
-    ).runInContext(context) as () => string;
+    ).runInContext(context) as () => string | Promise<string>;
 
-    const first = JSON.parse(inspect()) as { captionsEnabledAttempted?: boolean };
+    const first = JSON.parse(await inspect()) as { captionsEnabledAttempted?: boolean };
     const stateAfterFirst = windowState.__openclawMeetCaptions as { enabledAttempted?: boolean };
     expect(first.captionsEnabledAttempted).toBe(false);
     expect(stateAfterFirst.enabledAttempted).toBe(false);
     expect(captionButton.click).not.toHaveBeenCalled();
 
     page.buttons = [leaveButton, captionButton];
-    const second = JSON.parse(inspect()) as { captionsEnabledAttempted?: boolean };
+    const second = JSON.parse(await inspect()) as { captionsEnabledAttempted?: boolean };
     const stateAfterSecond = windowState.__openclawMeetCaptions as { enabledAttempted?: boolean };
     expect(second.captionsEnabledAttempted).toBe(true);
     expect(stateAfterSecond.enabledAttempted).toBe(true);
     expect(captionButton.click).toHaveBeenCalledTimes(1);
   });
 
-  it("reports in-call Meet audio permission problems from button labels", () => {
+  it("reports in-call Meet audio permission problems from button labels", async () => {
     const makeButton = (label: string) => ({
       disabled: false,
       innerText: "",
@@ -2361,9 +2362,9 @@ describe("google-meet plugin", () => {
         captureCaptions: false,
         guestName: "OpenClaw Agent",
       })})`,
-    ).runInContext(context) as () => string;
+    ).runInContext(context) as () => string | Promise<string>;
 
-    const result = JSON.parse(inspect()) as {
+    const result = JSON.parse(await inspect()) as {
       inCall?: boolean;
       manualActionRequired?: boolean;
       manualActionReason?: string;
@@ -2376,7 +2377,7 @@ describe("google-meet plugin", () => {
     expect(result.manualActionMessage).toContain("Allow microphone/camera/speaker permissions");
   });
 
-  it("uses the local Meet microphone control instead of remote participant mute buttons", () => {
+  it("uses the local Meet microphone control instead of remote participant mute buttons", async () => {
     const makeButton = (label: string, disabled = false) => ({
       disabled,
       innerText: "",
@@ -2416,9 +2417,9 @@ describe("google-meet plugin", () => {
         captureCaptions: false,
         guestName: "OpenClaw Agent",
       })})`,
-    ).runInContext(context) as () => string;
+    ).runInContext(context) as () => string | Promise<string>;
 
-    const result = JSON.parse(inspect()) as { micMuted?: boolean; notes?: string[] };
+    const result = JSON.parse(await inspect()) as { micMuted?: boolean; notes?: string[] };
 
     expect(result.micMuted).toBe(true);
     expect(localMic.click).toHaveBeenCalledTimes(1);
@@ -3526,7 +3527,7 @@ describe("google-meet plugin", () => {
 
     const handle = await startCommandRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
-        realtime: { provider: "openai", model: "gpt-realtime", agentId: "jay" },
+        realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime", agentId: "jay" },
       }),
       fullConfig: {} as never,
       runtime: runtime as never,
@@ -3579,6 +3580,7 @@ describe("google-meet plugin", () => {
     expect(outputProcess.kill).toHaveBeenCalledWith("SIGKILL");
     expect(replacementOutputStdinWrites).toEqual([Buffer.from([6, 7])]);
     outputProcess.emit("error", new Error("stale output process failed after clear"));
+    outputStdin.emit("error", new Error("stale output pipe closed after clear"));
     expect(bridge.close).not.toHaveBeenCalled();
     expect(bridge.acknowledgeMark).toHaveBeenCalled();
     expect(bridge.triggerGreeting).not.toHaveBeenCalled();
@@ -3616,6 +3618,7 @@ describe("google-meet plugin", () => {
         sampleRateHz: 24000,
         channels: 1,
       },
+      autoRespondToAudio: true,
       tools: [
         expect.objectContaining({
           name: "openclaw_agent_consult",
@@ -3635,18 +3638,132 @@ describe("google-meet plugin", () => {
       expect.objectContaining({
         messageProvider: "google-meet",
         agentId: "jay",
-        sessionKey: "agent:jay:google-meet:meet-1",
-        sandboxSessionKey: "agent:jay:google-meet:meet-1",
+        spawnedBy: "agent:jay:main",
+        sessionKey: "agent:jay:subagent:google-meet:meet-1",
+        sandboxSessionKey: "agent:jay:subagent:google-meet:meet-1",
         thinkLevel: "high",
         toolsAllow: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
       }),
     );
-    expect(sessionStore).toHaveProperty("agent:jay:google-meet:meet-1");
+    expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
 
     await handle.stop();
     expect(bridge.close).toHaveBeenCalled();
     expect(inputProcess.kill).toHaveBeenCalledWith("SIGTERM");
     expect(replacementOutputProcess.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("defaults Chrome command-pair realtime to agent-driven talk-back", async () => {
+    let callbacks: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const sendUserMessage = vi.fn();
+    const bridge = {
+      connect: vi.fn(async () => {}),
+      sendAudio: vi.fn(),
+      sendUserMessage,
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      triggerGreeting: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      autoSelectOrder: 1,
+      resolveConfig: ({ rawConfig }) => rawConfig,
+      isConfigured: () => true,
+      createBridge: (req) => {
+        callbacks = req;
+        return bridge;
+      },
+    };
+    const inputStdout = new PassThrough();
+    const makeProcess = (stdio: {
+      stdin?: { write(chunk: unknown): unknown } | null;
+      stdout?: { on(event: "data", listener: (chunk: unknown) => void): unknown } | null;
+    }): TestBridgeProcess => {
+      const proc = new EventEmitter() as unknown as TestBridgeProcess;
+      proc.stdin = stdio.stdin;
+      proc.stdout = stdio.stdout;
+      proc.stderr = new PassThrough();
+      proc.killed = false;
+      proc.kill = vi.fn(() => {
+        proc.killed = true;
+        return true;
+      });
+      return proc;
+    };
+    const outputProcess = makeProcess({
+      stdin: new Writable({
+        write(_chunk, _encoding, done) {
+          done();
+        },
+      }),
+      stdout: null,
+    });
+    const inputProcess = makeProcess({ stdout: inputStdout, stdin: null });
+    const spawnMock = vi.fn().mockReturnValueOnce(outputProcess).mockReturnValueOnce(inputProcess);
+    const sessionStore: Record<string, unknown> = {};
+    const runtime = {
+      agent: {
+        resolveAgentDir: vi.fn(() => "/tmp/agent"),
+        resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+        ensureAgentWorkspace: vi.fn(async () => {}),
+        session: {
+          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+          loadSessionStore: vi.fn(() => sessionStore),
+          saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
+          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+        },
+        runEmbeddedPiAgent: vi.fn(async () => ({
+          payloads: [{ text: "The launch is still on track." }],
+          meta: {},
+        })),
+        resolveAgentTimeoutMs: vi.fn(() => 1000),
+      },
+    };
+
+    const handle = await startCommandRealtimeAudioBridge({
+      config: resolveGoogleMeetConfig({ realtime: { provider: "openai", agentId: "jay" } }),
+      fullConfig: {} as never,
+      runtime: runtime as never,
+      meetingSessionId: "meet-1",
+      inputCommand: ["capture-meet"],
+      outputCommand: ["play-meet"],
+      logger: noopLogger,
+      providers: [provider],
+      spawn: spawnMock,
+    });
+
+    expect(callbacks).toMatchObject({
+      autoRespondToAudio: false,
+      tools: [],
+    });
+    callbacks?.onTranscript?.("user", "Are we still on track?", true);
+    callbacks?.onTranscript?.("user", "Please include launch blockers.", true);
+
+    await vi.waitFor(() => {
+      expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+      expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "jay",
+          spawnedBy: "agent:jay:main",
+          sessionKey: "agent:jay:subagent:google-meet:meet-1",
+          sandboxSessionKey: "agent:jay:subagent:google-meet:meet-1",
+        }),
+      );
+    });
+    expect(JSON.stringify(runtime.agent.runEmbeddedPiAgent.mock.calls[0]?.[0])).toContain(
+      "Are we still on track?\\nPlease include launch blockers.",
+    );
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining(JSON.stringify("The launch is still on track.")),
+    );
+    expect(sessionStore).toHaveProperty("agent:jay:subagent:google-meet:meet-1");
+
+    await handle.stop();
   });
 
   it("uses a local barge-in input command to clear active Chrome playback", async () => {
@@ -3818,7 +3935,7 @@ describe("google-meet plugin", () => {
 
     const handle = await startNodeRealtimeAudioBridge({
       config: resolveGoogleMeetConfig({
-        realtime: { provider: "openai", model: "gpt-realtime" },
+        realtime: { strategy: "bidi", provider: "openai", model: "gpt-realtime" },
       }),
       fullConfig: {} as never,
       runtime: runtime as never,
@@ -3901,6 +4018,7 @@ describe("google-meet plugin", () => {
         sampleRateHz: 24000,
         channels: 1,
       },
+      autoRespondToAudio: true,
       tools: [
         expect.objectContaining({
           name: "openclaw_agent_consult",

@@ -217,6 +217,9 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     lastCaptionSpeaker?: string;
     lastCaptionText?: string;
     recentTranscript?: GoogleMeetChromeHealth["recentTranscript"];
+    audioOutputRouted?: boolean;
+    audioOutputDeviceLabel?: string;
+    audioOutputRouteError?: string;
     manualActionRequired?: boolean;
     manualActionReason?: GoogleMeetChromeHealth["manualActionReason"];
     manualActionMessage?: string;
@@ -236,6 +239,9 @@ function parseMeetBrowserStatus(result: unknown): GoogleMeetChromeHealth | undef
     lastCaptionSpeaker: parsed.lastCaptionSpeaker,
     lastCaptionText: parsed.lastCaptionText,
     recentTranscript: parsed.recentTranscript,
+    audioOutputRouted: parsed.audioOutputRouted,
+    audioOutputDeviceLabel: parsed.audioOutputDeviceLabel,
+    audioOutputRouteError: parsed.audioOutputRouteError,
     manualActionRequired: parsed.manualActionRequired,
     manualActionReason: parsed.manualActionReason,
     manualActionMessage: parsed.manualActionMessage,
@@ -329,7 +335,7 @@ function meetStatusScript(params: {
   guestName: string;
   readOnly?: boolean;
 }) {
-  return `() => {
+  return `async () => {
   const text = (node) => (node?.innerText || node?.textContent || "").trim();
   const allowMicrophone = ${JSON.stringify(params.allowMicrophone)};
   const captureCaptions = ${JSON.stringify(params.captureCaptions)};
@@ -345,6 +351,9 @@ function meetStatusScript(params: {
       .join(" ");
   const buttonLabels = buttons.map(buttonLabel).filter(Boolean);
   const notes = [];
+  let audioOutputRouted;
+  let audioOutputDeviceLabel;
+  let audioOutputRouteError;
   const findButton = (pattern) =>
     buttons.find((button) => {
       const label = buttonLabel(button);
@@ -398,6 +407,55 @@ function meetStatusScript(params: {
     notes.push("Skipped Meet microphone prompt for observe-only mode.");
   }
   const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  const routeMeetAudioOutput = async () => {
+    if (
+      !allowMicrophone ||
+      typeof navigator === 'undefined' ||
+      !navigator.mediaDevices?.enumerateDevices
+    ) return;
+    const mediaElements = [...document.querySelectorAll('audio, video')]
+      .filter((el) => typeof el.setSinkId === 'function');
+    if (mediaElements.length === 0) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const output = devices.find((device) =>
+        device.kind === 'audiooutput' && /\\bBlackHole\\s+2ch\\b/i.test(device.label || '')
+      ) || devices.find((device) =>
+        device.kind === 'audiooutput' && /\\bBlackHole\\b/i.test(device.label || '')
+      );
+      if (!output?.deviceId) {
+        if (devices.some((device) => device.kind === 'audiooutput')) {
+          notes.push("BlackHole 2ch speaker output was not visible to Meet.");
+        }
+        return;
+      }
+      let routed = 0;
+      for (const element of mediaElements) {
+        if (element.sinkId !== output.deviceId) {
+          if (readOnly) {
+            continue;
+          }
+          await element.setSinkId(output.deviceId);
+          routed += 1;
+        }
+      }
+      audioOutputRouted = mediaElements.some((element) => element.sinkId === output.deviceId);
+      audioOutputDeviceLabel = output.label || "BlackHole 2ch";
+      if (!readOnly && audioOutputRouted) {
+        notes.push(
+          routed > 0
+            ? \`Routed Meet media output to \${audioOutputDeviceLabel}.\`
+            : \`Meet media output already routed to \${audioOutputDeviceLabel}.\`
+        );
+      }
+    } catch (error) {
+      audioOutputRouteError = error?.message || String(error);
+      notes.push(\`Could not route Meet speaker output to BlackHole 2ch: \${audioOutputRouteError}\`);
+    }
+  };
+  if (inCall) {
+    await routeMeetAudioOutput();
+  }
   let captioning = false;
   let captionsEnabledAttempted = false;
   let transcriptLines = 0;
@@ -520,6 +578,9 @@ function meetStatusScript(params: {
     lastCaptionSpeaker,
     lastCaptionText,
     recentTranscript,
+    audioOutputRouted,
+    audioOutputDeviceLabel,
+    audioOutputRouteError,
     manualActionRequired: Boolean(manualActionReason),
     manualActionReason,
     manualActionMessage,

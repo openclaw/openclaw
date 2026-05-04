@@ -150,6 +150,10 @@ const googleMeetConfigSchema = {
       advanced: true,
     },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },
+    "realtime.strategy": {
+      label: "Realtime Strategy",
+      help: "Agent routes participant speech through OpenClaw before speaking; bidi lets the realtime model answer directly.",
+    },
     "realtime.provider": {
       label: "Realtime Provider",
       help: "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set.",

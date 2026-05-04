@@ -143,6 +143,10 @@
       "label": "Voice Call Intro Message",
       "advanced": true
     },
+    "realtime.strategy": {
+      "label": "Realtime Strategy",
+      "help": "Agent routes participant speech through OpenClaw before speaking; bidi lets the realtime model answer directly."
+    },
     "realtime.provider": {
       "label": "Realtime Provider",
       "help": "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set."
@@ -404,6 +408,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": ["agent", "bidi"],
+            "default": "agent"
+          },
           "provider": {
             "type": "string",
             "default": "openai"
@@ -413,7 +422,7 @@
           },
           "instructions": {
             "type": "string",
-            "default": "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering."
+            "default": "You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent strategy, wait for OpenClaw consult results and speak them exactly. In bidi strategy, answer directly and call openclaw_agent_consult for deeper reasoning, current information, or tools."
           },
           "introMessage": {
             "type": "string",

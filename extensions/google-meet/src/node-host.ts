@@ -124,6 +124,11 @@ function attachOutputProcessHandlers(session: NodeBridgeSession, outputProcess: 
       stopSession(session);
     }
   });
+  outputProcess.stdin?.on?.("error", () => {
+    if (session.output === outputProcess) {
+      stopSession(session);
+    }
+  });
 }
 
 function startOutputProcess(command: { command: string; args: string[] }) {
@@ -241,7 +246,12 @@ function pushAudio(params: Record<string, unknown>) {
   const audio = Buffer.from(base64, "base64");
   session.lastOutputAt = new Date().toISOString();
   session.lastOutputBytes += audio.byteLength;
-  session.output?.stdin?.write(audio);
+  try {
+    session.output?.stdin?.write(audio);
+  } catch {
+    stopSession(session);
+    throw new Error(`bridge is not open: ${bridgeId}`);
+  }
   return { bridgeId, ok: true };
 }
 

@@ -190,7 +190,7 @@ then share the returned `meetingUri`.
 ```
 
 For an observe-only/browser-control join, set `"mode": "transcribe"`. That does
-not start the duplex realtime model bridge, does not require BlackHole or SoX,
+not start the duplex realtime voice bridge, does not require BlackHole or SoX,
 and will not talk back into the meeting. Chrome joins in this mode also avoid
 OpenClaw's microphone/camera permission grant and avoid the Meet **Use
 microphone** path. If Meet shows an audio-choice interstitial, automation tries
@@ -1027,6 +1027,12 @@ Defaults:
   interruption on `chrome.bargeInInputCommand`
 - `chrome.bargeInCooldownMs: 900`: minimum delay between repeated human
   interruption clears
+- `realtime.strategy: "agent"`: default. Participant speech is transcribed,
+  sent to the configured OpenClaw agent in a per-meeting sub-agent session, and
+  the returned answer is spoken back through the realtime provider.
+- `realtime.strategy: "bidi"`: direct bidirectional realtime model mode. The
+  realtime provider answers participant speech directly and may call
+  `openclaw_agent_consult` for deeper/tool-backed answers.
 - `realtime.provider: "openai"`
 - `realtime.toolPolicy: "safe-read-only"`
 - `realtime.instructions`: brief spoken replies, with
@@ -1072,6 +1078,7 @@ Optional overrides:
     node: "parallels-macos",
   },
   realtime: {
+    strategy: "agent",
     provider: "google",
     agentId: "jay",
     toolPolicy: "owner",
@@ -1124,7 +1131,10 @@ Agents can use the `google_meet` tool:
 Use `transport: "chrome"` when Chrome runs on the Gateway host. Use
 `transport: "chrome-node"` when Chrome runs on a paired node such as a Parallels
 VM. In both cases the realtime model and `openclaw_agent_consult` run on the
-Gateway host, so model credentials stay there.
+Gateway host, so model credentials stay there. With the default
+`realtime.strategy: "agent"`, the realtime provider handles audio and
+transcription while the configured OpenClaw agent produces the spoken answer.
+With `realtime.strategy: "bidi"`, the realtime model answers directly.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent
@@ -1149,6 +1159,8 @@ a session ended.
   not send the intro/test phrase into the audio bridge.
 - `providerConnected` / `realtimeReady`: realtime voice bridge state
 - `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
+- `audioOutputRouted` / `audioOutputDeviceLabel`: whether the Meet tab's media
+  output was actively routed to the BlackHole device used by the bridge
 - `lastSuppressedInputAt` / `suppressedInputBytes`: loopback input ignored while
   assistant playback is active
 
@@ -1164,8 +1176,20 @@ a session ended.
 
 Chrome realtime mode is optimized for a live voice loop. The realtime voice
 provider hears the meeting audio and speaks through the configured audio bridge.
-When the realtime model needs deeper reasoning, current information, or normal
-OpenClaw tools, it can call `openclaw_agent_consult`.
+The default `realtime.strategy: "agent"` uses the realtime provider for audio
+I/O and transcription, but routes final participant transcripts through the
+configured OpenClaw agent before speaking. Set `realtime.strategy: "bidi"` when
+you want the realtime model to answer directly.
+Nearby final transcript fragments are coalesced before the consult so one spoken
+turn does not produce several stale partial answers.
+
+| Strategy | Who decides the answer        | Context behavior                                                                     | Use when                                              |
+| -------- | ----------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------------------------- |
+| `agent`  | The configured OpenClaw agent | Per-meeting sub-agent session plus normal agent policy, tools, workspace, and memory | You want "my agent is in the meeting" behavior        |
+| `bidi`   | The realtime voice model      | Realtime session context, with optional `openclaw_agent_consult` calls               | You want the lowest-latency conversational voice loop |
+
+In `bidi` strategy, when the realtime model needs deeper reasoning, current
+information, or normal OpenClaw tools, it can call `openclaw_agent_consult`.
 
 The consult tool runs the regular OpenClaw agent behind the scenes with recent
 meeting transcript context and returns a concise spoken answer to the realtime
@@ -1175,6 +1199,10 @@ It uses the same shared realtime consult tool as Voice Call.
 By default, consults run against the `main` agent. Set `realtime.agentId` when a
 Meet lane should consult a dedicated OpenClaw agent workspace, model defaults,
 tool policy, memory, and session history.
+
+Agent strategy consults use a per-meeting `agent:<id>:subagent:google-meet:<session>`
+session key so follow-up questions keep meeting context while inheriting normal
+agent policy from the configured agent.
 
 `realtime.toolPolicy` controls the consult run:
 
@@ -1414,7 +1442,8 @@ Also verify:
 - `BlackHole 2ch` is visible on the Chrome host.
 - `sox` exists on the Chrome host.
 - Meet microphone and speaker are routed through the virtual audio path used by
-  OpenClaw.
+  OpenClaw. `doctor` should show `meet output routed: yes` for local Chrome
+  realtime joins.
 
 `googlemeet doctor [session-id]` prints the session, node, in-call state,
 manual action reason, realtime provider connection, `realtimeReady`, audio
@@ -1578,7 +1607,7 @@ phone dial-in participation.
 Chrome realtime mode needs `BlackHole 2ch` plus either:
 
 - `chrome.audioInputCommand` plus `chrome.audioOutputCommand`: OpenClaw owns the
-  realtime model bridge and pipes audio in `chrome.audioFormat` between those
+  realtime voice bridge and pipes audio in `chrome.audioFormat` between those
   commands and the selected realtime voice provider. The default Chrome path is
   24 kHz PCM16; 8 kHz G.711 mu-law remains available for legacy command pairs.
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local

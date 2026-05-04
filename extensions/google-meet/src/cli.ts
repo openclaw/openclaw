@@ -353,6 +353,9 @@ function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"
       "provider: %s",
       session.chrome?.audioBridge?.provider ?? session.realtime.provider ?? "n/a",
     );
+    if (session.realtime.enabled) {
+      writeStdoutLine("realtime strategy: %s", session.realtime.strategy ?? "agent");
+    }
     writeStdoutLine("in call: %s", formatBoolean(health?.inCall));
     writeStdoutLine("lobby waiting: %s", formatBoolean(health?.lobbyWaiting));
     writeStdoutLine("captioning: %s", formatBoolean(health?.captioning));
@@ -372,6 +375,11 @@ function writeDoctorStatus(status: Awaited<ReturnType<GoogleMeetRuntime["status"
     writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
     writeStdoutLine("audio input active: %s", formatBoolean(health?.audioInputActive));
     writeStdoutLine("audio output active: %s", formatBoolean(health?.audioOutputActive));
+    writeStdoutLine("meet output routed: %s", formatBoolean(health?.audioOutputRouted));
+    if (health?.audioOutputDeviceLabel || health?.audioOutputRouteError) {
+      writeStdoutLine("meet output device: %s", formatOptional(health.audioOutputDeviceLabel));
+      writeStdoutLine("meet output route error: %s", formatOptional(health.audioOutputRouteError));
+    }
     writeStdoutLine(
       "last input: %s (%s bytes)",
       formatOptional(health?.lastInputAt),

@@ -392,6 +392,7 @@ export class GoogleMeetRuntime {
             : "signed-in Google Chrome profile",
       realtime: {
         enabled: mode === "realtime",
+        strategy: this.params.config.realtime.strategy,
         provider: this.params.config.realtime.provider,
         model: this.params.config.realtime.model,
         toolPolicy: this.params.config.realtime.toolPolicy,

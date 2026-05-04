@@ -99,10 +99,15 @@ export type GoogleMeetRealtimeEventEntry = RealtimeVoiceBridgeEvent & {
   at: string;
 };
 
+export const GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS = 900;
+
 export function recordGoogleMeetRealtimeEvent(
   events: GoogleMeetRealtimeEventEntry[],
   event: RealtimeVoiceBridgeEvent,
 ) {
+  if (event.direction === "client" && event.type === "input_audio_buffer.append") {
+    return;
+  }
   events.push({ at: new Date().toISOString(), ...event });
   if (events.length > 40) {
     events.splice(0, events.length - 40);
@@ -173,6 +178,13 @@ export function resolveGoogleMeetRealtimeProvider(params: {
   });
 }
 
+export function buildGoogleMeetSpeakExactUserMessage(text: string): string {
+  return [
+    "Speak this exact OpenClaw answer to the meeting, without adding, removing, or rephrasing words.",
+    `Answer: ${JSON.stringify(text)}`,
+  ].join("\n");
+}
+
 export async function startCommandRealtimeAudioBridge(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
@@ -212,6 +224,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   let lastOutputAtMs = 0;
   let lastOutputPlayableUntilMs = 0;
   let bargeInInputProcess: BridgeProcess | undefined;
+  let agentConsultDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
   const suppressInputForOutput = (audio: Buffer) => {
     const bytesPerMs = params.config.chrome.audioFormat === "g711-ulaw-8khz" ? 8 : 48;
@@ -254,6 +267,10 @@ export async function startCommandRealtimeAudioBridge(params: {
       return;
     }
     stopped = true;
+    if (agentConsultDebounceTimer) {
+      clearTimeout(agentConsultDebounceTimer);
+      agentConsultDebounceTimer = undefined;
+    }
     try {
       bridge?.close();
     } catch (error) {
@@ -274,6 +291,12 @@ export async function startCommandRealtimeAudioBridge(params: {
   };
   const attachOutputProcessHandlers = (proc: BridgeProcess) => {
     proc.on("error", (error) => {
+      if (proc !== outputProcess) {
+        return;
+      }
+      fail("audio output command")(error);
+    });
+    proc.stdin?.on?.("error", (error: Error) => {
       if (proc !== outputProcess) {
         return;
       }
@@ -309,6 +332,13 @@ export async function startCommandRealtimeAudioBridge(params: {
       `[google-meet] cleared realtime audio output buffer by restarting playback command`,
     );
     terminateProcess(previousOutput, "SIGKILL");
+  };
+  const writeOutputAudio = (audio: Buffer) => {
+    try {
+      outputProcess.stdin?.write(audio);
+    } catch (error) {
+      fail("audio output command")(error as Error);
+    }
   };
   const startHumanBargeInMonitor = () => {
     const commandArgv = params.config.chrome.bargeInInputCommand;
@@ -384,17 +414,97 @@ export async function startCommandRealtimeAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
+  const strategy = params.config.realtime.strategy;
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
+  let agentConsultActive = false;
+  let pendingAgentQuestion: string | undefined;
+  const enqueueAgentConsultForUserTranscript = (question: string): void => {
+    const trimmed = question.trim();
+    if (!trimmed || stopped) {
+      return;
+    }
+    pendingAgentQuestion = pendingAgentQuestion ? `${pendingAgentQuestion}\n${trimmed}` : trimmed;
+    if (agentConsultDebounceTimer) {
+      clearTimeout(agentConsultDebounceTimer);
+    }
+    agentConsultDebounceTimer = setTimeout(() => {
+      agentConsultDebounceTimer = undefined;
+      const queuedQuestion = pendingAgentQuestion;
+      pendingAgentQuestion = undefined;
+      if (queuedQuestion && !stopped) {
+        void runAgentConsultForUserTranscript(queuedQuestion);
+      }
+    }, GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
+    agentConsultDebounceTimer.unref?.();
+  };
+  const runAgentConsultForUserTranscript = async (question: string): Promise<void> => {
+    const trimmed = question.trim();
+    if (!trimmed || stopped) {
+      return;
+    }
+    if (agentConsultActive) {
+      pendingAgentQuestion = trimmed;
+      return;
+    }
+    agentConsultActive = true;
+    let nextQuestion: string | undefined = trimmed;
+    try {
+      while (nextQuestion) {
+        if (stopped) {
+          return;
+        }
+        const currentQuestion = nextQuestion;
+        pendingAgentQuestion = undefined;
+        params.logger.info(`[google-meet] realtime agent consult: ${currentQuestion}`);
+        const result = await consultOpenClawAgentForGoogleMeet({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          logger: params.logger,
+          meetingSessionId: params.meetingSessionId,
+          args: {
+            question: currentQuestion,
+            responseStyle: "Brief, natural spoken answer for a live meeting.",
+          },
+          transcript,
+        });
+        if (!stopped && result.text.trim()) {
+          bridge?.sendUserMessage(buildGoogleMeetSpeakExactUserMessage(result.text.trim()));
+        }
+        nextQuestion = pendingAgentQuestion;
+      }
+    } catch (error) {
+      params.logger.warn(
+        `[google-meet] realtime agent consult failed: ${formatErrorMessage(error)}`,
+      );
+      if (!stopped) {
+        bridge?.sendUserMessage(
+          buildGoogleMeetSpeakExactUserMessage(
+            "I hit an error while checking that. Please try again.",
+          ),
+        );
+      }
+    } finally {
+      agentConsultActive = false;
+      const queuedQuestion = pendingAgentQuestion;
+      pendingAgentQuestion = undefined;
+      if (queuedQuestion && !stopped) {
+        void runAgentConsultForUserTranscript(queuedQuestion);
+      }
+    }
+  };
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
     providerConfig: resolved.providerConfig,
     audioFormat: resolveGoogleMeetRealtimeAudioFormat(params.config),
     instructions: params.config.realtime.instructions,
     initialGreetingInstructions: params.config.realtime.introMessage,
+    autoRespondToAudio: strategy === "bidi",
     triggerGreetingOnReady: false,
     markStrategy: "ack-immediately",
-    tools: resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy),
+    tools:
+      strategy === "bidi" ? resolveGoogleMeetRealtimeTools(params.config.realtime.toolPolicy) : [],
     audioSink: {
       isOpen: () => !stopped,
       sendAudio: (audio) => {
@@ -402,7 +512,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         lastOutputAt = new Date().toISOString();
         lastOutputBytes += audio.byteLength;
         suppressInputForOutput(audio);
-        outputProcess.stdin?.write(audio);
+        writeOutputAudio(audio);
       },
       clearAudio: clearOutputPlayback,
     },
@@ -410,16 +520,32 @@ export async function startCommandRealtimeAudioBridge(params: {
       if (isFinal) {
         recordGoogleMeetRealtimeTranscript(transcript, role, text);
         params.logger.info(`[google-meet] realtime ${role}: ${text}`);
+        if (role === "user" && strategy === "agent") {
+          enqueueAgentConsultForUserTranscript(text);
+        }
       }
     },
     onEvent: (event) => {
       recordGoogleMeetRealtimeEvent(realtimeEvents, event);
-      if (event.type === "error" || event.type === "response.done") {
+      if (
+        event.type === "error" ||
+        event.type === "response.done" ||
+        event.type === "input_audio_buffer.speech_started" ||
+        event.type === "input_audio_buffer.speech_stopped" ||
+        event.type === "conversation.item.input_audio_transcription.completed" ||
+        event.type === "conversation.item.input_audio_transcription.failed"
+      ) {
         const detail = event.detail ? ` ${event.detail}` : "";
         params.logger.info(`[google-meet] realtime ${event.direction}:${event.type}${detail}`);
       }
     },
     onToolCall: (event, session) => {
+      if (strategy !== "bidi") {
+        session.submitToolResult(event.callId || event.itemId, {
+          error: `Tool "${event.name}" is only available in bidi realtime strategy`,
+        });
+        return;
+      }
       if (event.name !== GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME) {
         session.submitToolResult(event.callId || event.itemId, {
           error: `Tool "${event.name}" not available`,
