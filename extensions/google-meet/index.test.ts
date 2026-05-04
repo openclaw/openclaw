@@ -94,6 +94,19 @@ function setup(
   return harness;
 }
 
+async function withProcessPlatform<T>(
+  platform: NodeJS.Platform,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", { value: platform });
+  try {
+    return await callback();
+  } finally {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  }
+}
+
 function jsonResponse(value: unknown): Response {
   return new Response(JSON.stringify(value), {
     status: 200,
@@ -1893,9 +1906,11 @@ describe("google-meet plugin", () => {
       | undefined;
     const respond = vi.fn();
 
-    await handler?.({
-      params: { url: "https://meet.google.com/abc-defg-hij" },
-      respond,
+    await withProcessPlatform("darwin", async () => {
+      await handler?.({
+        params: { url: "https://meet.google.com/abc-defg-hij" },
+        respond,
+      });
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -1982,9 +1997,11 @@ describe("google-meet plugin", () => {
       | undefined;
     const respond = vi.fn();
 
-    await handler?.({
-      params: { url: "https://meet.google.com/abc-defg-hij" },
-      respond,
+    await withProcessPlatform("darwin", async () => {
+      await handler?.({
+        params: { url: "https://meet.google.com/abc-defg-hij" },
+        respond,
+      });
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -2060,9 +2077,11 @@ describe("google-meet plugin", () => {
       | undefined;
     const respond = vi.fn();
 
-    await handler?.({
-      params: { url: "https://meet.google.com/abc-defg-hij" },
-      respond,
+    await withProcessPlatform("darwin", async () => {
+      await handler?.({
+        params: { url: "https://meet.google.com/abc-defg-hij" },
+        respond,
+      });
     });
 
     expect(respond.mock.calls[0]?.[0]).toBe(true);
@@ -2310,14 +2329,19 @@ describe("google-meet plugin", () => {
     ).runInContext(context) as () => string | Promise<string>;
 
     const first = JSON.parse(await inspect()) as { captionsEnabledAttempted?: boolean };
-    const stateAfterFirst = windowState.__openclawMeetCaptions as { enabledAttempted?: boolean };
+    const captionsStateKey = "__openclawMeetCaptions";
+    const stateAfterFirst = windowState[captionsStateKey] as {
+      enabledAttempted?: boolean;
+    };
     expect(first.captionsEnabledAttempted).toBe(false);
     expect(stateAfterFirst.enabledAttempted).toBe(false);
     expect(captionButton.click).not.toHaveBeenCalled();
 
     page.buttons = [leaveButton, captionButton];
     const second = JSON.parse(await inspect()) as { captionsEnabledAttempted?: boolean };
-    const stateAfterSecond = windowState.__openclawMeetCaptions as { enabledAttempted?: boolean };
+    const stateAfterSecond = windowState[captionsStateKey] as {
+      enabledAttempted?: boolean;
+    };
     expect(second.captionsEnabledAttempted).toBe(true);
     expect(stateAfterSecond.enabledAttempted).toBe(true);
     expect(captionButton.click).toHaveBeenCalledTimes(1);

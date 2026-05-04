@@ -4,6 +4,7 @@ import { MATRIX_QA_DRIVER_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./s
 import {
   advanceMatrixQaActorCursor,
   buildMatrixQaToken,
+  createMatrixQaDriverScenarioClient,
   createMatrixQaScenarioClient,
   primeMatrixQaDriverScenarioClient,
   type MatrixQaScenarioContext,
@@ -145,10 +146,7 @@ async function reactToApproval(params: {
   roomId: string;
   targetEventId: string;
 }) {
-  const client = createMatrixQaScenarioClient({
-    accessToken: params.context.driverAccessToken,
-    baseUrl: params.context.baseUrl,
-  });
+  const client = createMatrixQaDriverScenarioClient(params.context);
   const emoji =
     params.decision === "allow-once"
       ? MATRIX_QA_APPROVAL_ALLOW_ONCE_REACTION
