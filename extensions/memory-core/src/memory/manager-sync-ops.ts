@@ -81,6 +81,11 @@ const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
 const SESSION_DIRTY_DEBOUNCE_MS = 5000;
+// Throttle floor for watch-triggered reindex. Defaults to 60s so a busy
+// workspace (transcripts + heartbeat memory writes firing every few seconds)
+// runs at most one reindex per minute, preventing runaway tmp-db spawn.
+// Tunable via agents.defaults.memorySearch.sync.watchSyncMinIntervalMs.
+const DEFAULT_WATCH_SYNC_MIN_INTERVAL_MS = 60_000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
@@ -188,6 +193,18 @@ export abstract class MemoryManagerSyncOps {
   >();
   protected vectorDegradedWriteWarningShown = false;
   private lastMetaSerialized: string | null = null;
+
+  // Watch-triggered reindex throttle: avoid runaway reindex spawn when files
+  // in the watched memory/sessions dirs are written at high frequency (every
+  // chokidar event would otherwise schedule a new full sync, and each full
+  // sync spawns a tmp sqlite + runs the embedding pipeline). Empirically
+  // observed in long-running, high-traffic deployments: background session
+  // transcripts + heartbeat memory writes fire watcher events every few
+  // seconds, each triggering a reindex; without throttling this can stack
+  // multiple concurrent reindex attempts, produce orphan `.tmp-<uuid>` files,
+  // and eventually exhaust disk.
+  private lastWatchSyncAtMs = 0;
+  private pendingWatchSyncAfterThrottle = false;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
@@ -691,11 +708,40 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
+
+    // Throttle floor: do not run a watch-triggered sync more often than once
+    // per watchSyncMinIntervalMs. `dirty=true` is already set by markDirty(),
+    // so a skipped watch cycle is not lost -- the next scheduleWatchSync()
+    // call after the cooldown expires will still see dirty work and run
+    // a reindex then.
+    const minIntervalMs = DEFAULT_WATCH_SYNC_MIN_INTERVAL_MS;
+    const elapsedSinceLast = Date.now() - this.lastWatchSyncAtMs;
+    if (elapsedSinceLast < minIntervalMs) {
+      // Within throttle window: remember we owe a sync and arm a single
+      // timer for the remaining cooldown. Collapse multiple rapid calls
+      // into one pending follow-up.
+      if (this.pendingWatchSyncAfterThrottle) return;
+      this.pendingWatchSyncAfterThrottle = true;
+      const remainingMs = Math.max(0, minIntervalMs - elapsedSinceLast);
+      if (this.watchTimer) {
+        clearTimeout(this.watchTimer);
+      }
+      this.watchTimer = setTimeout(() => {
+        this.watchTimer = null;
+        this.pendingWatchSyncAfterThrottle = false;
+        this.lastWatchSyncAtMs = Date.now();
+        runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
+      }, remainingMs);
+      return;
+    }
+
+    // Outside throttle window: normal debounce coalescing for rapid bursts.
     if (this.watchTimer) {
       clearTimeout(this.watchTimer);
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
+      this.lastWatchSyncAtMs = Date.now();
       runDetachedMemorySync(() => this.sync({ reason: "watch" }), "watch");
     }, this.settings.sync.watchDebounceMs);
   }
