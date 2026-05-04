@@ -411,7 +411,10 @@ function scrubAuthStoresForProviderTargets(params: {
           delete profile.profile[profile.valueField];
           mutated = true;
         }
-        if (profile.refField in profile.profile) {
+        // Preserve refField when it holds a SecretRef object — the auth
+        // profile is the canonical credential source and takes precedence
+        // over models.providers.<X>.apiKey (see REF_SHADOWED audit note).
+        if (profile.refField in profile.profile && !isRecord(profile.refValue)) {
           delete profile.profile[profile.refField];
           mutated = true;
         }

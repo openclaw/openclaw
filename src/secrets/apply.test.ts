@@ -303,6 +303,50 @@ describe("secrets apply", () => {
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
+  it("preserves auth-profile keyRef when it holds a SecretRef object (#77300)", async () => {
+    const secretRef = { source: "file", provider: "local_keys", id: "/OPENAI_API_KEY" };
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: secretRef,
+        },
+      },
+    });
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            ...createOpenAiProviderConfig(),
+            apiKey: "secretref-managed",
+          },
+        },
+      },
+    });
+
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    const applied = await runSecretsApply({ plan, env: fixture.env, write: true });
+    expect(applied.mode).toBe("write");
+
+    const nextAuthStore = JSON.parse(await fs.readFile(fixture.authStorePath, "utf8")) as {
+      profiles: {
+        "openai:default": {
+          key?: string;
+          keyRef?: unknown;
+        };
+      };
+    };
+
+    expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
+    expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual(secretRef);
+  });
+
   it("skips exec SecretRef checks during dry-run unless explicitly allowed", async () => {
     if (process.platform === "win32") {
       return;
