@@ -497,6 +497,45 @@ describe("config plugin validation", () => {
     });
   });
 
+  it("points missing installable plugin entries at doctor repair", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          discord: { token: "xxx" },
+          whatsapp: {},
+        },
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+            whatsapp: { enabled: true },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).toContainEqual({
+      path: "plugins.entries.discord",
+      message:
+        "plugin not installed: discord (Discord; run openclaw doctor --fix or openclaw plugins install @openclaw/discord; config preserved)",
+    });
+    expect(res.warnings ?? []).toContainEqual({
+      path: "plugins.entries.whatsapp",
+      message:
+        "plugin not installed: whatsapp (WhatsApp; run openclaw doctor --fix or openclaw plugins install @openclaw/whatsapp; config preserved)",
+    });
+  });
+
   it("uses persisted installed-plugin records as stale channel evidence", async () => {
     const installedPluginIndexPath = path.join(suiteHome, ".openclaw", "plugins", "installs.json");
     await mkdirSafe(path.dirname(installedPluginIndexPath));
