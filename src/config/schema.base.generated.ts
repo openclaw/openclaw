@@ -18274,6 +18274,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 properties: {
                   enabled: {
                     type: "boolean",
+                    title: "Post-compaction Loop Guard",
                     description:
                       "Enable the post-compaction loop guard that aborts the run when the agent repeats the same (tool, args, result) triple windowSize times immediately after auto-compaction-retry (default: true).",
                   },
@@ -18281,6 +18282,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "integer",
                     exclusiveMinimum: 0,
                     maximum: 9007199254740991,
+                    title: "Post-compaction Loop Guard Window Size",
                     description:
                       "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
                   },
@@ -25647,6 +25649,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Global no-progress breaker threshold (default: 30).",
       tags: ["reliability", "tools"],
     },
+    "tools.loopDetection.postCompactionGuard.enabled": {
+      label: "Post-compaction Loop Guard",
+      help: "Enable the post-compaction loop guard that aborts the run when the agent repeats the same (tool, args, result) triple windowSize times immediately after auto-compaction-retry (default: true).",
+      tags: ["tools"],
+    },
+    "tools.loopDetection.postCompactionGuard.windowSize": {
+      label: "Post-compaction Loop Guard Window Size",
+      help: "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+      tags: ["tools"],
+    },
     "tools.loopDetection.detectors.genericRepeat": {
       label: "Tool-loop Generic Repeat Detection",
       help: "Enable generic repeated same-tool/same-params loop detection (default: true).",
@@ -29003,14 +29015,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Config",
       help: "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
       tags: ["advanced"],
-    },
-    "tools.loopDetection.postCompactionGuard.enabled": {
-      help: "Enable the post-compaction loop guard that aborts the run when the agent repeats the same (tool, args, result) triple windowSize times immediately after auto-compaction-retry (default: true).",
-      tags: ["tools"],
-    },
-    "tools.loopDetection.postCompactionGuard.windowSize": {
-      help: "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
-      tags: ["tools"],
     },
     "models.providers.*.headers.*": {
       sensitive: true,
