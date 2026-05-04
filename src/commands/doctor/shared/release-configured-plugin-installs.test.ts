@@ -281,11 +281,9 @@ describe("configured plugin install release step", () => {
     expect(result.completed).toBe(true);
   });
 
-  it("does not stamp config during update-time deferred install repair", async () => {
+  it("does not stamp config during update-time runtime install repair", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: [
-        'Deferred missing configured plugin "codex" install repair until post-update doctor.',
-      ],
+      changes: ['Installed missing configured plugin "codex".'],
       warnings: [],
     });
 
@@ -312,9 +310,7 @@ describe("configured plugin install release step", () => {
       }),
     );
     expect(result).toEqual({
-      changes: [
-        'Deferred missing configured plugin "codex" install repair until post-update doctor.',
-      ],
+      changes: ['Installed missing configured plugin "codex".'],
       warnings: [],
       completed: false,
       touchedConfig: false,
