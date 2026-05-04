@@ -911,19 +911,23 @@ describe("switchChatSession", () => {
 
 describe("dismissChatError", () => {
   it("clears persistent Talk error state", () => {
+    const stop = vi.fn();
     const state = {
       lastError: 'Realtime voice provider "openai" is not configured',
       lastErrorCode: "UNAVAILABLE",
-      realtimeTalkActive: false,
+      realtimeTalkActive: true,
+      realtimeTalkSession: { stop },
       realtimeTalkStatus: "error",
       realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
       realtimeTalkTranscript: "partial transcript",
-    } as AppViewState;
+    } as unknown as AppViewState & { realtimeTalkSession: { stop(): void } | null };
 
     dismissChatError(state);
 
     expect(state.lastError).toBeNull();
     expect(state.lastErrorCode).toBeNull();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkSession).toBeNull();
     expect(state.realtimeTalkActive).toBe(false);
     expect(state.realtimeTalkStatus).toBe("idle");
     expect(state.realtimeTalkDetail).toBeNull();

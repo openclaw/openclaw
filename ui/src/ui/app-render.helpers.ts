@@ -623,6 +623,11 @@ export function dismissChatError(state: AppViewState) {
   state.lastError = null;
   state.lastErrorCode = null;
   if (state.realtimeTalkStatus === "error") {
+    const talkHost = state as unknown as {
+      realtimeTalkSession?: { stop(): void } | null;
+    };
+    talkHost.realtimeTalkSession?.stop();
+    talkHost.realtimeTalkSession = null;
     state.realtimeTalkActive = false;
     state.realtimeTalkStatus = "idle";
     state.realtimeTalkDetail = null;
