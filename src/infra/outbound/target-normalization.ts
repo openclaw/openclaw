@@ -102,7 +102,22 @@ export function looksLikeTargetId(params: {
   if (params.raw.includes("@thread")) {
     return true;
   }
-  return /^(conversation|user):/i.test(params.raw);
+  if (/^(conversation|user):/i.test(params.raw)) {
+    return true;
+  }
+  // Fallback for channel-prefixed numeric targets (e.g. "telegram:-1003577364307",
+  // "telegram:-1003577364307:topic:1189") when the channel plugin is not in the active
+  // registry. Plugin normalizers handle these precisely when loaded; this covers agent
+  // contexts (subagents, cron, CLI runner) where the channel registry is not pinned.
+  const channelPrefix = `${normalizeOptionalLowercaseString(params.channel) ?? ""}:`;
+  const rawLower = params.raw.toLowerCase().trim();
+  if (channelPrefix.length > 1 && rawLower.startsWith(channelPrefix)) {
+    const body = params.raw.slice(channelPrefix.length);
+    if (/^-?\d+(:(topic:)?\d+)?$/.test(body)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export async function maybeResolvePluginMessagingTarget(params: {

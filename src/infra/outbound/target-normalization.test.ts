@@ -162,6 +162,24 @@ describe("looksLikeTargetId", () => {
       expect(looksLikeTargetId({ channel: "workspace", raw })).toBe(true);
     },
   );
+
+  it.each([
+    ["telegram:-1003577364307", "telegram"],
+    ["telegram:-1003577364307:topic:1189", "telegram"],
+    ["telegram:-1003577364307:1189", "telegram"],
+    ["telegram:1234567890", "telegram"],
+  ])(
+    "recognizes channel-prefixed numeric group/topic targets without plugin (%s on channel %s) (#77137)",
+    (raw, channel) => {
+      getChannelPluginMock.mockReturnValueOnce(undefined);
+      expect(looksLikeTargetId({ channel, raw })).toBe(true);
+    },
+  );
+
+  it("does not treat non-numeric channel-prefixed strings as id-like without plugin (#77137)", () => {
+    getChannelPluginMock.mockReturnValueOnce(undefined);
+    expect(looksLikeTargetId({ channel: "telegram", raw: "telegram:someusername" })).toBe(false);
+  });
 });
 
 describe("maybeResolvePluginMessagingTarget", () => {
