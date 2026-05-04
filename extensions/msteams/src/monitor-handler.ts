@@ -5,7 +5,11 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
-import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
+import {
+  extractMSTeamsConversationMessageId,
+  htmlToPlainText,
+  normalizeMSTeamsConversationId,
+} from "./inbound.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
@@ -50,6 +54,110 @@ function serializeAdaptiveCardActionValue(value: unknown): string | null {
   } catch {
     return null;
   }
+}
+
+function extractSigninMagicCode(activity: MSTeamsTurnContext["activity"]): string | undefined {
+  const rawText = typeof activity.text === "string" ? activity.text : "";
+  const text = htmlToPlainText(rawText).trim();
+  return /^\d{6}$/.test(text) ? text : undefined;
+}
+
+function resolveSigninUserCandidates(
+  activity: MSTeamsTurnContext["activity"],
+): Array<{ userId: string; channelId: string }> {
+  const channelId = activity.channelId ?? "msteams";
+  const seen = new Set<string>();
+  const users: Array<{ userId: string; channelId: string }> = [];
+  for (const rawUserId of [activity.from?.aadObjectId, activity.from?.id]) {
+    const userId = rawUserId?.trim();
+    if (!userId || seen.has(userId)) {
+      continue;
+    }
+    seen.add(userId);
+    users.push({ userId, channelId });
+  }
+  return users;
+}
+
+const SIGNIN_MAGIC_CODE_CHALLENGE_TTL_MS = 15 * 60 * 1000;
+
+function resolveSigninChallengeKeys(activity: MSTeamsTurnContext["activity"]): string[] {
+  const conversationId = activity.conversation?.id?.trim();
+  if (!conversationId) {
+    return [];
+  }
+  return resolveSigninUserCandidates(activity).map(
+    (user) => `${user.channelId}\n${conversationId}\n${user.userId}`,
+  );
+}
+
+function createSigninChallengeTracker(now: () => number = Date.now) {
+  type Challenge = { keys: Set<string>; expiresAt: number };
+  const challenges = new Map<string, Challenge>();
+
+  function prune(): void {
+    const timestamp = now();
+    for (const [key, challenge] of challenges) {
+      if (challenge.expiresAt <= timestamp) {
+        challenges.delete(key);
+      }
+    }
+  }
+
+  return {
+    record(activity: MSTeamsTurnContext["activity"]): void {
+      prune();
+      const keys = resolveSigninChallengeKeys(activity);
+      if (keys.length === 0) {
+        return;
+      }
+      const expiresAt = now() + SIGNIN_MAGIC_CODE_CHALLENGE_TTL_MS;
+      const groupedKeys = new Set(keys);
+      for (const key of keys) {
+        const existing = challenges.get(key);
+        if (!existing) {
+          continue;
+        }
+        for (const existingKey of existing.keys) {
+          groupedKeys.add(existingKey);
+        }
+      }
+      const challenge: Challenge = { keys: groupedKeys, expiresAt };
+      for (const key of groupedKeys) {
+        challenges.set(key, challenge);
+      }
+    },
+    has(activity: MSTeamsTurnContext["activity"]): boolean {
+      prune();
+      return resolveSigninChallengeKeys(activity).some((key) => challenges.has(key));
+    },
+    clear(activity: MSTeamsTurnContext["activity"]): void {
+      prune();
+      const cleared = new Set<Challenge>();
+      for (const key of resolveSigninChallengeKeys(activity)) {
+        const challenge = challenges.get(key);
+        if (!challenge || cleared.has(challenge)) {
+          continue;
+        }
+        cleared.add(challenge);
+        for (const challengeKey of challenge.keys) {
+          challenges.delete(challengeKey);
+        }
+      }
+    },
+  };
+}
+
+function normalizeSigninFailureValue(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  const obj = value as Record<string, unknown>;
+  return {
+    code: typeof obj.code === "string" ? obj.code : undefined,
+    message: typeof obj.message === "string" ? obj.message : undefined,
+    connectionName: typeof obj.connectionName === "string" ? obj.connectionName : undefined,
+  };
 }
 
 async function isInvokeAuthorized(params: {
@@ -138,6 +246,87 @@ async function isSigninInvokeAuthorized(
     },
     includeInvokeName: true,
   });
+}
+
+async function handleSigninMagicCodeMessage(
+  context: MSTeamsTurnContext,
+  deps: MSTeamsMessageHandlerDeps,
+): Promise<boolean> {
+  const code = extractSigninMagicCode(context.activity);
+  if (!code) {
+    return false;
+  }
+
+  if (!deps.sso) {
+    return false;
+  }
+  if (!deps.hasSsoSignInChallenge?.(context.activity)) {
+    return false;
+  }
+
+  if (
+    !(await isInvokeAuthorized({
+      context,
+      deps,
+      deniedLogs: {
+        dm: "dropping signin code message (dm sender not allowlisted)",
+        channel: "dropping signin code message (not in team/channel allowlist)",
+        group: "dropping signin code message (group sender not allowlisted)",
+      },
+    }))
+  ) {
+    return true;
+  }
+
+  const users = resolveSigninUserCandidates(context.activity);
+  if (users.length === 0) {
+    deps.log.error("msteams sso magic-code verification failed", {
+      code: "missing_user",
+      status: undefined,
+      message: "no user id on message activity",
+    });
+    await context.sendActivity(
+      "That sign-in code could not be verified. Open the latest sign-in link and try the new code.",
+    );
+    return true;
+  }
+
+  let lastFailure:
+    | {
+        code: string;
+        status?: number;
+        message: string;
+      }
+    | undefined;
+  for (const user of users) {
+    const result = await handleSigninVerifyStateInvoke({
+      value: { state: code },
+      user,
+      deps: deps.sso,
+    });
+    if (result.ok) {
+      deps.log.info("msteams sso magic-code verification succeeded", {
+        userId: user.userId,
+        hasExpiry: Boolean(result.expiresAt),
+      });
+      deps.clearSsoSignInChallenge?.(context.activity);
+      await context.sendActivity(
+        "Microsoft Teams delegated auth is connected. Retry the tool now.",
+      );
+      return true;
+    }
+    lastFailure = {
+      code: result.code,
+      status: result.status,
+      message: result.message,
+    };
+  }
+
+  deps.log.error("msteams sso magic-code verification failed", lastFailure);
+  await context.sendActivity(
+    "That sign-in code could not be verified. Open the latest sign-in link and try the new code.",
+  );
+  return true;
 }
 
 /**
@@ -322,8 +511,18 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   handler: T,
   deps: MSTeamsMessageHandlerDeps,
 ): T {
-  const handleTeamsMessage = createMSTeamsMessageHandler(deps);
-  const handleReaction = createMSTeamsReactionHandler(deps);
+  const challengeTracker = createSigninChallengeTracker();
+  const runtimeDeps: MSTeamsMessageHandlerDeps = {
+    ...deps,
+    recordSsoSignInChallenge:
+      deps.recordSsoSignInChallenge ?? ((activity) => challengeTracker.record(activity)),
+    hasSsoSignInChallenge:
+      deps.hasSsoSignInChallenge ?? ((activity) => challengeTracker.has(activity)),
+    clearSsoSignInChallenge:
+      deps.clearSsoSignInChallenge ?? ((activity) => challengeTracker.clear(activity)),
+  };
+  const handleTeamsMessage = createMSTeamsMessageHandler(runtimeDeps);
+  const handleReaction = createMSTeamsReactionHandler(runtimeDeps);
 
   // Wrap the original run method to intercept invokes
   const originalRun = handler.run;
@@ -332,7 +531,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       const ctx = context as MSTeamsTurnContext;
       // Handle file consent invokes before passing to normal flow
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
-        await respondToMSTeamsFileConsentInvoke(ctx, deps.log);
+        await respondToMSTeamsFileConsentInvoke(ctx, runtimeDeps.log);
         return;
       }
 
@@ -341,7 +540,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       // Do NOT call sendActivity with invokeResponse; our custom adapter would POST
       // a new activity to Bot Framework instead of responding to the HTTP request.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "message/submitAction") {
-        const handled = await handleFeedbackInvoke(ctx, deps);
+        const handled = await handleFeedbackInvoke(ctx, runtimeDeps);
         if (handled) {
           return;
         }
@@ -363,6 +562,13 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         deps.log.debug?.("skipping adaptive card action invoke without value payload");
       }
 
+      if (ctx.activity?.type === "message") {
+        const handled = await handleSigninMagicCodeMessage(ctx, runtimeDeps);
+        if (handled) {
+          return;
+        }
+      }
+
       // Bot Framework OAuth SSO: Teams sends signin/tokenExchange (with a
       // Teams-provided exchangeable token) or signin/verifyState (magic
       // code fallback) after an oauthCard is presented. We must ack with
@@ -371,27 +577,44 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       if (
         ctx.activity?.type === "invoke" &&
         (ctx.activity?.name === "signin/tokenExchange" ||
-          ctx.activity?.name === "signin/verifyState")
+          ctx.activity?.name === "signin/verifyState" ||
+          ctx.activity?.name === "signin/failure")
       ) {
         // Always ack immediately — silently dropping the invoke causes
         // the Teams card UI to report "Something went wrong".
         await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
 
-        if (!(await isSigninInvokeAuthorized(ctx, deps))) {
+        if (!(await isSigninInvokeAuthorized(ctx, runtimeDeps))) {
           return;
         }
 
-        if (!deps.sso) {
-          deps.log.debug?.("signin invoke received but msteams.sso is not configured", {
+        if (!runtimeDeps.sso) {
+          runtimeDeps.log.debug?.("signin invoke received but msteams.sso is not configured", {
             name: ctx.activity.name,
           });
           return;
         }
 
-        const user = {
-          userId: ctx.activity.from?.aadObjectId ?? ctx.activity.from?.id ?? "",
-          channelId: ctx.activity.channelId ?? "msteams",
-        };
+        if (ctx.activity.name === "signin/failure") {
+          // Teams can emit signin/failure while the browser fallback link is
+          // still usable. Keep the pending challenge so a pasted magic code can
+          // complete until the normal challenge TTL expires.
+          runtimeDeps.log.warn?.(
+            "msteams sso signin failure",
+            normalizeSigninFailureValue(ctx.activity.value),
+          );
+          return;
+        }
+
+        const users = resolveSigninUserCandidates(ctx.activity);
+        if (users.length === 0) {
+          runtimeDeps.log.error("msteams sso signin invoke failed", {
+            code: "missing_user",
+            status: undefined,
+            message: "no user id on invoke activity",
+          });
+          return;
+        }
 
         try {
           if (ctx.activity.name === "signin/tokenExchange") {
@@ -400,23 +623,34 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
               deps.log.debug?.("invalid signin/tokenExchange invoke value");
               return;
             }
-            const result = await handleSigninTokenExchangeInvoke({
-              value: parsed,
-              user,
-              deps: deps.sso,
-            });
-            if (result.ok) {
-              deps.log.info("msteams sso token exchanged", {
-                userId: user.userId,
-                hasExpiry: Boolean(result.expiresAt),
+            let lastFailure:
+              | {
+                  code: string;
+                  status?: number;
+                  message: string;
+                }
+              | undefined;
+            for (const user of users) {
+              const result = await handleSigninTokenExchangeInvoke({
+                value: parsed,
+                user,
+                deps: runtimeDeps.sso,
               });
-            } else {
-              deps.log.error("msteams sso token exchange failed", {
+              if (result.ok) {
+                runtimeDeps.clearSsoSignInChallenge?.(ctx.activity);
+                runtimeDeps.log.info("msteams sso token exchanged", {
+                  userId: user.userId,
+                  hasExpiry: Boolean(result.expiresAt),
+                });
+                return;
+              }
+              lastFailure = {
                 code: result.code,
                 status: result.status,
                 message: result.message,
-              });
+              };
             }
+            runtimeDeps.log.error("msteams sso token exchange failed", lastFailure);
             return;
           }
 
@@ -426,25 +660,36 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
             deps.log.debug?.("invalid signin/verifyState invoke value");
             return;
           }
-          const result = await handleSigninVerifyStateInvoke({
-            value: parsed,
-            user,
-            deps: deps.sso,
-          });
-          if (result.ok) {
-            deps.log.info("msteams sso verifyState succeeded", {
-              userId: user.userId,
-              hasExpiry: Boolean(result.expiresAt),
+          let lastFailure:
+            | {
+                code: string;
+                status?: number;
+                message: string;
+              }
+            | undefined;
+          for (const user of users) {
+            const result = await handleSigninVerifyStateInvoke({
+              value: parsed,
+              user,
+              deps: runtimeDeps.sso,
             });
-          } else {
-            deps.log.error("msteams sso verifyState failed", {
+            if (result.ok) {
+              runtimeDeps.clearSsoSignInChallenge?.(ctx.activity);
+              runtimeDeps.log.info("msteams sso verifyState succeeded", {
+                userId: user.userId,
+                hasExpiry: Boolean(result.expiresAt),
+              });
+              return;
+            }
+            lastFailure = {
               code: result.code,
               status: result.status,
               message: result.message,
-            });
+            };
           }
+          runtimeDeps.log.error("msteams sso verifyState failed", lastFailure);
         } catch (err) {
-          deps.log.error("msteams sso invoke handler error", {
+          runtimeDeps.log.error("msteams sso invoke handler error", {
             error: formatUnknownError(err),
           });
         }
