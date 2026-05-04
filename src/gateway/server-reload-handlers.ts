@@ -113,6 +113,7 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  onCronRestart?: () => void;
 };
 
 type ManagedGatewayConfigReloaderParams = Omit<
@@ -310,6 +311,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartCron) {
+      params.onCronRestart?.();
       state.cronState.cron.stop();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
@@ -489,6 +491,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
         cfg: config,
