@@ -830,6 +830,7 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
   return {
     id: "google",
     label: "Google Live Voice",
+    defaultModel: GOOGLE_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 20,
     resolveConfig: ({ cfg, rawConfig }) => normalizeProviderConfig(rawConfig, cfg),
     isConfigured: ({ providerConfig }) =>

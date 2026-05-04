@@ -1813,6 +1813,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
   label: string;
   aliases?: string[];
+  defaultModel?: string;
   autoSelectOrder?: number;
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
@@ -1830,6 +1831,7 @@ export type RealtimeVoiceProviderPlugin = {
   id: RealtimeVoiceProviderId;
   label: string;
   aliases?: string[];
+  defaultModel?: string;
   autoSelectOrder?: number;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;

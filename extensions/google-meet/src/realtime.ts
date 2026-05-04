@@ -409,6 +409,70 @@ export function buildGoogleMeetSpeakExactUserMessage(text: string): string {
   ].join("\n");
 }
 
+function readLogString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function formatLogValue(value: string | undefined): string {
+  const normalized = value?.replace(/\s+/g, "_").slice(0, 180);
+  return normalized || "unknown";
+}
+
+function resolveProviderModelForLog(params: {
+  provider: { defaultModel?: string };
+  providerConfig: RealtimeVoiceProviderConfig | RealtimeTranscriptionProviderConfig;
+  fallbackModel?: string;
+}): string {
+  return (
+    readLogString(params.providerConfig.model) ??
+    readLogString(params.providerConfig.modelId) ??
+    readLogString(params.fallbackModel) ??
+    readLogString(params.provider.defaultModel) ??
+    "provider-default"
+  );
+}
+
+export function formatGoogleMeetRealtimeVoiceModelLog(params: {
+  strategy: string;
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
+  fallbackModel?: string;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+}): string {
+  return [
+    `[google-meet] realtime voice bridge starting: strategy=${formatLogValue(params.strategy)}`,
+    `provider=${formatLogValue(params.provider.id)}`,
+    `model=${formatLogValue(
+      resolveProviderModelForLog({
+        provider: params.provider,
+        providerConfig: params.providerConfig,
+        fallbackModel: params.fallbackModel,
+      }),
+    )}`,
+    `audioFormat=${formatLogValue(params.audioFormat)}`,
+  ].join(" ");
+}
+
+export function formatGoogleMeetAgentAudioModelLog(params: {
+  provider: RealtimeTranscriptionProviderPlugin;
+  providerConfig: RealtimeTranscriptionProviderConfig;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+}): string {
+  return [
+    `[google-meet] agent audio bridge starting: transcriptionProvider=${formatLogValue(
+      params.provider.id,
+    )}`,
+    `transcriptionModel=${formatLogValue(
+      resolveProviderModelForLog({
+        provider: params.provider,
+        providerConfig: params.providerConfig,
+      }),
+    )}`,
+    "tts=telephony",
+    `audioFormat=${formatLogValue(params.audioFormat)}`,
+  ].join(" ");
+}
+
 function normalizeGoogleMeetTtsPromptText(text: string | undefined): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -464,6 +528,13 @@ export async function startCommandAgentAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
+  params.logger.info(
+    formatGoogleMeetAgentAudioModelLog({
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
 
   const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
     if (proc.killed && signal !== "SIGKILL") {
@@ -956,6 +1027,15 @@ export async function startCommandRealtimeAudioBridge(params: {
     providers: params.providers,
   });
   const strategy = params.config.realtime.strategy;
+  params.logger.info(
+    formatGoogleMeetRealtimeVoiceModelLog({
+      strategy,
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      fallbackModel: params.config.realtime.model,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   let agentConsultActive = false;

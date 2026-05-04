@@ -31,6 +31,8 @@ import {
   isGoogleMeetLikelyAssistantEchoTranscript,
   convertGoogleMeetBridgeAudioForStt,
   convertGoogleMeetTtsAudioForBridge,
+  formatGoogleMeetAgentAudioModelLog,
+  formatGoogleMeetRealtimeVoiceModelLog,
   type GoogleMeetRealtimeEventEntry,
   type GoogleMeetRealtimeTranscriptEntry,
 } from "./realtime.js";
@@ -96,6 +98,13 @@ export async function startNodeAgentAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
+  params.logger.info(
+    formatGoogleMeetAgentAudioModelLog({
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   let agentConsultActive = false;
   let pendingAgentQuestion: string | undefined;
@@ -390,6 +399,15 @@ export async function startNodeRealtimeAudioBridge(params: {
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   const strategy = params.config.realtime.strategy;
+  params.logger.info(
+    formatGoogleMeetRealtimeVoiceModelLog({
+      strategy,
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      fallbackModel: params.config.realtime.model,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
   let agentConsultActive = false;
   let pendingAgentQuestion: string | undefined;
   let agentConsultDebounceTimer: ReturnType<typeof setTimeout> | undefined;

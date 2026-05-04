@@ -250,6 +250,7 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
     id: "deepgram",
     label: "Deepgram Realtime Transcription",
     aliases: ["deepgram-realtime", "nova-3-streaming"],
+    defaultModel: DEFAULT_DEEPGRAM_AUDIO_MODEL,
     autoSelectOrder: 35,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>

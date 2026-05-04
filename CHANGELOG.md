@@ -50,6 +50,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Exec approvals: treat POSIX `exec` as a command carrier for inline eval, shell-wrapper, and eval/source detection, so approval explanations and command-risk checks do not miss payloads hidden behind `exec`. Thanks @vincentkoc.
+- Google Meet: log the resolved audio provider model when starting Chrome and paired-node Meet talk-back bridges, so agent-mode joins show the STT model and bidi joins show the realtime voice model.
 - Diagnostics: handle missing session-tail files in cron recovery context without tripping extension test typecheck. Thanks @vincentkoc.
 - QA/Slack: update the Slack dispatch preview fallback test SDK mock for structured progress draft helpers, so the rich progress draft regression suite covers the new imports instead of failing before assertions run. Thanks @vincentkoc.
 - Plugins/loader: keep bundled plugin package `test-api.js` aliases behind private QA mode, so source transforms do not expose test-only public surfaces during normal plugin loading. Thanks @vincentkoc.

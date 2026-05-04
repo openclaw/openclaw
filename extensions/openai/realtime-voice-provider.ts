@@ -871,6 +871,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
   return {
     id: "openai",
     label: "OpenAI Realtime Voice",
+    defaultModel: OPENAI_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>

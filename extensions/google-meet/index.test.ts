@@ -3806,6 +3806,7 @@ describe("google-meet plugin", () => {
     const provider: RealtimeTranscriptionProviderPlugin = {
       id: "openai",
       label: "OpenAI",
+      defaultModel: "gpt-4o-transcribe",
       autoSelectOrder: 1,
       resolveConfig: ({ rawConfig }) => rawConfig,
       isConfigured: () => true,
@@ -3882,6 +3883,9 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] agent audio bridge starting: transcriptionProvider=openai transcriptionModel=gpt-4o-transcribe tts=telephony audioFormat=pcm16-24khz",
+    );
     inputStdout.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
     callbacks?.onTranscript?.("Please summarize the launch.");
     await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -3942,6 +3946,7 @@ describe("google-meet plugin", () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI",
+      defaultModel: "gpt-realtime-1.5",
       autoSelectOrder: 1,
       resolveConfig: ({ rawConfig }) => rawConfig,
       isConfigured: () => true,
@@ -4023,6 +4028,9 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
+    );
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
@@ -4154,6 +4162,7 @@ describe("google-meet plugin", () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI",
+      defaultModel: "gpt-realtime-1.5",
       autoSelectOrder: 1,
       resolveConfig: ({ rawConfig }) => rawConfig,
       isConfigured: () => true,
@@ -4492,6 +4501,9 @@ describe("google-meet plugin", () => {
       providers: [provider],
     });
 
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
+    );
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
     callbacks?.onClearAudio();
     callbacks?.onReady?.();
