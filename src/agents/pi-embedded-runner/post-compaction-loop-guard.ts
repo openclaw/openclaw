@@ -62,16 +62,15 @@ export function createPostCompactionLoopGuard(
   };
 
   const observe = (call: PostCompactionGuardObservation): PostCompactionGuardVerdict => {
+    if (!state.enabled) {
+      return { shouldAbort: false, armed: false, remainingAttempts: 0 };
+    }
     if (state.remainingAttempts <= 0) {
       return { shouldAbort: false, armed: false, remainingAttempts: 0 };
     }
     state.remainingAttempts -= 1;
     state.history.push(call);
     const armedAfter = state.remainingAttempts > 0;
-
-    if (!state.enabled) {
-      return { shouldAbort: false, armed: armedAfter, remainingAttempts: state.remainingAttempts };
-    }
 
     const matches = state.history.filter(
       (entry) =>
@@ -124,5 +123,15 @@ export class PostCompactionLoopPersistedError extends Error {
     this.detector = details.detector;
     this.count = details.count;
     this.toolName = details.toolName;
+  }
+
+  static fromVerdict(
+    verdict: Extract<PostCompactionGuardVerdict, { shouldAbort: true }>,
+  ): PostCompactionLoopPersistedError {
+    return new PostCompactionLoopPersistedError(verdict.message, {
+      detector: verdict.detector,
+      count: verdict.count,
+      toolName: verdict.toolName,
+    });
   }
 }

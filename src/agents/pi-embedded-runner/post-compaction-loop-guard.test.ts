@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createPostCompactionLoopGuard,
+  PostCompactionLoopPersistedError,
   type PostCompactionLoopGuard,
 } from "./post-compaction-loop-guard.js";
 
@@ -109,5 +110,39 @@ describe("createPostCompactionLoopGuard", () => {
     guard.observe(callOutcome("exec", { cmd: "ls" }, "r3"));
     expect(guard.snapshot().armed).toBe(false);
     expect(guard.snapshot().remainingAttempts).toBe(0);
+  });
+});
+
+describe("PostCompactionLoopPersistedError", () => {
+  it("captures the detector, count, toolName, and message", () => {
+    const err = new PostCompactionLoopPersistedError("loop persisted", {
+      detector: "compaction_loop_persisted",
+      count: 4,
+      toolName: "gateway",
+    });
+    expect(err).toBeInstanceOf(Error);
+    expect(err).toBeInstanceOf(PostCompactionLoopPersistedError);
+    expect(err.name).toBe("PostCompactionLoopPersistedError");
+    expect(err.message).toBe("loop persisted");
+    expect(err.detector).toBe("compaction_loop_persisted");
+    expect(err.count).toBe(4);
+    expect(err.toolName).toBe("gateway");
+  });
+
+  it("can be built from a guard verdict via fromVerdict", () => {
+    const guard = createPostCompactionLoopGuard({ windowSize: 2 });
+    guard.armPostCompaction();
+    guard.observe(callOutcome("read", { path: "/x" }, "r1"));
+    const verdict = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
+    expect(verdict.shouldAbort).toBe(true);
+    if (!verdict.shouldAbort) {
+      throw new Error("verdict was expected to abort");
+    }
+    const err = PostCompactionLoopPersistedError.fromVerdict(verdict);
+    expect(err).toBeInstanceOf(PostCompactionLoopPersistedError);
+    expect(err.detector).toBe(verdict.detector);
+    expect(err.count).toBe(verdict.count);
+    expect(err.toolName).toBe(verdict.toolName);
+    expect(err.message).toBe(verdict.message);
   });
 });
