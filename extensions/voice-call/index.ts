@@ -22,6 +22,9 @@ import {
 import type { CoreConfig } from "./src/core-bridge.js";
 import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
+const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
+const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
+
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const normalized = normalizeVoiceCallLegacyConfigInput(value);
@@ -415,6 +418,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -432,6 +436,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -452,6 +457,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -473,6 +479,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_READ_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -508,6 +515,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -531,6 +539,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -553,6 +562,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -576,6 +586,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_READ_METHOD_SCOPE,
     );
 
     api.registerGatewayMethod(
@@ -604,6 +615,7 @@ export default definePluginEntry({
           sendError(respond, err);
         }
       },
+      VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
     api.registerTool({

@@ -29,6 +29,7 @@ const callGatewayFromCliMock = vi.fn();
 
 type Registered = {
   methods: Map<string, unknown>;
+  methodScopes: Map<string, string | undefined>;
   tools: unknown[];
   service?: Parameters<OpenClawPluginApi["registerService"]>[0];
 };
@@ -108,6 +109,7 @@ function createServiceContext(): Parameters<NonNullable<Registered["service"]>["
 
 function setup(config: Record<string, unknown>): Registered {
   const methods = new Map<string, unknown>();
+  const methodScopes = new Map<string, string | undefined>();
   const tools: unknown[] = [];
   let service: Registered["service"];
   const api = createTestPluginApi({
@@ -120,7 +122,10 @@ function setup(config: Record<string, unknown>): Registered {
     pluginConfig: config,
     runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger: noopLogger,
-    registerGatewayMethod: (method: string, handler: unknown) => methods.set(method, handler),
+    registerGatewayMethod: (method: string, handler: unknown, opts?: { scope?: string }) => {
+      methods.set(method, handler);
+      methodScopes.set(method, opts?.scope);
+    },
     registerTool: (tool: unknown) => tools.push(tool),
     registerCli: () => {},
     registerService: (registeredService) => {
@@ -129,7 +134,7 @@ function setup(config: Record<string, unknown>): Registered {
     resolvePath: (p: string) => p,
   });
   plugin.register(api);
-  return { methods, tools, service };
+  return { methods, methodScopes, tools, service };
 }
 
 function envRef(id: string) {
@@ -361,6 +366,24 @@ describe("voice-call plugin", () => {
     const [ok, payload] = respond.mock.calls[0];
     expect(ok).toBe(true);
     expect(payload.callId).toBe("call-1");
+  });
+
+  it("registers voice call gateway methods with least-privilege scopes", () => {
+    const { methodScopes } = setup({ provider: "mock" });
+
+    for (const method of [
+      "voicecall.initiate",
+      "voicecall.start",
+      "voicecall.continue",
+      "voicecall.continue.start",
+      "voicecall.speak",
+      "voicecall.dtmf",
+      "voicecall.end",
+    ]) {
+      expect(methodScopes.get(method)).toBe("operator.write");
+    }
+    expect(methodScopes.get("voicecall.continue.result")).toBe("operator.read");
+    expect(methodScopes.get("voicecall.status")).toBe("operator.read");
   });
 
   it("preserves mode on legacy voicecall.start", async () => {
