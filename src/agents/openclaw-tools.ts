@@ -94,6 +94,11 @@ function isToolAllowedByFactoryPolicy(params: {
   });
 }
 
+function mergeFactoryPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
+  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+}
+
 function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -165,25 +170,27 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
+  const toolAllowlist = mergeFactoryPolicyList(params.config?.tools?.allow, params.toolAllowlist);
+  const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
   const allowImageGenerate = isToolAllowedByFactoryPolicy({
     toolName: "image_generate",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const allowVideoGenerate = isToolAllowedByFactoryPolicy({
     toolName: "video_generate",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const allowMusicGenerate = isToolAllowedByFactoryPolicy({
     toolName: "music_generate",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const allowPdf = isToolAllowedByFactoryPolicy({
     toolName: "pdf",
-    allowlist: params.toolAllowlist,
-    denylist: params.toolDenylist,
+    allowlist: toolAllowlist,
+    denylist: toolDenylist,
   });
   const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.imageGenerationModel);
   const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.videoGenerationModel);
