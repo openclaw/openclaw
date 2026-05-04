@@ -27,6 +27,10 @@ DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"
 DOCKER_EXTRA_ENV_FILES=()
 DOCKER_AUTH_PRESTAGED=0
 
+openclaw_live_codex_harness_is_ci() {
+  [[ -n "${CI:-}" && "${CI:-}" != "false" ]] || [[ -n "${GITHUB_ACTIONS:-}" && "${GITHUB_ACTIONS:-}" != "false" ]]
+}
+
 openclaw_live_codex_harness_append_build_extension() {
   local extension="${1:?extension required}"
   local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
@@ -62,7 +66,7 @@ trap cleanup_temp_dirs EXIT
 
 if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
   CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_codex_harness_is_ci; then
   CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
   TEMP_DIRS+=("$CLI_TOOLS_DIR")
 else
@@ -70,7 +74,7 @@ else
 fi
 if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
   CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_codex_harness_is_ci; then
   CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
   TEMP_DIRS+=("$CACHE_HOME_DIR")
 else
@@ -79,10 +83,10 @@ fi
 
 mkdir -p "$CLI_TOOLS_DIR"
 mkdir -p "$CACHE_HOME_DIR"
-if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+if openclaw_live_codex_harness_is_ci; then
   chmod 0777 "$CLI_TOOLS_DIR" "$CACHE_HOME_DIR" || true
 fi
-if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+if openclaw_live_codex_harness_is_ci; then
   DOCKER_USER="$(id -u):$(id -g)"
   DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
