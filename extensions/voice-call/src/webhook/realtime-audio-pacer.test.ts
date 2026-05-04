@@ -61,6 +61,28 @@ describe("RealtimeTwilioAudioPacer", () => {
     expect(sent).toHaveLength(2);
     expect(sent[1]).toEqual({ event: "clear", streamSid: "MZ-test" });
   });
+
+  it("stops instead of buffering unbounded realtime audio", async () => {
+    vi.useFakeTimers();
+    const sent: unknown[] = [];
+    const onBackpressure = vi.fn();
+    const pacer = new RealtimeTwilioAudioPacer({
+      streamSid: "MZ-test",
+      maxQueuedAudioBytes: 320,
+      onBackpressure,
+      sendJson: (message) => {
+        sent.push(message);
+        return true;
+      },
+    });
+
+    pacer.sendAudio(Buffer.alloc(480, 0x7f));
+    pacer.sendMark("after-overflow");
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(onBackpressure).toHaveBeenCalledOnce();
+    expect(sent).toEqual([]);
+  });
 });
 
 describe("RealtimeMulawSpeechStartDetector", () => {

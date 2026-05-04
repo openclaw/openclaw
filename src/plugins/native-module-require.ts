@@ -7,6 +7,30 @@ export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
 
+function isMissingTargetModuleError(
+  error: { code?: unknown; message?: unknown },
+  modulePath: string,
+): boolean {
+  if (error.code !== "MODULE_NOT_FOUND" || typeof error.message !== "string") {
+    return false;
+  }
+  const firstLine = error.message.split("\n", 1)[0] ?? "";
+  return firstLine.includes(`'${modulePath}'`) || firstLine.includes(`"${modulePath}"`);
+}
+
+function isSourceTransformFallbackError(error: unknown, modulePath: string): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = candidate.code;
+  return (
+    code === "ERR_REQUIRE_ESM" ||
+    code === "ERR_REQUIRE_ASYNC_MODULE" ||
+    isMissingTargetModuleError(candidate, modulePath)
+  );
+}
+
 export function tryNativeRequireJavaScriptModule(
   modulePath: string,
   options: { allowWindows?: boolean } = {},
@@ -19,7 +43,10 @@ export function tryNativeRequireJavaScriptModule(
   }
   try {
     return { ok: true, moduleExport: nodeRequire(modulePath) };
-  } catch {
+  } catch (error) {
+    if (!isSourceTransformFallbackError(error, modulePath)) {
+      throw error;
+    }
     return { ok: false };
   }
 }

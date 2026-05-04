@@ -23,7 +23,6 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearAgentRunContext } from "../infra/agent-events.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -70,7 +69,6 @@ import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
-import { resolveSessionKeyForRun } from "./server-session-key.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
@@ -92,7 +90,11 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
-export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
+export async function __resetModelCatalogCacheForTest(): Promise<void> {
+  const { __resetModelCatalogCacheForTest: resetModelCatalogCacheForTest } =
+    await import("./server-model-catalog.js");
+  await resetModelCatalogCacheForTest();
+}
 
 ensureOpenClawCliOnPath();
 
@@ -1028,8 +1030,6 @@ export async function startGatewayServer(
         nodeSendToSession,
         agentRunSeq,
         chatRunState,
-        resolveSessionKeyForRun,
-        clearAgentRunContext,
         toolEventRecipients,
         sessionEventSubscribers,
         sessionMessageSubscribers,

@@ -1131,6 +1131,50 @@ Optional overrides:
 }
 ```
 
+ElevenLabs for both agent-mode listening and speaking:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          modelId: "eleven_v3",
+          voiceId: "pMsXgVXv3BLzUgSXRplE",
+        },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "google-meet": {
+        config: {
+          realtime: {
+            transcriptionProvider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                modelId: "scribe_v2_realtime",
+                audioFormat: "ulaw_8000",
+                sampleRate: 8000,
+                commitStrategy: "vad",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The persistent Meet voice comes from
+`messages.tts.providers.elevenlabs.voiceId`. Agent replies can also use
+per-reply `[[tts:voiceId=... model=eleven_v3]]` directives when TTS model
+overrides are enabled, but config is the deterministic default for meetings.
+On join, the logs should show `transcriptionProvider=elevenlabs` and each
+spoken reply should log `provider=elevenlabs model=eleven_v3 voice=<voiceId>`.
+
 Twilio-only config:
 
 ```json5

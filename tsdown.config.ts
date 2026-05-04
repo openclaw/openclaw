@@ -242,6 +242,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
       "src/agents/pi-embedded-runner/effective-tool-policy.ts",
     "agents/pi-embedded-runner/run/runtime-context-prompt":
       "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
+    "auto-reply/reply/provider-dispatcher": "src/auto-reply/reply/provider-dispatcher.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
