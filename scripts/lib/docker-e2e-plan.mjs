@@ -178,6 +178,27 @@ function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 23 }) >= 0;
 }
 
+function supportsUpgradeSurvivorTildeLogPath(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 24 }) >= 0;
+}
+
+function supportsUpgradeSurvivorScenario(baselineSpec, scenario) {
+  if (scenario === "plugin-deps-cleanup") {
+    return supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec);
+  }
+  if (scenario === "tilde-log-path") {
+    return supportsUpgradeSurvivorTildeLogPath(baselineSpec);
+  }
+  return true;
+}
+
 function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
@@ -192,11 +213,7 @@ function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScen
     const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
     return matrixBaselines.flatMap((baselineSpec) =>
       matrixScenarios
-        .filter(
-          (scenario) =>
-            scenario !== "plugin-deps-cleanup" ||
-            supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec),
-        )
+        .filter((scenario) => supportsUpgradeSurvivorScenario(baselineSpec, scenario))
         .map((scenario) => {
           const suffixParts = [
             baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",

@@ -126,7 +126,9 @@ Available scenarios are `base`, `feishu-channel`, `bootstrap-persona`,
 `plugin-deps-cleanup`, `configured-plugin-installs`,
 `stale-source-plugin-shadow`, `tilde-log-path`, and `versioned-runtime-deps`. In aggregate runs,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands to all reported
-issue-shaped scenarios, including the configured-plugin install migration.
+issue-shaped scenarios, including the configured-plugin install migration. The
+aggregate planner skips `tilde-log-path` before `2026.4.24` because older
+baseline updaters can hang before the candidate package takes over.
 
 Full update migration is intentionally separate from Full Release CI. Use the
 manual `Update Migration` workflow when the release question is "can every

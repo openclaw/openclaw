@@ -349,7 +349,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.23",
       "published-upgrade-survivor-2026.4.23-feishu-channel",
-      "published-upgrade-survivor-2026.4.23-tilde-log-path",
     ]);
     expect(plan.lanes).toEqual(
       expect.arrayContaining([
@@ -409,7 +408,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
       "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
-      "published-upgrade-survivor-2026.3.13-tilde-log-path",
       "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
     ]);
   });
