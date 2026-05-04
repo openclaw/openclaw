@@ -17,6 +17,20 @@ type SlackActionInvoke = (
   toolContext?: ChannelMessageActionContext["toolContext"],
 ) => Promise<AgentToolResult<unknown>>;
 
+function normalizeSlackSearchChannelName(raw: string | undefined): string | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const withoutPrefix = trimmed.replace(/^channel:/i, "").replace(/^#/, "");
+  if (/^[CDG][A-Z0-9]{8,}$/i.test(withoutPrefix)) {
+    throw new Error(
+      "Slack search channelName requires a channel name, not a channel id. Use channelId for ids or channelName for names.",
+    );
+  }
+  return withoutPrefix;
+}
+
 /** Translate generic channel action requests into Slack-specific tool invocations and payload shapes. */
 export async function handleSlackMessageAction(params: {
   providerId: string;
@@ -190,6 +204,30 @@ export async function handleSlackMessageAction(params: {
   if (action === "emoji-list") {
     const limit = readNumberParam(actionParams, "limit", { integer: true });
     return await invoke({ action: "emojiList", limit, accountId }, cfg);
+  }
+
+  if (action === "search") {
+    const query = readStringParam(actionParams, "query", { required: true });
+    const count = readNumberParam(actionParams, "limit", { integer: true });
+    const sort = readStringParam(actionParams, "sort") as "score" | "timestamp" | undefined;
+    const sortDir = readStringParam(actionParams, "sortDir") as "asc" | "desc" | undefined;
+    const page = readNumberParam(actionParams, "page", { integer: true });
+    const channelId = readStringParam(actionParams, "channelId");
+    const channelName = normalizeSlackSearchChannelName(readStringParam(actionParams, "channelName"));
+    return await invoke(
+      {
+        action: "searchMessages",
+        query,
+        channelId: channelId ?? undefined,
+        channelName: channelName ?? undefined,
+        count: count ?? undefined,
+        sort: sort ?? undefined,
+        sortDir: sortDir ?? undefined,
+        page: page ?? undefined,
+        accountId,
+      },
+      cfg,
+    );
   }
 
   if (action === "download-file") {

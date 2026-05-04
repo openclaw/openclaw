@@ -111,4 +111,101 @@ describe("Slack message tools", () => {
       "upload-file",
     ]);
   });
+
+  it("adds search when any enabled Slack account has a user token", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-root",
+          actions: {
+            messages: true,
+          },
+          accounts: {
+            default: {
+              botToken: "xoxb-default",
+              userToken: "xoxp-default",
+              actions: {
+                messages: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toEqual(expect.arrayContaining(["search"]));
+  });
+
+  it("exposes only runnable Slack search for user-token-only accounts", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          actions: {
+            messages: true,
+          },
+          accounts: {
+            default: {
+              userToken: "xoxp-default",
+              actions: {
+                messages: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toEqual(["search"]);
+  });
+
+  it("does not advertise search when the selected account lacks a user token", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            botOnly: {
+              botToken: "xoxb-bot",
+              actions: {
+                messages: true,
+              },
+            },
+            searchOnly: {
+              userToken: "xoxp-user",
+              actions: {
+                messages: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg, "botOnly")).not.toContain("search");
+    expect(listSlackMessageActions(cfg, "searchOnly")).toEqual(["search"]);
+  });
+
+  it("gates search with runnable user-token accounts rather than bot-only accounts", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            botOnly: {
+              botToken: "xoxb-bot",
+              actions: {
+                messages: false,
+              },
+            },
+            searchOnly: {
+              userToken: "xoxp-user",
+              actions: {
+                messages: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackMessageActions(cfg)).toContain("search");
+  });
 });

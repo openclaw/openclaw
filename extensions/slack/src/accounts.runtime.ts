@@ -1,1 +1,1 @@
-export { resolveSlackAccount } from "./accounts.js";
+export { listEnabledSlackAccounts, resolveSlackAccount } from "./accounts.js";

@@ -127,9 +127,12 @@ Name lookup:
   - Matrix only: available when Matrix encryption is enabled and verification actions are allowed
 
 - `search`
-  - Channels: Discord
-  - Required: `--guild-id`, `--query`
-  - Optional: `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`
+  - Channels: Discord/Slack
+  - Required: `--query` (+ `--guild-id` for Discord only)
+  - Discord optional filters: `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`
+  - Slack optional filters: `--channel-id`, `--channel-name`, `--limit`, `--sort`, `--sort-dir`
+  - Slack: requires a user token (`xoxp-`) with `search:read`. `--channel-name` scopes with Slack's `in:<name>` search syntax. `--channel-id` is accepted only when OpenClaw can resolve it to a channel name first; if that lookup fails, the command fails closed instead of broadening to workspace-wide search.
+  - Slack rejects Discord-only filters (`--channel-ids`, `--author-id`, `--author-ids`) instead of silently ignoring them.
 
 ### Threads
 

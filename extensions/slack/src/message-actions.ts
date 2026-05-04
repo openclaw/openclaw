@@ -10,13 +10,15 @@ export function listSlackMessageActions(
 ): ChannelMessageActionName[] {
   const accounts = (
     accountId ? [resolveSlackAccount({ cfg, accountId })] : listEnabledSlackAccounts(cfg)
-  ).filter((account) => account.enabled && account.botTokenSource !== "none");
-  if (accounts.length === 0) {
+  ).filter((account) => account.enabled);
+  const botAccounts = accounts.filter((account) => account.botTokenSource !== "none");
+  const searchAccounts = accounts.filter((account) => account.userToken?.trim());
+  if (botAccounts.length === 0 && searchAccounts.length === 0) {
     return [];
   }
 
-  const isActionEnabled = (key: string, defaultValue = true) => {
-    for (const account of accounts) {
+  const isActionEnabled = (key: string, defaultValue = true, scopedAccounts = botAccounts) => {
+    for (const account of scopedAccounts) {
       const gate = createActionGate(
         (account.actions ?? cfg.channels?.slack?.actions) as Record<string, boolean | undefined>,
       );
@@ -27,7 +29,10 @@ export function listSlackMessageActions(
     return false;
   };
 
-  const actions = new Set<ChannelMessageActionName>(["send"]);
+  const actions = new Set<ChannelMessageActionName>();
+  if (botAccounts.length > 0) {
+    actions.add("send");
+  }
   if (isActionEnabled("reactions")) {
     actions.add("react");
     actions.add("reactions");
@@ -38,6 +43,9 @@ export function listSlackMessageActions(
     actions.add("delete");
     actions.add("download-file");
     actions.add("upload-file");
+  }
+  if (isActionEnabled("messages", true, searchAccounts)) {
+    actions.add("search");
   }
   if (isActionEnabled("pins")) {
     actions.add("pin");

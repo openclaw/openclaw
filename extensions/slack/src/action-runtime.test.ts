@@ -17,6 +17,12 @@ const readSlackMessages = vi.fn(async (..._args: unknown[]) => ({}));
 const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"]);
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
 const recordSlackThreadParticipation = vi.fn();
+const searchSlackMessages = vi.fn(async (..._args: unknown[]) => ({
+  matches: [],
+  total: 0,
+  page: 1,
+  pages: 1,
+}));
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
 
@@ -106,6 +112,7 @@ describe("handleSlackAction", () => {
       recordSlackThreadParticipation,
       removeOwnSlackReactions,
       removeSlackReaction,
+      searchSlackMessages,
       sendSlackMessage,
       unpinSlackMessage,
     });
@@ -817,6 +824,55 @@ describe("handleSlackAction", () => {
       },
     } as OpenClawConfig);
     expect(token).toBe("xoxp-user");
+  });
+
+  it("routes search to a user-token account when no accountId is provided", async () => {
+    await handleSlackAction({ action: "searchMessages", query: "deploy", channelId: "C123" }, {
+      channels: {
+        slack: {
+          accounts: {
+            default: {
+              botToken: "xoxb-bot",
+              actions: { messages: false },
+            },
+            searchOnly: {
+              userToken: "xoxp-search",
+              actions: { messages: true },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(searchSlackMessages).toHaveBeenCalledWith(
+      "deploy",
+      expect.objectContaining({
+        accountId: "searchonly",
+        token: "xoxp-search",
+        channelId: "C123",
+      }),
+    );
+  });
+
+  it("keeps an explicit search accountId scoped to that account", async () => {
+    await expect(
+      handleSlackAction({ action: "searchMessages", query: "deploy", accountId: "botOnly" }, {
+        channels: {
+          slack: {
+            accounts: {
+              botOnly: {
+                botToken: "xoxb-bot",
+                actions: { messages: true },
+              },
+              searchOnly: {
+                userToken: "xoxp-search",
+                actions: { messages: true },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig),
+    ).rejects.toThrow(/Slack search requires a User Token/);
   });
 
   it("returns all emojis when no limit is provided", async () => {

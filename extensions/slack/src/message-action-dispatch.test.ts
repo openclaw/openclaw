@@ -335,4 +335,64 @@ describe("handleSlackMessageAction", () => {
       expect.any(Object),
     );
   });
+
+  it("maps search to searchMessages and passes Slack channel name scoping", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "search",
+        cfg: {},
+        params: {
+          query: "hello world",
+          channelName: "#general",
+          limit: 10,
+          sort: "timestamp",
+          sortDir: "desc",
+          page: 2,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "searchMessages",
+        query: "hello world",
+        channelName: "general",
+        count: 10,
+        sort: "timestamp",
+        sortDir: "desc",
+        page: 2,
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("passes Slack channel ids for runtime channel name resolution", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "search",
+        cfg: {},
+        params: {
+          query: "hello world",
+          channelId: "C123456789",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "searchMessages",
+        query: "hello world",
+        channelId: "C123456789",
+      }),
+      expect.any(Object),
+    );
+  });
 });

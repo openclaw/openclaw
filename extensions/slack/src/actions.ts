@@ -96,6 +96,31 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   return mode === "write" ? getSlackWriteClient(token) : createSlackWebClient(token);
 }
 
+async function resolveSlackChannelName(client: WebClient, channelId: string): Promise<string> {
+  try {
+    const info = await client.conversations.info({ channel: channelId });
+    const channel = info.channel as { name?: string } | undefined;
+    const name = channel?.name?.trim();
+    if (name) {
+      return name;
+    }
+  } catch (error) {
+    const slackError =
+      error && typeof error === "object" && "data" in error
+        ? ((error as { data?: { error?: unknown } }).data?.error as string | undefined)
+        : undefined;
+    throw new Error(
+      `Slack search --channel-id requires resolving the channel name with conversations.info before calling search.messages. Ensure the user token can read this channel and has the required Slack scopes (for example channels:read/groups:read/im:read/mpim:read).${
+        slackError ? ` Slack returned: ${slackError}.` : ""
+      }`,
+      { cause: error },
+    );
+  }
+  throw new Error(
+    "Slack search --channel-id could not resolve a channel name from conversations.info. Use --channel-name, or ensure the user token can read this channel.",
+  );
+}
+
 async function resolveBotUserId(client: WebClient) {
   const auth = await client.auth.test();
   if (!auth?.user_id) {
@@ -350,6 +375,69 @@ export async function listSlackPins(
   const client = await getClient(opts);
   const result = await client.pins.list({ channel: channelId });
   return (result.items ?? []) as SlackPin[];
+}
+
+export type SlackSearchMatch = {
+  ts?: string;
+  text?: string;
+  user?: string;
+  username?: string;
+  channel?: { id?: string; name?: string };
+  permalink?: string;
+  thread_ts?: string;
+};
+
+export type SlackSearchResult = {
+  matches: SlackSearchMatch[];
+  total: number;
+  page: number;
+  pages: number;
+};
+
+export async function searchSlackMessages(
+  query: string,
+  opts: SlackActionClientOpts & {
+    channelId?: string;
+    channelName?: string;
+    count?: number;
+    sort?: "score" | "timestamp";
+    sortDir?: "asc" | "desc";
+    page?: number;
+  } = {},
+): Promise<SlackSearchResult> {
+  const client = await getClient(opts);
+  let scopedQuery = query;
+  const directChannelName = opts.channelName?.trim();
+  if (directChannelName) {
+    scopedQuery = `${query} in:${directChannelName}`;
+  } else if (opts.channelId?.trim()) {
+    const channelName = await resolveSlackChannelName(client, opts.channelId.trim());
+    scopedQuery = `${query} in:${channelName}`;
+  }
+  const result = await client.search.messages({
+    query: scopedQuery,
+    count: opts.count,
+    sort: opts.sort,
+    sort_dir: opts.sortDir,
+    page: opts.page,
+  });
+  const messages = result.messages;
+  const paging = messages?.paging as { page?: number; pages?: number } | undefined;
+  const rawMatches = (messages?.matches ?? []) as Array<Record<string, unknown>>;
+  return {
+    matches: rawMatches.map((m) => ({
+      ts: m.ts as string | undefined,
+      text: m.text as string | undefined,
+      username: m.username as string | undefined,
+      user: m.user as string | undefined,
+      channel: m.channel as { id?: string; name?: string } | undefined,
+      permalink: m.permalink as string | undefined,
+      thread_ts: m.thread_ts as string | undefined,
+    })),
+    total: messages?.total ?? 0,
+    page: paging?.page ?? 1,
+    pages: paging?.pages ?? 1,
+  };
 }
 
 type SlackFileInfoSummary = {

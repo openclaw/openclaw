@@ -81,6 +81,7 @@ export const slackActionRuntime = {
   recordSlackThreadParticipation,
   removeOwnSlackReactions: createLazySlackAction("removeOwnSlackReactions"),
   removeSlackReaction: createLazySlackAction("removeSlackReaction"),
+  searchSlackMessages: createLazySlackAction("searchSlackMessages"),
   sendSlackMessage: createLazySlackAction("sendSlackMessage"),
   unpinSlackMessage: createLazySlackAction("unpinSlackMessage"),
 };
@@ -160,8 +161,22 @@ export async function handleSlackAction(
     );
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
-  const { resolveSlackAccount } = await loadSlackAccountsRuntime();
-  const account = resolveSlackAccount({ cfg, accountId });
+  const { listEnabledSlackAccounts, resolveSlackAccount } = await loadSlackAccountsRuntime();
+  let account = resolveSlackAccount({ cfg, accountId });
+
+  if (action === "searchMessages" && !accountId) {
+    const searchAccount = listEnabledSlackAccounts(cfg).find((candidate) => {
+      if (!candidate.userToken?.trim()) {
+        return false;
+      }
+      const candidateGate = createActionGate(candidate.actions ?? cfg.channels?.slack?.actions);
+      return candidateGate("messages", true);
+    });
+    if (searchAccount) {
+      account = searchAccount;
+    }
+  }
+
   const actionConfig = account.actions ?? cfg.channels?.slack?.actions;
   const isActionEnabled = createActionGate(actionConfig);
   const userToken = account.userToken;
@@ -497,6 +512,43 @@ export async function handleSlackAction(
       ? await slackActionRuntime.getSlackMemberInfo(userId, readOpts)
       : await slackActionRuntime.getSlackMemberInfo(userId);
     return jsonResult({ ok: true, info });
+  }
+
+  if (action === "searchMessages") {
+    if (!isActionEnabled("messages")) {
+      throw new Error("Slack messages are disabled.");
+    }
+    if (!userToken) {
+      throw new Error(
+        "Slack search requires a User Token (xoxp-) with search:read scope. Set channels.slack.userToken in your config.",
+      );
+    }
+    const query = readStringParam(params, "query", { required: true });
+    const channelId = readStringParam(params, "channelId");
+    const channelName = readStringParam(params, "channelName");
+    const count = readNumberParam(params, "count", { integer: true });
+    const sort = readStringParam(params, "sort") as "score" | "timestamp" | undefined;
+    const sortDir = readStringParam(params, "sortDir") as "asc" | "desc" | undefined;
+    const page = readNumberParam(params, "page", { integer: true });
+    const result = await slackActionRuntime.searchSlackMessages(query, {
+      accountId: account.accountId,
+      token: userToken,
+      channelId: channelId ?? undefined,
+      channelName: channelName ?? undefined,
+      count: count ?? undefined,
+      sort: sort ?? undefined,
+      sortDir: sortDir ?? undefined,
+      page: page ?? undefined,
+    });
+    return jsonResult({
+      ok: true,
+      results: {
+        messages: result.matches,
+      },
+      total: result.total,
+      page: result.page,
+      pages: result.pages,
+    });
   }
 
   if (action === "emojiList") {
