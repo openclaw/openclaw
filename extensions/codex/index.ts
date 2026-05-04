@@ -50,7 +50,7 @@ export default definePluginEntry({
       const queued = api.runtime.system.enqueueSystemEvent(formatGoalTerminalSystemEvent(event), {
         sessionKey,
         contextKey: `codex-goal:${fingerprint}`,
-        trusted: true,
+        trusted: false,
       });
       if (queued) {
         api.runtime.system.requestHeartbeat({

@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.
 - Google Meet: preserve `realtime.introMessage: ""` so realtime Chrome joins can stay silent instead of restoring the default spoken intro. Thanks @vincentkoc.
 - OpenAI/Codex media: advertise Codex audio transcription in runtime and manifest metadata and route active Codex chat models to the OpenAI transcription default instead of sending chat model ids to audio transcription. Thanks @vincentkoc.
+- Plugins/Codex: add `/goal` (and `/codex goal`) controls for bound Codex thread goals, and enqueue Codex-native goal-terminal bridge events as untrusted system context.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Cron CLI: add `openclaw cron list --agent <id>`, normalize the requested agent id, and include jobs without a stored agent id under the configured default agent while keeping `cron list` unfiltered when no agent is supplied. Fixes #77118. Thanks @zhanggttry.
 - Status: show compact Gateway process uptime and host system uptime in `/status`, making restart and host-lifetime checks visible from chat. Thanks @vincentkoc.
