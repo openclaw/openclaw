@@ -527,6 +527,7 @@ export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
+  preserveActivity?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
   return await runExclusiveSessionStoreWrite(storePath, async () => {
@@ -540,7 +541,10 @@ export async function updateSessionStoreEntry(params: {
     if (!patch) {
       return existing;
     }
-    const next = mergeSessionEntry(existing, patch);
+    const next =
+      params.preserveActivity === true
+        ? mergeSessionEntryPreserveActivity(existing, patch)
+        : mergeSessionEntry(existing, patch);
     return await persistResolvedSessionEntry({
       storePath,
       store,

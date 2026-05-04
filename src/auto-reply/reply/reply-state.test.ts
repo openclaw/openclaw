@@ -432,6 +432,26 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(3);
   });
 
+  it("preserves updatedAt when incrementing compaction count", async () => {
+    const updatedAt = Date.now() - 1_000;
+    const entry = { sessionId: "s1", updatedAt, compactionCount: 2 } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    const count = await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      now: Date.now(),
+    });
+    expect(count).toBe(3);
+    expect(sessionStore[sessionKey]?.updatedAt).toBe(updatedAt);
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(3);
+    expect(stored[sessionKey].updatedAt).toBe(updatedAt);
+  });
+
   it("updates totalTokens when tokensAfter is provided", async () => {
     const entry = {
       sessionId: "s1",
