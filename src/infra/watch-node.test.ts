@@ -155,6 +155,49 @@ describe("watch-node script", () => {
     });
   });
 
+  it("starts the runner before loading chokidar", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi.fn(() => child);
+    const watcher = Object.assign(new EventEmitter(), {
+      close: vi.fn(async () => {}),
+    });
+    const watch = vi.fn(() => watcher);
+    let resolveLoadChokidar: (value: { watch: typeof watch }) => void = () => {};
+    const loadChokidar = vi.fn(
+      () =>
+        new Promise<{ watch: typeof watch }>((resolve) => {
+          resolveLoadChokidar = resolve;
+        }),
+    );
+    const fakeProcess = createFakeProcess();
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      loadChokidar,
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+    });
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(loadChokidar).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.invocationCallOrder[0]).toBeLessThan(
+      loadChokidar.mock.invocationCallOrder[0],
+    );
+
+    resolveLoadChokidar({ watch });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(watch).toHaveBeenCalledTimes(1);
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
   it("terminates child on SIGINT and returns shell interrupt code", async () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
@@ -412,6 +455,10 @@ describe("watch-node script", () => {
       ),
       { code: "ERR_INVALID_PACKAGE_CONFIG" },
     );
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi.fn(() => child);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -423,9 +470,12 @@ describe("watch-node script", () => {
             throw error;
           }),
           process: createFakeProcess(),
+          spawn,
         }),
       ).rejects.toBe(error);
 
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(errorSpy.mock.calls).toEqual([
         [""],
         [
@@ -450,6 +500,10 @@ describe("watch-node script", () => {
     const error = Object.assign(new Error("Cannot find package 'chokidar'"), {
       code: "ERR_MODULE_NOT_FOUND",
     });
+    const child = Object.assign(new EventEmitter(), {
+      kill: vi.fn(() => {}),
+    });
+    const spawn = vi.fn(() => child);
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
     try {
@@ -459,9 +513,12 @@ describe("watch-node script", () => {
             throw error;
           }),
           process: createFakeProcess(),
+          spawn,
         }),
       ).rejects.toBe(error);
 
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
       expect(errorSpy).not.toHaveBeenCalled();
     } finally {
       errorSpy.mockRestore();

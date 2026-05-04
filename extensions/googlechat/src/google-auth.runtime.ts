@@ -23,6 +23,9 @@ type GoogleAuthTransport = InstanceType<GaxiosModule["Gaxios"]>;
 type GoogleAuthRequestWithUnknownHeaders = RequestInit & {
   headers?: unknown;
 };
+type GoogleAuthResponseWithUnknownHeaders = {
+  headers?: unknown;
+};
 type GuardedGoogleAuthRequestInit = RequestInit & {
   agent?: unknown;
   cert?: unknown;
@@ -79,11 +82,23 @@ function normalizeGoogleAuthPreparedRequestHeaders<T extends GoogleAuthRequestWi
   return config as T & { headers: Headers };
 }
 
+function normalizeGoogleAuthResponseHeaders<T extends GoogleAuthResponseWithUnknownHeaders>(
+  response: T,
+): T & { headers: Headers } {
+  if (!(response.headers instanceof Headers)) {
+    response.headers = new Headers(response.headers as HeadersInit | undefined);
+  }
+  return response as T & { headers: Headers };
+}
+
 function installGoogleAuthHeaderCompatibilityInterceptor(
   transport: GoogleAuthTransport,
 ): GoogleAuthTransport {
   transport.interceptors.request.add({
     resolved: async (config) => normalizeGoogleAuthPreparedRequestHeaders(config),
+  });
+  transport.interceptors.response.add({
+    resolved: async (response) => normalizeGoogleAuthResponseHeaders(response),
   });
   return transport;
 }
@@ -558,6 +573,7 @@ export const __testing = {
     googleAuthTransportPromise = null;
   },
   normalizeGoogleAuthPreparedRequestHeaders,
+  normalizeGoogleAuthResponseHeaders,
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };
