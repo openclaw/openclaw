@@ -350,9 +350,9 @@ services:
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    gateway_home_mount="${home_volume}:/home/node"
-    gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
-    gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
+    gateway_home_mount="${home_volume}:/home/openclaw"
+    gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/openclaw/.openclaw"
+    gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/openclaw/.openclaw/workspace"
     validate_mount_spec "$gateway_home_mount"
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
@@ -515,8 +515,8 @@ else
   fi
 fi
 
-# Ensure bind-mounted data directories are writable by the container's `node`
-# user (uid 1000). Host-created dirs inherit the host user's uid which may
+# Ensure bind-mounted data directories are writable by the container's `openclaw`
+# user (uid 1001). Host-created dirs inherit the host user's uid which may
 # differ, causing EACCES when the container tries to mkdir/write.
 # Running a brief root container to chown is the portable Docker idiom --
 # it works regardless of the host uid and doesn't require host-side root.
@@ -528,8 +528,8 @@ echo "==> Fixing data-directory permissions"
 # After fixing the config dir, only the OpenClaw metadata subdirectory
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
-  'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
-   [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
+  'find /home/openclaw/.openclaw -xdev -exec chown openclaw:openclaw {} +; \
+   [ -d /home/openclaw/.openclaw/workspace/.openclaw ] && chown -R openclaw:openclaw /home/openclaw/.openclaw/workspace/.openclaw || true'
 
 echo ""
 if [[ -n "$SKIP_ONBOARDING" ]]; then

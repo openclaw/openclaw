@@ -68,6 +68,7 @@ describe("update-startup", () => {
     tempDir = await suiteRootTracker.make("case");
     envSnapshot = captureEnv([
       "OPENCLAW_NO_AUTO_UPDATE",
+      "OPENCLAW_NO_UPDATE_CHECK",
       "OPENCLAW_STATE_DIR",
       "NODE_ENV",
       "VITEST",
@@ -199,6 +200,21 @@ describe("update-startup", () => {
         : {}),
     });
   }
+
+  it("skips startup update checks when OPENCLAW_NO_UPDATE_CHECK is set", async () => {
+    process.env.NODE_ENV = "production";
+    process.env.OPENCLAW_NO_UPDATE_CHECK = "1";
+    mockPackageUpdateStatus("latest", "2.0.0");
+
+    await runGatewayUpdateCheck({
+      cfg: { update: { channel: "stable" } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
+    expect(checkUpdateStatus).not.toHaveBeenCalled();
+  });
 
   it.each([
     {

@@ -176,6 +176,52 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
       );
     }
   });
+
+  it("downgrades invalid channel config to a disabled channel when lenient channel config is enabled", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "telegram",
+          channels: ["telegram"],
+          channelConfigs: {
+            telegram: {
+              schema: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean" },
+                },
+                additionalProperties: false,
+              },
+              uiHints: {},
+            },
+          },
+        }),
+      ],
+    });
+
+    const result = validateConfigObjectWithPlugins(
+      {
+        channels: {
+          telegram: { allowedUsers: ["legacy"] },
+        },
+      },
+      { env: { OPENCLAW_LENIENT_CHANNEL_CONFIG: "1" } },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "channels.telegram",
+          message: expect.stringContaining("channel disabled"),
+        }),
+      ]),
+    );
+    if (result.ok) {
+      expect(result.config.channels?.telegram).toEqual({ enabled: false });
+    }
+  });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {

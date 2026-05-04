@@ -72,6 +72,9 @@ function shouldSkipCheck(allowInTests: boolean): boolean {
   if (allowInTests) {
     return false;
   }
+  if (isTruthyEnvValue(process.env.OPENCLAW_NO_UPDATE_CHECK)) {
+    return true;
+  }
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return true;
   }

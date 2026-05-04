@@ -155,27 +155,73 @@ WORKDIR /app
 # so it must be installed explicitly here. Without it `/etc/ssl/certs/`
 # stays empty and every HTTPS outbound dies at TLS handshake with
 # `error setting certificate file`.
+#
+# Keep this as a practical hosted-agent baseline, not a bare Node image.
+# Agents regularly need Python/data scripting, common archive/search tools, and
+# SSH for private Git remotes. Keep compiler/browser-heavy packages behind
+# explicit build args so the default GHCR release stays close to the slim image.
+# `python-is-python3` also makes the command agents
+# naturally try (`python`) work instead of failing despite Python being present.
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates procps hostname curl git lsof openssl python3 && \
+      ca-certificates \
+      curl \
+      file \
+      gh \
+      git \
+      hostname \
+      jq \
+      lsof \
+      openssh-client \
+      openssl \
+      procps \
+      python-is-python3 \
+      python3 \
+      python3-bs4 \
+      python3-pip \
+      python3-requests \
+      python3-venv \
+      ripgrep \
+      sqlite3 \
+      unzip \
+      wget \
+      zip && \
     update-ca-certificates
 
-RUN chown node:node /app
+RUN groupadd --gid 1001 openclaw && \
+    useradd --uid 1001 --gid 1001 --home-dir /home/openclaw --create-home --shell /bin/bash openclaw
 
-COPY --from=runtime-assets --chown=node:node /app/dist ./dist
-COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
-COPY --from=runtime-assets --chown=node:node /app/package.json .
-COPY --from=runtime-assets --chown=node:node /app/patches ./patches
-COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
-COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
-COPY --from=runtime-assets --chown=node:node /app/skills ./skills
-COPY --from=runtime-assets --chown=node:node /app/docs ./docs
-COPY --from=runtime-assets --chown=node:node /app/qa ./qa
+ENV NPM_CONFIG_PREFIX=/home/openclaw/.local \
+    NPM_CONFIG_CACHE=/home/openclaw/.npm \
+    PIP_CACHE_DIR=/home/openclaw/.cache/pip \
+    OPENCLAW_DISABLE_BONJOUR=1 \
+    OPENCLAW_LENIENT_CHANNEL_CONFIG=1 \
+    OPENCLAW_NO_AUTO_UPDATE=1 \
+    OPENCLAW_NO_UPDATE_CHECK=1 \
+    PATH=/home/openclaw/.local/bin:$PATH
+
+RUN install -d -m 0755 -o openclaw -g openclaw \
+      /home/openclaw/.cache \
+      /home/openclaw/.cache/pip \
+      /home/openclaw/.local \
+      /home/openclaw/.npm && \
+    install -d -m 0700 -o openclaw -g openclaw /home/openclaw/.ssh && \
+    chown openclaw:openclaw /app
+
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/dist ./dist
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/node_modules ./node_modules
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/package.json .
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/patches ./patches
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} ./${OPENCLAW_BUNDLED_PLUGIN_DIR}
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/skills ./skills
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/docs ./docs
+COPY --from=runtime-assets --chown=openclaw:openclaw /app/qa ./qa
 
 # Keep pnpm available in the runtime image for container-local workflows.
-# Use a shared Corepack home so the non-root `node` user does not need a
+# Use a shared Corepack home so the non-root `openclaw` user does not need a
 # first-run network fetch when invoking pnpm.
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
@@ -211,10 +257,10 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
       apt-get update && \
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
-      mkdir -p /home/node/.cache/ms-playwright && \
-      PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
+      mkdir -p /home/openclaw/.cache/ms-playwright && \
+      PLAYWRIGHT_BROWSERS_PATH=/home/openclaw/.cache/ms-playwright \
       node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
-      chown -R node:node /home/node/.cache/ms-playwright; \
+      chown -R openclaw:openclaw /home/openclaw/.cache/ms-playwright; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
@@ -260,17 +306,22 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Pre-create the default state dir so first-run Docker named volumes mounted
-# here inherit node ownership instead of root-owned state.
-RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
-    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
+# Pre-create the default hosted state dir so first-run Docker named volumes
+# mounted here inherit openclaw/1001 ownership instead of root-owned state.
+# `/root/.openclaw` remains a compatibility symlink for old wrappers or
+# accidentally-root HOME values; `/root` must be executable for UID 1001 to
+# traverse the symlink.
+RUN install -d -m 0700 -o openclaw -g openclaw /home/openclaw/.openclaw && \
+    stat -c '%U:%G %u:%g %a' /home/openclaw/.openclaw | grep -qx 'openclaw:openclaw 1001:1001 700' && \
+    chmod 711 /root && \
+    ln -s /home/openclaw/.openclaw /root/.openclaw
 
 ENV NODE_ENV=production
 
-# Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
+# Security hardening: Run as non-root user.
+# Hosted Heyron containers mount persistent data owned by UID 1001.
 # This reduces the attack surface by preventing container escape via root privileges
-USER node
+USER openclaw
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
