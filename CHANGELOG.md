@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Google Meet: add `chrome.audioBufferBytes` for generated command-pair SoX audio commands and lower the default buffer from SoX's 8192 bytes to 4096 bytes to reduce Chrome talk-back latency.
 - Google Meet: split realtime provider config into agent-mode transcription and bidi-mode voice providers, and migrate legacy Gemini Live bidi configs with `doctor --fix`, so Gemini Live can back direct bidi fallback without breaking the default OpenClaw agent talk-back path.
+- Google Meet: keep waiting for the Meet microphone to unmute during join intro readiness instead of permanently skipping talk-back when Meet briefly reports the local mic as muted.
 - Google Meet: expose `voiceCall.postDtmfSpeechDelayMs` in the plugin manifest schema and setup hints, so manifest-based config editing accepts the runtime-supported Twilio delay key. Thanks @vincentkoc.
 - Google Meet: keep explicit non-Google `realtime.provider` values as the transcription provider compatibility fallback when `realtime.transcriptionProvider` is unset. Thanks @vincentkoc.
 - Google Meet: make Twilio setup status require an enabled `voice-call` plugin entry instead of treating a missing entry as ready. Thanks @vincentkoc.

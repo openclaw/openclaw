@@ -604,7 +604,12 @@ export class GoogleMeetRuntime {
         return false;
       }
       const blocked = health?.speechBlockedReason;
-      if (blocked && blocked !== "not-in-call" && blocked !== "browser-unverified") {
+      if (
+        blocked &&
+        blocked !== "not-in-call" &&
+        blocked !== "browser-unverified" &&
+        blocked !== "meet-microphone-muted"
+      ) {
         return false;
       }
     }

@@ -118,7 +118,7 @@ function requestUrl(input: RequestInfo | URL): URL {
 }
 
 function mockLocalMeetBrowserRequest(
-  browserActResult: Record<string, unknown> = {
+  browserActResult: Record<string, unknown> | (() => Record<string, unknown>) = {
     inCall: true,
     micMuted: false,
     title: "Meet call",
@@ -158,7 +158,11 @@ function mockLocalMeetBrowserRequest(
         };
       }
       if (request.path === "/act") {
-        return { result: JSON.stringify(browserActResult) };
+        return {
+          result: JSON.stringify(
+            typeof browserActResult === "function" ? browserActResult() : browserActResult,
+          ),
+        };
       }
       throw new Error(`unexpected browser request path ${request.path}`);
     },
@@ -2761,6 +2765,57 @@ describe("google-meet plugin", () => {
           },
         },
       });
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("keeps waiting while the Meet microphone is muted during intro readiness", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      let inspectCount = 0;
+      mockLocalMeetBrowserRequest(() => {
+        inspectCount += 1;
+        return {
+          inCall: true,
+          micMuted: true,
+          title: "Meet call",
+          url: "https://meet.google.com/abc-defg-hij",
+        };
+      });
+      const { methods } = setup({
+        chrome: {
+          audioBridgeCommand: ["bridge", "start"],
+          waitForInCallMs: 1000,
+        },
+      });
+      const handler = methods.get("googlemeet.join") as
+        | ((ctx: {
+            params: Record<string, unknown>;
+            respond: ReturnType<typeof vi.fn>;
+          }) => Promise<void>)
+        | undefined;
+      const respond = vi.fn();
+
+      await handler?.({
+        params: { url: "https://meet.google.com/abc-defg-hij" },
+        respond,
+      });
+
+      expect(respond.mock.calls[0]?.[1]).toMatchObject({
+        spoken: false,
+        session: {
+          chrome: {
+            health: {
+              micMuted: true,
+              speechReady: false,
+              speechBlockedReason: "meet-microphone-muted",
+            },
+          },
+        },
+      });
+      expect(inspectCount).toBeGreaterThanOrEqual(2);
     } finally {
       Object.defineProperty(process, "platform", { value: originalPlatform });
     }
