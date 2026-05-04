@@ -501,6 +501,7 @@ export const dispatchTelegramMessage = async ({
     answerLane.lastPartialText = previewText;
     answerLane.hasStreamedMessage = true;
     answerLane.stream.update(previewText);
+    noteAnswerPreviewUpdated();
     if (options?.flush) {
       await answerLane.stream.flush();
     }
@@ -536,6 +537,7 @@ export const dispatchTelegramMessage = async ({
       answerLane.lastPartialText = previewText;
       answerLane.hasStreamedMessage = true;
       answerLane.stream.update(previewText);
+      noteAnswerPreviewUpdated();
       return;
     }
     if (previewToolProgressEnabled && !previewToolProgressSuppressed && normalized) {
@@ -555,6 +557,10 @@ export const dispatchTelegramMessage = async ({
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let pendingCompactionReplayBoundary = false;
+  let visibleMessageOrder = 0;
+  let lastAnswerPreviewUpdateOrder = 0;
+  let lastVisibleNonPreviewDeliveryOrder = 0;
+  let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
   let draftLaneEventQueue = Promise.resolve();
   const reasoningStepState = createTelegramReasoningStepState();
   const enqueueDraftLaneEvent = (task: () => Promise<void>): Promise<void> => {
@@ -594,19 +600,29 @@ export const dispatchTelegramMessage = async ({
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
   };
+  const noteAnswerPreviewUpdated = () => {
+    lastAnswerPreviewUpdateOrder = ++visibleMessageOrder;
+  };
+  const noteVisibleNonPreviewDelivery = () => {
+    lastVisibleNonPreviewDeliveryOrder = ++visibleMessageOrder;
+  };
+  const wasPreviewPushedUpByVisibleDelivery = () =>
+    lastVisibleNonPreviewDeliveryOrder > lastAnswerPreviewUpdateOrder;
   const rotateAnswerLaneForNewAssistantMessage = async () => {
     let didForceNewMessage = false;
     if (answerLane.hasStreamedMessage) {
       const materializedId = await answerLane.stream?.materialize?.();
       const previewMessageId = materializedId ?? answerLane.stream?.messageId();
+      const visibleSinceMs = answerLane.stream?.visibleSinceMs?.();
       if (
         typeof previewMessageId === "number" &&
-        activePreviewLifecycleByLane.answer === "transient"
+        activePreviewLifecycleByLane.answer === "transient" &&
+        !wasPreviewPushedUpByVisibleDelivery()
       ) {
         archivedAnswerPreviews.push({
           messageId: previewMessageId,
           textSnapshot: answerLane.lastPartialText,
-          visibleSinceMs: answerLane.stream?.visibleSinceMs?.(),
+          visibleSinceMs,
           deleteIfUnused: !answerLaneHasAssistantContent,
         });
       }
@@ -647,6 +663,9 @@ export const dispatchTelegramMessage = async ({
     }
     lane.lastPartialText = text;
     laneStream.update(text);
+    if (lane === answerLane) {
+      noteAnswerPreviewUpdated();
+    }
   };
   const ingestDraftLaneSegments = async (text: string | undefined) => {
     const split = splitTextIntoLaneSegments(text);
@@ -818,7 +837,6 @@ export const dispatchTelegramMessage = async ({
       }
       return { ...payload, replyToId: implicitQuoteReplyTargetId };
     };
-    let lastVisibleNonPreviewDeliveryAtMs: number | undefined;
     const sendPayload = async (payload: ReplyPayload) => {
       if (isDispatchSuperseded()) {
         return false;
@@ -832,6 +850,7 @@ export const dispatchTelegramMessage = async ({
       });
       if (result.delivered) {
         deliveryState.markDelivered();
+        noteVisibleNonPreviewDelivery();
         lastVisibleNonPreviewDeliveryAtMs = Date.now();
       }
       return result.delivered;

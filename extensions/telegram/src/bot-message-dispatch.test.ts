@@ -2038,7 +2038,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).toHaveBeenCalledTimes(1);
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
-      expect.any(Number),
+      1002,
       "Message B final",
       expect.any(Object),
     );
