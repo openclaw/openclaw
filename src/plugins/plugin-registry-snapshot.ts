@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import {
@@ -78,6 +79,25 @@ function hasMissingPersistedPluginSource(index: InstalledPluginIndex): boolean {
       (plugin.source ? !fs.existsSync(plugin.source) : false) ||
       (plugin.setupSource ? !fs.existsSync(plugin.setupSource) : false)
     );
+  });
+}
+
+function hasMissingEnabledPersistedInstallRecordPlugin(
+  index: InstalledPluginIndex,
+  config: LoadPluginRegistryParams["config"],
+): boolean {
+  const pluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+  const normalizedConfig = normalizePluginsConfig(config?.plugins);
+  return Object.entries(index.installRecords ?? {}).some(([pluginId, record]) => {
+    if (pluginIds.has(pluginId) || typeof record.source !== "string") {
+      return false;
+    }
+    return resolveEffectiveEnableState({
+      id: pluginId,
+      origin: "global",
+      config: normalizedConfig,
+      rootConfig: config,
+    }).enabled;
   });
 }
 
@@ -204,6 +224,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry points at missing plugin files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (hasMissingEnabledPersistedInstallRecordPlugin(persistedIndex, params.config)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry omits installed plugin records; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else if (hasMismatchedPersistedBundledPluginRoot(persistedIndex, env)) {
         diagnostics.push({
