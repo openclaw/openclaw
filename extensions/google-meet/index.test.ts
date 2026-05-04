@@ -3848,6 +3848,10 @@ describe("google-meet plugin", () => {
           success: true,
           audioBuffer: Buffer.from([1, 0, 2, 0]),
           sampleRate: 24_000,
+          provider: "elevenlabs",
+          providerModel: "eleven_multilingual_v2",
+          providerVoice: "pMsXgVXv3BLzUgSXRplE",
+          outputFormat: "pcm16",
         })),
       },
       agent: {
@@ -3896,6 +3900,9 @@ describe("google-meet plugin", () => {
       text: "Use the Portugal launch data.",
       cfg: {},
     });
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] agent TTS: provider=elevenlabs model=eleven_multilingual_v2 voice=pMsXgVXv3BLzUgSXRplE outputFormat=pcm16 sampleRate=24000",
+    );
     expect(Buffer.concat(outputStdinWrites)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(handle.getHealth()).toMatchObject({
       providerConnected: true,

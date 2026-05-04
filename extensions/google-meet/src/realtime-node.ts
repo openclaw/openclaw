@@ -32,6 +32,7 @@ import {
   convertGoogleMeetBridgeAudioForStt,
   convertGoogleMeetTtsAudioForBridge,
   formatGoogleMeetAgentAudioModelLog,
+  formatGoogleMeetAgentTtsResultLog,
   formatGoogleMeetRealtimeVoiceModelLog,
   type GoogleMeetRealtimeEventEntry,
   type GoogleMeetRealtimeTranscriptEntry,
@@ -184,6 +185,7 @@ export async function startNodeAgentAudioBridge(params: {
         if (!result.success || !result.audioBuffer || !result.sampleRate) {
           throw new Error(result.error ?? "TTS conversion failed");
         }
+        params.logger.info(formatGoogleMeetAgentTtsResultLog("node agent", result));
         await pushOutputAudio(
           convertGoogleMeetTtsAudioForBridge(
             result.audioBuffer,

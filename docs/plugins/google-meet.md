@@ -1175,6 +1175,9 @@ agent produces the answer, and regular OpenClaw TTS speaks it into Meet. Use
 `mode: "bidi"` when you want the realtime voice model to answer directly.
 Raw `mode: "realtime"` remains accepted as a legacy compatibility alias for
 `mode: "agent"`, but it is no longer advertised in the agent tool schema.
+Agent-mode logs include the resolved transcription provider/model at bridge
+startup and the TTS provider, model, voice, output format, and sample rate after
+each synthesized reply.
 
 Use `action: "status"` to list active sessions or inspect a session ID. Use
 `action: "speak"` with `sessionId` and `message` to make the realtime agent

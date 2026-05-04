@@ -473,6 +473,29 @@ export function formatGoogleMeetAgentAudioModelLog(params: {
   ].join(" ");
 }
 
+type GoogleMeetTtsResultLogFields = {
+  provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
+  outputFormat?: string;
+  sampleRate?: number;
+  fallbackFrom?: string;
+};
+
+export function formatGoogleMeetAgentTtsResultLog(
+  prefix: string,
+  result: GoogleMeetTtsResultLogFields,
+): string {
+  return [
+    `[google-meet] ${prefix} TTS: provider=${formatLogValue(result.provider)}`,
+    `model=${formatLogValue(result.providerModel)}`,
+    `voice=${formatLogValue(result.providerVoice)}`,
+    `outputFormat=${formatLogValue(result.outputFormat)}`,
+    `sampleRate=${result.sampleRate ?? "unknown"}`,
+    ...(result.fallbackFrom ? [`fallbackFrom=${formatLogValue(result.fallbackFrom)}`] : []),
+  ].join(" ");
+}
+
 function normalizeGoogleMeetTtsPromptText(text: string | undefined): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -648,6 +671,7 @@ export async function startCommandAgentAudioBridge(params: {
         if (!result.success || !result.audioBuffer || !result.sampleRate) {
           throw new Error(result.error ?? "TTS conversion failed");
         }
+        params.logger.info(formatGoogleMeetAgentTtsResultLog("agent", result));
         writeOutputAudio(
           convertGoogleMeetTtsAudioForBridge(
             result.audioBuffer,

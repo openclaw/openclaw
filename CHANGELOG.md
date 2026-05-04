@@ -53,6 +53,7 @@ Docs: https://docs.openclaw.ai
 
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
 - Exec approvals: detect `env -S` split-string command-carrier risks when `-S`/`-s` is combined with other env short options, so approval explanations do not miss split payloads hidden behind `env -iS...`. Thanks @vincentkoc.
+- Google Meet: log the concrete agent-mode TTS provider, model, voice, output format, and sample rate after speech synthesis, so Meet logs show which voice backend spoke each reply.
 - Voice Call: mark realtime calls completed when the realtime provider closes normally, so Twilio/OpenAI/Google realtime stop events do not leave active call records behind. Thanks @vincentkoc.
 - Exec approvals: treat POSIX `exec` as a command carrier for inline eval, shell-wrapper, and eval/source detection, so approval explanations and command-risk checks do not miss payloads hidden behind `exec`. Thanks @vincentkoc.
 - Google Meet: log the resolved audio provider model when starting Chrome and paired-node Meet talk-back bridges, so agent-mode joins show the STT model and bidi joins show the realtime voice model.
