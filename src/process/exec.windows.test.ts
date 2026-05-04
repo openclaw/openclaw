@@ -222,7 +222,7 @@ describe("windows command wrapper behavior", () => {
   it("rejects unsafe Windows root values when selecting the command wrapper", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const previousSystemRoot = process.env.SystemRoot;
-    const previousWindir = process.env.windir;
+    const previousWindir = process.env.WINDIR;
 
     spawnMock.mockImplementation(
       (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
@@ -236,8 +236,12 @@ describe("windows command wrapper behavior", () => {
         "relative\\path",
       ]) {
         _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+        // Set every install-root env source to the unsafe value so the
+        // resolver rejects each one and falls through to the safe default.
+        // Deleting WINDIR here is unreliable on real Windows runners, so
+        // overwrite it with the same rejected payload.
         process.env.SystemRoot = unsafeRoot;
-        delete process.env.windir;
+        process.env.WINDIR = unsafeRoot;
         spawnMock.mockClear();
 
         const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
@@ -255,9 +259,9 @@ describe("windows command wrapper behavior", () => {
         process.env.SystemRoot = previousSystemRoot;
       }
       if (previousWindir === undefined) {
-        delete process.env.windir;
+        delete process.env.WINDIR;
       } else {
-        process.env.windir = previousWindir;
+        process.env.WINDIR = previousWindir;
       }
       platformSpy.mockRestore();
     }
