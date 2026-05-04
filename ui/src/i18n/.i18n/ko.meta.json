@@ -10,11 +10,11 @@
     "sessionsView.sourceFilters",
     "sessionsView.unknownTooltip"
   ],
-  "generatedAt": "2026-05-04T05:07:47.489Z",
+  "generatedAt": "2026-05-04T05:27:38.790Z",
   "locale": "ko",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "811aafd29beaa9a3db352fd59ef96a410ee137a3ca791d04e889365f0a3e09e2",
+  "sourceHash": "d7422a132d25e453459e21cce7d013def56da9d668963841d4c509bce458e534",
   "totalKeys": 996,
   "translatedKeys": 987,
   "workflow": 1

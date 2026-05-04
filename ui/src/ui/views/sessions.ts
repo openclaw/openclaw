@@ -282,7 +282,7 @@ function renderFilterToggle(params: {
     .filter(Boolean)
     .join(" ");
   return html`
-    <label class=${className} title=${params.title} data-tooltip=${params.title}>
+    <label class=${className} data-tooltip=${params.title}>
       <input
         name=${params.name}
         class="session-filter-check__input"
@@ -374,16 +374,11 @@ export function renderSessions(props: SessionsProps) {
                 aria-label="Session filters"
               >
                 <div class="session-filter-primary-row">
-                  <label
-                    class="session-filter-field"
-                    title=${activeTooltip}
-                    data-tooltip=${activeTooltip}
-                  >
+                  <label class="session-filter-field" data-tooltip=${activeTooltip}>
                     <span class="session-filter-label">${t("sessionsView.active")}</span>
                     <input
                       class="session-filter-input session-filter-input--minutes"
                       placeholder=${t("sessionsView.minutesPlaceholder")}
-                      title=${activeTooltip}
                       .value=${props.activeMinutes}
                       ?disabled=${props.showArchived}
                       @input=${(e: Event) =>
@@ -396,15 +391,10 @@ export function renderSessions(props: SessionsProps) {
                         })}
                     />
                   </label>
-                  <label
-                    class="session-filter-field"
-                    title=${limitTooltip}
-                    data-tooltip=${limitTooltip}
-                  >
+                  <label class="session-filter-field" data-tooltip=${limitTooltip}>
                     <span class="session-filter-label">${t("sessionsView.limit")}</span>
                     <input
                       class="session-filter-input session-filter-input--limit"
-                      title=${limitTooltip}
                       .value=${props.limit}
                       @input=${(e: Event) =>
                         props.onFiltersChange({

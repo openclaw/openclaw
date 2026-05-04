@@ -2796,19 +2796,13 @@ td.data-table-key-col {
   .session-filter-field[data-tooltip]:hover::before,
   .session-filter-field[data-tooltip]:hover::after,
   .session-filter-check[data-tooltip]:hover::before,
-  .session-filter-check[data-tooltip]:hover::after,
-  .session-filter-field[data-tooltip]:focus-within::before,
-  .session-filter-field[data-tooltip]:focus-within::after,
-  .session-filter-check[data-tooltip]:focus-within::before,
-  .session-filter-check[data-tooltip]:focus-within::after {
+  .session-filter-check[data-tooltip]:hover::after {
     opacity: 1;
     transform: translateY(0) rotate(45deg);
   }
 
   .session-filter-field[data-tooltip]:hover::after,
-  .session-filter-check[data-tooltip]:hover::after,
-  .session-filter-field[data-tooltip]:focus-within::after,
-  .session-filter-check[data-tooltip]:focus-within::after {
+  .session-filter-check[data-tooltip]:hover::after {
     transform: translateY(0);
   }
 }

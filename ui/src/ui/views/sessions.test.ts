@@ -98,44 +98,36 @@ describe("sessions view", () => {
     });
   });
 
-  it("explains each session source filter with a tooltip", async () => {
+  it("uses one short styled tooltip per session filter", async () => {
     const container = document.createElement("div");
     render(renderSessions(buildProps(buildMultiResult([]))), container);
     await Promise.resolve();
 
     const filters = container.querySelector(".sessions-filter-bar");
+    const activeField = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-input--minutes")
+      ?.closest("label");
+    const limitField = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-input--limit")
+      ?.closest("label");
+    const globalToggle = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
+      ?.closest("label");
+    const unknownToggle = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeUnknown]")
+      ?.closest("label");
+    const archivedToggle = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
+      ?.closest("label");
+
+    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last N minutes.");
+    expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
+    expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
+    expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
+    expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
     expect(
-      filters
-        ?.querySelector<HTMLInputElement>(".session-filter-input--minutes")
-        ?.getAttribute("title"),
-    ).toBe(
-      "Only request sessions updated within the last N minutes. Clear the field, or show archived sessions, to remove the active-time cutoff.",
-    );
-    expect(
-      filters
-        ?.querySelector<HTMLInputElement>(".session-filter-input--limit")
-        ?.getAttribute("title"),
-    ).toBe("Maximum rows to request from the Gateway. Higher limits can make large stores slower.");
-    expect(
-      filters
-        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
-        ?.closest("label")
-        ?.getAttribute("title"),
-    ).toBe("Include the special global session bucket shared outside a specific agent or chat.");
-    expect(
-      filters
-        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeUnknown]")
-        ?.closest("label")
-        ?.getAttribute("title"),
-    ).toBe("Include the special unknown session bucket for legacy or unresolved traffic.");
-    expect(
-      filters
-        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
-        ?.closest("label")
-        ?.getAttribute("title"),
-    ).toBe(
-      "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
-    );
+      Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
+    ).toEqual([]);
   });
 
   it("keeps active and limit together and renders streamlined source toggles", async () => {
