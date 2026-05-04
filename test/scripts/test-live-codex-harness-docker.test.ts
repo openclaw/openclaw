@@ -15,6 +15,7 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     expect(script).toContain('DOCKER_CLI_TOOLS_CONTAINER_DIR="/tmp/openclaw-npm-global"');
     expect(script).toContain('-e XDG_CACHE_HOME="$DOCKER_CACHE_CONTAINER_DIR"');
     expect(script).toContain('-e NPM_CONFIG_PREFIX="$DOCKER_CLI_TOOLS_CONTAINER_DIR"');
+    expect(script).toContain('chmod 0777 "$CLI_TOOLS_DIR" "$CACHE_HOME_DIR" || true');
     expect(script).toContain('-v "$CACHE_HOME_DIR":"$DOCKER_CACHE_CONTAINER_DIR"');
     expect(script).toContain('-v "$CLI_TOOLS_DIR":"$DOCKER_CLI_TOOLS_CONTAINER_DIR"');
     expect(script).not.toContain('-v "$CACHE_HOME_DIR":/home/node/.cache');
