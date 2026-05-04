@@ -272,6 +272,7 @@ describe("getMemorySearchManager caching", () => {
     const cfg = createQmdCfg("missing-qmd");
     checkQmdBinaryAvailability.mockResolvedValueOnce({
       available: false,
+      reason: "binary",
       error: "spawn qmd ENOENT",
     });
 
@@ -506,7 +507,7 @@ describe("getMemorySearchManager caching", () => {
     );
     checkQmdBinaryAvailability
       .mockResolvedValueOnce({ available: true })
-      .mockResolvedValueOnce({ available: false, error: "spawn qmd ENOENT" });
+      .mockResolvedValueOnce({ available: false, reason: "binary", error: "spawn qmd ENOENT" });
 
     const first = await getMemorySearchManager({ cfg: firstCfg, agentId });
     const firstManager = requireManager(first);

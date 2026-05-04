@@ -182,13 +182,15 @@ export async function getMemorySearchManager(params: {
         cwd: workspaceDir,
       });
       if (!qmdBinary.available) {
-        const message = qmdBinary.error ?? "unknown error";
-        log.warn(
-          `qmd binary unavailable (${qmdResolved.command}); falling back to builtin: ${message}`,
-        );
+        const message = qmdBinary.error;
+        const failurePrefix =
+          qmdBinary.reason === "workspace-cwd"
+            ? `qmd workspace unavailable (${workspaceDir})`
+            : `qmd binary unavailable (${qmdResolved.command})`;
+        log.warn(`${failurePrefix}; falling back to builtin: ${message}`);
         return {
           manager: null,
-          failureReason: `qmd binary unavailable (${qmdResolved.command}): ${message}`,
+          failureReason: `${failurePrefix}: ${message}`,
         };
       }
       try {
