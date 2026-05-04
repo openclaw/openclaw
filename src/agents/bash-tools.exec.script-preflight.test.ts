@@ -24,6 +24,7 @@ const isWin = process.platform === "win32";
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
+const analyzeHeavyExecCommand = __testing.analyzeHeavyExecCommand;
 const parseOpenClawChannelsLoginShellCommand = __testing.parseOpenClawChannelsLoginShellCommand;
 const validateExecScriptPreflight = __testing.validateScriptFileForShellBleed;
 const createPreflightTool = () =>
@@ -66,6 +67,93 @@ async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
     expect(swapped).toBe(true);
   });
 }
+
+describe("exec heavy-command guard", () => {
+  it("classifies package-manager and compiler-style validation as heavy", () => {
+    expect(analyzeHeavyExecCommand("corepack pnpm install --frozen-lockfile")).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm install" },
+    });
+    expect(analyzeHeavyExecCommand("pnpm lint:core")).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "pnpm lint:core" },
+    });
+    expect(analyzeHeavyExecCommand("corepack pnpm exec vitest run src/foo.test.ts")).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm exec vitest" },
+    });
+    expect(analyzeHeavyExecCommand("tsgolint src")).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "tsgolint" },
+    });
+  });
+
+  it("detects heavy commands inside shell wrappers and chained commands", () => {
+    expect(
+      analyzeHeavyExecCommand("cd /tmp/openclaw && git diff --check && corepack pnpm lint:core"),
+    ).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm lint:core" },
+    });
+    expect(
+      analyzeHeavyExecCommand(
+        "bash -lc 'cd /tmp/openclaw && corepack pnpm install --frozen-lockfile'",
+      ),
+    ).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm install" },
+    });
+  });
+
+  it("classifies broader diagnostic commands as maybe-heavy", () => {
+    expect(analyzeHeavyExecCommand("git diff --stat")).toMatchObject({
+      heavy: true,
+      hit: { classification: "maybe", reason: "git diff --stat" },
+    });
+    expect(analyzeHeavyExecCommand("rg -n pattern -S .")).toMatchObject({
+      heavy: true,
+      hit: { classification: "maybe", reason: "broad ripgrep" },
+    });
+    expect(analyzeHeavyExecCommand("grep -rn pattern src")).toMatchObject({
+      heavy: true,
+      hit: { classification: "maybe", reason: "recursive grep" },
+    });
+    expect(analyzeHeavyExecCommand("grep error src/file.ts")).toMatchObject({ heavy: false });
+  });
+
+  it("allows light commands and explicitly isolated heavy commands", () => {
+    expect(analyzeHeavyExecCommand("git status --short")).toMatchObject({ heavy: false });
+    expect(analyzeHeavyExecCommand("openclaw-heavy-run -- corepack pnpm lint:core")).toMatchObject({
+      heavy: false,
+      wrapped: true,
+    });
+    expect(
+      analyzeHeavyExecCommand(
+        "systemd-run --user --scope -p MemoryMax=6G -- corepack pnpm lint:core",
+      ),
+    ).toMatchObject({ heavy: false, wrapped: true });
+  });
+
+  it("blocks unisolated always-heavy commands before execution", async () => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-unisolated-heavy", {
+        command: "cd /tmp/openclaw && corepack pnpm lint:core",
+      }),
+    ).rejects.toThrow(/exec heavy-command guard: refused unisolated always-heavy command/);
+  });
+
+  it("does not fail closed on maybe-heavy diagnostics", async () => {
+    const tool = createPreflightTool();
+
+    await expect(
+      tool.execute("call-maybe-heavy", {
+        command: "git diff --stat -- src/agents/bash-tools.exec.ts",
+      }),
+    ).resolves.toMatchObject({ details: { status: "completed" } });
+  });
+});
 
 describe("exec interactive OpenClaw channel login guard", () => {
   it("recognizes direct and package-runner channel login commands before execution", () => {
