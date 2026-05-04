@@ -111,6 +111,33 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
+  it("drops reflected assistant metadata even when echo cache misses", () => {
+    const echoHas = vi.fn(() => false);
+    const logVerbose = vi.fn();
+    const reflectedText = [
+      "| col | val |",
+      "| --- | --- |",
+      "| a | 1 |",
+      "assistant to=final",
+    ].join("\n");
+
+    const decision = resolveDecision({
+      message: {
+        id: 43,
+        text: reflectedText,
+      },
+      messageText: reflectedText,
+      bodyText: reflectedText,
+      echoCache: { has: echoHas },
+      logVerbose,
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "reflected assistant content" });
+    expect(logVerbose).toHaveBeenCalledWith(
+      "imessage: dropping reflected assistant content (markers: assistant-role-marker)",
+    );
+  });
+
   it("drops reflected self-chat duplicates after seeing the from-me copy", () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
