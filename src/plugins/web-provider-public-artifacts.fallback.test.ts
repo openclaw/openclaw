@@ -152,4 +152,37 @@ describe("web provider public artifact manifest fallback", () => {
       pluginId: "fallback-fetch",
     });
   });
+
+  it("matches bundled web-search candidates through provider alias allowlist entries", () => {
+    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockReturnValueOnce(null);
+    mocks.loadPluginMetadataSnapshot.mockReturnValueOnce({
+      diagnostics: [],
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          rootDir: "/tmp/google",
+          contracts: { webSearchProviders: ["gemini"] },
+        },
+      ],
+    });
+    mocks.loadBundledWebSearchProviderEntriesFromDir.mockReturnValueOnce([
+      { id: "gemini", pluginId: "google" },
+    ]);
+
+    const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
+      config: {
+        plugins: {
+          allow: ["google-gemini-cli"],
+          bundledDiscovery: "allowlist",
+        },
+      },
+    });
+
+    expect(providers).toEqual([{ id: "gemini", pluginId: "google" }]);
+    expect(mocks.loadBundledWebSearchProviderEntriesFromDir).toHaveBeenCalledWith({
+      dirName: "google",
+      pluginId: "google",
+    });
+  });
 });

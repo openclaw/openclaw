@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -38,7 +39,9 @@ function filterAllowlistedBundledPluginIds(
   ) {
     return [...pluginIds];
   }
-  const allowedPluginIds = new Set(allow.map((pluginId) => pluginId.trim()).filter(Boolean));
+  const allowedPluginIds = new Set(
+    allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean),
+  );
   return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
 }
 
