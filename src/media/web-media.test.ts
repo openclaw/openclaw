@@ -167,8 +167,10 @@ describe("loadWebMedia", () => {
   // (e.g. the `image` agent tool) on hosts that skipped the optional `sharp`
   // native dep used to see a generic "Failed to optimize image" with the raw
   // module-resolution error tail, with no install hint. The thrown error now
-  // explicitly names the missing dep and the install command.
-  it("surfaces a clear sharp-install hint when the optional optimizer is unavailable (#73148)", async () => {
+  // explicitly names the missing dep and includes both the local-checkout and
+  // global-install repair commands so operators on either install posture get
+  // a working remediation.
+  it("surfaces a clear sharp-install hint covering both local and global installs when the optional optimizer is unavailable (#73148)", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { optimizeImageToJpeg: optimizeImageToJpegWithMissingOptimizer } =
         await import("./web-media.js");
@@ -176,9 +178,17 @@ describe("loadWebMedia", () => {
         Buffer.from(TINY_PNG_BASE64, "base64"),
         8,
       );
-      await expect(promise).rejects.toThrow(
-        /requires the optional `sharp` native dependency.*pnpm add sharp/i,
+      const error = await promise.then(
+        () => null,
+        (err: unknown) => err,
       );
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toMatch(/requires the optional `sharp` native dependency/i);
+      // Local-install repair command (workspace checkout).
+      expect(message).toMatch(/pnpm add sharp/);
+      // Global-install repair command (npm -g openclaw users).
+      expect(message).toMatch(/npm install -g openclaw@latest --include=optional/);
     });
   });
 
