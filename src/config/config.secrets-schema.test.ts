@@ -70,6 +70,28 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts google-vertex as a native model api value", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "google-vertex": {
+            baseUrl: "https://aiplatform.googleapis.com",
+            api: "google-vertex",
+            models: [
+              {
+                id: "gemini-3.1-pro-preview",
+                name: "Gemini 3.1 Pro Preview",
+                api: "google-vertex",
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts skills entry apiKey refs", () => {
     const result = validateConfigObjectRaw({
       skills: {

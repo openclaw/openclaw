@@ -44,4 +44,31 @@ describe("google provider policy public artifact", () => {
       api: "openai-completions",
     });
   });
+
+  it("preserves native Google Vertex provider configs during normalization", () => {
+    expect(
+      normalizeConfig({
+        provider: "google-vertex",
+        providerConfig: {
+          baseUrl: "https://aiplatform.googleapis.com",
+          api: "google-vertex",
+          models: [
+            {
+              id: "gemini-3.1-flash-lite",
+              name: "Gemini Flash Lite",
+              reasoning: true,
+              input: ["text", "image"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1_048_576,
+              maxTokens: 65_536,
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      baseUrl: "https://aiplatform.googleapis.com",
+      api: "google-vertex",
+      models: [{ id: "gemini-3.1-flash-lite-preview" }],
+    });
+  });
 });
