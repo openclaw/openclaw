@@ -61,6 +61,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/packages: reject inferred built runtime entries that exist but fail package-boundary checks instead of falling back to TypeScript source for installed packages. Thanks @vincentkoc.
 - Plugins/loader: do not retry native-loaded JavaScript plugin modules through the source transformer after native evaluation has already reached a missing dependency, avoiding duplicate top-level side effects. Thanks @vincentkoc.
 - Plugins/packages: reject blank `openclaw.runtimeExtensions` entries instead of silently ignoring them and falling back to inferred TypeScript runtime entries. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed npm plugin shadow entries from the managed package lock as well as `package.json` and `node_modules`, so future npm operations do not keep referencing repaired bundled-plugin shadows. Thanks @vincentkoc.

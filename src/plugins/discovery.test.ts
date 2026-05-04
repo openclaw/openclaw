@@ -1505,6 +1505,39 @@ describe("discoverOpenClawPlugins", () => {
         return true;
       },
     },
+    {
+      name: "rejects hardlinked inferred built runtime entries instead of falling back to source",
+      expectedDiagnostic: "escapes" as const,
+      expectedId: "pack",
+      setup: (stateDir: string) => {
+        if (process.platform === "win32") {
+          return false;
+        }
+        const globalExt = path.join(stateDir, "extensions", "pack");
+        const outsideDir = path.join(stateDir, "outside");
+        const outsideFile = path.join(outsideDir, "index.js");
+        const linkedFile = path.join(globalExt, "dist", "index.js");
+        mkdirSafe(path.join(globalExt, "src"));
+        mkdirSafe(path.dirname(linkedFile));
+        mkdirSafe(outsideDir);
+        fs.writeFileSync(path.join(globalExt, "src", "index.ts"), "export default {}", "utf-8");
+        fs.writeFileSync(outsideFile, "export default {}", "utf-8");
+        try {
+          fs.linkSync(outsideFile, linkedFile);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return false;
+          }
+          throw err;
+        }
+        writePluginPackageManifest({
+          packageDir: globalExt,
+          packageName: "@openclaw/pack",
+          extensions: ["./src/index.ts"],
+        });
+        return true;
+      },
+    },
   ] as const)("$name", async ({ setup, expectedDiagnostic, expectedId }) => {
     const stateDir = makeTempDir();
     await expectRejectedPackageExtensionEntry({
