@@ -89,6 +89,27 @@ directory, installs dependencies, builds each ref, runs the scenario with
 and `mantis-report.md`. For the first Discord scenario, a successful verification
 means baseline status is `fail` and candidate status is `pass`.
 
+The first VM/browser primitive is the desktop smoke:
+
+```bash
+pnpm openclaw qa mantis desktop-browser-smoke \
+  --output-dir .artifacts/qa-e2e/mantis/desktop-browser
+```
+
+It leases or reuses a Crabbox desktop machine, starts a visible browser inside the
+VNC session, captures the desktop, pulls artifacts back to the local output
+directory, and writes the reconnect command into the report. The command defaults
+to the Hetzner provider because it is the first provider with working desktop/VNC
+coverage in the Mantis lane. Override it with `--provider`, `--crabbox-bin`, or
+`OPENCLAW_MANTIS_CRABBOX_PROVIDER` when running against another Crabbox fleet.
+
+Useful desktop smoke flags:
+
+- `--lease-id <cbx_...>` or `OPENCLAW_MANTIS_CRABBOX_LEASE_ID` reuses a warmed desktop.
+- `--browser-url <url>` changes the page opened in the visible browser.
+- `--keep-lease` or `OPENCLAW_MANTIS_KEEP_VM=1` keeps a newly created passing lease open for VNC inspection. Failed runs keep the lease by default when one was created so an operator can reconnect.
+- `--class`, `--idle-timeout`, and `--ttl` tune machine size and lease lifetime.
+
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
 accepts:
@@ -132,18 +153,19 @@ ClawSweeper review findings.
 
 1. Acquire credentials.
 2. Allocate or reuse a VM.
-3. Prepare a clean checkout for the baseline ref.
-4. Install dependencies and build only what the scenario needs.
-5. Start a child OpenClaw Gateway with an isolated state directory.
-6. Configure the live transport, provider, model, and browser profile.
-7. Run the scenario and capture baseline evidence.
-8. Stop the gateway and preserve logs.
-9. Prepare the candidate ref in the same VM.
-10. Run the same scenario and capture candidate evidence.
-11. Compare the oracle results and visual evidence.
-12. Write Markdown, JSON, logs, screenshots, and optional trace artifacts.
-13. Upload GitHub Actions artifacts.
-14. Post a concise PR or Discord status message.
+3. Prepare the desktop/browser profile when the scenario needs UI evidence.
+4. Prepare a clean checkout for the baseline ref.
+5. Install dependencies and build only what the scenario needs.
+6. Start a child OpenClaw Gateway with an isolated state directory.
+7. Configure the live transport, provider, model, and browser profile.
+8. Run the scenario and capture baseline evidence.
+9. Stop the gateway and preserve logs.
+10. Prepare the candidate ref in the same VM.
+11. Run the same scenario and capture candidate evidence.
+12. Compare the oracle results and visual evidence.
+13. Write Markdown, JSON, logs, screenshots, and optional trace artifacts.
+14. Upload GitHub Actions artifacts.
+15. Post a concise PR or Discord status message.
 
 The scenario should be able to fail in two different ways:
 

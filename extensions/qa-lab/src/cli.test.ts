@@ -49,6 +49,7 @@ const {
   runQaSuiteCommand,
   runQaTelegramCommand,
   runMantisBeforeAfterCommand,
+  runMantisDesktopBrowserSmokeCommand,
   runMantisDiscordSmokeCommand,
 } = vi.hoisted(() => ({
   runQaCredentialsAddCommand: vi.fn(),
@@ -59,6 +60,7 @@ const {
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
   runMantisBeforeAfterCommand: vi.fn(),
+  runMantisDesktopBrowserSmokeCommand: vi.fn(),
   runMantisDiscordSmokeCommand: vi.fn(),
 }));
 
@@ -78,6 +80,7 @@ vi.mock("./live-transports/telegram/cli.runtime.js", () => ({
 
 vi.mock("./mantis/cli.runtime.js", () => ({
   runMantisBeforeAfterCommand,
+  runMantisDesktopBrowserSmokeCommand,
   runMantisDiscordSmokeCommand,
 }));
 
@@ -105,6 +108,7 @@ describe("qa cli registration", () => {
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
     runMantisBeforeAfterCommand.mockReset();
+    runMantisDesktopBrowserSmokeCommand.mockReset();
     runMantisDiscordSmokeCommand.mockReset();
     listQaRunnerCliContributions
       .mockReset()
@@ -205,6 +209,73 @@ describe("qa cli registration", () => {
       skipBuild: true,
       skipInstall: true,
       transport: "discord",
+    });
+  });
+
+  it("routes mantis desktop browser smoke flags into the mantis runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "desktop-browser-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+      "--output-dir",
+      ".artifacts/qa-e2e/mantis/desktop-browser",
+      "--browser-url",
+      "https://openclaw.ai/docs",
+      "--crabbox-bin",
+      "/tmp/crabbox",
+      "--provider",
+      "hetzner",
+      "--class",
+      "beast",
+      "--lease-id",
+      "cbx_123abc",
+      "--idle-timeout",
+      "30m",
+      "--ttl",
+      "90m",
+      "--keep-lease",
+    ]);
+
+    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
+      browserUrl: "https://openclaw.ai/docs",
+      crabboxBin: "/tmp/crabbox",
+      idleTimeout: "30m",
+      keepLease: true,
+      leaseId: "cbx_123abc",
+      machineClass: "beast",
+      outputDir: ".artifacts/qa-e2e/mantis/desktop-browser",
+      provider: "hetzner",
+      repoRoot: "/tmp/openclaw-repo",
+      ttl: "90m",
+    });
+  });
+
+  it("does not shadow mantis desktop browser runtime env defaults", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "mantis",
+      "desktop-browser-smoke",
+      "--repo-root",
+      "/tmp/openclaw-repo",
+    ]);
+
+    expect(runMantisDesktopBrowserSmokeCommand).toHaveBeenCalledWith({
+      browserUrl: undefined,
+      crabboxBin: undefined,
+      idleTimeout: undefined,
+      keepLease: undefined,
+      leaseId: undefined,
+      machineClass: undefined,
+      outputDir: undefined,
+      provider: undefined,
+      repoRoot: "/tmp/openclaw-repo",
+      ttl: undefined,
     });
   });
 
