@@ -16,19 +16,19 @@ function pickWatchdogProfile(
   minMs: number;
   maxMs: number;
   maxMsConfigured: boolean;
+  noOutputTimeoutRatioConfigured: boolean;
 } {
   const defaults = useResume ? CLI_RESUME_WATCHDOG_DEFAULTS : CLI_FRESH_WATCHDOG_DEFAULTS;
   const configured = useResume
     ? backend.reliability?.watchdog?.resume
     : backend.reliability?.watchdog?.fresh;
 
-  const ratio = (() => {
-    const value = configured?.noOutputTimeoutRatio;
-    if (typeof value !== "number" || !Number.isFinite(value)) {
-      return defaults.noOutputTimeoutRatio;
-    }
-    return Math.max(0.05, Math.min(0.95, value));
-  })();
+  const configuredRatio = configured?.noOutputTimeoutRatio;
+  const noOutputTimeoutRatioConfigured =
+    typeof configuredRatio === "number" && Number.isFinite(configuredRatio);
+  const ratio = noOutputTimeoutRatioConfigured
+    ? Math.max(0.05, Math.min(0.95, configuredRatio))
+    : defaults.noOutputTimeoutRatio;
   const minMs = (() => {
     const value = configured?.minMs;
     if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -52,6 +52,7 @@ function pickWatchdogProfile(
     minMs: Math.min(minMs, maxMs),
     maxMs: Math.max(minMs, maxMs),
     maxMsConfigured,
+    noOutputTimeoutRatioConfigured,
   };
 }
 
@@ -68,7 +69,9 @@ export function resolveCliNoOutputTimeoutMs(params: {
     return Math.min(profile.noOutputTimeoutMs, cap);
   }
   const isCronRun = params.trigger === "cron";
-  const noOutputTimeoutRatio = isCronRun
+  const shouldLiftDefaultResumeRatio =
+    isCronRun && params.useResume && !profile.noOutputTimeoutRatioConfigured;
+  const noOutputTimeoutRatio = shouldLiftDefaultResumeRatio
     ? Math.max(profile.noOutputTimeoutRatio, CLI_FRESH_WATCHDOG_DEFAULTS.noOutputTimeoutRatio)
     : profile.noOutputTimeoutRatio;
   const maxMs =

@@ -913,6 +913,25 @@ describe("resolveCliNoOutputTimeoutMs", () => {
     expect(timeoutMs).toBe(180_000);
   });
 
+  it("preserves configured cron resume watchdog ratio", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: {
+        command: "codex",
+        reliability: {
+          watchdog: {
+            resume: {
+              noOutputTimeoutRatio: 0.2,
+            },
+          },
+        },
+      },
+      timeoutMs: 600_000,
+      trigger: "cron",
+      useResume: true,
+    });
+    expect(timeoutMs).toBe(120_000);
+  });
+
   it("preserves configured cron resume watchdog caps", () => {
     const timeoutMs = resolveCliNoOutputTimeoutMs({
       backend: {
