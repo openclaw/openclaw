@@ -7,7 +7,10 @@ import {
   listFeishuDirectoryGroupsLive as listFeishuDirectoryGroupsLiveImpl,
   listFeishuDirectoryPeersLive as listFeishuDirectoryPeersLiveImpl,
 } from "./directory.js";
-import { feishuOutbound as feishuOutboundImpl } from "./outbound.js";
+import {
+  feishuOutbound as feishuOutboundImpl,
+  tryParseFeishuCardFromText as tryParseFeishuCardFromTextImpl,
+} from "./outbound.js";
 import {
   createPinFeishu as createPinFeishuImpl,
   listPinsFeishu as listPinsFeishuImpl,
@@ -44,4 +47,5 @@ export const feishuChannelRuntime = {
   getMessageFeishu: getMessageFeishuImpl,
   sendCardFeishu: sendCardFeishuImpl,
   sendMessageFeishu: sendMessageFeishuImpl,
+  tryParseFeishuCardFromText: tryParseFeishuCardFromTextImpl,
 };
