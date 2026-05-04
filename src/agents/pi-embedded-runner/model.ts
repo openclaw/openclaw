@@ -991,7 +991,8 @@ export function resolveModel(
   };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
-  const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
+  const modelRegistry =
+    options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir, { config: cfg });
   const runtimeHooks = resolveRuntimeHooks(options);
   const model = resolveModelWithRegistry({
     provider: normalizedRef.provider,
@@ -1053,7 +1054,7 @@ export async function resolveModelAsync(
   const modelRegistry =
     options?.modelRegistry ??
     emptyDiscoveryStores?.modelRegistry ??
-    discoverModels(authStorage, resolvedAgentDir);
+    discoverModels(authStorage, resolvedAgentDir, { config: cfg });
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
     provider: normalizedRef.provider,

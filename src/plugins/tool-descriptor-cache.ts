@@ -167,6 +167,9 @@ export function capturePluginToolDescriptor(params: {
 export function readCachedPluginToolDescriptors(
   cacheKey: string,
 ): readonly CachedPluginToolDescriptor[] | undefined {
+  if (process.env.OPENCLAW_DISABLE_TOOL_CACHE === "1") {
+    return undefined;
+  }
   return descriptorCache.get(cacheKey);
 }
 
@@ -174,6 +177,9 @@ export function writeCachedPluginToolDescriptors(params: {
   cacheKey: string;
   descriptors: readonly CachedPluginToolDescriptor[];
 }): void {
+  if (process.env.OPENCLAW_DISABLE_TOOL_CACHE === "1") {
+    return;
+  }
   if (
     !descriptorCache.has(params.cacheKey) &&
     descriptorCache.size >= PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT
