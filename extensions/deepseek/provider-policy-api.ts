@@ -1,35 +1,13 @@
-import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
-import { DEEPSEEK_MODEL_CATALOG, isDeepSeekV4ModelId } from "./models.js";
+import { DEEPSEEK_MODEL_CATALOG } from "./models.js";
+import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 type ModelDefinitionDraft = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
 
-const DEEPSEEK_V4_THINKING_LEVEL_IDS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-function buildDeepSeekV4ThinkingLevel(id: (typeof DEEPSEEK_V4_THINKING_LEVEL_IDS)[number]) {
-  return { id };
-}
-
-const DEEPSEEK_V4_THINKING_PROFILE = {
-  levels: DEEPSEEK_V4_THINKING_LEVEL_IDS.map(buildDeepSeekV4ThinkingLevel),
-  defaultLevel: "high",
-} satisfies ProviderThinkingProfile;
-
-export function resolveThinkingProfile(params: {
-  provider: string;
-  modelId: string;
-}): ProviderThinkingProfile | null {
-  return isDeepSeekV4ModelId(params.modelId) ? DEEPSEEK_V4_THINKING_PROFILE : null;
+export function resolveThinkingProfile(params: { provider: string; modelId: string }) {
+  return resolveDeepSeekV4ThinkingProfile(params.modelId) ?? null;
 }
 
 /**
