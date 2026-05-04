@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
-import { Socket } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { assertDebugProxyDirectConnectAllowed, startDebugProxyServer } from "./proxy-server.js";
+import { assertDebugProxyDirectUpstreamAllowed, startDebugProxyServer } from "./proxy-server.js";
 
 let testRoot: string | undefined;
 
@@ -47,7 +48,60 @@ async function connectThroughProxy(proxyUrl: string): Promise<string> {
   return data;
 }
 
-describe("debug proxy managed-proxy CONNECT policy", () => {
+async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise<string> {
+  const proxy = new URL(proxyUrl);
+  const target = new URL(targetUrl);
+  const socket = new Socket();
+  let data = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    data += chunk;
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.connect(Number(proxy.port), proxy.hostname, resolve);
+  });
+  socket.write(`GET ${target.href} HTTP/1.1\r\nHost: ${target.host}\r\nConnection: close\r\n\r\n`);
+  await new Promise<void>((resolve) => socket.once("end", resolve));
+  socket.destroy();
+  return data;
+}
+
+async function startCanaryOrigin(): Promise<{
+  requestCount: () => number;
+  stop: () => Promise<void>;
+  url: string;
+}> {
+  let requests = 0;
+  const server = createHttpServer((_req, res) => {
+    requests += 1;
+    res.end("ok");
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    requestCount: () => requests,
+    stop: async () =>
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+      }),
+    url: `http://127.0.0.1:${address.port}/metadata`,
+  };
+}
+
+describe("debug proxy managed-proxy direct upstream policy", () => {
   const originalProxyActive = process.env["OPENCLAW_PROXY_ACTIVE"];
   const originalAllowDirect =
     process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"];
@@ -73,31 +127,31 @@ describe("debug proxy managed-proxy CONNECT policy", () => {
     await cleanupTestDirs();
   });
 
-  it("allows direct CONNECT upstreams when managed proxy mode is inactive", () => {
-    expect(() => assertDebugProxyDirectConnectAllowed()).not.toThrow();
+  it("allows direct upstreams when managed proxy mode is inactive", () => {
+    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
   });
 
-  it("rejects direct CONNECT upstreams while managed proxy mode is active", () => {
+  it("rejects direct upstreams while managed proxy mode is active", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
 
-    expect(() => assertDebugProxyDirectConnectAllowed()).toThrow(
-      /Debug proxy CONNECT upstream forwarding is disabled/,
+    expect(() => assertDebugProxyDirectUpstreamAllowed()).toThrow(
+      /Debug proxy direct upstream forwarding is disabled/,
     );
   });
 
   it("uses shared truthy parsing for managed proxy mode", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "true";
 
-    expect(() => assertDebugProxyDirectConnectAllowed()).toThrow(
-      /Debug proxy CONNECT upstream forwarding is disabled/,
+    expect(() => assertDebugProxyDirectUpstreamAllowed()).toThrow(
+      /Debug proxy direct upstream forwarding is disabled/,
     );
   });
 
-  it("allows direct CONNECT upstreams with explicit diagnostic override", () => {
+  it("allows direct upstreams with explicit diagnostic override", () => {
     process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
     process.env["OPENCLAW_DEBUG_PROXY_ALLOW_DIRECT_CONNECT_WITH_MANAGED_PROXY"] = "1";
 
-    expect(() => assertDebugProxyDirectConnectAllowed()).not.toThrow();
+    expect(() => assertDebugProxyDirectUpstreamAllowed()).not.toThrow();
   });
 
   it("rejects CONNECT upstreams before opening direct sockets while managed proxy mode is active", async () => {
@@ -108,9 +162,26 @@ describe("debug proxy managed-proxy CONNECT policy", () => {
 
       expect(response).toContain("403 Forbidden");
       expect(response).toContain("Connection: close");
-      expect(response).toContain("Debug proxy CONNECT upstream forwarding is disabled");
+      expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
     } finally {
       await server.stop();
+    }
+  });
+
+  it("rejects absolute-form HTTP proxy requests before opening direct upstreams while managed proxy mode is active", async () => {
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    const origin = await startCanaryOrigin();
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
+    try {
+      const response = await requestThroughProxy(server.proxyUrl, origin.url);
+
+      expect(response).toContain("403 Forbidden");
+      expect(response).toContain("Connection: close");
+      expect(response).toContain("Debug proxy direct upstream forwarding is disabled");
+      expect(origin.requestCount()).toBe(0);
+    } finally {
+      await server.stop();
+      await origin.stop();
     }
   });
 });
