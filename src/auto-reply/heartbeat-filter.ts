@@ -1,5 +1,9 @@
-import { stripHeartbeatToken } from "./heartbeat.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "./heartbeat.js";
+import {
+  HEARTBEAT_PROMPT,
+  HEARTBEAT_RESPONSE_TOOL_PROMPT,
+  HEARTBEAT_TRANSCRIPT_PROMPT,
+  stripHeartbeatToken,
+} from "./heartbeat.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
@@ -46,11 +50,13 @@ export function isHeartbeatUserMessage(
   if (!trimmed) {
     return false;
   }
-  const normalizedHeartbeatPrompt = heartbeatPrompt?.trim();
+  const knownHeartbeatPrompts = [heartbeatPrompt, HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT]
+    .map((prompt) => prompt?.trim())
+    .filter((prompt): prompt is string => Boolean(prompt));
   if (trimmed === HEARTBEAT_TRANSCRIPT_PROMPT) {
     return true;
   }
-  if (normalizedHeartbeatPrompt && trimmed.startsWith(normalizedHeartbeatPrompt)) {
+  if (knownHeartbeatPrompts.some((prompt) => trimmed.startsWith(prompt))) {
     return true;
   }
   return (

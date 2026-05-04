@@ -462,6 +462,88 @@ function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>
   );
 }
 
+function projectedHistoryDedupeKey(message: Record<string, unknown>): string | null {
+  const role = typeof message.role === "string" ? message.role.trim().toLowerCase() : "";
+  if (!role) {
+    return null;
+  }
+
+  const textSignature =
+    typeof message.textSignature === "string" && message.textSignature.trim()
+      ? message.textSignature.trim()
+      : null;
+  if (role === "assistant" && textSignature) {
+    return `${role}:signature:${textSignature}`;
+  }
+
+  const responseId =
+    typeof message.responseId === "string" && message.responseId.trim()
+      ? message.responseId.trim()
+      : null;
+  if (role === "assistant" && responseId) {
+    return `${role}:response:${responseId}`;
+  }
+
+  const timestamp =
+    typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? message.timestamp
+      : null;
+  if (timestamp === null) {
+    return null;
+  }
+
+  const roleContent = asRoleContentMessage(message);
+  const text = roleContent ? extractMessageTextForDisplayDedupe(roleContent.content).trim() : "";
+  if (!text) {
+    return null;
+  }
+  return `${role}:ts:${timestamp}:text:${text}`;
+}
+
+function extractMessageTextForDisplayDedupe(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
+  return content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const entry = block as { type?: unknown; text?: unknown };
+      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+    })
+    .join("");
+}
+
+function dedupeAdjacentProjectedHistoryMessages(messages: Array<Record<string, unknown>>): {
+  messages: Array<Record<string, unknown>>;
+  changed: boolean;
+} {
+  if (messages.length < 2) {
+    return { messages, changed: false };
+  }
+  let changed = false;
+  const deduped: Array<Record<string, unknown>> = [];
+  for (const message of messages) {
+    const key = projectedHistoryDedupeKey(message);
+    const previous = deduped[deduped.length - 1];
+    const previousKey = previous ? projectedHistoryDedupeKey(previous) : null;
+    if (key && previousKey === key) {
+      // Keep the newer/right-most transcript copy. Control UI duplicates can
+      // differ only by internal sender metadata; the later copy displays as
+      // the local user instead of the synthetic openclaw-control-ui sender.
+      deduped[deduped.length - 1] = message;
+      changed = true;
+      continue;
+    }
+    deduped.push(message);
+  }
+  return { messages: deduped, changed };
+}
+
 function filterVisibleProjectedHistoryMessages(
   messages: Array<Record<string, unknown>>,
 ): Array<Record<string, unknown>> {
@@ -494,7 +576,9 @@ function filterVisibleProjectedHistoryMessages(
     }
     visible.push(current);
   }
-  return changed ? visible : messages;
+  const deduped = dedupeAdjacentProjectedHistoryMessages(visible);
+  changed ||= deduped.changed;
+  return changed ? deduped.messages : messages;
 }
 
 export function projectChatDisplayMessages(

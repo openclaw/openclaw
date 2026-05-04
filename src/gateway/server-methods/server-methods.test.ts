@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_PROMPT, HEARTBEAT_RESPONSE_TOOL_PROMPT } from "../../auto-reply/heartbeat.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
 import {
@@ -458,6 +459,45 @@ describe("sanitizeChatHistoryMessages", () => {
 });
 
 describe("projectRecentChatDisplayMessages", () => {
+  it("hides heartbeat user prompts from display history", () => {
+    const result = projectRecentChatDisplayMessages([
+      { role: "user", content: HEARTBEAT_PROMPT, timestamp: 1 },
+      { role: "user", content: HEARTBEAT_RESPONSE_TOOL_PROMPT, timestamp: 2 },
+      { role: "user", content: "real user message", timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([{ role: "user", content: "real user message", timestamp: 3 }]);
+  });
+
+  it("dedupes adjacent duplicate display messages while keeping the local user copy", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: "same ask",
+        timestamp: 10,
+        senderLabel: "openclaw-control-ui",
+      },
+      { role: "user", content: "same ask", timestamp: 10 },
+      {
+        role: "assistant",
+        content: "same answer",
+        timestamp: 11,
+        textSignature: "sig-1",
+      },
+      {
+        role: "assistant",
+        content: "same answer",
+        timestamp: 11,
+        textSignature: "sig-1",
+      },
+    ]);
+
+    expect(result).toEqual([
+      { role: "user", content: "same ask", timestamp: 10 },
+      { role: "assistant", content: "same answer", timestamp: 11, textSignature: "sig-1" },
+    ]);
+  });
+
   it("applies history limits after dropping display-hidden messages", () => {
     const result = projectRecentChatDisplayMessages(
       [
