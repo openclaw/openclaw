@@ -466,6 +466,41 @@ describe("fs-safe", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "does not stat out-of-root files when path parents change before pinned stat",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const slot = path.join(root, "slot");
+      await fs.mkdir(slot, { recursive: true });
+      await fs.writeFile(path.join(slot, "safe.txt"), "safe");
+      await fs.writeFile(path.join(outside, "safe.txt"), "secret");
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "stat") {
+            await fs.rm(slot, { force: true, recursive: true });
+            await fs.symlink(outside, slot);
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          statPathWithinRoot({
+            rootDir: root,
+            relativePath: path.join("slot", "safe.txt"),
+            followSymlinks: false,
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "does not list out-of-root directories when path parents change before pinned readdir",
     async () => {
       const root = await tempDirs.make("openclaw-fs-safe-root-");

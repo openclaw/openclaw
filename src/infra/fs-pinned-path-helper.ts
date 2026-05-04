@@ -87,6 +87,26 @@ const LOCAL_PINNED_PATH_PYTHON = [
   "    finally:",
   "        os.close(dir_fd)",
   "",
+  "def stat_within_root(root_fd, segments, follow_symlinks):",
+  "    if not segments:",
+  "        target_stat = os.fstat(root_fd)",
+  "    else:",
+  "        parent_fd = walk_existing_path(root_fd, segments[:-1])",
+  "        try:",
+  "            basename = segments[-1]",
+  "            validate_segment(basename)",
+  "            target_stat = os.stat(basename, dir_fd=parent_fd, follow_symlinks=follow_symlinks)",
+  "        finally:",
+  "            os.close(parent_fd)",
+  "    print(json.dumps({",
+  "        'mode': target_stat.st_mode,",
+  "        'size': target_stat.st_size,",
+  "        'mtimeMs': target_stat.st_mtime_ns / 1000000,",
+  "        'ctimeMs': target_stat.st_ctime_ns / 1000000,",
+  "        'atimeMs': target_stat.st_atime_ns / 1000000,",
+  "        'birthtimeMs': getattr(target_stat, 'st_birthtime', target_stat.st_ctime) * 1000,",
+  "    }))",
+  "",
   "def rename_within_root(root_fd, source_segments, dest_segments, overwrite):",
   "    if not source_segments or not dest_segments:",
   "        raise OSError(errno.EPERM, 'refusing to rename root path')",
@@ -120,6 +140,8 @@ const LOCAL_PINNED_PATH_PYTHON = [
   "        remove_within_root(root_fd, segments)",
   "    elif operation == 'readdir':",
   "        readdir_within_root(root_fd, segments)",
+  "    elif operation == 'stat':",
+  "        stat_within_root(root_fd, segments, overwrite)",
   "    elif operation == 'rename':",
   "        rename_within_root(root_fd, segments, split_segments(to_relative_path), overwrite)",
   "    else:",
@@ -182,7 +204,7 @@ export function isPinnedPathHelperSpawnError(error: unknown): boolean {
 }
 
 export async function runPinnedPathHelper(params: {
-  operation: "mkdirp" | "remove" | "readdir" | "rename";
+  operation: "mkdirp" | "remove" | "readdir" | "rename" | "stat";
   rootPath: string;
   relativePath: string;
   toRelativePath?: string;
