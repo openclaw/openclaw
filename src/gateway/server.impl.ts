@@ -24,7 +24,6 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearAgentRunContext } from "../infra/agent-events.js";
 import { maybeStartAgentEventSink } from "../infra/agent-event-sink.js";
 import {
   isDiagnosticsEnabled,
