@@ -727,6 +727,15 @@ export const th: TranslationMap = {
       dailyCsv: "CSV รายวัน",
       json: "JSON",
     },
+    cacheStatus: {
+      warning: "แคชการใช้งานกำลังสร้างใหม่ในเบื้องหลัง ยอดรวมที่แสดงอาจไม่เป็นปัจจุบัน",
+      title: "{status}: ค้างอยู่ {pending}, ล้าสมัย {stale}, แคชแล้ว {cached}",
+      status: {
+        refreshing: "กำลังรีเฟรช",
+        stale: "ล้าสมัย",
+        partial: "บางส่วน",
+      },
+    },
     empty: {
       title: "เริ่มต้นด้วยช่วงวันที่",
       subtitle:
@@ -1118,7 +1127,7 @@ export const th: TranslationMap = {
       channel: "ช่องทาง",
       webhookPlaceholder: "https://example.com/cron",
       channelHelp: "เลือกช่องทางที่เชื่อมต่อซึ่งจะได้รับสรุป",
-      webhookHelp: "ส่งสรุปผลการทำงานไปยังปลายทาง webhook",
+      webhookHelp: "ส่งสรุปผลการ��ำงานไปยังปลายทาง webhook",
       to: "ถึง",
       toPlaceholder: "+1555... หรือ chat id",
       toHelp: "ตัวเลือกแทนที่ผู้รับ (chat id, โทรศัพท์ หรือ user id)",

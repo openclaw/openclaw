@@ -4,6 +4,7 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discoverOpenClawPlugins } from "./discovery.js";
+import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -198,6 +199,7 @@ function createPackagePluginWithEntry(params: {
   packageName: string;
   pluginId?: string;
   entryPath?: string;
+  writeBuiltRuntime?: boolean;
 }) {
   const entryPath = params.entryPath ?? "src/index.ts";
   mkdirSafe(path.dirname(path.join(params.packageDir, entryPath)));
@@ -208,6 +210,14 @@ function createPackagePluginWithEntry(params: {
     ...(params.pluginId ? { pluginId: params.pluginId } : {}),
   });
   writePluginEntry(path.join(params.packageDir, entryPath));
+  if (params.writeBuiltRuntime ?? listBuiltRuntimeEntryCandidates(entryPath).length > 0) {
+    const runtimeEntry = listBuiltRuntimeEntryCandidates(entryPath)[0];
+    if (runtimeEntry) {
+      const runtimePath = path.join(params.packageDir, runtimeEntry.replace(/^\.\//u, ""));
+      mkdirSafe(path.dirname(runtimePath));
+      writePluginEntry(runtimePath);
+    }
+  }
 }
 
 function createBundleRoot(bundleDir: string, markerPath: string, manifest?: unknown) {
@@ -303,7 +313,7 @@ function expectBundleCandidateMatch(params: {
 async function expectRejectedPackageExtensionEntry(params: {
   stateDir: string;
   setup: (stateDir: string) => boolean | void;
-  expectedDiagnostic?: "escapes" | "none";
+  expectedDiagnostic?: "escapes" | "none" | "runtime";
   expectedId?: string;
 }) {
   if (params.setup(params.stateDir) === false) {
@@ -318,6 +328,14 @@ async function expectRejectedPackageExtensionEntry(params: {
   }
   if (params.expectedDiagnostic === "escapes") {
     expectEscapesPackageDiagnostic(result.diagnostics);
+    return;
+  }
+  if (params.expectedDiagnostic === "runtime") {
+    expect(
+      result.diagnostics.some(
+        (entry) => entry.level === "error" && entry.message.includes("compiled runtime output"),
+      ),
+    ).toBe(true);
     return;
   }
   expect(result.diagnostics).toEqual([]);
@@ -714,6 +732,7 @@ describe("discoverOpenClawPlugins", () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions", "pack");
     mkdirSafe(path.join(globalExt, "src"));
+    mkdirSafe(path.join(globalExt, "dist"));
 
     writePluginPackageManifest({
       packageDir: globalExt,
@@ -722,15 +741,43 @@ describe("discoverOpenClawPlugins", () => {
     });
     writePluginEntry(path.join(globalExt, "src", "one.ts"));
     writePluginEntry(path.join(globalExt, "src", "two.ts"));
+    writePluginEntry(path.join(globalExt, "dist", "one.js"));
+    writePluginEntry(path.join(globalExt, "dist", "two.js"));
 
     const { candidates } = await discoverWithStateDir(stateDir, {});
     expectCandidateIds(candidates, { includes: ["pack/one", "pack/two"] });
+  });
+
+  it("rejects source-only TypeScript entries for installed package plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "source-only-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/source-only-pack",
+      extensions: ["./src/index.ts"],
+    });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { absent: ["source-only-pack"] });
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("requires compiled runtime output") &&
+          entry.message.includes("./dist/index.js"),
+      ),
+    ).toBe(true);
   });
 
   it("reuses one filesystem realpath lookup per package root within a discovery run", () => {
     const stateDir = makeTempDir();
     const packageDir = path.join(stateDir, "extensions", "pack");
     mkdirSafe(path.join(packageDir, "src"));
+    mkdirSafe(path.join(packageDir, "dist"));
 
     writePluginPackageManifest({
       packageDir,
@@ -739,6 +786,8 @@ describe("discoverOpenClawPlugins", () => {
     });
     writePluginEntry(path.join(packageDir, "src", "one.ts"));
     writePluginEntry(path.join(packageDir, "src", "two.ts"));
+    writePluginEntry(path.join(packageDir, "dist", "one.js"));
+    writePluginEntry(path.join(packageDir, "dist", "two.js"));
 
     const realpathSync = vi.spyOn(fs, "realpathSync");
     const { candidates } = discoverOpenClawPlugins({
@@ -1049,6 +1098,7 @@ describe("discoverOpenClawPlugins", () => {
       "diffs",
     );
     mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
     mkdirSafe(nestedDiffsDir);
 
     writePluginPackageManifest({
@@ -1059,6 +1109,11 @@ describe("discoverOpenClawPlugins", () => {
     writePluginManifest({ pluginDir, id: "opik-openclaw" });
     fs.writeFileSync(
       path.join(pluginDir, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "dist", "index.js"),
       "export default function () {}",
       "utf-8",
     );
@@ -1322,8 +1377,8 @@ describe("discoverOpenClawPlugins", () => {
       },
     },
     {
-      name: "skips missing package extension entries without escape diagnostics",
-      expectedDiagnostic: "none" as const,
+      name: "rejects missing TypeScript package runtime entries without escape diagnostics",
+      expectedDiagnostic: "runtime" as const,
       setup: (stateDir: string) => {
         const globalExt = path.join(stateDir, "extensions", "missing-entry-pack");
         mkdirSafe(globalExt);
@@ -1550,6 +1605,71 @@ describe("discoverOpenClawPlugins", () => {
       expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(
         shouldBlockForMismatch,
       );
+      if (shouldBlockForMismatch) {
+        expect(result.diagnostics).toContainEqual(
+          expect.objectContaining({
+            pluginId: "owner-mismatch",
+          }),
+        );
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("deduplicates blocked candidate diagnostics", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    mkdirSafe(globalExt);
+    const blockedDir = path.join(globalExt, "blocked-plugin");
+    mkdirSafe(blockedDir);
+    fs.writeFileSync(path.join(blockedDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.chmodSync(blockedDir, 0o777);
+
+    try {
+      const result = discoverOpenClawPlugins({
+        env: {
+          ...buildDiscoveryEnv(stateDir),
+          OPENCLAW_PLUGINS_PATHS: blockedDir,
+        },
+      });
+      const blockedDiagnostics = result.diagnostics.filter(
+        (diag) =>
+          diag.pluginId === "blocked-plugin" &&
+          diag.message.includes("blocked plugin candidate: world-writable path"),
+      );
+      expect(blockedDiagnostics).toHaveLength(1);
+    } finally {
+      fs.chmodSync(blockedDir, 0o755);
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "uses native manifest ids for blocked index-file directory diagnostics",
+    () => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "alias-dir");
+      mkdirSafe(pluginDir);
+      writePluginManifest({ pluginDir, id: "actual-id" });
+      writePluginEntry(path.join(pluginDir, "index.ts"));
+      fs.chmodSync(pluginDir, 0o777);
+
+      try {
+        const result = discoverOpenClawPlugins({
+          extraPaths: [pluginDir],
+          env: {
+            ...buildDiscoveryEnv(stateDir),
+          },
+        });
+        expect(result.candidates).toHaveLength(0);
+        expect(result.diagnostics).toContainEqual(
+          expect.objectContaining({
+            pluginId: "actual-id",
+            source: expect.stringMatching(/alias-dir$/),
+            message: expect.stringContaining("blocked plugin candidate: world-writable path"),
+          }),
+        );
+      } finally {
+        fs.chmodSync(pluginDir, 0o755);
+      }
     },
   );
 

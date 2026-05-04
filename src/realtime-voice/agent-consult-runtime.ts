@@ -39,6 +39,7 @@ export async function consultRealtimeVoiceAgent(params: {
   assistantLabel?: string;
   questionSourceLabel?: string;
   agentId?: string;
+  spawnedBy?: string | null;
   provider?: RunEmbeddedPiAgentParams["provider"];
   model?: RunEmbeddedPiAgentParams["model"];
   thinkLevel?: RunEmbeddedPiAgentParams["thinkLevel"];
@@ -73,6 +74,7 @@ export async function consultRealtimeVoiceAgent(params: {
     sessionKey: params.sessionKey,
     sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
     agentId,
+    spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
     sessionFile,
     workspaceDir,

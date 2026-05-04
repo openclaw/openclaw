@@ -16,7 +16,10 @@ function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
 }
 
 function normalizeMode(value: unknown): GoogleMeetMode | undefined {
-  return value === "realtime" || value === "transcribe" ? value : undefined;
+  if (value === "realtime") {
+    return "agent";
+  }
+  return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
 }
 
 function normalizeGoogleMeetAccessType(value: unknown): GoogleMeetAccessType | undefined {

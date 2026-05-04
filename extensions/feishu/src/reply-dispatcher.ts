@@ -1,6 +1,10 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  formatChannelProgressDraftLine,
+  isChannelProgressDraftWorkToolName,
+} from "openclaw/plugin-sdk/channel-streaming";
+import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
@@ -8,7 +12,7 @@ import {
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { sendMediaFeishu } from "./media.js";
+import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
 import {
@@ -52,6 +56,12 @@ function rememberStreamingStartFailure(accountId: string, now = Date.now()): num
   const backoffUntil = now + STREAMING_START_FAILURE_BACKOFF_MS;
   streamingStartBackoffUntilByAccount.set(accountId, backoffUntil);
   return backoffUntil;
+}
+
+function formatMediaFallbackText(text: string | undefined, mediaUrl: string): string {
+  const trimmedText = text?.trim() ?? "";
+  const attachmentText = `📎 ${mediaUrl}`;
+  return trimmedText ? `${trimmedText}\n\n${attachmentText}` : attachmentText;
 }
 
 export function clearFeishuStreamingStartBackoffForTests() {
@@ -216,6 +226,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
   const reasoningPreviewEnabled = streamingEnabled && params.allowReasoningPreview === true;
 
   let streaming: FeishuStreamingSession | null = null;
@@ -431,12 +442,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const sendMediaReplies = async (payload: ReplyPayload) => {
+  const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
+    const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+    let sentFallbackText = false;
     await sendMediaWithLeadingCaption({
-      mediaUrls: resolveSendableOutboundReplyParts(payload).mediaUrls,
+      mediaUrls,
       caption: "",
       send: async ({ mediaUrl }) => {
-        await sendMediaFeishu({
+        const result = await sendMediaFeishu({
           cfg,
           to: chatId,
           mediaUrl,
@@ -445,7 +458,52 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
+        if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
+          sentFallbackText = true;
+          await sendChunkedTextReply({
+            text: options.fallbackText,
+            useCard: false,
+            infoKind: "final",
+            sendChunk: async ({ chunk, isFirst }) => {
+              await sendMessageFeishu({
+                cfg,
+                to: chatId,
+                text: chunk,
+                replyToMessageId: sendReplyToMessageId,
+                replyInThread: effectiveReplyInThread,
+                mentions: isFirst ? mentionTargets : undefined,
+                accountId,
+              });
+            },
+          });
+        }
       },
+      onError:
+        options?.fallbackText === undefined
+          ? undefined
+          : async ({ mediaUrl }) => {
+              const fallbackText = formatMediaFallbackText(
+                sentFallbackText ? undefined : options.fallbackText,
+                mediaUrl,
+              );
+              sentFallbackText = true;
+              await sendChunkedTextReply({
+                text: fallbackText,
+                useCard: false,
+                infoKind: "final",
+                sendChunk: async ({ chunk, isFirst }) => {
+                  await sendMessageFeishu({
+                    cfg,
+                    to: chatId,
+                    text: chunk,
+                    replyToMessageId: sendReplyToMessageId,
+                    replyInThread: effectiveReplyInThread,
+                    mentions: isFirst ? mentionTargets : undefined,
+                    accountId,
+                  });
+                },
+              });
+            },
     });
   };
 
@@ -468,8 +526,19 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const text = reply.text;
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
+        const hasVoiceMedia =
+          hasMedia &&
+          reply.mediaUrls.some((mediaUrl) =>
+            shouldSuppressFeishuTextForVoiceMedia({
+              mediaUrl,
+              ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
+            }),
+          );
         const useCard =
-          hasText && (renderMode === "card" || (renderMode === "auto" && shouldUseCard(text)));
+          hasText &&
+          (renderMode === "card" ||
+            (info?.kind === "block" && coreBlockStreamingEnabled && renderMode !== "raw") ||
+            (renderMode === "auto" && shouldUseCard(text)));
         const skipTextForDuplicateFinal =
           info?.kind === "final" && hasText && deliveredFinalTexts.has(text);
         const skipTextForClosedStreamingFinal =
@@ -480,7 +549,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           streamingEnabled &&
           useCard;
         const shouldDeliverText =
-          hasText && !skipTextForDuplicateFinal && !skipTextForClosedStreamingFinal;
+          hasText &&
+          !hasVoiceMedia &&
+          !skipTextForDuplicateFinal &&
+          !skipTextForClosedStreamingFinal;
 
         if (!shouldDeliverText && !hasMedia) {
           return;
@@ -567,7 +639,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (hasMedia) {
-          await sendMediaReplies(payload);
+          await sendMediaReplies(
+            payload,
+            hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
+          );
         }
       },
       onError: async (error, info) => {
@@ -593,7 +668,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      disableBlockStreaming: true,
+      disableBlockStreaming:
+        typeof account.config?.blockStreaming === "boolean" ? !account.config.blockStreaming : true,
       onPartialReply: streamingEnabled
         ? (payload: ReplyPayload) => {
             if (!payload.text) {
@@ -623,10 +699,29 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
       onToolStart: streamingEnabled
-        ? (payload: { name?: string; phase?: string }) => {
-            updateStreamingStatusLine(
-              `🔧 **Using: ${payload.name ?? payload.phase ?? "tool"}...**`,
+        ? (payload: {
+            name?: string;
+            phase?: string;
+            args?: Record<string, unknown>;
+            detailMode?: "explain" | "raw";
+          }) => {
+            if (!isChannelProgressDraftWorkToolName(payload.name)) {
+              return;
+            }
+            const statusLine = formatChannelProgressDraftLine(
+              {
+                event: "tool",
+                name: payload.name,
+                phase: payload.phase,
+                args: payload.args,
+              },
+              {
+                detailMode: payload.detailMode,
+              },
             );
+            if (statusLine) {
+              updateStreamingStatusLine(statusLine);
+            }
           }
         : undefined,
       onAssistantMessageStart: streamingEnabled

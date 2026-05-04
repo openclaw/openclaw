@@ -295,7 +295,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       emitSessionTranscriptUpdate({ sessionFile, sessionKey, message, messageId });
       break;
     case "file-only":
-      emitSessionTranscriptUpdate(sessionFile);
+      emitSessionTranscriptUpdate({ sessionFile, sessionKey });
       break;
     case "none":
       break;

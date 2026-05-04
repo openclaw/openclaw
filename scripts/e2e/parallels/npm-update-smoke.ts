@@ -12,11 +12,14 @@ import {
   repoRoot,
   resolveHostIp,
   resolveLatestVersion,
+  resolveOpenClawRegistryVersion,
   resolveProviderAuth,
   resolveWindowsProviderAuth,
   run,
   say,
+  shellQuote,
   startHostServer,
+  writeSummaryMarkdown,
   writeJson,
   type HostServer,
   type PackageArtifact,
@@ -24,11 +27,13 @@ import {
   type Provider,
   type ProviderAuth,
 } from "./common.ts";
+import { runWindowsBackgroundPowerShell } from "./guest-transports.ts";
 import { linuxUpdateScript, macosUpdateScript, windowsUpdateScript } from "./npm-update-scripts.ts";
 import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
-import { encodePowerShell } from "./powershell.ts";
 
 interface NpmUpdateOptions {
+  betaValidation?: string;
+  freshTargetSpec?: string;
   packageSpec: string;
   updateTarget: string;
   platforms: Set<Platform>;
@@ -40,9 +45,15 @@ interface NpmUpdateOptions {
 
 interface Job {
   done: boolean;
+  durationMs: number;
   label: string;
+  lastBytes: number;
+  lastOutputAt: number;
+  lastPhase: string;
   logPath: string;
   promise: Promise<number>;
+  rerunCommand: string;
+  startedAt: number;
 }
 
 interface UpdateJobContext {
@@ -59,7 +70,16 @@ interface NpmUpdateSummary {
   currentHead: string;
   runDir: string;
   fresh: Record<Platform, string>;
+  freshTarget: Record<Platform, string>;
+  freshTargetSpec: string;
   update: Record<Platform, { status: string; version: string }>;
+  timings: Array<{
+    durationMs: number;
+    label: string;
+    logPath: string;
+    phase: "fresh" | "fresh-target" | "update";
+    status: string;
+  }>;
 }
 
 const macosVm = "macOS Tahoe";
@@ -74,6 +94,10 @@ Options:
   --package-spec <npm-spec>  Baseline npm package spec. Default: openclaw@latest
   --update-target <target>    Target passed to guest 'openclaw update --tag'.
                              Default: host-served tgz packed from current checkout.
+  --fresh-target <npm-spec>   Also run fresh install smoke for this package after update lanes.
+  --beta-validation [target]  Resolve a beta tag/alias/version, then run latest->target update
+                             plus fresh target install. Default target when flag is bare: beta.
+                             Aliases like beta3 resolve to the latest *-beta.3 version.
   --platform <list>           Comma-separated platforms to run: all, macos, windows, linux.
                              Default: all
   --provider <openai|anthropic|minimax>
@@ -88,6 +112,8 @@ Options:
 function parseArgs(argv: string[]): NpmUpdateOptions {
   const options: NpmUpdateOptions = {
     apiKeyEnv: undefined,
+    betaValidation: undefined,
+    freshTargetSpec: undefined,
     json: false,
     modelId: undefined,
     packageSpec: "",
@@ -108,6 +134,20 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
         options.updateTarget = ensureValue(argv, i, arg);
         i++;
         break;
+      case "--fresh-target":
+        options.freshTargetSpec = ensureValue(argv, i, arg);
+        i++;
+        break;
+      case "--beta-validation": {
+        const next = argv[i + 1];
+        if (next && !next.startsWith("-")) {
+          options.betaValidation = next;
+          i++;
+        } else {
+          options.betaValidation = "beta";
+        }
+        break;
+      }
       case "--platform":
       case "--only":
         options.platforms = parsePlatformList(ensureValue(argv, i, arg));
@@ -156,13 +196,16 @@ class NpmUpdateSmoke {
   private hostIp = "";
   private server: HostServer | null = null;
   private artifact: PackageArtifact | null = null;
+  private freshTargetSpec = "";
   private updateTargetEffective = "";
   private updateExpectedNeedle = "";
   private linuxVm = linuxVmDefault;
 
   private freshStatus = platformRecord("skip");
+  private freshTargetStatus = platformRecord("skip");
   private updateStatus = platformRecord("skip");
   private updateVersion = platformRecord("skip");
+  private timings: NpmUpdateSummary["timings"] = [];
 
   constructor(private options: NpmUpdateOptions) {
     this.auth = resolveProviderAuth({
@@ -188,6 +231,7 @@ class NpmUpdateSmoke {
         quiet: true,
       }).stdout.trim();
       this.hostIp = resolveHostIp("");
+      this.configurePublishedTargets();
 
       if (this.options.platforms.has("linux")) {
         this.linuxVm = resolveUbuntuVmName(linuxVmDefault);
@@ -202,6 +246,11 @@ class NpmUpdateSmoke {
       await this.prepareUpdateTarget();
       say(`Run same-guest openclaw update to ${this.updateTargetEffective}`);
       await this.runSameGuestUpdates();
+
+      if (this.freshTargetSpec) {
+        say(`Run fresh target npm install: ${this.freshTargetSpec}`);
+        await this.runFreshTargetInstalls();
+      }
 
       const summaryPath = await this.writeSummary();
       if (this.options.json) {
@@ -236,9 +285,47 @@ class NpmUpdateSmoke {
       const status = (await job.promise) === 0 ? "pass" : "fail";
       const platform = this.platformFromLabel(job.label);
       this.freshStatus[platform] = status;
+      this.recordTiming("fresh", job, status);
       if (status !== "pass") {
         this.dumpLogTail(job.logPath);
-        die(`${job.label} fresh baseline failed`);
+        die(`${job.label} fresh baseline failed; rerun: ${job.rerunCommand}`);
+      }
+    }
+  }
+
+  private async runFreshTargetInstalls(): Promise<void> {
+    const jobs: Job[] = [];
+    if (this.options.platforms.has("macos")) {
+      jobs.push(this.spawnFresh("macOS", "macos", [], {}, this.freshTargetSpec, "fresh-target"));
+    }
+    if (this.options.platforms.has("windows")) {
+      jobs.push(
+        this.spawnFresh("Windows", "windows", [], {}, this.freshTargetSpec, "fresh-target"),
+      );
+    }
+    if (this.options.platforms.has("linux")) {
+      jobs.push(
+        this.spawnFresh(
+          "Linux",
+          "linux",
+          ["--vm", this.linuxVm],
+          {
+            OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR: "1",
+          },
+          this.freshTargetSpec,
+          "fresh-target",
+        ),
+      );
+    }
+    await this.monitorJobs("fresh-target", jobs);
+    for (const job of jobs) {
+      const status = (await job.promise) === 0 ? "pass" : "fail";
+      const platform = this.platformFromLabel(job.label);
+      this.freshTargetStatus[platform] = status;
+      this.recordTiming("fresh-target", job, status);
+      if (status !== "pass") {
+        this.dumpLogTail(job.logPath);
+        die(`${job.label} fresh target failed; rerun: ${job.rerunCommand}`);
       }
     }
   }
@@ -248,8 +335,10 @@ class NpmUpdateSmoke {
     platform: Platform,
     extraArgs: string[],
     env: NodeJS.ProcessEnv = {},
+    packageSpec = this.packageSpec,
+    phase: "fresh" | "fresh-target" = "fresh",
   ): Job {
-    const logPath = path.join(this.runDir, `${platform}-fresh.log`);
+    const logPath = path.join(this.runDir, `${platform}-${phase}.log`);
     const auth = this.authForPlatform(platform);
     const args = [
       "exec",
@@ -264,17 +353,27 @@ class NpmUpdateSmoke {
       "--api-key-env",
       auth.apiKeyEnv,
       "--target-package-spec",
-      this.packageSpec,
+      packageSpec,
       "--json",
       ...extraArgs,
     ];
+    const startedAt = Date.now();
     const job: Job = {
       done: false,
+      durationMs: 0,
       label,
+      lastBytes: 0,
+      lastOutputAt: startedAt,
+      lastPhase: "starting",
       logPath,
       promise: Promise.resolve(1),
+      rerunCommand: this.formatRerun("pnpm", args, env),
+      startedAt,
     };
-    job.promise = this.spawnLogged("pnpm", args, logPath, env).finally(() => {
+    job.promise = this.spawnLogged("pnpm", args, logPath, env, (text) =>
+      this.noteJobOutput(job, text),
+    ).finally(() => {
+      job.durationMs = Date.now() - job.startedAt;
       job.done = true;
     });
     return job;
@@ -300,7 +399,7 @@ class NpmUpdateSmoke {
     this.updateTargetEffective = this.options.updateTarget;
     this.updateExpectedNeedle = this.isExplicitPackageTarget(this.updateTargetEffective)
       ? ""
-      : this.resolveRegistryTargetVersion(this.updateTargetEffective) || this.updateTargetEffective;
+      : resolveOpenClawRegistryVersion(this.updateTargetEffective) || this.updateTargetEffective;
   }
 
   private async runSameGuestUpdates(): Promise<void> {
@@ -323,9 +422,10 @@ class NpmUpdateSmoke {
       const status = (await job.promise) === 0 ? "pass" : "fail";
       this.updateStatus[platform] = status;
       this.updateVersion[platform] = await this.extractLastVersion(job.logPath);
+      this.recordTiming("update", job, status);
       if (status !== "pass") {
         this.dumpLogTail(job.logPath);
-        die(`${job.label} update failed`);
+        die(`${job.label} update failed; rerun: ${job.rerunCommand}`);
       }
     }
   }
@@ -336,18 +436,25 @@ class NpmUpdateSmoke {
     fn: (ctx: UpdateJobContext) => Promise<void> | void,
   ): Job {
     const logPath = path.join(this.runDir, `${platform}-update.log`);
+    const startedAt = Date.now();
     const job: Job = {
       done: false,
+      durationMs: 0,
       label,
+      lastBytes: 0,
+      lastOutputAt: startedAt,
+      lastPhase: "starting",
       logPath,
       promise: Promise.resolve(1),
+      rerunCommand: `inspect ${logPath}; rerun aggregate phase with --platform ${platform}`,
+      startedAt,
     };
     job.promise = (async () => {
       let log = "";
-      const append = (chunk: string | Uint8Array): boolean => {
+      const append = (chunk: string | Uint8Array): void => {
         const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
         log += text;
-        return true;
+        this.noteJobOutput(job, text);
       };
       const timeout = setTimeout(() => {
         append(`${label} update timed out after ${updateTimeoutSeconds}s\n`);
@@ -364,6 +471,7 @@ class NpmUpdateSmoke {
         clearTimeout(timeout);
       }
     })().finally(() => {
+      job.durationMs = Date.now() - job.startedAt;
       job.done = true;
     });
     return job;
@@ -407,6 +515,7 @@ class NpmUpdateSmoke {
     args: string[],
     logPath: string,
     env: NodeJS.ProcessEnv = {},
+    onOutput: (text: string) => void = () => undefined,
   ): Promise<number> {
     return new Promise((resolve, reject) => {
       const child = spawn(command, args, {
@@ -416,10 +525,14 @@ class NpmUpdateSmoke {
       });
       let log = "";
       child.stdout.on("data", (chunk: Buffer) => {
-        log += chunk.toString("utf8");
+        const text = chunk.toString("utf8");
+        log += text;
+        onOutput(text);
       });
       child.stderr.on("data", (chunk: Buffer) => {
-        log += chunk.toString("utf8");
+        const text = chunk.toString("utf8");
+        log += text;
+        onOutput(text);
       });
       child.on("error", reject);
       child.on("close", async (code) => {
@@ -442,7 +555,15 @@ class NpmUpdateSmoke {
         }
       }
       if (pending.size > 0) {
-        say(`${label} still running: ${[...pending].join(", ")}`);
+        const status = jobs
+          .filter((job) => pending.has(job.label))
+          .map((job) => {
+            const elapsed = Math.floor((Date.now() - job.startedAt) / 1000);
+            const stale = Math.floor((Date.now() - job.lastOutputAt) / 1000);
+            return `${job.label}:${job.lastPhase} ${elapsed}s stale=${stale}s bytes=${job.lastBytes}`;
+          })
+          .join(", ");
+        say(`${label} still running: ${status}`);
       }
     }
   }
@@ -572,145 +693,13 @@ class NpmUpdateSmoke {
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
-    const fileBase = `openclaw-parallels-npm-update-windows-${process.pid}-${Date.now()}`;
-    const pathsScript = `$base = Join-Path $env:TEMP '${fileBase}'
-$scriptPath = "$base.ps1"
-$logPath = "$base.log"
-$donePath = "$base.done"
-$exitPath = "$base.exit"`;
-    const payload = `$ErrorActionPreference = 'Stop'
-$PSNativeCommandUseErrorActionPreference = $false
-${pathsScript}
-try {
-  & {
-${script}
-  } *>&1 | ForEach-Object { $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8 }
-  Set-Content -Path $exitPath -Value '0' -Encoding UTF8
-} catch {
-  $_ | Out-String | Add-Content -Path $logPath -Encoding UTF8
-  Set-Content -Path $exitPath -Value '1' -Encoding UTF8
-} finally {
-  Set-Content -Path $donePath -Value 'done' -Encoding UTF8
-}`;
-    const writeScript = run(
-      "prlctl",
-      [
-        "exec",
-        windowsVm,
-        "--current-user",
-        "powershell.exe",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-EncodedCommand",
-        encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue
-[System.IO.File]::WriteAllText($scriptPath, [Console]::In.ReadToEnd(), [System.Text.UTF8Encoding]::new($false))
-if (!(Test-Path $scriptPath)) { throw "background update script was not written" }`),
-      ],
-      { check: false, input: payload, timeoutMs: Math.min(timeoutMs, 120_000) },
-    );
-    if (writeScript.stdout) {
-      ctx.append(writeScript.stdout);
-    }
-    if (writeScript.stderr) {
-      ctx.append(writeScript.stderr);
-    }
-    if (writeScript.status !== 0) {
-      throw new Error(
-        `Windows update background script write failed with exit code ${writeScript.status}`,
-      );
-    }
-
-    const launchStatus = await this.runStreamingToJobLog(
-      "prlctl",
-      [
-        "exec",
-        windowsVm,
-        "--current-user",
-        "cmd.exe",
-        "/d",
-        "/s",
-        "/c",
-        `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
-      ],
-      20_000,
-      ctx,
-    );
-    if (launchStatus !== 0 && launchStatus !== 124) {
-      throw new Error(`Windows update background launch failed with exit code ${launchStatus}`);
-    }
-
-    const deadline = Date.now() + timeoutMs;
-    let lastLogOffset = 0;
-    while (Date.now() < deadline) {
-      const poll = run(
-        "prlctl",
-        [
-          "exec",
-          windowsVm,
-          "--current-user",
-          "powershell.exe",
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-EncodedCommand",
-          encodePowerShell(`${pathsScript}
-$offset = ${lastLogOffset}
-if (Test-Path $logPath) {
-  $bytes = [System.IO.File]::ReadAllBytes($logPath)
-  if ($bytes.Length -gt $offset) {
-    "__OPENCLAW_LOG_OFFSET__:$($bytes.Length)"
-    [System.Text.Encoding]::UTF8.GetString($bytes, $offset, $bytes.Length - $offset)
-  }
-}
-if (Test-Path $donePath) {
-  $backgroundExit = if (Test-Path $exitPath) { (Get-Content -Path $exitPath -Raw).Trim() } else { '0' }
-  "__OPENCLAW_BACKGROUND_EXIT__:$backgroundExit"
-  '__OPENCLAW_BACKGROUND_DONE__'
-  if ($backgroundExit -ne '0') { exit 23 }
-  exit 0
-}`),
-        ],
-        { check: false, timeoutMs: Math.min(30_000, Math.max(1_000, deadline - Date.now())) },
-      );
-      if (poll.stdout) {
-        ctx.append(poll.stdout);
-      }
-      if (poll.stderr) {
-        ctx.append(poll.stderr);
-      }
-      const offsetMatch = poll.stdout.match(/__OPENCLAW_LOG_OFFSET__:(\d+)/);
-      if (offsetMatch) {
-        lastLogOffset = Number(offsetMatch[1]);
-      }
-      if (poll.stdout.includes("__OPENCLAW_BACKGROUND_DONE__")) {
-        const exitMatch = poll.stdout.match(/__OPENCLAW_BACKGROUND_EXIT__:(\S+)/);
-        const backgroundExit = exitMatch?.[1] ?? "0";
-        if (backgroundExit !== "0" || (poll.status !== 0 && poll.status !== 124)) {
-          throw new Error("Windows update failed");
-        }
-        run(
-          "prlctl",
-          [
-            "exec",
-            windowsVm,
-            "--current-user",
-            "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            encodePowerShell(`${pathsScript}
-Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorAction SilentlyContinue`),
-          ],
-          { check: false, timeoutMs: 30_000 },
-        );
-        return;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 5_000));
-    }
-    throw new Error(`Windows update timed out after ${updateTimeoutSeconds}s`);
+    await runWindowsBackgroundPowerShell({
+      append: (chunk) => ctx.append(chunk),
+      label: "Windows update",
+      script,
+      timeoutMs,
+      vmName: windowsVm,
+    });
   }
 
   private async guestLinux(
@@ -811,16 +800,6 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     });
   }
 
-  private resolveRegistryTargetVersion(target: string): string {
-    const spec = target.startsWith("openclaw@") ? target : `openclaw@${target}`;
-    return (
-      run("npm", ["view", spec, "version"], { check: false, quiet: true })
-        .stdout.trim()
-        .split("\n")
-        .at(-1) ?? ""
-    );
-  }
-
   private isExplicitPackageTarget(target: string): boolean {
     return (
       target.includes("://") ||
@@ -837,8 +816,8 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     ) {
       return;
     }
-    const baseline = this.resolveRegistryTargetVersion(this.packageSpec);
-    const target = this.resolveRegistryTargetVersion(this.options.updateTarget);
+    const baseline = resolveOpenClawRegistryVersion(this.packageSpec);
+    const target = resolveOpenClawRegistryVersion(this.options.updateTarget);
     if (baseline && target && baseline === target) {
       die(
         `--update-target ${this.options.updateTarget} resolves to openclaw@${target}, same as baseline ${this.packageSpec}; publish or choose a newer --update-target before running VM update coverage`,
@@ -855,21 +834,77 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
 
   private async extractLastVersion(logPath: string): Promise<string> {
     const log = await readFile(logPath, "utf8").catch(() => "");
-    const matches = [...log.matchAll(/openclaw\s+([0-9][^\s]*)/g)];
+    const matches = [...log.matchAll(/OpenClaw\s+([0-9][^\s]*)/gi)];
     return matches.at(-1)?.[1] ?? "";
   }
 
   private dumpLogTail(logPath: string): void {
     const log = run("tail", ["-n", "80", logPath], { check: false, quiet: true }).stdout;
     if (log) {
+      process.stderr.write(`\n--- tail ${logPath} ---\n`);
       process.stderr.write(log);
     }
+  }
+
+  private recordTiming(phase: "fresh" | "fresh-target" | "update", job: Job, status: string): void {
+    this.timings.push({
+      durationMs: job.durationMs || Date.now() - job.startedAt,
+      label: job.label,
+      logPath: job.logPath,
+      phase,
+      status,
+    });
+  }
+
+  private configurePublishedTargets(): void {
+    if (this.options.betaValidation) {
+      const version = resolveOpenClawRegistryVersion(this.options.betaValidation);
+      if (!version) {
+        die(`could not resolve beta validation target: ${this.options.betaValidation}`);
+      }
+      this.options.updateTarget = version;
+      this.options.freshTargetSpec = `openclaw@${version}`;
+      say(`Beta validation target: openclaw@${version}`);
+    } else if (
+      this.options.updateTarget &&
+      this.options.updateTarget !== "local-main" &&
+      !this.isExplicitPackageTarget(this.options.updateTarget)
+    ) {
+      const version = resolveOpenClawRegistryVersion(this.options.updateTarget);
+      if (version) {
+        this.options.updateTarget = version;
+      }
+    }
+
+    if (this.options.freshTargetSpec) {
+      const version = resolveOpenClawRegistryVersion(this.options.freshTargetSpec);
+      this.freshTargetSpec = version ? `openclaw@${version}` : this.options.freshTargetSpec;
+    }
+  }
+
+  private noteJobOutput(job: Job, text: string): void {
+    job.lastOutputAt = Date.now();
+    job.lastBytes += text.length;
+    const matches = [...text.matchAll(/[=]=>\s*([A-Za-z0-9_.-]+)/g)];
+    const phase = matches.at(-1)?.[1];
+    if (phase) {
+      job.lastPhase = phase;
+    }
+  }
+
+  private formatRerun(command: string, args: string[], env: NodeJS.ProcessEnv): string {
+    const envPrefix = Object.entries(env)
+      .filter(([, value]) => value !== undefined)
+      .map(([key, value]) => `${key}=${shellQuote(String(value))}`);
+    return [...envPrefix, command, ...args.map(shellQuote)].join(" ");
   }
 
   private async writeSummary(): Promise<string> {
     const summary: NpmUpdateSummary = {
       currentHead: this.currentHeadShort,
       fresh: this.freshStatus,
+      freshTarget: this.freshTargetStatus,
+      freshTargetSpec: this.freshTargetSpec,
       latestVersion: this.latestVersion,
       packageSpec: this.packageSpec,
       provider: this.options.provider,
@@ -879,11 +914,25 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
         macos: { status: this.updateStatus.macos, version: this.updateVersion.macos },
         windows: { status: this.updateStatus.windows, version: this.updateVersion.windows },
       },
+      timings: this.timings,
       updateExpected: this.updateExpectedNeedle,
       updateTarget: this.updateTargetEffective,
     };
     const summaryPath = path.join(this.runDir, "summary.json");
     await writeJson(summaryPath, summary);
+    await writeSummaryMarkdown({
+      lines: [
+        `- package spec: ${summary.packageSpec}`,
+        `- update target: ${summary.updateTarget}`,
+        `- update expected: ${summary.updateExpected}`,
+        `- fresh: macOS=${summary.fresh.macos}, Windows=${summary.fresh.windows}, Linux=${summary.fresh.linux}`,
+        `- update: macOS=${summary.update.macos.status} (${summary.update.macos.version}), Windows=${summary.update.windows.status} (${summary.update.windows.version}), Linux=${summary.update.linux.status} (${summary.update.linux.version})`,
+        `- fresh target: ${summary.freshTargetSpec || "skip"} macOS=${summary.freshTarget.macos}, Windows=${summary.freshTarget.windows}, Linux=${summary.freshTarget.linux}`,
+        `- logs: ${summary.runDir}`,
+      ],
+      summaryPath,
+      title: "Parallels NPM Update Smoke",
+    });
     return summaryPath;
   }
 }

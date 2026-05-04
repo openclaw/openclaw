@@ -337,6 +337,82 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("marks realtime calls ended when the provider closes normally", async () => {
+    let callbacks:
+      | {
+          onClose?: (reason: "completed" | "error") => void;
+        }
+      | undefined;
+    const processEvent = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({
+          close: () => {
+            callbacks?.onClose?.("completed");
+          },
+        });
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-complete",
+        provider: "twilio",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId,
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-complete", callSid: "CA-complete" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        ws.send(JSON.stringify({ event: "stop" }));
+
+        await vi.waitFor(() => {
+          expect(processEvent).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "call.ended",
+              callId: "call-1",
+              providerCallId: "CA-complete",
+              reason: "completed",
+            }),
+          );
+        });
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("submits continuing responses only for realtime agent consult calls", async () => {
     let callbacks:
       | {

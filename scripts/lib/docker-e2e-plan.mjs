@@ -327,7 +327,11 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (poolLane.name === "openwebui" || poolLane.name === "openai-web-search-minimal") {
+  if (
+    poolLane.name === "openwebui" ||
+    poolLane.name === "openai-web-search-minimal" ||
+    poolLane.name === "live-codex-npm-plugin"
+  ) {
     credentials.push("openai");
   }
   return credentials;

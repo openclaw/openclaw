@@ -5,8 +5,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import {
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
   createHappyPathPromptSnapshotFiles,
-  HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
 } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,7 +39,12 @@ async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 }
 
 async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
-  const filePaths = files.map((file) => path.resolve(root, file.path));
+  const filePaths = files
+    .filter((file) => file.path.endsWith(".md") || file.path.endsWith(".json"))
+    .map((file) => path.resolve(root, file.path));
+  if (filePaths.length === 0) {
+    return;
+  }
   await execFileAsync(oxfmtPath, ["--write", "--threads=1", ...filePaths], {
     cwd: repoRoot,
   });
@@ -57,7 +62,9 @@ async function readSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 async function listCommittedSnapshotArtifactPaths(root: string): Promise<string[]> {
   let committedEntries: string[];
   try {
-    committedEntries = await fs.readdir(path.resolve(root, HAPPY_PATH_PROMPT_SNAPSHOT_DIR));
+    committedEntries = await fs.readdir(
+      path.resolve(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR),
+    );
   } catch (error) {
     if (!hasErrorCode(error, "ENOENT")) {
       throw error;
@@ -66,7 +73,7 @@ async function listCommittedSnapshotArtifactPaths(root: string): Promise<string[
   }
   return committedEntries
     .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-    .map((entry) => path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
+    .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
 }
 
 export async function deleteStalePromptSnapshotFiles(
@@ -95,7 +102,9 @@ export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapsh
 
 async function writeSnapshots() {
   const files = await createFormattedPromptSnapshotFiles();
-  await fs.mkdir(path.resolve(repoRoot, HAPPY_PATH_PROMPT_SNAPSHOT_DIR), { recursive: true });
+  await fs.mkdir(path.resolve(repoRoot, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR), {
+    recursive: true,
+  });
   const deleted = await deleteStalePromptSnapshotFiles(repoRoot, files);
   await writeSnapshotFiles(repoRoot, files);
   const deletedSummary = deleted.length > 0 ? ` Deleted ${deleted.length} stale file(s).` : "";

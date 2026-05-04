@@ -121,7 +121,11 @@ function hasOwn(record: Record<string, unknown>, key: string): boolean {
 }
 
 function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undefined {
-  return value === "direct" || value === "group" || value === "global" || value === "unknown"
+  return value === "cron" ||
+    value === "direct" ||
+    value === "group" ||
+    value === "global" ||
+    value === "unknown"
     ? value
     : undefined;
 }
@@ -147,6 +151,10 @@ function projectSessionsResultForAvailability(
     count: sessions.length,
     sessions,
   };
+}
+
+function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
 function checkpointSummarySignature(
@@ -256,9 +264,16 @@ async function runCompactionMutation<T>(
   }
 }
 
-export function applySessionsChangedEvent(state: SessionsState, payload: unknown): boolean {
+export type SessionsChangedApplyResult =
+  | { applied: false }
+  | { applied: true; change: "deleted" | "inserted" | "updated" };
+
+export function applySessionsChangedEvent(
+  state: SessionsState,
+  payload: unknown,
+): SessionsChangedApplyResult {
   if (!isRecord(payload) || !state.sessionsResult) {
-    return false;
+    return { applied: false };
   }
   const eventSession = isRecord(payload.session) ? payload.session : null;
   const source = eventSession ?? payload;
@@ -268,14 +283,14 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
     (typeof payload.key === "string" && payload.key.trim()) ||
     "";
   if (!key) {
-    return false;
+    return { applied: false };
   }
 
   const previousRows = state.sessionsResult.sessions;
   const existingIndex = previousRows.findIndex((row) => row.key === key);
   if (payload.reason === "delete") {
     if (existingIndex < 0) {
-      return false;
+      return { applied: false };
     }
     state.sessionsResult = {
       ...state.sessionsResult,
@@ -283,12 +298,13 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
       sessions: previousRows.filter((row) => row.key !== key),
     };
     invalidateCheckpointCacheForKey(state, key);
-    return true;
+    return { applied: true, change: "deleted" };
   }
   const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
-  const hasReliableSource = eventSession !== null || typeof source.sessionId === "string";
+  const hasReliableSource =
+    existingIndex >= 0 || eventSession !== null || typeof source.sessionId === "string";
   if (!hasReliableSource) {
-    return false;
+    return { applied: false };
   }
   const previousCheckpointSignature = checkpointSummarySignature(existing);
   const fallbackKind = normalizeSessionKind(source.kind) ?? existing?.kind ?? "unknown";
@@ -314,7 +330,7 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
   }
   if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
     if (existingIndex < 0) {
-      return false;
+      return { applied: false };
     }
     state.sessionsResult = {
       ...state.sessionsResult,
@@ -322,13 +338,14 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
       sessions: previousRows.filter((row) => row.key !== key),
     };
     invalidateCheckpointCacheForKey(state, key);
-    return true;
+    return { applied: true, change: "deleted" };
   }
 
-  const sessions =
+  const nextRows =
     existingIndex >= 0
       ? previousRows.map((row, index) => (index === existingIndex ? nextRow : row))
       : [nextRow, ...previousRows];
+  const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
   state.sessionsResult = {
     ...state.sessionsResult,
@@ -340,7 +357,7 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
   if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
     invalidateCheckpointCacheForKey(state, key);
   }
-  return true;
+  return { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" };
 }
 
 export async function subscribeSessions(state: SessionsState) {

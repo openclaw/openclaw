@@ -117,6 +117,10 @@ function resolveFetchReadabilityEnabled(fetch?: WebFetchConfig): boolean {
   return true;
 }
 
+function resolveFetchUseTrustedEnvProxy(fetch?: WebFetchConfig): boolean {
+  return fetch?.useTrustedEnvProxy === true;
+}
+
 function resolveFetchMaxCharsCap(fetch?: WebFetchConfig): number {
   const raw =
     fetch && "maxCharsCap" in fetch && typeof fetch.maxCharsCap === "number"
@@ -273,6 +277,7 @@ type WebFetchRuntimeParams = {
   userAgent: string;
   readabilityEnabled: boolean;
   config?: OpenClawConfig;
+  useTrustedEnvProxy: boolean;
   ssrfPolicy?: {
     allowRfc2544BenchmarkRange?: boolean;
     allowIpv6UniqueLocalRange?: boolean;
@@ -392,6 +397,7 @@ async function maybeFetchProviderWebFetchPayload(
 async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string, unknown>> {
   const allowRfc2544BenchmarkRange = params.ssrfPolicy?.allowRfc2544BenchmarkRange === true;
   const allowIpv6UniqueLocalRange = params.ssrfPolicy?.allowIpv6UniqueLocalRange === true;
+  const useTrustedEnvProxy = params.useTrustedEnvProxy;
   const ssrfPolicy: SsrFPolicy | undefined =
     allowRfc2544BenchmarkRange || allowIpv6UniqueLocalRange
       ? {
@@ -400,7 +406,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
         }
       : undefined;
   const cacheKey = normalizeCacheKey(
-    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}`,
+    `fetch:${params.url}:${params.extractMode}:${params.maxChars}${allowRfc2544BenchmarkRange ? ":allow-rfc2544" : ""}${allowIpv6UniqueLocalRange ? ":allow-ipv6-ula" : ""}${useTrustedEnvProxy ? ":trusted-env-proxy" : ""}`,
   );
   const cached = readCache(FETCH_CACHE, cacheKey);
   if (cached) {
@@ -428,6 +434,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       maxRedirects: params.maxRedirects,
       timeoutSeconds: params.timeoutSeconds,
       lookupFn: params.lookupFn,
+      useEnvProxy: useTrustedEnvProxy,
       policy: ssrfPolicy,
       init: {
         headers: {
@@ -661,6 +668,7 @@ export function createWebFetchTool(options?: {
         userAgent,
         readabilityEnabled,
         config: options?.config,
+        useTrustedEnvProxy: resolveFetchUseTrustedEnvProxy(fetch),
         ssrfPolicy: fetch?.ssrfPolicy,
         lookupFn: options?.lookupFn,
         resolveProviderFallback,

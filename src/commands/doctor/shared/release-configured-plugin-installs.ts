@@ -1,15 +1,24 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
 import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
+import { isTruthyEnvValue } from "../../../infra/env.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
 
-export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2";
+export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
+const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+
+const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
+  // Codex can be selected as a harness for OpenAI models without a plugin entry.
+  codex: "codex",
+};
 
 type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
@@ -207,6 +216,39 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectAgentHarnessRuntimePluginIds(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  return collectConfiguredAgentHarnessRuntimes(cfg, env)
+    .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
+    .filter((pluginId): pluginId is string => Boolean(pluginId))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
+  const providerId = cfg.tools?.web?.search?.provider;
+  if (typeof providerId !== "string") {
+    return [];
+  }
+  const entry = resolveWebSearchInstallCatalogEntry({ providerId });
+  return entry?.pluginId ? [entry.pluginId] : [];
+}
+
+function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
+  const acp = asObjectRecord(cfg.acp);
+  if (!acp) {
+    return [];
+  }
+  const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
+  const configured =
+    acp.enabled === true || asObjectRecord(acp.dispatch)?.enabled === true || backend === "acpx";
+  if (!configured || (backend && backend !== "acpx")) {
+    return [];
+  }
+  return ["acpx"];
+}
+
 function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, pluginId: string): void {
   const normalized = pluginId.trim();
   if (!normalized || isDenied(cfg, normalized) || isDisabled(cfg, normalized)) {
@@ -258,6 +300,15 @@ export function collectReleaseConfiguredPluginIds(params: {
   for (const pluginId of collectProviderPluginIds(params.cfg, env)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
+  for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectWebSearchPluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
     if (
       !isChannelDisabled(params.cfg, channelId) &&
@@ -285,18 +336,33 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
   completed: boolean;
   touchedConfig: boolean;
 }> {
-  if (
-    !shouldRunConfiguredPluginInstallReleaseStep({
-      currentVersion: params.currentVersion,
-      touchedVersion: params.touchedVersion,
-    })
-  ) {
-    return { changes: [], warnings: [], completed: false, touchedConfig: false };
-  }
   const env = params.env ?? process.env;
+  const updateInProgress = isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
   const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
+  const shouldRunReleaseStep = shouldRunConfiguredPluginInstallReleaseStep({
+    currentVersion: params.currentVersion,
+    touchedVersion: params.touchedVersion,
+  });
+  if (!shouldRunReleaseStep) {
+    if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
+      return { changes: [], warnings: [], completed: false, touchedConfig: false };
+    }
+    const repaired = await repairMissingPluginInstallsForIds({
+      cfg: params.cfg,
+      pluginIds: configured.pluginIds,
+      channelIds: configured.channelIds,
+      blockedPluginIds: collectBlockedPluginIds(params.cfg),
+      env,
+    });
+    return {
+      changes: repaired.changes,
+      warnings: repaired.warnings,
+      completed: repaired.warnings.length === 0,
+      touchedConfig: false,
+    };
+  }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
-    return { changes: [], warnings: [], completed: true, touchedConfig: true };
+    return { changes: [], warnings: [], completed: true, touchedConfig: !updateInProgress };
   }
   const repaired = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,
@@ -305,7 +371,7 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     env,
   });
-  const completed = repaired.warnings.length === 0;
+  const completed = repaired.warnings.length === 0 && !updateInProgress;
   return {
     changes: repaired.changes,
     warnings: repaired.warnings,

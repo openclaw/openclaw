@@ -201,7 +201,7 @@ describe("watch-node script", () => {
     const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
 
     const runPromise = runWatch({
-      args: ["gateway", "--force", "--help"],
+      args: ["config", "validate"],
       createWatcher,
       lockDisabled: true,
       process: fakeProcess,
@@ -215,6 +215,66 @@ describe("watch-node script", () => {
     expect(watcher.close).toHaveBeenCalledTimes(1);
     expect(fakeProcess.listenerCount("SIGINT")).toBe(0);
     expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
+
+  it("runs doctor once and restarts when gateway exits nonzero", async () => {
+    const gatewayA = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const doctor = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const gatewayB = Object.assign(new EventEmitter(), { kill: vi.fn() });
+    const spawn = vi
+      .fn()
+      .mockReturnValueOnce(gatewayA)
+      .mockReturnValueOnce(doctor)
+      .mockReturnValueOnce(gatewayB);
+    const { watcher, fakeProcess, runPromise } = startWatchRun({ spawn });
+
+    gatewayA.emit("exit", 1, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn).toHaveBeenNthCalledWith(
+      2,
+      "/usr/local/bin/node",
+      ["scripts/run-node.mjs", "doctor", "--fix", "--non-interactive"],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+
+    doctor.emit("exit", 0, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(spawn).toHaveBeenCalledTimes(3);
+    expect(spawn).toHaveBeenNthCalledWith(
+      3,
+      "/usr/local/bin/node",
+      ["scripts/run-node.mjs", "gateway", "--force"],
+      expect.objectContaining({ stdio: "inherit" }),
+    );
+
+    fakeProcess.emit("SIGINT");
+    const exitCode = await runPromise;
+    expect(exitCode).toBe(130);
+    expect(gatewayB.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(watcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not run doctor after a gateway failure when auto doctor is disabled", async () => {
+    const { child, spawn, watcher, createWatcher, fakeProcess } = createWatchHarness();
+
+    const runPromise = runWatch({
+      args: ["gateway", "--force"],
+      createWatcher,
+      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0" },
+      lockDisabled: true,
+      process: fakeProcess,
+      spawn,
+    });
+
+    child.emit("exit", 1, null);
+    const exitCode = await runPromise;
+
+    expect(exitCode).toBe(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(watcher.close).toHaveBeenCalledTimes(1);
   });
 
   it("restarts when the runner exits with a SIGTERM-derived code unexpectedly", async () => {

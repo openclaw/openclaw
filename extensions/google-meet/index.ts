@@ -52,7 +52,7 @@ const googleMeetConfigSchema = {
     },
     defaultMode: {
       label: "Default Mode",
-      help: "Realtime starts the duplex voice model loop. Transcribe joins/observes without the realtime talk-back bridge.",
+      help: "Agent uses realtime transcription plus regular OpenClaw TTS. Bidi uses the realtime voice model directly. Transcribe observes only.",
     },
     "chrome.audioBackend": {
       label: "Chrome Audio Backend",
@@ -80,6 +80,11 @@ const googleMeetConfigSchema = {
     "chrome.audioFormat": {
       label: "Audio Format",
       help: "Command-pair audio format. PCM16 24 kHz is the default Chrome/Meet path; G.711 mu-law 8 kHz remains available for legacy command pairs.",
+      advanced: true,
+    },
+    "chrome.audioBufferBytes": {
+      label: "Audio Buffer Bytes",
+      help: "SoX processing buffer for generated Chrome command-pair audio commands. Lower values reduce latency but may underrun on busy hosts.",
       advanced: true,
     },
     "chrome.audioInputCommand": {
@@ -150,11 +155,27 @@ const googleMeetConfigSchema = {
       advanced: true,
     },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },
-    "realtime.provider": {
-      label: "Realtime Provider",
-      help: "Defaults to OpenAI; uses OPENAI_API_KEY when no provider config is set.",
+    "realtime.strategy": {
+      label: "Realtime Strategy",
+      help: "Legacy realtime alias setting. Use mode=agent or mode=bidi for new Meet joins.",
     },
-    "realtime.model": { label: "Realtime Model", advanced: true },
+    "realtime.provider": {
+      label: "Speech Provider",
+      help: "Compatibility fallback for both realtime transcription and bidi voice. Prefer realtime.transcriptionProvider and realtime.voiceProvider for new configs.",
+    },
+    "realtime.transcriptionProvider": {
+      label: "Realtime Transcription Provider",
+      help: "Agent mode uses this provider to transcribe meeting audio before regular OpenClaw TTS answers.",
+    },
+    "realtime.voiceProvider": {
+      label: "Bidi Voice Provider",
+      help: "Bidi mode uses this realtime voice provider. Falls back to realtime.provider when unset.",
+    },
+    "realtime.model": {
+      label: "Bidi Realtime Model",
+      help: "Only used by mode=bidi. Agent mode answers with the configured OpenClaw agent and regular TTS.",
+      advanced: true,
+    },
     "realtime.instructions": { label: "Realtime Instructions", advanced: true },
     "realtime.introMessage": {
       label: "Realtime Intro Message",
@@ -234,9 +255,9 @@ const GoogleMeetToolSchema = Type.Object({
   ),
   mode: Type.Optional(
     Type.String({
-      enum: ["realtime", "transcribe"],
+      enum: ["agent", "bidi", "transcribe"],
       description:
-        "Join mode. realtime starts live listen/talk-back through the realtime voice model; transcribe joins without the realtime talk-back bridge.",
+        "Join mode. agent uses realtime transcription, the configured OpenClaw agent, and regular TTS. bidi uses the realtime voice model directly. transcribe joins observe-only.",
     }),
   ),
   dialInNumber: Type.Optional(
@@ -324,7 +345,14 @@ function normalizeTransport(value: unknown): GoogleMeetTransport | undefined {
 }
 
 function normalizeMode(value: unknown): GoogleMeetMode | undefined {
-  return value === "realtime" || value === "transcribe" ? value : undefined;
+  if (value === "realtime") {
+    return "agent";
+  }
+  return value === "agent" || value === "bidi" || value === "transcribe" ? value : undefined;
+}
+
+function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
+  return mode === "agent" || mode === "bidi";
 }
 
 function resolveMeetingInput(config: GoogleMeetConfig, value: unknown): string {
@@ -414,9 +442,9 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
   const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
   const mode =
     action === "test_speech"
-      ? "realtime"
+      ? "agent"
       : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
-  return transport === "chrome" && mode === "realtime";
+  return transport === "chrome" && isGoogleMeetTalkBackMode(mode);
 }
 
 function assertGoogleMeetAgentToolActionSupported(params: {
@@ -427,7 +455,7 @@ function assertGoogleMeetAgentToolActionSupported(params: {
     return;
   }
   throw new Error(
-    "Google Meet local Chrome realtime audio is macOS-only. On this host, use mode: transcribe, transport: twilio, or transport: chrome-node backed by a macOS node.",
+    "Google Meet local Chrome talk-back audio is macOS-only. On this host, use mode: transcribe, transport: twilio, or transport: chrome-node backed by a macOS node.",
   );
 }
 
@@ -994,7 +1022,7 @@ export default definePluginEntry({
       name: "google_meet",
       label: "Google Meet",
       description:
-        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. If local Chrome realtime audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for realtime Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. If local Chrome talk-back audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for agent/bidi Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);

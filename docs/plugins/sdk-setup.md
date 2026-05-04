@@ -495,12 +495,12 @@ The `ChannelSetupWizard` type supports `credentials`, `textInputs`, `dmPolicy`, 
 **External plugins:** publish to [ClawHub](/tools/clawhub), then install:
 
 <Tabs>
-  <Tab title="Auto (ClawHub then npm)">
+  <Tab title="npm">
     ```bash
     openclaw plugins install @myorg/openclaw-my-plugin
     ```
 
-    OpenClaw tries ClawHub first and falls back to npm automatically.
+    Bare package specs install from npm during the launch cutover.
 
   </Tab>
   <Tab title="ClawHub only">

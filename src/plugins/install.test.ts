@@ -773,7 +773,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     expect(
       warnings.some((warning) =>
-        warning.includes("allowed because it is an official source-linked ClawHub package"),
+        warning.includes("allowed because it is an official OpenClaw package"),
       ),
     ).toBe(true);
   });
@@ -927,6 +927,32 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.pluginId).toBe("inferred-runtime-plugin");
+    }
+  });
+
+  it("rejects package installs when a TypeScript extension entry has no compiled runtime output", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "source-only-runtime-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("requires compiled runtime output");
+      expect(result.error).toContain("./dist/index.js");
     }
   });
 
@@ -1935,7 +1961,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     expect(
       warnings.some((warning) =>
-        warning.includes("allowed because it is an official source-linked ClawHub package"),
+        warning.includes("allowed because it is an official OpenClaw package"),
       ),
     ).toBe(true);
   });

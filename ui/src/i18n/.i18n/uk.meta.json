@@ -10,12 +10,12 @@
     "sessionsView.sourceFilters",
     "sessionsView.unknownTooltip"
   ],
-  "generatedAt": "2026-05-04T05:27:40.913Z",
+  "generatedAt": "2026-05-04T05:56:59.815Z",
   "locale": "uk",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "d7422a132d25e453459e21cce7d013def56da9d668963841d4c509bce458e534",
-  "totalKeys": 996,
-  "translatedKeys": 987,
+  "sourceHash": "66b99bdd39fc9dae0476c0e2fd2c0392f068bc3f7f91b532b04a106f14a3f3df",
+  "totalKeys": 1001,
+  "translatedKeys": 992,
   "workflow": 1
 }

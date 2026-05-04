@@ -251,7 +251,19 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
     "event_subscriptions": {
       "request_url": "https://gateway-host.example.com/slack/events",
       "bot_events": [
-        /* same as Socket Mode */
+        "app_home_opened",
+        "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
       ]
     },
     "interactivity": {
@@ -283,116 +295,123 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
       <Tab title="Socket Mode (default)">
 
 ```json
-    "slash_commands": [
-      {
-        "command": "/new",
-        "description": "Start a new session",
-        "usage_hint": "[model]"
-      },
-      {
-        "command": "/reset",
-        "description": "Reset the current session"
-      },
-      {
-        "command": "/compact",
-        "description": "Compact the session context",
-        "usage_hint": "[instructions]"
-      },
-      {
-        "command": "/stop",
-        "description": "Stop the current run"
-      },
-      {
-        "command": "/session",
-        "description": "Manage thread-binding expiry",
-        "usage_hint": "idle <duration|off> or max-age <duration|off>"
-      },
-      {
-        "command": "/think",
-        "description": "Set the thinking level",
-        "usage_hint": "<level>"
-      },
-      {
-        "command": "/verbose",
-        "description": "Toggle verbose output",
-        "usage_hint": "on|off|full"
-      },
-      {
-        "command": "/fast",
-        "description": "Show or set fast mode",
-        "usage_hint": "[status|on|off]"
-      },
-      {
-        "command": "/reasoning",
-        "description": "Toggle reasoning visibility",
-        "usage_hint": "[on|off|stream]"
-      },
-      {
-        "command": "/elevated",
-        "description": "Toggle elevated mode",
-        "usage_hint": "[on|off|ask|full]"
-      },
-      {
-        "command": "/exec",
-        "description": "Show or set exec defaults",
-        "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>"
-      },
-      {
-        "command": "/model",
-        "description": "Show or set the model",
-        "usage_hint": "[name|#|status]"
-      },
-      {
-        "command": "/models",
-        "description": "List providers/models",
-        "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
-      },
-      {
-        "command": "/help",
-        "description": "Show the short help summary"
-      },
-      {
-        "command": "/commands",
-        "description": "Show the generated command catalog"
-      },
-      {
-        "command": "/tools",
-        "description": "Show what the current agent can use right now",
-        "usage_hint": "[compact|verbose]"
-      },
-      {
-        "command": "/agentstatus",
-        "description": "Show runtime status, including provider usage/quota when available"
-      },
-      {
-        "command": "/tasks",
-        "description": "List active/recent background tasks for the current session"
-      },
-      {
-        "command": "/context",
-        "description": "Explain how context is assembled",
-        "usage_hint": "[list|detail|json]"
-      },
-      {
-        "command": "/whoami",
-        "description": "Show your sender identity"
-      },
-      {
-        "command": "/skill",
-        "description": "Run a skill by name",
-        "usage_hint": "<name> [input]"
-      },
-      {
-        "command": "/btw",
-        "description": "Ask a side question without changing session context",
-        "usage_hint": "<question>"
-      },
-      {
-        "command": "/usage",
-        "description": "Control the usage footer or show cost summary",
-        "usage_hint": "off|tokens|full|cost"
-      }
-    ]
+{
+  "slash_commands": [
+    {
+      "command": "/new",
+      "description": "Start a new session",
+      "usage_hint": "[model]"
+    },
+    {
+      "command": "/reset",
+      "description": "Reset the current session"
+    },
+    {
+      "command": "/compact",
+      "description": "Compact the session context",
+      "usage_hint": "[instructions]"
+    },
+    {
+      "command": "/stop",
+      "description": "Stop the current run"
+    },
+    {
+      "command": "/session",
+      "description": "Manage thread-binding expiry",
+      "usage_hint": "idle <duration|off> or max-age <duration|off>"
+    },
+    {
+      "command": "/think",
+      "description": "Set the thinking level",
+      "usage_hint": "<level>"
+    },
+    {
+      "command": "/verbose",
+      "description": "Toggle verbose output",
+      "usage_hint": "on|off|full"
+    },
+    {
+      "command": "/fast",
+      "description": "Show or set fast mode",
+      "usage_hint": "[status|on|off]"
+    },
+    {
+      "command": "/reasoning",
+      "description": "Toggle reasoning visibility",
+      "usage_hint": "[on|off|stream]"
+    },
+    {
+      "command": "/elevated",
+      "description": "Toggle elevated mode",
+      "usage_hint": "[on|off|ask|full]"
+    },
+    {
+      "command": "/exec",
+      "description": "Show or set exec defaults",
+      "usage_hint": "host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>"
+    },
+    {
+      "command": "/model",
+      "description": "Show or set the model",
+      "usage_hint": "[name|#|status]"
+    },
+    {
+      "command": "/models",
+      "description": "List providers/models",
+      "usage_hint": "[provider] [page] [limit=<n>|size=<n>|all]"
+    },
+    {
+      "command": "/help",
+      "description": "Show the short help summary"
+    },
+    {
+      "command": "/commands",
+      "description": "Show the generated command catalog"
+    },
+    {
+      "command": "/tools",
+      "description": "Show what the current agent can use right now",
+      "usage_hint": "[compact|verbose]"
+    },
+    {
+      "command": "/agentstatus",
+      "description": "Show runtime status, including provider usage/quota when available"
+    },
+    {
+      "command": "/tasks",
+      "description": "List active/recent background tasks for the current session"
+    },
+    {
+      "command": "/context",
+      "description": "Explain how context is assembled",
+      "usage_hint": "[list|detail|json]"
+    },
+    {
+      "command": "/whoami",
+      "description": "Show your sender identity"
+    },
+    {
+      "command": "/skill",
+      "description": "Run a skill by name",
+      "usage_hint": "<name> [input]"
+    },
+    {
+      "command": "/btw",
+      "description": "Ask a side question without changing session context",
+      "usage_hint": "<question>"
+    },
+    {
+      "command": "/side",
+      "description": "Ask a side question without changing session context",
+      "usage_hint": "<question>"
+    },
+    {
+      "command": "/usage",
+      "description": "Control the usage footer or show cost summary",
+      "usage_hint": "off|tokens|full|cost"
+    }
+  ]
+}
 ```
 
       </Tab>
@@ -400,21 +419,24 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
         Use the same `slash_commands` list as Socket Mode above, and add `"url": "https://gateway-host.example.com/slack/events"` to every entry. Example:
 
 ```json
-    "slash_commands": [
-      {
-        "command": "/new",
-        "description": "Start a new session",
-        "usage_hint": "[model]",
-        "url": "https://gateway-host.example.com/slack/events"
-      },
-      {
-        "command": "/help",
-        "description": "Show the short help summary",
-        "url": "https://gateway-host.example.com/slack/events"
-      }
-      // ...repeat for every command with the same `url` value
-    ]
+{
+  "slash_commands": [
+    {
+      "command": "/new",
+      "description": "Start a new session",
+      "usage_hint": "[model]",
+      "url": "https://gateway-host.example.com/slack/events"
+    },
+    {
+      "command": "/help",
+      "description": "Show the short help summary",
+      "url": "https://gateway-host.example.com/slack/events"
+    }
+  ]
+}
 ```
+
+        Repeat that `url` value on every command in the list.
 
       </Tab>
     </Tabs>
@@ -648,8 +670,8 @@ Notes:
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
-- Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
-- Top-level Slack DMs stay off-thread by default, so they do not show the thread-style preview; use thread replies or `typingReaction` if you want visible progress there.
+- Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
+- Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.

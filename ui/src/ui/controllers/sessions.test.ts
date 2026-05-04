@@ -566,7 +566,7 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toBe(true);
+    expect(applied).toEqual({ applied: true, change: "deleted" });
     expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
       "agent:main:main",
     ]);
@@ -590,11 +590,11 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toBe(false);
+    expect(applied).toEqual({ applied: false });
     expect(state.sessionsResult?.sessions).toEqual([]);
   });
 
-  it("does not treat partial existing-row events as a complete source of truth", () => {
+  it("applies partial events only to existing source-of-truth rows", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
         ts: 1,
@@ -611,7 +611,7 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toBe(false);
+    expect(applied).toEqual({ applied: true, change: "updated" });
     expect(state.sessionsResult?.sessions).toEqual([
       { key: "agent:main:main", kind: "direct", updatedAt: 1 },
     ]);
@@ -636,7 +636,7 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toBe(true);
+    expect(applied).toEqual({ applied: true, change: "deleted" });
     expect(state.sessionsResult?.sessions).toEqual([]);
   });
 
@@ -658,7 +658,7 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toBe(true);
+    expect(applied).toEqual({ applied: true, change: "updated" });
     expect(state.sessionsResult?.sessions).toMatchObject([
       {
         key: "agent:main:subagent:done",
@@ -697,7 +697,7 @@ describe("applySessionsChangedEvent", () => {
       model: "gpt-5.4",
     });
 
-    expect(applied).toBe(true);
+    expect(applied).toEqual({ applied: true, change: "updated" });
     expect(state.sessionsResult?.ts).toBe(2);
     expect(state.sessionsResult?.sessions[0]).toMatchObject({
       key: "agent:main:main",
@@ -738,5 +738,68 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions[0]?.totalTokens).toBeUndefined();
     expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(false);
     expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
+  });
+
+  it("keeps updated existing rows sorted like sessions.list", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:newer",
+            kind: "direct",
+            updatedAt: 10,
+          },
+          {
+            key: "agent:main:older",
+            kind: "direct",
+            updatedAt: 1,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:older",
+      ts: 2,
+      updatedAt: 20,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+      "agent:main:older",
+      "agent:main:newer",
+    ]);
+  });
+
+  it("reports when reliable websocket event payloads insert new rows", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:new",
+      sessionId: "sess-new",
+      ts: 2,
+      kind: "direct",
+      updatedAt: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "inserted" });
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "agent:main:new",
+      kind: "direct",
+      updatedAt: 2,
+    });
   });
 });

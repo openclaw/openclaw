@@ -41,6 +41,12 @@ describe("configured plugin install release step", () => {
     ).toBe(false);
     expect(
       shouldRunConfiguredPluginInstallReleaseStep({
+        currentVersion: "2026.5.2-beta.1",
+        touchedVersion: "2026.5.1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunConfiguredPluginInstallReleaseStep({
         currentVersion: "2026.5.2",
         touchedVersion: "2026.5.1",
       }),
@@ -123,6 +129,61 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toEqual(["wecom"]);
   });
 
+  it("collects Codex from the configured agent runtime even without integration discovery", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.detectPluginAutoEnableCandidates).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              model: "openai/gpt-5.4",
+              agentRuntime: { id: "codex" },
+            }),
+          }),
+        }),
+      }),
+    );
+    expect(result.pluginIds).toEqual(["codex"]);
+    expect(result.channelIds).toEqual([]);
+  });
+
+  it("collects external web search and ACP runtime plugins from config-only usage", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        acp: {
+          enabled: true,
+          backend: "acpx",
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["acpx", "brave"]);
+    expect(result.channelIds).toEqual([]);
+  });
+
   it("does not collect channel ids when the matching plugin id is blocked", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -178,32 +239,112 @@ describe("configured plugin install release step", () => {
   });
 
   it("repairs used plugin installs and touches config only on success", async () => {
-    mocks.detectPluginAutoEnableCandidates.mockReturnValue([
-      { pluginId: "matrix", kind: "channel-configured", channelId: "matrix" },
-    ]);
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Installed missing configured plugin "matrix".'],
+      changes: ['Installed missing configured plugin "codex".'],
       warnings: [],
     });
 
     const { maybeRunConfiguredPluginInstallReleaseStep } =
       await import("./release-configured-plugin-installs.js");
     const result = await maybeRunConfiguredPluginInstallReleaseStep({
-      cfg: {},
-      currentVersion: "2026.5.2",
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
       touchedVersion: "2026.5.1",
       env: {},
     });
 
     expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
       expect.objectContaining({
-        pluginIds: ["matrix"],
+        pluginIds: ["codex"],
         channelIds: [],
         env: {},
       }),
     );
     expect(result.touchedConfig).toBe(true);
     expect(result.completed).toBe(true);
+  });
+
+  it("does not stamp config during update-time deferred install repair", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: [
+        'Deferred missing configured plugin "codex" install repair until post-update doctor.',
+      ],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+    });
+
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["codex"],
+        env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      }),
+    );
+    expect(result).toEqual({
+      changes: [
+        'Deferred missing configured plugin "codex" install repair until post-update doctor.',
+      ],
+      warnings: [],
+      completed: false,
+      touchedConfig: false,
+    });
+  });
+
+  it("repairs missing configured installs even when a prior update doctor touched config", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      currentVersion: "2026.5.3-beta.1",
+      touchedVersion: "2026.5.3-beta.1",
+      env: {},
+    });
+
+    expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginIds: ["discord"],
+        channelIds: [],
+        env: {},
+      }),
+    );
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "discord".'],
+      warnings: [],
+      completed: true,
+      touchedConfig: false,
+    });
   });
 
   it("does not touch config when install repair warns", async () => {

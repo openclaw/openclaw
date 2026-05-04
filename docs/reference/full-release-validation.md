@@ -27,6 +27,12 @@ Child workflows use the trusted workflow ref for the harness and the input
 `ref` for the candidate under test. That keeps new validation logic available
 when validating an older release branch or tag.
 
+Package Acceptance normally builds the candidate tarball from the resolved
+`ref`, including full-SHA runs dispatched with `pnpm ci:full-release`. After
+publish, pass `package_acceptance_package_spec=openclaw@YYYY.M.D` (or
+`openclaw@beta`/`openclaw@latest`) to run the same package/update matrix against
+the shipped npm package instead.
+
 ## Top-level stages
 
 | Stage                | Details                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -35,7 +41,8 @@ when validating an older release branch or tag.
 | Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, channel contracts, Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`. |
 | Plugin prerelease    | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, and plugin prerelease Docker lanes.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                       |
 | Release checks       | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, live/E2E suites, Docker release-path chunks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle.                                |
-| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** artifact-backed Telegram package proof for `rerun_group=all` with `release_profile=full`, or published-package Telegram proof when `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram` with `npm_telegram_package_spec`.                                     |
+| Package artifact     | **Job:** `Prepare release package artifact`<br />**Child workflow:** none<br />**Proves:** creates the parent `release-package-under-test` tarball early enough for package-facing checks that do not need to wait for `OpenClaw Release Checks`.<br />**Rerun:** rerun the umbrella or provide `npm_telegram_package_spec` for `rerun_group=npm-telegram`.                                   |
+| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** parent-artifact-backed Telegram package proof for `rerun_group=all` with `release_profile=full`, or published-package Telegram proof when `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram` with `npm_telegram_package_spec`.                              |
 | Umbrella verifier    | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                   |
 
 For `ref=main` and `rerun_group=all`, a newer umbrella supersedes an older one.
@@ -57,7 +64,7 @@ or Docker-facing stages need it.
 | Cross-OS            | **Job:** `cross_os_release_checks`<br />**Backing workflow:** `OpenClaw Cross-OS Release Checks (Reusable)`<br />**Tests:** fresh and upgrade lanes on Linux, Windows, and macOS for the selected provider and mode, using the candidate tarball plus a baseline package.<br />**Rerun:** `rerun_group=cross-os`.                                                                               |
 | Repo and live E2E   | **Job:** `Run repo/live E2E validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** repository E2E, live cache, OpenAI websocket streaming, native live provider and plugin shards, and Docker-backed live model/backend/gateway harnesses selected by `release_profile`.<br />**Rerun:** `rerun_group=live-e2e`, optionally with `live_suite_filter`. |
 | Docker release path | **Job:** `Run Docker release-path validation`<br />**Backing workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Tests:** release-path Docker chunks against the shared package artifact.<br />**Rerun:** `rerun_group=live-e2e`.                                                                                                                                                      |
-| Package Acceptance  | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, and mock-OpenAI Telegram package acceptance against the same tarball.<br />**Rerun:** `rerun_group=package`.                                                                                                                                  |
+| Package Acceptance  | **Job:** `Run package acceptance`<br />**Backing workflow:** `Package Acceptance`<br />**Tests:** offline plugin package fixtures, plugin update, mock-OpenAI Telegram package acceptance, and published-upgrade survivor checks from every stable npm release at or after `2026.4.23` against the same tarball.<br />**Rerun:** `rerun_group=package`.                                         |
 | QA parity           | **Job:** `Run QA Lab parity lane` and `Run QA Lab parity report`<br />**Backing workflow:** direct jobs<br />**Tests:** candidate and baseline agentic parity packs, then the parity report.<br />**Rerun:** `rerun_group=qa-parity` or `rerun_group=qa`.                                                                                                                                       |
 | QA live Matrix      | **Job:** `Run QA Lab live Matrix lane`<br />**Backing workflow:** direct job<br />**Tests:** fast live Matrix QA profile in the `qa-live-shared` environment.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                        |
 | QA live Telegram    | **Job:** `Run QA Lab live Telegram lane`<br />**Backing workflow:** direct job<br />**Tests:** live Telegram QA with Convex CI credential leases.<br />**Rerun:** `rerun_group=qa-live` or `rerun_group=qa`.                                                                                                                                                                                    |
@@ -87,30 +94,33 @@ commands with package artifact and image reuse inputs when available.
 `release_profile` mostly controls live/provider breadth inside release checks.
 It does not remove normal full CI, Plugin Prerelease, install smoke, package
 acceptance, QA Lab, or Docker release-path chunks. `full` also makes the
-umbrella run package Telegram E2E against the release package artifact when
+umbrella run package Telegram E2E against the parent release package artifact when
 `rerun_group=all`, so a full pre-publish candidate does not silently skip that
 Telegram package lane.
 
-| Profile   | Intended use                      | Included live/provider coverage                                                                                                                                               |
-| --------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimum` | Fastest release-critical smoke.   | OpenAI/core live path, Docker live models for OpenAI, native gateway core, native OpenAI gateway profile, native OpenAI plugin, and Docker live gateway OpenAI.               |
-| `stable`  | Default release approval profile. | `minimum` plus Anthropic, Google, MiniMax, backend, native live test harness, Docker live CLI backend, Docker ACP bind, Docker Codex harness, and an OpenCode Go smoke shard. |
-| `full`    | Broad advisory sweep.             | `stable` plus advisory providers, plugin live shards, and media live shards.                                                                                                  |
+| Profile   | Intended use                      | Included live/provider coverage                                                                                                                                                     |
+| --------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimum` | Fastest release-critical smoke.   | OpenAI/core live path, Docker live models for OpenAI, native gateway core, native OpenAI gateway profile, native OpenAI plugin, and Docker live gateway OpenAI.                     |
+| `stable`  | Default release approval profile. | `minimum` plus Anthropic smoke, Google, MiniMax, backend, native live test harness, Docker live CLI backend, Docker ACP bind, Docker Codex harness, and an OpenCode Go smoke shard. |
+| `full`    | Broad advisory sweep.             | `stable` plus advisory providers, plugin live shards, and media live shards.                                                                                                        |
 
 ## Full-only additions
 
 These suites are skipped by `stable` and included by `full`:
 
-| Area                             | Full-only coverage                                                              |
-| -------------------------------- | ------------------------------------------------------------------------------- |
-| Docker live models               | OpenCode Go, OpenRouter, xAI, Z.ai, and Fireworks.                              |
-| Docker live gateway              | Advisory shard for DeepSeek, Fireworks, OpenCode Go, OpenRouter, xAI, and Z.ai. |
-| Native gateway provider profiles | Fireworks, DeepSeek, full OpenCode Go model shards, OpenRouter, xAI, and Z.ai.  |
-| Native plugin live shards        | Plugins A-K, L-N, O-Z other, Moonshot, and xAI.                                 |
-| Native media live shards         | Audio, Google music, MiniMax music, and video groups A-D.                       |
+| Area                             | Full-only coverage                                                                                                          |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Docker live models               | OpenCode Go, OpenRouter, xAI, Z.ai, and Fireworks.                                                                          |
+| Docker live gateway              | Advisory providers split into DeepSeek/Fireworks, OpenCode Go/OpenRouter, and xAI/Z.ai shards.                              |
+| Native gateway provider profiles | Full Anthropic Opus and Sonnet/Haiku shards, Fireworks, DeepSeek, full OpenCode Go model shards, OpenRouter, xAI, and Z.ai. |
+| Native plugin live shards        | Plugins A-K, L-N, O-Z other, Moonshot, and xAI.                                                                             |
+| Native media live shards         | Audio, Google music, MiniMax music, and video groups A-D.                                                                   |
 
-`stable` includes `native-live-src-gateway-profiles-opencode-go-smoke`; `full`
-uses the broader OpenCode Go model shards instead.
+`stable` includes `native-live-src-gateway-profiles-anthropic-smoke` and
+`native-live-src-gateway-profiles-opencode-go-smoke`; `full` uses the broader
+Anthropic and OpenCode Go model shards instead. Focused reruns can still use the
+aggregate `native-live-src-gateway-profiles-anthropic` or
+`native-live-src-gateway-profiles-opencode-go` handles.
 
 ## Focused reruns
 
@@ -139,6 +149,9 @@ Valid filter ids are defined in the reusable live/E2E workflow, including
 `live-cli-backend-docker`, `live-acp-bind-docker`, and
 `live-codex-harness-docker`.
 
+The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
+three provider shards, so it still fans out to all advisory Docker gateway jobs.
+
 ## Evidence to keep
 
 Keep the `Full Release Validation` summary as the release-level index. It links
@@ -147,7 +160,7 @@ workflow first, then rerun the smallest matching handle above.
 
 Useful artifacts:
 
-- `release-package-under-test` from `OpenClaw Release Checks`
+- `release-package-under-test` from the Full Release Validation parent and `OpenClaw Release Checks`
 - Docker release-path artifacts under `.artifacts/docker-tests/`
 - Package Acceptance `package-under-test` and Docker acceptance artifacts
 - Cross-OS release-check artifacts for each OS and suite
