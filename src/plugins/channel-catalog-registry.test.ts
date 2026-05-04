@@ -6,7 +6,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("./discovery.js");
-  vi.doUnmock("./installed-plugin-index-records.js");
+  vi.doUnmock("./installed-plugin-index-record-reader.js");
 });
 
 const ENV: NodeJS.ProcessEnv = { HOME: "/tmp/openclaw-test-home" };
@@ -41,7 +41,7 @@ async function loadWithMocks(params: {
   });
 
   vi.doMock("./discovery.js", () => ({ discoverOpenClawPlugins: discoverSpy }));
-  vi.doMock("./installed-plugin-index-records.js", () => ({
+  vi.doMock("./installed-plugin-index-record-reader.js", () => ({
     loadInstalledPluginIndexInstallRecordsSync: loadRecordsSpy,
   }));
 

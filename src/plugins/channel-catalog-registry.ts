@@ -1,6 +1,6 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   loadPluginManifest,
   type PluginPackageChannel,
