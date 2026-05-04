@@ -328,9 +328,23 @@ describe("codex command", () => {
             requiresOpenaiAuth: false,
           },
         },
-        limits: { ok: true as const, value: [] },
-        mcps: { ok: true as const, value: [] },
-        skills: { ok: true as const, value: [] },
+        limits: {
+          ok: true as const,
+          value: {
+            rateLimits: {
+              limitId: null,
+              limitName: null,
+              primary: null,
+              secondary: null,
+              credits: null,
+              planType: null,
+              rateLimitReachedType: null,
+            },
+            rateLimitsByLimitId: null,
+          },
+        },
+        mcps: { ok: true as const, value: { data: [], nextCursor: null } },
+        skills: { ok: true as const, value: { data: [] } },
       })),
     });
 
