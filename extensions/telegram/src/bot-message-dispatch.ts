@@ -238,10 +238,13 @@ function clipProgressMarkdownText(text: string): string {
   return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
 }
 
+function sanitizeProgressMarkdownText(text: string): string {
+  return text.replaceAll("`", "'");
+}
+
 function formatProgressAsMarkdownCode(text: string): string {
   const clipped = clipProgressMarkdownText(text);
-  const safe = clipped.replaceAll("`", "'");
-  return `\`${safe}\``;
+  return `\`${sanitizeProgressMarkdownText(clipped)}\``;
 }
 
 export const dispatchTelegramMessage = async ({
@@ -509,7 +512,7 @@ export const dispatchTelegramMessage = async ({
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return;
     }
-    const normalized = line?.replace(/\s+/g, " ").trim();
+    const normalized = sanitizeProgressMarkdownText(line?.replace(/\s+/g, " ").trim() ?? "");
     if (streamMode !== "progress") {
       if (!previewToolProgressEnabled || previewToolProgressSuppressed || !normalized) {
         return;

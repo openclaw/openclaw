@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
 - Telegram: keep reply-dispatch lazy provider runtime chunks behind stable dist names and delete `/reasoning stream` previews after final delivery so package updates and live reasoning drafts do not leave Telegram turns broken or noisy. Thanks @BunsDev.
 - Exec approvals: detect `env -S` split-string command-carrier risks when `-S`/`-s` is combined with other env short options, so approval explanations do not miss split payloads hidden behind `env -iS...`. Thanks @vincentkoc.
