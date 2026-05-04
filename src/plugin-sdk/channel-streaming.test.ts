@@ -61,6 +61,32 @@ describe("channel-streaming", () => {
     expect(resolveChannelStreamingPreviewToolProgress(entry)).toBe(false);
   });
 
+  it("keeps progress-only tool progress config out of normal preview modes", () => {
+    expect(
+      resolveChannelStreamingPreviewToolProgress({
+        streaming: { mode: "partial", progress: { toolProgress: false } },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingPreviewToolProgress({
+        streaming: {
+          mode: "block",
+          preview: { toolProgress: true },
+          progress: { toolProgress: false },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingPreviewToolProgress({
+        streaming: {
+          mode: "progress",
+          preview: { toolProgress: true },
+          progress: { toolProgress: false },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("falls back to legacy flat fields when the canonical object is absent", () => {
     const entry = {
       chunkMode: "newline",

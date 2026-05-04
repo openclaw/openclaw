@@ -424,11 +424,14 @@ export function resolveChannelStreamingPreviewToolProgress(
   defaultValue = true,
 ): boolean {
   const config = getChannelStreamingConfigObject(entry);
-  return (
-    asBoolean(config?.progress?.toolProgress) ??
-    asBoolean(config?.preview?.toolProgress) ??
-    defaultValue
-  );
+  if (resolveChannelPreviewStreamMode(entry, "partial") === "progress") {
+    return (
+      asBoolean(config?.progress?.toolProgress) ??
+      asBoolean(config?.preview?.toolProgress) ??
+      defaultValue
+    );
+  }
+  return asBoolean(config?.preview?.toolProgress) ?? defaultValue;
 }
 
 export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
