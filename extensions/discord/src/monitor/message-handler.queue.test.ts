@@ -78,9 +78,21 @@ function createPreflightContext(channelId = "ch-1") {
     cfg,
     accountId: "default",
     token: "test-token",
+    runtime: {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: (code: number): never => {
+        throw new Error(`exit ${code}`);
+      },
+    },
     textLimit: 2_000,
     replyToMode: "off" as const,
     discordConfig,
+    isDirectMessage: false,
+    isGuildMessage: true,
+    isGroupDm: false,
+    baseText: "hello",
+    messageText: "hello",
   };
 }
 
@@ -92,16 +104,6 @@ function createAcceptedDmPreflightContext(overrides: Record<string, unknown> = {
     isGroupDm: false,
     messageText: "hello",
     ...overrides,
-  };
-}
-
-function createReplyTypingFeedbackMock(channelId = "ch-1") {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    onIdle: vi.fn(),
-    onCleanup: vi.fn(),
-    updateChannelId: vi.fn(),
-    getChannelId: vi.fn(() => channelId),
   };
 }
 
@@ -209,10 +211,17 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const replyTypingFeedback = createReplyTypingFeedbackMock("dm-1");
     replyTypingFeedback.onReplyStart.mockRejectedValueOnce(new Error("typing failed"));
     const createReplyTypingFeedback = vi.fn(() => replyTypingFeedback);
-    const params = createDiscordHandlerParams();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: (code: number): never => {
+        throw new Error(`exit ${code}`);
+      },
+    };
+    preflightDiscordMessageMock.mockResolvedValue(createAcceptedDmPreflightContext({ runtime }));
 
     const handler = createDiscordMessageHandler({
-      ...params,
+      ...createDiscordHandlerParams(),
       __testing: { createReplyTypingFeedback },
     });
     await expect(
@@ -222,7 +231,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await flushQueueWork();
 
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
-    expect(params.runtime.error).toHaveBeenCalledWith(
+    expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("discord accepted typing failed: Error: typing failed"),
     );
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
