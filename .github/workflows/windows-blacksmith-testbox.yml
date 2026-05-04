@@ -65,7 +65,7 @@ jobs:
           fi
           runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
 
-          response="$(curl -s -f -L -X POST "${api_url}/api/testbox/phone-home" \
+          response="$(curl -s -f -L --post302 --post303 -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
             -d "{
@@ -155,7 +155,7 @@ jobs:
           }
           JSON
 
-          http_code="$(curl -sS -L -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
+          http_code="$(curl -sS -L --post302 --post303 -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
