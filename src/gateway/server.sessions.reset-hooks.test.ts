@@ -296,3 +296,68 @@ test("sessions.reset emits before_reset for the entry actually reset in the writ
     sessionId: "sess-new",
   });
 });
+
+test("sessions.create with emitCommandHooks=true fires command:new hook against parent (#76957)", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-parent", "hello from parent");
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent"),
+    },
+  });
+
+  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+  });
+  expect(result.ok).toBe(true);
+
+  const commandNewEvents = (
+    sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+  )
+    .map((call) => call[0])
+    .filter(
+      (event): event is { type: string; action: string; context?: { commandSource?: string } } =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "command" &&
+        (event as { action?: unknown }).action === "new",
+    );
+  expect(commandNewEvents).toHaveLength(1);
+  expect(commandNewEvents[0]).toMatchObject({
+    type: "command",
+    action: "new",
+    context: { commandSource: "webchat" },
+  });
+});
+
+test("sessions.create without emitCommandHooks does NOT fire command:new hook (#76957)", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent2"),
+    },
+  });
+
+  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
+    parentSessionKey: "main",
+    // No emitCommandHooks — SDK programmatic create path
+  });
+  expect(result.ok).toBe(true);
+
+  const commandNewEvents = (
+    sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>
+  )
+    .map((call) => call[0])
+    .filter(
+      (event): event is { type: string; action: string } =>
+        Boolean(event) &&
+        typeof event === "object" &&
+        (event as { type?: unknown }).type === "command" &&
+        (event as { action?: unknown }).action === "new",
+    );
+  expect(commandNewEvents).toHaveLength(0);
+});

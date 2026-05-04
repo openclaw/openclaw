@@ -24,6 +24,7 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
   type SessionPatchHookContext,
@@ -999,6 +1000,44 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       canonicalParentSessionKey = parent.canonicalKey;
     }
+    // Emit command:new + before_reset + session lifecycle hooks only when the caller
+    // explicitly opts in (emitCommandHooks: true). The Control UI /new flow sets this;
+    // SDK programmatic creates that supply parentSessionKey do not, so they never fire
+    // command:new with commandSource: "webchat" (#76957).
+    if (canonicalParentSessionKey && p.emitCommandHooks === true) {
+      const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
+      const parentAgentId = normalizeAgentId(
+        resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? resolveDefaultAgentId(cfg),
+      );
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, parentAgentId);
+      if (hasInternalHookListeners("command", "new")) {
+        const hookEvent = createInternalHookEvent("command", "new", canonicalParentSessionKey, {
+          sessionEntry: parentEntry,
+          previousSessionEntry: parentEntry,
+          commandSource: "webchat",
+          cfg,
+          workspaceDir,
+        });
+        await triggerInternalHook(hookEvent);
+      }
+      const parentStorePath = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: canonicalParentSessionKey,
+      }).storePath;
+      const parentTarget = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: canonicalParentSessionKey,
+      });
+      const { emitGatewayBeforeResetPluginHook } = await loadSessionsRuntimeModule();
+      await emitGatewayBeforeResetPluginHook({
+        cfg,
+        key: canonicalParentSessionKey,
+        target: parentTarget,
+        storePath: parentStorePath,
+        entry: parentEntry,
+        reason: "new",
+      });
+    }
     const loweredRequestedKey = normalizeOptionalLowercaseString(requestedKey);
     const key = requestedKey
       ? loweredRequestedKey === "global" || loweredRequestedKey === "unknown"
@@ -1140,6 +1179,32 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       emitSessionsChanged(context, {
         sessionKey: target.canonicalKey,
         reason: "send",
+      });
+    }
+    if (canonicalParentSessionKey && p.emitCommandHooks === true) {
+      const { entry: parentEntry } = loadSessionEntry(canonicalParentSessionKey);
+      const parentStorePath = resolveGatewaySessionStoreTarget({
+        cfg,
+        key: canonicalParentSessionKey,
+      }).storePath;
+      const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
+        await loadSessionsRuntimeModule();
+      emitGatewaySessionEndPluginHook({
+        cfg,
+        sessionKey: canonicalParentSessionKey,
+        sessionId: parentEntry?.sessionId ?? "",
+        storePath: parentStorePath,
+        sessionFile: parentEntry?.sessionFile,
+        agentId: resolveAgentIdFromSessionKey(canonicalParentSessionKey) ?? undefined,
+        reason: "new",
+        nextSessionId: createdEntry.sessionId,
+        nextSessionKey: target.canonicalKey,
+      });
+      emitGatewaySessionStartPluginHook({
+        cfg,
+        sessionKey: target.canonicalKey,
+        sessionId: createdEntry.sessionId,
+        resumedFrom: parentEntry?.sessionId,
       });
     }
   },
