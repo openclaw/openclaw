@@ -12,8 +12,8 @@ let manifestRegistryModule: ManifestRegistryModule;
 let webFetchProvidersSharedModule: WebFetchProvidersSharedModule;
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
+let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 let resolvePluginWebFetchProviders: WebFetchProvidersRuntimeModule["resolvePluginWebFetchProviders"];
-let resetWebFetchProviderSnapshotCacheForTests: WebFetchProvidersRuntimeModule["__testing"]["resetWebFetchProviderSnapshotCacheForTests"];
 
 const DEFAULT_WORKSPACE = "/tmp/workspace";
 
@@ -96,18 +96,26 @@ function createRuntimeWebFetchProvider() {
 
 describe("resolvePluginWebFetchProviders", () => {
   beforeAll(async () => {
+    vi.doMock("./plugin-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+      return {
+        ...actual,
+        loadPluginRegistrySnapshotWithMetadata: () => ({
+          snapshot: { plugins: [], diagnostics: [] },
+          source: "derived",
+          diagnostics: [],
+        }),
+      };
+    });
     loaderModule = await import("./loader.js");
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
-    ({ setActivePluginRegistry } = await import("./runtime.js"));
-    ({
-      resolvePluginWebFetchProviders,
-      __testing: { resetWebFetchProviderSnapshotCacheForTests },
-    } = await import("./web-fetch-providers.runtime.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
+    ({ resolvePluginWebFetchProviders } = await import("./web-fetch-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    resetWebFetchProviderSnapshotCacheForTests();
     vi.spyOn(manifestRegistryModule, "loadPluginManifestRegistry").mockReturnValue(
       createManifestRegistryFixture() as ManifestRegistryModule["loadPluginManifestRegistry"] extends (
         ...args: unknown[]
@@ -122,11 +130,11 @@ describe("resolvePluginWebFetchProviders", () => {
         registry.webFetchProviders = [createRuntimeWebFetchProvider()];
         return registry;
       });
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
   });
 
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
   });
 
@@ -170,7 +178,7 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(inFlightSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         activate: false,
-        cache: false,
+        cache: true,
         onlyPluginIds: ["firecrawl"],
         workspaceDir: DEFAULT_WORKSPACE,
       }),
@@ -194,7 +202,7 @@ describe("resolvePluginWebFetchProviders", () => {
       workspaceDir: DEFAULT_WORKSPACE,
       env,
       onlyPluginIds: ["firecrawl"],
-      cache: false,
+      cache: true,
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
@@ -231,7 +239,7 @@ describe("resolvePluginWebFetchProviders", () => {
       workspaceDir: DEFAULT_WORKSPACE,
       env,
       onlyPluginIds: ["firecrawl"],
-      cache: false,
+      cache: true,
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
@@ -250,7 +258,7 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("uses the active registry workspace for candidate discovery and snapshot loads when workspaceDir is omitted", () => {
+  it("uses the active registry workspace for candidate discovery when workspaceDir is omitted", () => {
     const env = createWebFetchEnv();
     const rawConfig = createFirecrawlAllowConfig();
 
@@ -280,7 +288,7 @@ describe("resolvePluginWebFetchProviders", () => {
     );
   });
 
-  it("invalidates web-fetch snapshot memoization when the active registry workspace changes", () => {
+  it("resolves web-fetch providers for each active registry workspace", () => {
     const env = createWebFetchEnv();
     const config = createFirecrawlAllowConfig();
 

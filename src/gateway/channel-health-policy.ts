@@ -1,6 +1,6 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
 
-export type ChannelHealthSnapshot = {
+type ChannelHealthSnapshot = {
   running?: boolean;
   connected?: boolean;
   enabled?: boolean;
@@ -10,13 +10,14 @@ export type ChannelHealthSnapshot = {
   activeRuns?: number;
   lastRunActivityAt?: number | null;
   lastEventAt?: number | null;
+  lastConnectedAt?: number | null;
   lastTransportActivityAt?: number | null;
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
 };
 
-export type ChannelHealthEvaluationReason =
+type ChannelHealthEvaluationReason =
   | "healthy"
   | "unmanaged"
   | "not-running"
@@ -38,12 +39,7 @@ export type ChannelHealthPolicy = {
   channelConnectGraceMs: number;
 };
 
-export type ChannelRestartReason =
-  | "gave-up"
-  | "stopped"
-  | "stale-socket"
-  | "stuck"
-  | "disconnected";
+type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false;

@@ -7,6 +7,7 @@ import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
+import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
@@ -34,7 +35,7 @@ function createTimedOutIsolatedCronState(params: { storePath: string; now: numbe
     log: logger,
     nowMs: () => params.now,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => {
       throw new Error("cron: job execution timed out");
     }),
@@ -48,7 +49,7 @@ function createOkIsolatedCronState(params: { storePath: string; now: number; sum
     log: logger,
     nowMs: () => params.now,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       ...(params.summary === undefined ? {} : { summary: params.summary }),
@@ -132,7 +133,7 @@ describe("cron service ops seam coverage", () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     await writeCronStoreSnapshot({
@@ -146,7 +147,7 @@ describe("cron service ops seam coverage", () => {
       log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -157,7 +158,7 @@ describe("cron service ops seam coverage", () => {
       "cron: marking interrupted running job failed on startup",
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(state.timer).not.toBeNull();
 
     const persisted = (await loadCronStore(storePath)) as {
@@ -326,25 +327,26 @@ describe("cron service ops seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const restoreStateDir = withStateDirForStorePath(storePath);
 
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [createMissedIsolatedJob(now)],
-    });
+    try {
+      await writeCronStoreSnapshot({
+        storePath,
+        jobs: [createMissedIsolatedJob(now)],
+      });
 
-    const state = createTimedOutIsolatedCronState({
-      storePath,
-      now,
-    });
+      const state = createTimedOutIsolatedCronState({
+        storePath,
+        now,
+      });
 
-    await start(state);
+      await runMissedJobs(state);
 
-    expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
-      runtime: "cron",
-      status: "timed_out",
-      sourceId: "startup-timeout",
-    });
-
-    restoreStateDir();
-    stop(state);
+      expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
+        runtime: "cron",
+        status: "timed_out",
+        sourceId: "startup-timeout",
+      });
+    } finally {
+      restoreStateDir();
+    }
   });
 });

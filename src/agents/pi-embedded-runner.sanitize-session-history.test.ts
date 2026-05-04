@@ -30,9 +30,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
   __testing: {},
-  clearProviderRuntimeHookCache: vi.fn(),
   prepareProviderExtraParams: vi.fn(() => undefined),
-  resetProviderRuntimeHookCacheForTest: vi.fn(),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),
   resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
@@ -1130,6 +1128,51 @@ describe("sanitizeSessionHistory", () => {
 
     expect((result[1] as Extract<AgentMessage, { role: "assistant" }>).content).toEqual([
       { type: "text", text: "Pong" },
+    ]);
+  });
+
+  it("drops metadata-only assistant replay turns before provider validation", async () => {
+    setNonGoogleModelApi();
+
+    const metadataOnlyText = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"channel:123","sender":"OpenClaw"}',
+      "```",
+    ].join("\n");
+    const messages = castAgentMessages([
+      makeUserMessage("First"),
+      makeAssistantMessage([{ type: "text", text: metadataOnlyText }]),
+      makeUserMessage("Second"),
+    ]);
+
+    const sanitized = await sanitizeSessionHistory({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionManager: makeMockSessionManager(),
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
+
+    const validated = await validateReplayTurns({
+      messages: sanitized,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      sessionId: TEST_SESSION_ID,
+    });
+    expect(validated).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "First" },
+          { type: "text", text: "Second" },
+        ],
+        timestamp: expect.any(Number),
+      },
     ]);
   });
 

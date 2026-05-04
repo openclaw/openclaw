@@ -55,7 +55,30 @@ export function shouldUseOpenAIWebSocketTransport(params: {
   return endpointClass === "default" || endpointClass === "openai-public";
 }
 
-export function shouldAppendAttemptCacheTtl(params: {
+function hasExplicitSseTransport(sources: Array<Record<string, unknown> | undefined>): boolean {
+  return sources.some((source) => {
+    const transport = typeof source?.transport === "string" ? source.transport : "";
+    return transport.trim().toLowerCase() === "sse";
+  });
+}
+
+export function shouldUseOpenAIWebSocketTransportForAttempt(params: {
+  provider: string;
+  modelApi?: string | null;
+  modelBaseUrl?: string | null;
+  streamParams?: Record<string, unknown>;
+  effectiveExtraParams?: Record<string, unknown>;
+  modelParams?: Record<string, unknown>;
+}): boolean {
+  if (
+    hasExplicitSseTransport([params.streamParams, params.effectiveExtraParams, params.modelParams])
+  ) {
+    return false;
+  }
+  return shouldUseOpenAIWebSocketTransport(params);
+}
+
+function shouldAppendAttemptCacheTtl(params: {
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
   config?: OpenClawConfig;

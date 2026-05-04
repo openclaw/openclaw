@@ -467,7 +467,10 @@ describe("diagnostics command", () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest(
       {
-        privateTargets: [{ channel: "whatsapp", to: "owner-dm", accountId: "account-1" }],
+        privateTargets: [
+          { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+          { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
+        ],
       },
     );
 
@@ -492,6 +495,7 @@ describe("diagnostics command", () => {
     expect(privateReplies).toHaveLength(0);
     expect(execCalls).toHaveLength(1);
     expect(execCalls[0]?.defaults).toMatchObject({
+      messageProvider: "telegram",
       currentChannelId: "owner-dm",
       accountId: "account-1",
     });
@@ -543,7 +547,10 @@ describe("diagnostics command", () => {
       ownership: "reserved",
     });
     const { privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest({
-      privateTargets: [{ channel: "whatsapp", to: "owner-dm", accountId: "account-1" }],
+      privateTargets: [
+        { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+        { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
+      ],
     });
 
     const result = await handleDiagnosticsCommand(
@@ -555,6 +562,9 @@ describe("diagnostics command", () => {
       "Diagnostics are sensitive. I sent the diagnostics details and approval prompts to the owner privately.",
     );
     expect(privateReplies).toHaveLength(1);
+    expect(privateReplies[0]?.targets).toEqual([
+      { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+    ]);
     expect(privateReplies[0]?.text).toContain("Codex diagnostics sent to OpenAI servers:");
     expect(privateReplies[0]?.text).toContain("codex-thread-1");
   });

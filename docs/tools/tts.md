@@ -48,6 +48,9 @@ audio attachments everywhere else, and PCM/Ulaw streams for telephony and Talk.
 <Note>
 Auto-TTS is **off** by default. When `messages.tts.provider` is unset,
 OpenClaw picks the first configured provider in registry auto-select order.
+The built-in `tts` agent tool is explicit-intent only: ordinary chat stays
+text unless the user asks for audio, uses `/tts`, or enables Auto-TTS/directive
+speech.
 </Note>
 
 ## Supported providers
@@ -849,11 +852,14 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   </Accordion>
 
   <Accordion title="Inworld">
+    ### Inworld primary
+
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
     <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
     <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
     <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
+
   </Accordion>
 
   <Accordion title="Local CLI (tts-local-cli)">
@@ -892,6 +898,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
     <ParamField path="voice" type="string">Voice name (e.g. `alloy`, `cedar`).</ParamField>
     <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
+    <ParamField path="extraBody / extra_body" type="Record<string, unknown>">Extra JSON fields merged into `/audio/speech` request bodies after generated OpenAI TTS fields. Use this for OpenAI-compatible endpoints such as Kokoro that require provider-specific keys like `lang`; unsafe prototype keys are ignored.</ParamField>
     <ParamField path="baseUrl" type="string">
       Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted.
     </ParamField>

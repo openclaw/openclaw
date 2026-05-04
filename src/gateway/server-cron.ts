@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -21,7 +22,7 @@ import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -246,9 +247,11 @@ export function buildGatewayCronService(params: {
         trusted: opts?.trusted,
       });
     },
-    requestHeartbeatNow: (opts) => {
+    requestHeartbeat: (opts) => {
       const { agentId, sessionKey } = resolveCronWakeTarget(opts);
-      requestHeartbeatNow({
+      requestHeartbeat({
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
@@ -278,6 +281,8 @@ export function buildGatewayCronService(params: {
         : undefined;
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
+        source: opts?.source ?? "cron",
+        intent: opts?.intent ?? "event",
         reason: opts?.reason,
         agentId,
         sessionKey,
@@ -306,6 +311,29 @@ export function buildGatewayCronService(params: {
           onWarn: (msg) => cronLogger.warn({ jobId: job.id }, msg),
         });
       }
+    },
+    cleanupTimedOutAgentRun: async ({ job, execution }) => {
+      if (!execution?.sessionId) {
+        return;
+      }
+      const result = await abortAndDrainEmbeddedPiRun({
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+        settleMs: 15_000,
+        forceClear: true,
+        reason: "cron_timeout",
+      });
+      cronLogger.warn(
+        {
+          jobId: job.id,
+          sessionId: execution.sessionId,
+          sessionKey: execution.sessionKey,
+          aborted: result.aborted,
+          drained: result.drained,
+          forceCleared: result.forceCleared,
+        },
+        "cron: cleaned up timed-out agent run",
+      );
     },
     sendCronFailureAlert: async ({ job, text, channel, to, mode, accountId }) =>
       await sendGatewayCronFailureAlert({

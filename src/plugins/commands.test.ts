@@ -415,8 +415,6 @@ describe("registerPluginCommand", () => {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
       OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     };
 
     expect(getPluginCommandSpecs("discord", { env })).toEqual([]);
@@ -453,6 +451,35 @@ describe("registerPluginCommand", () => {
       command: expect.objectContaining({
         nativeProgressMessages: { telegram: "Running voice command..." },
       }),
+    });
+  });
+
+  it("exposes native description localizations on plugin command specs", () => {
+    const result = registerVoiceCommandForTest({
+      description: "Demo command",
+      descriptionLocalizations: { ko: "데모 명령" },
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(listProviderPluginCommandSpecs("discord")).toEqual([
+      {
+        name: "voice",
+        description: "Demo command",
+        descriptionLocalizations: { ko: "데모 명령" },
+        acceptsArgs: false,
+      },
+    ]);
+  });
+
+  it("rejects empty native description localizations", () => {
+    const result = registerVoiceCommandForTest({
+      description: "Demo command",
+      descriptionLocalizations: { ko: "   " },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Description localization "ko" cannot be empty',
     });
   });
 

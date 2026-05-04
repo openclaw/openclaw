@@ -12,10 +12,14 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolvePluginTools } from "../plugins/tools.js";
+import { routeLogsToStderr } from "../logging/console.js";
+import { ensureStandalonePluginToolRegistryLoaded, resolvePluginTools } from "../plugins/tools.js";
 import { connectToolsMcpServerToStdio, createToolsMcpServer } from "./tools-stdio-server.js";
 
 function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+  ensureStandalonePluginToolRegistryLoaded({
+    context: { config },
+  });
   return resolvePluginTools({
     context: { config },
     suppressNameConflicts: true,
@@ -34,6 +38,10 @@ export function createPluginToolsMcpServer(
 }
 
 export async function servePluginToolsMcp(): Promise<void> {
+  // MCP stdio requires stdout to stay protocol-only, including during plugin
+  // tool discovery before the transport is connected.
+  routeLogsToStderr();
+
   const config = getRuntimeConfig();
   const tools = resolveTools(config);
   const server = createPluginToolsMcpServer({ config, tools });

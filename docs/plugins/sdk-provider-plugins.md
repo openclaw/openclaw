@@ -29,6 +29,8 @@ API key auth, and dynamic model resolution.
 
 <Steps>
   <Step title="Package and manifest">
+    ### Step 1: Package and manifest
+
     <CodeGroup>
     ```json package.json
     {
@@ -420,6 +422,9 @@ API key auth, and dynamic model resolution.
 
     <Accordion title="All available provider hooks">
       OpenClaw calls hooks in this order. Most providers only use 2-3:
+      Compatibility-only provider fields that OpenClaw no longer calls, such as
+      `ProviderPlugin.capabilities` and `suppressBuiltInModel`, are not listed
+      here.
 
       | # | Hook | When to use |
       | --- | --- | --- |
@@ -436,37 +441,35 @@ API key auth, and dynamic model resolution.
       | 11 | `prepareDynamicModel` | Async metadata fetch before resolving |
       | 12 | `normalizeResolvedModel` | Transport rewrites before the runner |
       | 13 | `contributeResolvedModelCompat` | Compat flags for vendor models behind another compatible transport |
-      | 14 | `capabilities` | Legacy static capability bag; compatibility only |
-      | 15 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
-      | 16 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
-      | 17 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
-      | 18 | `prepareExtraParams` | Default request params |
-      | 19 | `createStreamFn` | Fully custom StreamFn transport |
-      | 20 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
-      | 21 | `resolveTransportTurnState` | Native per-turn headers/metadata |
-      | 22 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
-      | 23 | `formatApiKey` | Custom runtime token shape |
-      | 24 | `refreshOAuth` | Custom OAuth refresh |
-      | 25 | `buildAuthDoctorHint` | Auth repair guidance |
-      | 26 | `matchesContextOverflowError` | Provider-owned overflow detection |
-      | 27 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
-      | 28 | `isCacheTtlEligible` | Prompt cache TTL gating |
-      | 29 | `buildMissingAuthMessage` | Custom missing-auth hint |
-      | 30 | `suppressBuiltInModel` | Deprecated. Runtime hook is no longer called; use manifest `modelCatalog.suppressions` |
-      | 31 | `augmentModelCatalog` | Synthetic forward-compat rows |
-      | 32 | `resolveThinkingProfile` | Model-specific `/think` option set |
-      | 33 | `isBinaryThinking` | Binary thinking on/off compatibility |
-      | 34 | `supportsXHighThinking` | `xhigh` reasoning support compatibility |
-      | 35 | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility |
-      | 36 | `isModernModelRef` | Live/smoke model matching |
-      | 37 | `prepareRuntimeAuth` | Token exchange before inference |
-      | 38 | `resolveUsageAuth` | Custom usage credential parsing |
-      | 39 | `fetchUsageSnapshot` | Custom usage endpoint |
-      | 40 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
-      | 41 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
-      | 42 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
-      | 43 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
-      | 44 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
+      | 14 | `normalizeToolSchemas` | Provider-owned tool-schema cleanup before registration |
+      | 15 | `inspectToolSchemas` | Provider-owned tool-schema diagnostics |
+      | 16 | `resolveReasoningOutputMode` | Tagged vs native reasoning-output contract |
+      | 17 | `prepareExtraParams` | Default request params |
+      | 18 | `createStreamFn` | Fully custom StreamFn transport |
+      | 19 | `wrapStreamFn` | Custom headers/body wrappers on the normal stream path |
+      | 20 | `resolveTransportTurnState` | Native per-turn headers/metadata |
+      | 21 | `resolveWebSocketSessionPolicy` | Native WS session headers/cool-down |
+      | 22 | `formatApiKey` | Custom runtime token shape |
+      | 23 | `refreshOAuth` | Custom OAuth refresh |
+      | 24 | `buildAuthDoctorHint` | Auth repair guidance |
+      | 25 | `matchesContextOverflowError` | Provider-owned overflow detection |
+      | 26 | `classifyFailoverReason` | Provider-owned rate-limit/overload classification |
+      | 27 | `isCacheTtlEligible` | Prompt cache TTL gating |
+      | 28 | `buildMissingAuthMessage` | Custom missing-auth hint |
+      | 29 | `augmentModelCatalog` | Synthetic forward-compat rows |
+      | 30 | `resolveThinkingProfile` | Model-specific `/think` option set |
+      | 31 | `isBinaryThinking` | Binary thinking on/off compatibility |
+      | 32 | `supportsXHighThinking` | `xhigh` reasoning support compatibility |
+      | 33 | `resolveDefaultThinkingLevel` | Default `/think` policy compatibility |
+      | 34 | `isModernModelRef` | Live/smoke model matching |
+      | 35 | `prepareRuntimeAuth` | Token exchange before inference |
+      | 36 | `resolveUsageAuth` | Custom usage credential parsing |
+      | 37 | `fetchUsageSnapshot` | Custom usage endpoint |
+      | 38 | `createEmbeddingProvider` | Provider-owned embedding adapter for memory/search |
+      | 39 | `buildReplayPolicy` | Custom transcript replay/compaction policy |
+      | 40 | `sanitizeReplayHistory` | Provider-specific replay rewrites after generic cleanup |
+      | 41 | `validateReplayTurns` | Strict replay-turn validation before the embedded runner |
+      | 42 | `onModelSelected` | Post-selection callback (e.g. telemetry) |
 
       Runtime fallback notes:
 
@@ -480,6 +483,8 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Add extra capabilities (optional)">
+    ### Step 5: Add extra capabilities
+
     A provider plugin can register speech, realtime transcription, realtime
     voice, media understanding, image generation, video generation, web fetch,
     and web search alongside text inference. OpenClaw classifies this as a
@@ -592,6 +597,7 @@ API key auth, and dynamic model resolution.
             connect: async () => {},
             sendAudio: () => {},
             setMediaTimestamp: () => {},
+            handleBargeIn: () => {},
             submitToolResult: () => {},
             acknowledgeMark: () => {},
             close: () => {},
@@ -599,6 +605,10 @@ API key auth, and dynamic model resolution.
           }),
         });
         ```
+
+        Implement `handleBargeIn` when a transport can detect that a human is
+        interrupting assistant playback and the provider supports truncating or
+        clearing the active audio response.
       </Tab>
       <Tab title="Media understanding">
         ```typescript
@@ -677,6 +687,8 @@ API key auth, and dynamic model resolution.
   </Step>
 
   <Step title="Test">
+    ### Step 6: Test
+
     ```typescript src/provider.test.ts
     import { describe, it, expect } from "vitest";
     // Export your provider config object from index.ts or a dedicated file

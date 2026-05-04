@@ -5,7 +5,11 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent"),
-  ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
+  ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown) => {
+    void agentDir;
+    void options;
+    return { profiles: {} };
+  }),
   buildAuthHealthSummary: vi.fn(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
@@ -20,9 +24,15 @@ vi.mock("../../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-}));
+vi.mock("../../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
+    "../../agents/auth-profiles.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  };
+});
 
 vi.mock("../../agents/auth-health.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
@@ -185,6 +195,63 @@ describe("models.authStatus", () => {
 
     await handler(createOptions());
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("scopes external CLI auth overlays to configured providers", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          "opencode-go:default": { provider: "opencode-go", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "opencode-go/kimi-k2.6" },
+        },
+      },
+      models: {
+        providers: {
+          "opencode-go": {
+            baseUrl: "https://example.test/v1",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    });
+
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          mode: "scoped",
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+          providerIds: expect.arrayContaining(["opencode-go"]),
+          profileIds: ["opencode-go:default"],
+        }),
+      }),
+    );
+    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    const externalCli = (options as { externalCli?: { providerIds?: string[] } }).externalCli;
+    expect(externalCli?.providerIds).not.toContain("claude-cli");
+  });
+
+  it("disables external CLI auth overlays when config has no provider signal", async () => {
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          mode: "none",
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+        }),
+      }),
+    );
   });
 
   it("still returns providers when usage fetch fails", async () => {

@@ -1,22 +1,20 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-import {
-  listPluginContributionIds,
-  loadPluginRegistrySnapshot,
-  type LoadPluginRegistryParams,
-  type PluginRegistrySnapshot,
-} from "./plugin-registry.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
+import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { type LoadPluginRegistryParams, type PluginRegistrySnapshot } from "./plugin-registry.js";
 import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
 
 const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
 const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-let providerRuntimePromise: Promise<typeof import("./provider-discovery.runtime.js")> | undefined;
+const providerRuntimeLoader = createLazyImportLoader(
+  () => import("./provider-discovery.runtime.js"),
+);
 
 function loadProviderRuntime() {
-  providerRuntimePromise ??= import("./provider-discovery.runtime.js");
-  return providerRuntimePromise;
+  return providerRuntimeLoader.load();
 }
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
@@ -43,7 +41,7 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
 export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
@@ -62,13 +60,11 @@ export function resolveInstalledPluginProviderContributionIds(
     params.candidates && params.preferPersisted === undefined
       ? { ...params, preferPersisted: false }
       : params;
-  const index = params.index ?? loadPluginRegistrySnapshot(registryParams);
   return sortedValues(
-    listPluginContributionIds({
-      index,
-      contribution: "providers",
+    listManifestProviderContributionIds({
+      ...registryParams,
+      index: params.index,
       includeDisabled: params.includeDisabled,
-      config: params.config,
     }),
   );
 }

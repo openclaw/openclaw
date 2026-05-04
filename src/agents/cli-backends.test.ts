@@ -64,7 +64,7 @@ function createBackendEntry(params: {
             params.id === "claude-cli"
               ? "@anthropic-ai/claude-code"
               : params.id === "codex-cli"
-                ? "@openai/codex@0.125.0"
+                ? "@openai/codex@0.128.0"
                 : params.id === "google-gemini-cli"
                   ? "@google/gemini-cli"
                   : undefined,
@@ -430,6 +430,48 @@ describe("resolveCliBackendConfig reliability merge", () => {
     expect(resolved?.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
     expect(resolved?.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
   });
+
+  it("deep-merges reliability output-limit overrides", () => {
+    runtimeBackendEntries.unshift(
+      createRuntimeBackendEntry({
+        pluginId: "test",
+        id: "test-cli",
+        config: {
+          command: "test-cli",
+          reliability: {
+            outputLimits: {
+              maxTurnRawChars: 8192,
+              maxTurnLines: 20_000,
+            },
+          },
+        },
+      }),
+    );
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "test-cli": {
+              command: "test-cli",
+              reliability: {
+                outputLimits: {
+                  maxTurnRawChars: 16_384,
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = resolveCliBackendConfig("test-cli", cfg);
+
+    expect(resolved).not.toBeNull();
+    expect(resolved?.config.reliability?.outputLimits).toEqual({
+      maxTurnRawChars: 16_384,
+      maxTurnLines: 20_000,
+    });
+  });
 });
 
 describe("resolveCliBackendLiveTest", () => {
@@ -448,7 +490,7 @@ describe("resolveCliBackendLiveTest", () => {
       defaultModelRef: "codex-cli/gpt-5.5",
       defaultImageProbe: true,
       defaultMcpProbe: true,
-      dockerNpmPackage: "@openai/codex@0.125.0",
+      dockerNpmPackage: "@openai/codex@0.128.0",
       dockerBinaryName: "codex",
     });
   });

@@ -36,11 +36,8 @@ import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
 export {
-  createCodexConversationBindingData,
   readCodexConversationBindingData,
-  readCodexConversationBindingDataRecord,
   resolveCodexDefaultWorkspaceDir,
-  type CodexConversationBindingData,
 } from "./conversation-binding-data.js";
 
 type CodexConversationRunOptions = {
@@ -352,9 +349,3 @@ function enqueueBoundTurn<T>(key: string, run: () => Promise<T>): Promise<T> {
   });
   return next;
 }
-
-export const __testing = {
-  resetQueues() {
-    getGlobalState().queues.clear();
-  },
-};

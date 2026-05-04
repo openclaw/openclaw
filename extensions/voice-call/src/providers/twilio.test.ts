@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WebhookContext } from "../types.js";
 import { TwilioProvider } from "./twilio.js";
+import { TwilioApiError } from "./twilio/api.js";
 
 const STREAM_URL = "wss://example.ngrok.app/voice/stream";
 
@@ -53,8 +54,18 @@ type TwilioApiRequest = (
   options?: { allowNotFound?: boolean },
 ) => Promise<unknown>;
 
-function createApiRequestMock() {
-  return vi.fn<TwilioApiRequest>(async () => ({}));
+function createApiRequestMock(impl?: TwilioApiRequest) {
+  return vi.fn<TwilioApiRequest>(impl ?? (async () => ({})));
+}
+
+function createTwilioCallStateRaceError(): TwilioApiError {
+  return new TwilioApiError(
+    400,
+    JSON.stringify({
+      code: 21220,
+      message: "Call is not in-progress. Cannot redirect.",
+    }),
+  );
 }
 
 function configureTelephonyTwiMlFallback(params: { providerCallId: string; streamSid?: string }) {
@@ -77,6 +88,63 @@ function configureTelephonyTwiMlFallback(params: { providerCallId: string; strea
 }
 
 describe("TwilioProvider", () => {
+  it("sends direct initial TwiML for notify-mode outbound calls", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+
+    const result = await provider.initiateCall({
+      callId: "call-1",
+      from: "+14155550100",
+      to: "+14155550123",
+      webhookUrl: "https://example.ngrok.app/voice/webhook",
+      inlineTwiml: "<Response><Say>Hello</Say></Response>",
+    });
+
+    expect(result).toEqual({ providerCallId: "CA123", status: "queued" });
+    expect(apiRequest).toHaveBeenCalledWith(
+      "/Calls.json",
+      expect.objectContaining({
+        To: "+14155550123",
+        From: "+14155550100",
+        Twiml: "<Response><Say>Hello</Say></Response>",
+        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
+        StatusCallbackEvent: ["initiated", "ringing", "answered", "completed"],
+      }),
+    );
+    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Url");
+  });
+
+  it("uses the webhook URL for conversation outbound calls", async () => {
+    const provider = createProvider();
+    const apiRequest = createApiRequestMock(async () => ({ sid: "CA123", status: "queued" }));
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = apiRequest;
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+14155550100",
+      to: "+14155550123",
+      webhookUrl: "https://example.ngrok.app/voice/webhook",
+    });
+
+    expect(apiRequest).toHaveBeenCalledWith(
+      "/Calls.json",
+      expect.objectContaining({
+        Url: "https://example.ngrok.app/voice/webhook?callId=call-1",
+        StatusCallback: "https://example.ngrok.app/voice/webhook?callId=call-1&type=status",
+      }),
+    );
+    expect(apiRequest.mock.calls[0]?.[1]).not.toHaveProperty("Twiml");
+  });
+
   it("returns streaming TwiML for outbound conversation calls before in-progress", () => {
     const provider = createProvider();
     const ctx = createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA123", {
@@ -86,6 +154,41 @@ describe("TwilioProvider", () => {
     const result = provider.parseWebhookEvent(ctx);
 
     expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
+  });
+
+  it("serves pre-connect TwiML once before outbound streaming starts", async () => {
+    const provider = createProvider();
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = vi.fn<TwilioApiRequest>(async () => ({
+      sid: "CA999",
+      status: "queued",
+    }));
+    const preConnectTwiml = '<Response><Play digits="ww123456#" /></Response>';
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.ngrok.app/voice/twilio",
+      preConnectTwiml,
+    });
+
+    const first = provider.parseWebhookEvent(
+      createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA999", {
+        callId: "call-1",
+      }),
+    );
+    expect(requireResponseBody(first.providerResponseBody)).toBe(preConnectTwiml);
+
+    const second = provider.parseWebhookEvent(
+      createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA999", {
+        callId: "call-1",
+      }),
+    );
+    expectStreamingTwiml(requireResponseBody(second.providerResponseBody));
   });
 
   it("returns empty TwiML for status callbacks", () => {
@@ -280,6 +383,38 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain("<Say");
   });
 
+  it("retries TwiML fallback when Twilio briefly rejects a live-call update as not in progress", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+        providerCallId: "CA-race-play",
+      });
+      apiRequest.mockRejectedValueOnce(createTwilioCallStateRaceError()).mockResolvedValueOnce({});
+
+      const playback = provider.playTts({
+        callId: "call-race-play",
+        providerCallId: "CA-race-play",
+        text: "Hello after race",
+      });
+      await Promise.resolve();
+      expect(apiRequest).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(playback).resolves.toBeUndefined();
+
+      expect(apiRequest).toHaveBeenCalledTimes(2);
+      expect(apiRequest.mock.calls[0]?.[0]).toBe("/Calls/CA-race-play.json");
+      expect(apiRequest.mock.calls[1]?.[0]).toBe("/Calls/CA-race-play.json");
+      expect(warn).toHaveBeenCalledWith(
+        "[voice-call] Twilio playTts update hit call state race (21220); retrying in 250ms",
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("sends DTMF by updating the call and redirecting back to the webhook", async () => {
     const { provider, apiRequest } = configureTelephonyTwiMlFallback({
       providerCallId: "CA-dtmf",
@@ -301,6 +436,37 @@ describe("TwilioProvider", () => {
     expect(params.Twiml).toContain('<Play digits="ww123#"');
     expect(params.Twiml).toContain("<Redirect");
     expect(params.Twiml).toContain("https://example.ngrok.app/voice/twilio");
+  });
+
+  it("retries startListening when Twilio briefly rejects a live-call update as not in progress", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { provider, apiRequest } = configureTelephonyTwiMlFallback({
+        providerCallId: "CA-race-listen",
+      });
+      apiRequest.mockRejectedValueOnce(createTwilioCallStateRaceError()).mockResolvedValueOnce({});
+
+      const listening = provider.startListening({
+        callId: "call-race-listen",
+        providerCallId: "CA-race-listen",
+      });
+      await Promise.resolve();
+      expect(apiRequest).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(250);
+      await expect(listening).resolves.toBeUndefined();
+
+      expect(apiRequest).toHaveBeenCalledTimes(2);
+      expect(apiRequest.mock.calls[0]?.[0]).toBe("/Calls/CA-race-listen.json");
+      expect(apiRequest.mock.calls[1]?.[0]).toBe("/Calls/CA-race-listen.json");
+      expect(warn).toHaveBeenCalledWith(
+        "[voice-call] Twilio startListening update hit call state race (21220); retrying in 250ms",
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("ignores stale stream unregister requests that do not match current stream SID", () => {

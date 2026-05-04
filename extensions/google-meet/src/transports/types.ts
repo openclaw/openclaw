@@ -1,39 +1,64 @@
 import type { GoogleMeetMode, GoogleMeetTransport } from "../config.js";
 
-export type GoogleMeetSessionState = "active" | "ended";
+type GoogleMeetSessionState = "active" | "ended";
 
 export type GoogleMeetJoinRequest = {
   url: string;
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
   message?: string;
+  timeoutMs?: number;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
 };
 
-export type GoogleMeetManualActionReason =
+type GoogleMeetManualActionReason =
   | "google-login-required"
   | "meet-admission-required"
   | "meet-permission-required"
   | "meet-audio-choice-required"
   | "browser-control-unavailable";
 
+type GoogleMeetSpeechBlockedReason =
+  | GoogleMeetManualActionReason
+  | "not-in-call"
+  | "browser-unverified"
+  | "audio-bridge-unavailable";
+
 export type GoogleMeetChromeHealth = {
   inCall?: boolean;
   micMuted?: boolean;
+  lobbyWaiting?: boolean;
+  leaveReason?: string;
+  captioning?: boolean;
+  captionsEnabledAttempted?: boolean;
+  transcriptLines?: number;
+  lastCaptionAt?: string;
+  lastCaptionSpeaker?: string;
+  lastCaptionText?: string;
+  recentTranscript?: Array<{
+    at?: string;
+    speaker?: string;
+    text: string;
+  }>;
   manualActionRequired?: boolean;
   manualActionReason?: GoogleMeetManualActionReason;
   manualActionMessage?: string;
+  speechReady?: boolean;
+  speechBlockedReason?: GoogleMeetSpeechBlockedReason;
+  speechBlockedMessage?: string;
   providerConnected?: boolean;
   realtimeReady?: boolean;
   audioInputActive?: boolean;
   audioOutputActive?: boolean;
   lastInputAt?: string;
   lastOutputAt?: string;
+  lastSuppressedInputAt?: string;
   lastClearAt?: string;
   lastInputBytes?: number;
   lastOutputBytes?: number;
+  suppressedInputBytes?: number;
   consecutiveInputErrors?: number;
   lastInputError?: string;
   clearCount?: number;
@@ -77,6 +102,7 @@ export type GoogleMeetSession = {
     dtmfSequence?: string;
     voiceCallId?: string;
     dtmfSent?: boolean;
+    introSent?: boolean;
   };
   notes: string[];
 };

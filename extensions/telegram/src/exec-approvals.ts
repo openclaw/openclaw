@@ -58,12 +58,9 @@ export function getTelegramExecApprovalApprovers(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): string[] {
-  const account = resolveTelegramAccount(params).config;
   return resolveApprovalApprovers({
     explicit: resolveTelegramExecApprovalConfig(params)?.approvers,
-    allowFrom: account.allowFrom,
-    extraAllowFrom: resolveTelegramOwnerApprovers(params.cfg),
-    defaultTo: account.defaultTo ? String(account.defaultTo) : null,
+    allowFrom: resolveTelegramOwnerApprovers(params.cfg),
     normalizeApprover: normalizeTelegramDirectApproverId,
   });
 }

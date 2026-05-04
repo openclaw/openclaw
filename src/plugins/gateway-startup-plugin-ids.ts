@@ -15,25 +15,23 @@ import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import {
   createPluginRegistryIdNormalizer,
   normalizePluginsConfigWithRegistry,
 } from "./plugin-registry-contributions.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 
-const DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV =
-  "OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS";
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-function shouldDisableLegacyImplicitStartupSidecars(env: NodeJS.ProcessEnv): boolean {
-  return isTruthyEnvValue(env[DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV]);
-}
+export type GatewayStartupPluginPlan = {
+  channelPluginIds: readonly string[];
+  configuredDeferredChannelPluginIds: readonly string[];
+  pluginIds: readonly string[];
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -58,18 +56,6 @@ function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.Proc
 
 function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
   return plugin.startup.memory;
-}
-
-/**
- * @deprecated Compatibility fallback for plugins that do not declare
- * `activation.onStartup`. Keep this path visible so we can remove it after
- * plugin manifests migrate to explicit startup activation.
- */
-function isDeprecatedLegacyImplicitStartupSidecar(params: {
-  plugin: InstalledPluginIndexRecord;
-  manifest: PluginManifestRecord | undefined;
-}): boolean {
-  return params.plugin.startup.sidecar && params.manifest?.activation?.onStartup === undefined;
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
@@ -112,28 +98,11 @@ function resolveMemorySlotStartupPluginId(params: {
 function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
-  disableLegacyImplicitStartupSidecars: boolean;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
 }): boolean {
   if (params.manifest?.activation?.onStartup === true) {
     return true;
-  }
-  if (params.plugin.startup.sidecar) {
-    if (params.manifest?.activation?.onStartup === false) {
-      return false;
-    }
-    if (params.disableLegacyImplicitStartupSidecars) {
-      return false;
-    }
-    // Deprecated compatibility fallback: plugins without explicit startup
-    // activation metadata may still need startup import to register hooks or
-    // services. All plugins should declare activation.onStartup explicitly as
-    // we migrate away from implicit startup sidecar loading.
-    return isDeprecatedLegacyImplicitStartupSidecar({
-      plugin: params.plugin,
-      manifest: params.manifest,
-    });
   }
   if (!isGatewayStartupMemoryPlugin(params.plugin)) {
     return false;
@@ -146,26 +115,34 @@ function shouldConsiderForGatewayStartup(params: {
 
 function hasConfiguredStartupChannel(params: {
   plugin: InstalledPluginIndexRecord;
-  manifestRegistry: PluginManifestRegistry;
+  manifestLookup: ManifestRegistryLookup;
   configuredChannelIds: ReadonlySet<string>;
 }): boolean {
-  return listManifestChannelIds(params.manifestRegistry, params.plugin.pluginId).some((channelId) =>
+  return listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
     params.configuredChannelIds.has(channelId),
   );
 }
 
-function listManifestChannelIds(
+type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
+
+function createManifestRegistryLookup(
   manifestRegistry: PluginManifestRegistry,
+): ManifestRegistryLookup {
+  return new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+}
+
+function listManifestChannelIds(
+  manifestLookup: ManifestRegistryLookup,
   pluginId: string,
 ): readonly string[] {
-  return manifestRegistry.plugins.find((plugin) => plugin.id === pluginId)?.channels ?? [];
+  return manifestLookup.get(pluginId)?.channels ?? [];
 }
 
 function findManifestPlugin(
-  manifestRegistry: PluginManifestRegistry,
+  manifestLookup: ManifestRegistryLookup,
   pluginId: string,
 ): PluginManifestRecord | undefined {
-  return manifestRegistry.plugins.find((plugin) => plugin.id === pluginId);
+  return manifestLookup.get(pluginId);
 }
 
 function hasConfiguredActivationPath(params: {
@@ -223,7 +200,7 @@ function canStartConfiguredChannelPlugin(params: {
     plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
     rootConfig?: OpenClawConfig;
   };
-  manifestRegistry: PluginManifestRegistry;
+  manifestLookup: ManifestRegistryLookup;
 }): boolean {
   if (!params.pluginsConfig.enabled) {
     return false;
@@ -236,7 +213,7 @@ function canStartConfiguredChannelPlugin(params: {
   }
   const explicitBundledChannelConfig =
     params.plugin.origin === "bundled" &&
-    listManifestChannelIds(params.manifestRegistry, params.plugin.pluginId).some((channelId) =>
+    listManifestChannelIds(params.manifestLookup, params.plugin.pluginId).some((channelId) =>
       hasExplicitChannelConfig({
         config: params.activationSource.rootConfig ?? params.config,
         channelId,
@@ -268,19 +245,7 @@ export function resolveChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return resolveChannelPluginIdsFromRegistry({ manifestRegistry });
+  return [...loadGatewayStartupPluginPlan(params).channelPluginIds];
 }
 
 export function resolveChannelPluginIdsFromRegistry(params: {
@@ -295,7 +260,7 @@ export function resolveChannelPluginIdsFromRegistry(params: {
 export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  index: ReturnType<typeof loadPluginRegistrySnapshot>;
+  index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
@@ -309,12 +274,13 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
     plugins: pluginsConfig,
     rootConfig: params.config,
   };
+  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   return params.index.plugins
     .filter(
       (plugin) =>
         hasConfiguredStartupChannel({
           plugin,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
           configuredChannelIds,
         }) &&
         plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen &&
@@ -323,7 +289,7 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
           config: params.config,
           pluginsConfig,
           activationSource,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
         }),
     )
     .map((plugin) => plugin.pluginId);
@@ -334,33 +300,25 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: params.env,
-    index,
-    manifestRegistry,
-  });
+  return [...loadGatewayStartupPluginPlan(params).configuredDeferredChannelPluginIds];
 }
 
-export function resolveGatewayStartupPluginIdsFromRegistry(params: {
+export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  index: ReturnType<typeof loadPluginRegistrySnapshot>;
+  index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
-}): string[] {
+}): GatewayStartupPluginPlan {
+  const channelPluginIds = resolveChannelPluginIdsFromRegistry({
+    manifestRegistry: params.manifestRegistry,
+  });
+  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromRegistry({
+    config: params.config,
+    env: params.env,
+    index: params.index,
+    manifestRegistry: params.manifestRegistry,
+  });
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
@@ -382,9 +340,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
-  const disableLegacyImplicitStartupSidecars = shouldDisableLegacyImplicitStartupSidecars(
-    params.env,
-  );
+  const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
     activationSourcePlugins,
@@ -392,13 +348,13 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
       manifestRegistry: params.manifestRegistry,
     }),
   });
-  return params.index.plugins
+  const pluginIds = params.index.plugins
     .filter((plugin) => {
-      const manifest = findManifestPlugin(params.manifestRegistry, plugin.pluginId);
+      const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
       if (
         hasConfiguredStartupChannel({
           plugin,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
           configuredChannelIds,
         })
       ) {
@@ -407,7 +363,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
           config: params.config,
           pluginsConfig,
           activationSource,
-          manifestRegistry: params.manifestRegistry,
+          manifestLookup,
         });
       }
       if (
@@ -438,7 +394,6 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
         !shouldConsiderForGatewayStartup({
           plugin,
           manifest,
-          disableLegacyImplicitStartupSidecars,
           startupDreamingPluginIds,
           memorySlotStartupPluginId,
         })
@@ -462,6 +417,57 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
       return activationState.source === "explicit" || activationState.source === "default";
     })
     .map((plugin) => plugin.pluginId);
+  return {
+    channelPluginIds,
+    configuredDeferredChannelPluginIds,
+    pluginIds,
+  };
+}
+
+export function resolveGatewayStartupPluginIdsFromRegistry(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  index: PluginRegistrySnapshot;
+  manifestRegistry: PluginManifestRegistry;
+}): string[] {
+  return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
+}
+
+export function loadGatewayStartupPluginPlan(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  index?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): GatewayStartupPluginPlan {
+  const snapshotConfig = params.activationSourceConfig ?? params.config;
+  const metadataSnapshot =
+    params.metadataSnapshot &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config: snapshotConfig,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      index: params.index,
+    })
+      ? params.metadataSnapshot
+      : loadPluginMetadataSnapshot({
+          config: snapshotConfig,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          ...(params.index ? { index: params.index } : {}),
+        });
+  return resolveGatewayStartupPluginPlanFromRegistry({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+    index: metadataSnapshot.index,
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+  });
 }
 
 export function resolveGatewayStartupPluginIds(params: {
@@ -470,25 +476,5 @@ export function resolveGatewayStartupPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return resolveGatewayStartupPluginIdsFromRegistry({
-    config: params.config,
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    env: params.env,
-    index,
-    manifestRegistry,
-  });
+  return [...loadGatewayStartupPluginPlan(params).pluginIds];
 }

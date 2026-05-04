@@ -49,6 +49,7 @@ export {
   resolveDmGroupAccessWithCommandGate,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
+  resolveOpenDmAllowlistAccess,
 } from "../security/dm-policy-shared.js";
 export {
   evaluateGroupRouteAccessForPolicy,

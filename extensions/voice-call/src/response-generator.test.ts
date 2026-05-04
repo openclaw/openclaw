@@ -6,6 +6,14 @@ import { generateVoiceResponse } from "./response-generator.js";
 function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
   const saveSessionStore = vi.fn(async () => {});
+  const updateSessionStore = vi.fn(
+    async (
+      _storePath: string,
+      mutator: (store: Record<string, { sessionId: string; updatedAt: number }>) => unknown,
+    ) => {
+      return await mutator(sessionStore);
+    },
+  );
   const runEmbeddedPiAgent = vi.fn(async () => ({
     payloads,
     meta: { durationMs: 12, aborted: false },
@@ -44,6 +52,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       resolveStorePath,
       loadSessionStore: () => sessionStore,
       saveSessionStore,
+      updateSessionStore,
       resolveSessionFilePath,
     },
   } as unknown as CoreAgentDeps;
@@ -52,6 +61,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     runtime,
     runEmbeddedPiAgent,
     saveSessionStore,
+    updateSessionStore,
     sessionStore,
     resolveAgentDir,
     resolveAgentWorkspaceDir,
@@ -157,7 +167,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedPiAgent, saveSessionStore, sessionStore } = createAgentRuntime([
+    const { runtime, runEmbeddedPiAgent, updateSessionStore, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Pinned model works."}' },
     ]);
     const voiceConfig = VoiceCallConfigSchema.parse({
@@ -181,12 +191,46 @@ describe("generateVoiceResponse", () => {
       modelOverride: "gpt-4.1-nano",
       modelOverrideSource: "auto",
     });
-    expect(saveSessionStore).toHaveBeenCalledWith("/tmp/openclaw/main/sessions.json", sessionStore);
+    expect(updateSessionStore).toHaveBeenCalledWith(
+      "/tmp/openclaw/main/sessions.json",
+      expect.any(Function),
+    );
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai",
         model: "gpt-4.1-nano",
         sessionKey: "voice:15550001111",
+      }),
+    );
+  });
+
+  it("uses the persisted per-call session key for classic responses", async () => {
+    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Fresh call context."}' },
+    ]);
+    const voiceConfig = VoiceCallConfigSchema.parse({
+      sessionScope: "per-call",
+      responseTimeoutMs: 5000,
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      sessionKey: "voice:call:call-123",
+      from: "+15550001111",
+      transcript: [{ speaker: "user", text: "hello there" }],
+      userMessage: "hello there",
+    });
+
+    expect(result.text).toBe("Fresh call context.");
+    expect(sessionStore["voice:call:call-123"]).toBeDefined();
+    expect(sessionStore["voice:15550001111"]).toBeUndefined();
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "voice:call:call-123",
+        sandboxSessionKey: "agent:main:voice:call:call-123",
       }),
     );
   });

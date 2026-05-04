@@ -1,13 +1,14 @@
+import type { OpenClawConfig } from "../../config/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
 
-let probeGatewayModulePromise: Promise<typeof import("../../gateway/probe.js")> | undefined;
+const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
 
 async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
-  probeGatewayModulePromise ??= import("../../gateway/probe.js");
-  return await probeGatewayModulePromise;
+  return await probeGatewayModuleLoader.load();
 }
 
 function resolveProbeFailureMessage(result: {
@@ -27,8 +28,10 @@ export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
   password?: string;
+  config?: OpenClawConfig;
   tlsFingerprint?: string;
   timeoutMs: number;
+  preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
   configPath?: string;
@@ -50,6 +53,9 @@ export async function probeGatewayStatus(opts: {
             password: opts.password,
           },
           tlsFingerprint: opts.tlsFingerprint,
+          ...(opts.preauthHandshakeTimeoutMs !== undefined
+            ? { preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs }
+            : {}),
           timeoutMs: opts.timeoutMs,
           includeDetails: false,
         };
@@ -60,6 +66,7 @@ export async function probeGatewayStatus(opts: {
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
+            ...(opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),

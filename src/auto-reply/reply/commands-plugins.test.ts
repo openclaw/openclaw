@@ -18,9 +18,7 @@ vi.mock("../../cli/npm-resolution.js", () => ({
 }));
 
 vi.mock("../../cli/plugins-command-helpers.js", () => ({
-  buildPreferredClawHubSpec: vi.fn(() => null),
   createPluginInstallLogger: vi.fn(() => ({})),
-  decidePreferredClawHubFallback: vi.fn(() => "fallback_to_npm"),
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),
 }));
 
@@ -59,10 +57,6 @@ vi.mock("../../plugins/installed-plugin-index-records.js", () => ({
   loadInstalledPluginIndexInstallRecords: vi.fn(
     async (params = {}) => params.config?.plugins?.installs ?? {},
   ),
-}));
-
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  clearPluginManifestRegistryCache: vi.fn(),
 }));
 
 vi.mock("../../plugins/status.js", () => ({

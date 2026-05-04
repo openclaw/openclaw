@@ -53,8 +53,8 @@ afterEach(() => {
   vi.doUnmock("./bundled-ids.js");
 });
 
-describe("bundled root-aware caches", () => {
-  it("partitions bundled channel ids by active bundled root without re-importing", async () => {
+describe("bundled root-aware plugin lookups", () => {
+  it("reads bundled channel ids from the active bundled root without re-importing", async () => {
     const rootA = makeBundledRoot("openclaw-bundled-ids-a-");
     const rootB = makeBundledRoot("openclaw-bundled-ids-b-");
 
@@ -83,16 +83,16 @@ describe("bundled root-aware caches", () => {
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["beta"]);
   });
 
-  it("partitions bootstrap plugin caches by active bundled root without re-importing", async () => {
+  it("reads bootstrap plugins from the active bundled root without re-importing", async () => {
     const rootA = makeBundledRoot("openclaw-bootstrap-a-");
     const rootB = makeBundledRoot("openclaw-bootstrap-b-");
 
     vi.doMock("./bundled-ids.js", () => ({
-      listBundledChannelPluginIdsForRoot: (cacheKey: string) => {
-        if (cacheKey === rootA.pluginsDir) {
+      listBundledChannelPluginIdsForRoot: () => {
+        if (process.env.OPENCLAW_BUNDLED_PLUGINS_DIR === rootA.pluginsDir) {
           return ["alpha"];
         }
-        if (cacheKey === rootB.pluginsDir) {
+        if (process.env.OPENCLAW_BUNDLED_PLUGINS_DIR === rootB.pluginsDir) {
           return ["beta"];
         }
         return [];
@@ -154,12 +154,12 @@ describe("bundled root-aware caches", () => {
     ).toBe("setup-beta-B");
   });
 
-  it("marks bundled plugin ids missing when bootstrap plugin loading throws", async () => {
+  it("retries bootstrap plugin loading after an error", async () => {
     const root = makeBundledRoot("openclaw-bootstrap-plugin-throw-");
 
     vi.doMock("./bundled-ids.js", () => ({
-      listBundledChannelPluginIdsForRoot: (cacheKey: string) =>
-        cacheKey === root.pluginsDir ? ["alpha"] : [],
+      listBundledChannelPluginIdsForRoot: () =>
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR === root.pluginsDir ? ["alpha"] : [],
     }));
 
     const getBundledChannelPluginMock = vi.fn(() => {
@@ -186,16 +186,16 @@ describe("bundled root-aware caches", () => {
     expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toBeUndefined();
     expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toBeUndefined();
     expect(bootstrapRegistry.getBootstrapChannelSecrets("alpha")).toBeUndefined();
-    expect(getBundledChannelPluginMock).toHaveBeenCalledTimes(1);
-    expect(getBundledChannelSecretsMock).not.toHaveBeenCalled();
+    expect(getBundledChannelPluginMock).toHaveBeenCalledTimes(2);
+    expect(getBundledChannelSecretsMock).toHaveBeenCalledTimes(1);
   });
 
-  it("marks bundled plugin ids missing when bootstrap secrets loading throws", async () => {
+  it("keeps plugin loading independent from bootstrap secrets loading errors", async () => {
     const root = makeBundledRoot("openclaw-bootstrap-secrets-throw-");
 
     vi.doMock("./bundled-ids.js", () => ({
-      listBundledChannelPluginIdsForRoot: (cacheKey: string) =>
-        cacheKey === root.pluginsDir ? ["alpha"] : [],
+      listBundledChannelPluginIdsForRoot: () =>
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR === root.pluginsDir ? ["alpha"] : [],
     }));
 
     const getBundledChannelSecretsMock = vi.fn(() => {
@@ -223,8 +223,11 @@ describe("bundled root-aware caches", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = root.pluginsDir;
     expect(bootstrapRegistry.getBootstrapChannelSecrets("alpha")).toBeUndefined();
     expect(bootstrapRegistry.getBootstrapChannelSecrets("alpha")).toBeUndefined();
-    expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toBeUndefined();
-    expect(getBundledChannelSecretsMock).toHaveBeenCalledTimes(1);
-    expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
+    expect(bootstrapRegistry.getBootstrapChannelPlugin("alpha")).toMatchObject({
+      id: "alpha",
+      meta: { id: "alpha", label: "Alpha" },
+    });
+    expect(getBundledChannelSecretsMock).toHaveBeenCalledTimes(2);
+    expect(getBundledChannelPluginMock).toHaveBeenCalledTimes(1);
   });
 });

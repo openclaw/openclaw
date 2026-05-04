@@ -9,6 +9,7 @@ let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSes
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
+let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
 
 vi.mock("../shared/pid-alive.js", async () => {
   const original =
@@ -133,12 +134,13 @@ describe("acquireSessionWriteLock", () => {
       cleanStaleLockFiles,
       resetSessionWriteLockStateForTest,
       resolveSessionLockMaxHoldFromTimeout,
+      resolveSessionWriteLockAcquireTimeoutMs,
     } = await import("./session-write-lock.js"));
   });
 
   afterEach(() => {
     resetSessionWriteLockStateForTest();
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
   it("reuses locks across symlinked session paths", async () => {
     await withSymlinkedSessionPaths(
@@ -335,6 +337,20 @@ describe("acquireSessionWriteLock", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
   });
 
+  it("resolves the session write-lock acquire timeout", () => {
+    expect(resolveSessionWriteLockAcquireTimeoutMs()).toBe(60_000);
+    expect(
+      resolveSessionWriteLockAcquireTimeoutMs({
+        session: { writeLock: { acquireTimeoutMs: 90_000 } },
+      }),
+    ).toBe(90_000);
+    expect(
+      resolveSessionWriteLockAcquireTimeoutMs({
+        session: { writeLock: { acquireTimeoutMs: 0 } },
+      }),
+    ).toBe(60_000);
+  });
+
   it("clamps max hold for effectively no-timeout runs", () => {
     expect(
       resolveSessionLockMaxHoldFromTimeout({
@@ -401,6 +417,43 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("cleans untracked current-process .jsonl lock files with matching starttime", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const nowMs = Date.now();
+    const orphanSelfLock = path.join(sessionsDir, "orphan-self.jsonl.lock");
+
+    try {
+      await fs.writeFile(
+        orphanSelfLock,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date(nowMs).toISOString(),
+          starttime: FAKE_STARTTIME,
+        }),
+        "utf8",
+      );
+
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+      });
+
+      expect(result.locks).toHaveLength(1);
+      expect(result.cleaned.map((entry) => path.basename(entry.lockPath))).toEqual([
+        "orphan-self.jsonl.lock",
+      ]);
+      expect(result.cleaned[0]?.staleReasons).toContain("orphan-self-pid");
+      await expect(fs.access(orphanSelfLock)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("removes held locks on termination signals", async () => {
     const signals = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
     const originalKill = process.kill.bind(process);
@@ -456,12 +509,24 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("reclaims untracked current-process lock files with matching starttime", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      await writeCurrentProcessLock(lockPath, { starttime: FAKE_STARTTIME });
+
+      await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500 });
+    });
+  });
+
   it("does not reclaim active in-process lock files without starttime", async () => {
     await expectActiveInProcessLockIsNotReclaimed();
   });
 
   it("does not reclaim active in-process lock files with malformed starttime", async () => {
     await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: 123.5 });
+  });
+
+  it("does not reclaim active in-process lock files with matching starttime", async () => {
+    await expectActiveInProcessLockIsNotReclaimed({ legacyStarttime: FAKE_STARTTIME });
   });
 
   it("registers cleanup for SIGQUIT and SIGABRT", () => {

@@ -2,10 +2,16 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
+import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
+type ResolveCompatibleRuntimePluginRegistry =
+  typeof import("./loader.js").resolveCompatibleRuntimePluginRegistry;
+type GetRuntimePluginRegistryForLoadOptions =
+  typeof import("./loader.js").getRuntimePluginRegistryForLoadOptions;
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
@@ -14,6 +20,8 @@ type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").ap
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
 const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
+const getRuntimePluginRegistryForLoadOptionsMock = vi.fn<GetRuntimePluginRegistryForLoadOptions>();
+const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
@@ -29,7 +37,6 @@ let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveD
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
 let setActivePluginRegistry: SetActivePluginRegistry;
-let clearPluginRegistrySnapshotCache: typeof import("./plugin-registry-snapshot.js").clearPluginRegistrySnapshotCache;
 
 function createManifestProviderPlugin(params: {
   id: string;
@@ -41,6 +48,7 @@ function createManifestProviderPlugin(params: {
   activation?: PluginManifestRecord["activation"];
   setup?: PluginManifestRecord["setup"];
   contracts?: PluginManifestRecord["contracts"];
+  packageManifest?: OpenClawPackageManifest;
 }): PluginManifestRecord {
   return {
     id: params.id,
@@ -51,6 +59,7 @@ function createManifestProviderPlugin(params: {
     modelSupport: params.modelSupport,
     activation: params.activation,
     setup: params.setup,
+    packageManifest: params.packageManifest,
     contracts: params.contracts,
     skills: [],
     hooks: [],
@@ -124,6 +133,95 @@ function setOwningProviderManifestPluginsWithWorkspace() {
       },
     }),
   ]);
+}
+
+function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
+  const manifestRegistry = loadPluginManifestRegistryMock();
+  const plugins = manifestRegistry.plugins.map((plugin) => {
+    const snapshotPlugin = {
+      pluginId: plugin.id,
+      manifestPath: plugin.manifestPath,
+      manifestHash: `test-${plugin.id}`,
+      source: plugin.source,
+      rootDir: plugin.rootDir,
+      origin: plugin.origin,
+      enabled: plugin.enabledByDefault !== false,
+      syntheticAuthRefs: plugin.syntheticAuthRefs,
+      startup: {
+        sidecar: false,
+        memory: false,
+        deferConfiguredChannelFullLoadUntilAfterListen: false,
+        agentHarnesses: [],
+      },
+      compat: [],
+    };
+    if (plugin.enabledByDefault === true) {
+      Object.assign(snapshotPlugin, { enabledByDefault: true });
+    }
+    return snapshotPlugin;
+  });
+
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins,
+    diagnostics: [],
+  };
+}
+
+function normalizeProviderForFixture(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function sortUniqueFixtureValues(values: Iterable<string>): string[] {
+  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function listManifestContributionIdsForFixture(
+  plugin: PluginManifestRecord,
+  contribution: string,
+): readonly string[] {
+  switch (contribution) {
+    case "providers":
+      return plugin.providers;
+    case "cliBackends":
+      return plugin.cliBackends;
+    default:
+      return [];
+  }
+}
+
+function resolvePluginContributionOwnersFixture(params: {
+  contribution: string;
+  matches: string | ((contributionId: string) => boolean);
+}): readonly string[] {
+  const matcher =
+    typeof params.matches === "string"
+      ? (contributionId: string) => contributionId === params.matches
+      : params.matches;
+  return sortUniqueFixtureValues(
+    loadPluginManifestRegistryMock().plugins.flatMap((plugin) =>
+      listManifestContributionIdsForFixture(plugin, params.contribution).some(matcher)
+        ? [plugin.id]
+        : [],
+    ),
+  );
+}
+
+function resolveProviderOwnersFixture(params: { providerId: string }): readonly string[] {
+  const providerId = normalizeProviderForFixture(params.providerId);
+  if (!providerId) {
+    return [];
+  }
+  return resolvePluginContributionOwnersFixture({
+    contribution: "providers",
+    matches: (contributionId) => normalizeProviderForFixture(contributionId) === providerId,
+  });
 }
 
 function getLastRuntimeRegistryCall(): Record<string, unknown> {
@@ -280,6 +378,12 @@ describe("resolvePluginProviders", () => {
         loadOpenClawPluginsMock(...args),
       isPluginRegistryLoadInFlight: (...args: Parameters<IsPluginRegistryLoadInFlight>) =>
         isPluginRegistryLoadInFlightMock(...args),
+      resolveCompatibleRuntimePluginRegistry: (
+        ...args: Parameters<ResolveCompatibleRuntimePluginRegistry>
+      ) => resolveCompatibleRuntimePluginRegistryMock(...args),
+      getRuntimePluginRegistryForLoadOptions: (
+        ...args: Parameters<GetRuntimePluginRegistryForLoadOptions>
+      ) => getRuntimePluginRegistryForLoadOptionsMock(...args),
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
     }));
@@ -291,6 +395,16 @@ describe("resolvePluginProviders", () => {
       loadPluginManifestRegistry: (...args: Parameters<LoadPluginManifestRegistry>) =>
         loadPluginManifestRegistryMock(...args),
     }));
+    vi.doMock("./plugin-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+      return {
+        ...actual,
+        loadPluginRegistrySnapshot: () => createProviderRegistrySnapshotFixture(),
+        resolvePluginContributionOwners: resolvePluginContributionOwnersFixture,
+        resolveProviderOwners: resolveProviderOwnersFixture,
+      };
+    });
     vi.doMock("./installed-plugin-index-store.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./installed-plugin-index-store.js")>();
       return {
@@ -310,7 +424,6 @@ describe("resolvePluginProviders", () => {
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
-    ({ clearPluginRegistrySnapshotCache } = await import("./plugin-registry-snapshot.js"));
   });
 
   it("maps cli backend ids to owning plugin ids via manifests", () => {
@@ -320,10 +433,30 @@ describe("resolvePluginProviders", () => {
     expectOwningPluginIds("codex-cli", ["openai"]);
   });
 
+  it("reflects provider ownership manifest changes on the next lookup", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "first-owner",
+        providerIds: ["dynamic-provider"],
+      }),
+    ]);
+    expectOwningPluginIds("dynamic-provider", ["first-owner"]);
+
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "second-owner",
+        providerIds: ["dynamic-provider"],
+      }),
+    ]);
+
+    expectOwningPluginIds("dynamic-provider", ["second-owner"]);
+  });
+
   beforeEach(() => {
-    clearPluginRegistrySnapshotCache();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
+    getRuntimePluginRegistryForLoadOptionsMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
@@ -335,6 +468,9 @@ describe("resolvePluginProviders", () => {
     const registry = createEmptyPluginRegistry();
     registry.providers.push({ pluginId: "google", provider, source: "bundled" });
     resolveRuntimePluginRegistryMock.mockReturnValue(registry);
+    getRuntimePluginRegistryForLoadOptionsMock.mockImplementation((...args) =>
+      resolveRuntimePluginRegistryMock(...args),
+    );
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -605,6 +741,35 @@ describe("resolvePluginProviders", () => {
 
     expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
+    });
+  });
+
+  it("includes present bundled providers in bundled compat expansion", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "google",
+        providerIds: ["google"],
+      }),
+      createManifestProviderPlugin({
+        id: "codex",
+        providerIds: ["codex"],
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expectResolvedAllowlistState({
+      expectedAllow: ["openrouter", "google", "codex"],
+    });
+    expectLastRuntimeRegistryLoad({
+      onlyPluginIds: ["codex", "google"],
     });
   });
 
@@ -1103,12 +1268,8 @@ describe("resolvePluginProviders", () => {
     });
 
     expect(providers).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        onlyPluginIds: [],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("does not auto-activate workspace runtime owners by default", () => {
@@ -1131,12 +1292,8 @@ describe("resolvePluginProviders", () => {
     });
 
     expect(providers).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {},
-        onlyPluginIds: [],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("keeps explicit provider requests scoped when runtime owner activation resolves nothing", () => {
@@ -1162,16 +1319,8 @@ describe("resolvePluginProviders", () => {
     });
 
     expect(providers).toEqual([]);
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: {
-          plugins: {
-            allow: ["other-plugin"],
-          },
-        },
-        onlyPluginIds: [],
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
 
   it("does not keep explicitly trusted disabled workspace setup owners discoverable", () => {

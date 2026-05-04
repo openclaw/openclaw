@@ -11,6 +11,10 @@ import {
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
 } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  isRetryableGatewayStartupUnavailableError,
+  resolveGatewayStartupRetryAfterMs,
+} from "../../../src/gateway/protocol/startup-unavailable.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -132,6 +136,8 @@ export type GatewayHelloOk = {
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: unknown) => void;
+  method: string;
+  startedAtMs: number;
 };
 
 type SelectedConnectAuth = {
@@ -143,7 +149,7 @@ type SelectedConnectAuth = {
   canFallbackToShared: boolean;
 };
 
-export const CONTROL_UI_OPERATOR_ROLE = "operator";
+const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.admin",
@@ -222,12 +228,24 @@ export type GatewayBrowserClientOptions = {
   onEvent?: (evt: GatewayEventFrame) => void;
   onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
+  onRequestTiming?: (timing: GatewayRequestTiming) => void;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
 
+export type GatewayRequestTiming = {
+  id: string;
+  method: string;
+  ok: boolean;
+  durationMs: number;
+  startedAtMs: number;
+  endedAtMs: number;
+  errorCode?: string;
+};
+
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+const STARTUP_RETRY_CLOSE_CODE = 4013;
 
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
@@ -302,6 +320,7 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private pendingStartupReconnectDelayMs: number | null = null;
   private eventListeners = new Set<GatewayEventListener>();
 
   constructor(private opts: GatewayBrowserClientOptions) {}
@@ -319,6 +338,7 @@ export class GatewayBrowserClient {
     this.pendingConnectError = undefined;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.pendingStartupReconnectDelayMs = null;
     this.flushPending(new Error("gateway client stopped"));
   }
 
@@ -348,6 +368,11 @@ export class GatewayBrowserClient {
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
+      if (this.pendingStartupReconnectDelayMs !== null) {
+        this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+        this.scheduleReconnect();
+        return;
+      }
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
@@ -371,8 +396,12 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    const startupDelay = this.pendingStartupReconnectDelayMs;
+    this.pendingStartupReconnectDelayMs = null;
+    const delay = startupDelay ?? this.backoffMs;
+    if (startupDelay === null) {
+      this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    }
     this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
@@ -381,10 +410,34 @@ export class GatewayBrowserClient {
   }
 
   private flushPending(err: Error) {
-    for (const [, p] of this.pending) {
+    for (const [id, p] of this.pending) {
+      this.emitRequestTiming(id, p, false, "CLIENT_CLOSED");
       p.reject(err);
     }
     this.pending.clear();
+  }
+
+  private nowMs(): number {
+    return typeof performance !== "undefined" && typeof performance.now === "function"
+      ? performance.now()
+      : Date.now();
+  }
+
+  private emitRequestTiming(id: string, pending: Pending, ok: boolean, errorCode?: string): void {
+    const endedAtMs = this.nowMs();
+    try {
+      this.opts.onRequestTiming?.({
+        id,
+        method: pending.method,
+        ok,
+        durationMs: Math.max(0, endedAtMs - pending.startedAtMs),
+        startedAtMs: pending.startedAtMs,
+        endedAtMs,
+        errorCode,
+      });
+    } catch (err) {
+      console.error("[gateway] request timing handler error:", err);
+    }
   }
 
   private buildConnectClient(): GatewayConnectClientInfo {
@@ -468,6 +521,7 @@ export class GatewayBrowserClient {
     }
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.pendingStartupReconnectDelayMs = null;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
@@ -530,6 +584,14 @@ export class GatewayBrowserClient {
       connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
     ) {
       clearDeviceAuthToken({ deviceId: plan.deviceIdentity.deviceId, role: plan.role });
+    }
+    const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
+    if (startupRetryAfterMs !== null) {
+      this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
+    }
+    if (isRetryableGatewayStartupUnavailableError(err)) {
+      ws.close(STARTUP_RETRY_CLOSE_CODE, "gateway starting");
+      return;
     }
     ws.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
   }
@@ -606,8 +668,10 @@ export class GatewayBrowserClient {
       }
       this.pending.delete(res.id);
       if (res.ok) {
+        this.emitRequestTiming(res.id, pending, true);
         pending.resolve(res.payload);
       } else {
+        this.emitRequestTiming(res.id, pending, false, res.error?.code);
         pending.reject(
           new GatewayRequestError({
             code: res.error?.code ?? "UNAVAILABLE",
@@ -672,8 +736,9 @@ export class GatewayBrowserClient {
     }
     const id = generateUUID();
     const frame = { type: "req", id, method, params };
+    const startedAtMs = this.nowMs();
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
+      this.pending.set(id, { resolve: (v) => resolve(v as T), reject, method, startedAtMs });
     });
     ws.send(JSON.stringify(frame));
     return p;

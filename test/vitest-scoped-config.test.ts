@@ -315,11 +315,17 @@ describe("scoped vitest configs", () => {
       expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
 
-    for (const config of [defaultGatewayConfig, defaultCommandsConfig, defaultAgentsConfig]) {
+    for (const config of [defaultGatewayConfig, defaultAgentsConfig]) {
       expect(config.test?.pool).toBe("threads");
       expect(config.test?.isolate).toBe(false);
       expect(normalizeConfigPath(config.test?.runner)).toBe("test/non-isolated-runner.ts");
     }
+
+    expect(defaultCommandsConfig.test?.pool).toBe("forks");
+    expect(defaultCommandsConfig.test?.isolate).toBe(false);
+    expect(normalizeConfigPath(defaultCommandsConfig.test?.runner)).toBe(
+      "test/non-isolated-runner.ts",
+    );
 
     expect(defaultUiConfig.test?.pool).toBe("threads");
     expect(defaultUiConfig.test?.isolate).toBe(false);

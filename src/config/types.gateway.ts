@@ -99,6 +99,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
+  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -220,8 +222,8 @@ export type GatewayReloadConfig = {
   debounceMs?: number;
   /**
    * Optional maximum time (ms) to wait for in-flight operations to complete
-   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
-   * still-pending warnings.
+   * before forcing a restart. Absent uses the gateway's default bounded wait;
+   * 0 waits indefinitely and logs periodic still-pending warnings.
    * Lower positive values risk aborting active subagent LLM calls.
    * @see https://github.com/openclaw/openclaw/issues/65485
    */

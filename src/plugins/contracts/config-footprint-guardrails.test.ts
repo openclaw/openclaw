@@ -111,7 +111,7 @@ describe("config footprint guardrails", () => {
   });
 
   it("keeps bundled channel private-network config canonical in generated metadata", () => {
-    const pluginIds = ["bluebubbles", "matrix", "mattermost", "nextcloud-talk", "tlon"];
+    const pluginIds = ["bluebubbles", "matrix", "nextcloud-talk", "tlon"];
 
     for (const pluginId of pluginIds) {
       const metadata = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
@@ -199,7 +199,7 @@ describe("config footprint guardrails", () => {
     }
     expect(bundledSource).toContain("Bundled-channel config schemas");
     expect(bundledSource).toContain("openclaw/plugin-sdk/channel-config-schema");
-    expect(legacySource).toContain("Deprecated bundled-channel compatibility surface");
+    expect(legacySource).toContain("Compatibility surface for bundled channel schemas");
     expect(legacySource).toContain("openclaw/plugin-sdk/bundled-channel-config-schema");
     expect(legacySource).toContain('export * from "./bundled-channel-config-schema.js";');
   });

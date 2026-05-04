@@ -19,6 +19,7 @@ const buildProgramMock = vi.hoisted(() => vi.fn());
 const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
+const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
@@ -151,6 +152,10 @@ vi.mock("./program/register.subclis.js", () => ({
   registerSubCliByName: registerSubCliByNameMock,
 }));
 
+vi.mock("../plugins/cli.js", () => ({
+  registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
+}));
+
 vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
@@ -172,7 +177,7 @@ vi.mock("./progress.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: loadConfigMock,
+  readBestEffortConfig: loadConfigMock,
 }));
 
 vi.mock("../infra/net/proxy/proxy-lifecycle.js", () => ({
@@ -357,7 +362,12 @@ describe("runCli exit behavior", () => {
     ["agents list", ["node", "openclaw", "agents", "list"]],
     ["models list", ["node", "openclaw", "models", "list"]],
     ["models status without live probe", ["node", "openclaw", "models", "status"]],
+    ["skills check", ["node", "openclaw", "skills", "check"]],
+    ["skills info", ["node", "openclaw", "skills", "info", "weather"]],
+    ["skills list", ["node", "openclaw", "skills", "list"]],
     ["tasks list", ["node", "openclaw", "tasks", "list"]],
+    ["legacy singular tool namespace", ["node", "openclaw", "tool", "image_generate"]],
+    ["gateway tools namespace typo", ["node", "openclaw", "tools", "effective"]],
     ["migrate", ["node", "openclaw", "migrate"]],
   ])("skips managed proxy routing for %s", (_name, argv) => {
     expect(shouldStartProxyForCli(argv)).toBe(false);
@@ -377,6 +387,35 @@ describe("runCli exit behavior", () => {
     await runCli(["node", "openclaw", "googlemeet", "login"]);
 
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
+  });
+
+  it("does not install the env proxy dispatcher for bypassed skills inspection commands", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "skills", "check"]);
+
+    expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["auth", ["node", "openclaw", "auth", "--help"]],
+    ["tool", ["node", "openclaw", "tool", "image_generate"]],
+    ["tools", ["node", "openclaw", "tools", "effective"]],
+  ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(argv);
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), argv[2], argv);
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+    expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
   it("fails protected commands when managed proxy activation fails", async () => {
@@ -545,6 +584,17 @@ describe("runCli exit behavior", () => {
     expect(closeActiveMemorySearchManagersMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not fail the command when memory cleanup is unavailable", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(true);
+    hasMemoryRuntimeMock.mockImplementationOnce(() => {
+      throw new Error("stale memory-state chunk");
+    });
+
+    await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
+
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
+  });
+
   it("returns after a handled container-target invocation", async () => {
     maybeRunCliInContainerMock.mockReturnValueOnce({ handled: true, exitCode: 0 });
 
@@ -674,11 +724,13 @@ describe("runCli exit behavior", () => {
     expect(typeof handler).toBe("function");
 
     try {
-      const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
-      expect(() => (handler as (error: unknown) => void)(epipe)).not.toThrow();
+      const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH 149.154.167.220:443"), {
+        code: "EHOSTUNREACH",
+      });
+      expect(() => (handler as (error: unknown) => void)(hostUnreachable)).not.toThrow();
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal uncaught exception (continuing):",
-        expect.stringContaining("write EPIPE"),
+        expect.stringContaining("EHOSTUNREACH"),
       );
       expect(restoreTerminalStateMock).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();

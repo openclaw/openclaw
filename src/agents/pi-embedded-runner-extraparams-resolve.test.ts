@@ -22,6 +22,7 @@ describe("resolveExtraParams", () => {
     expect(result).toEqual({
       parallel_tool_calls: true,
       text_verbosity: "low",
+      transport: "sse",
       openaiWsWarmup: false,
     });
   });
@@ -192,6 +193,7 @@ describe("resolveExtraParams", () => {
       openaiWsWarmup: false,
       parallel_tool_calls: true,
       text_verbosity: "low",
+      transport: "sse",
     });
   });
 

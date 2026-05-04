@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 
 type SetupRegistryRuntimeModule = Pick<
   typeof import("./setup-registry.js"),
@@ -19,12 +19,10 @@ const require = createRequire(import.meta.url);
 const SETUP_REGISTRY_RUNTIME_CANDIDATES = ["./setup-registry.js", "./setup-registry.ts"] as const;
 
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
-let bundledSetupCliBackendsCache: SetupCliBackendRuntimeEntry[] | undefined;
 
 export const __testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
-    bundledSetupCliBackendsCache = undefined;
   },
   setRuntimeModuleForTest(module: SetupRegistryRuntimeModule | null | undefined): void {
     setupRegistryRuntimeModule = module;
@@ -32,14 +30,9 @@ export const __testing = {
 };
 
 function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
-  if (bundledSetupCliBackendsCache) {
-    return bundledSetupCliBackendsCache;
-  }
-  const index = loadPluginRegistrySnapshot({ cache: true });
-  bundledSetupCliBackendsCache = loadPluginManifestRegistryForInstalledIndex({
-    index,
-  }).plugins.flatMap((plugin) => {
-    if (plugin.origin !== "bundled") {
+  const snapshot = loadManifestMetadataSnapshot({ config: {}, env: process.env });
+  return snapshot.plugins.flatMap((plugin) => {
+    if (plugin.origin !== "bundled" || !isInstalledPluginEnabled(snapshot.index, plugin.id)) {
       return [];
     }
     return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
@@ -50,7 +43,6 @@ function resolveBundledSetupCliBackends(): SetupCliBackendRuntimeEntry[] {
         }) satisfies SetupCliBackendRuntimeEntry,
     );
   });
-  return bundledSetupCliBackendsCache;
 }
 
 function loadSetupRegistryRuntime(): SetupRegistryRuntimeModule | null {

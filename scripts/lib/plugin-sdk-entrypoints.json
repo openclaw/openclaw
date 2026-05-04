@@ -281,6 +281,7 @@
   "string-normalization-runtime",
   "state-paths",
   "target-resolver-runtime",
+  "telegram-account",
   "telegram-command-config",
   "text-autolink-runtime",
   "tool-payload",
@@ -290,5 +291,6 @@
   "webhook-request-guards",
   "webhook-path",
   "web-media",
+  "zalouser",
   "zod"
 ]

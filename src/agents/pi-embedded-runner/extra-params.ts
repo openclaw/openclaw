@@ -10,6 +10,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
 import { createGoogleThinkingPayloadWrapper } from "./google-stream-wrappers.js";
@@ -37,6 +38,8 @@ const providerRuntimeDeps = {
   ...defaultProviderRuntimeDeps,
 };
 
+let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
+
 export const __testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
@@ -50,6 +53,7 @@ export const __testing = {
       deps?.wrapProviderStreamFn ?? defaultProviderRuntimeDeps.wrapProviderStreamFn;
   },
   resetProviderRuntimeDepsForTest(): void {
+    clearPreparedExtraParamsCache();
     providerRuntimeDeps.prepareProviderExtraParams =
       defaultProviderRuntimeDeps.prepareProviderExtraParams;
     providerRuntimeDeps.resolveProviderExtraParamsForTransport =
@@ -71,8 +75,11 @@ export function resolveExtraParams(params: {
   agentId?: string;
 }): Record<string, unknown> | undefined {
   const defaultParams = params.cfg?.agents?.defaults?.params ?? undefined;
-  const modelKey = `${params.provider}/${params.modelId}`;
-  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
+  const canonicalKey = modelKey(params.provider, params.modelId);
+  const legacyKey = legacyModelKey(params.provider, params.modelId);
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  const modelConfig =
+    configuredModels?.[canonicalKey] ?? (legacyKey ? configuredModels?.[legacyKey] : undefined);
   const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
   const agentParams =
     params.agentId && params.cfg?.agents?.list
@@ -120,7 +127,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cachedContent?: string;
   openaiWsWarmup?: boolean;
 };
-export type SupportedTransport = Exclude<CacheRetentionStreamOptions["transport"], undefined>;
+export type SupportedTransport = "sse" | "websocket" | "auto";
 
 function resolveSupportedTransport(value: unknown): SupportedTransport | undefined {
   return value === "sse" || value === "websocket" || value === "auto" ? value : undefined;
@@ -128,6 +135,60 @@ function resolveSupportedTransport(value: unknown): SupportedTransport | undefin
 
 function hasExplicitTransportSetting(settings: { transport?: unknown }): boolean {
   return Object.hasOwn(settings, "transport");
+}
+
+function clearPreparedExtraParamsCache(): void {
+  preparedExtraParamsCache = new WeakMap();
+}
+
+function fingerprintPreparedExtraParamsModel(model?: ProviderRuntimeModel): unknown {
+  if (!model) {
+    return null;
+  }
+  const record = model as unknown as Record<string, unknown>;
+  return {
+    api: model.api,
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    baseUrl: model.baseUrl,
+    reasoning: model.reasoning,
+    input: model.input,
+    cost: model.cost,
+    compat: record.compat ?? null,
+    contextWindow: model.contextWindow,
+    contextTokens: model.contextTokens ?? null,
+    headers: record.headers ?? null,
+    maxTokens: model.maxTokens,
+    params: model.params ?? null,
+    requestTimeoutMs: model.requestTimeoutMs ?? null,
+  };
+}
+
+function resolvePreparedExtraParamsCacheKey(params: {
+  provider: string;
+  modelId: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  extraParamsOverride?: Record<string, unknown>;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+  resolvedExtraParams?: Record<string, unknown>;
+  model?: ProviderRuntimeModel;
+  resolvedTransport?: SupportedTransport;
+}): string {
+  return JSON.stringify({
+    provider: params.provider,
+    modelId: params.modelId,
+    agentId: params.agentId ?? "",
+    agentDir: params.agentDir ?? "",
+    workspaceDir: params.workspaceDir ?? "",
+    thinkingLevel: params.thinkingLevel ?? "",
+    resolvedTransport: params.resolvedTransport ?? "",
+    extraParamsOverride: params.extraParamsOverride ?? null,
+    resolvedExtraParams: params.resolvedExtraParams ?? null,
+    model: fingerprintPreparedExtraParamsModel(params.model),
+  });
 }
 
 export function resolvePreparedExtraParams(params: {
@@ -172,6 +233,14 @@ export function resolvePreparedExtraParams(params: {
     merged.cachedContent = resolvedCachedContent;
     delete merged.cached_content;
   }
+  const cfg = params.cfg;
+  const cacheKey = cfg ? resolvePreparedExtraParamsCacheKey(params) : undefined;
+  if (cacheKey) {
+    const cached = preparedExtraParamsCache.get(cfg!)?.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const prepared =
     providerRuntimeDeps.prepareProviderExtraParams({
       provider: params.provider,
@@ -203,7 +272,16 @@ export function resolvePreparedExtraParams(params: {
       transport: params.resolvedTransport ?? resolveSupportedTransport(prepared.transport),
     },
   })?.patch;
-  return transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  if (cacheKey) {
+    let bucket = preparedExtraParamsCache.get(cfg!);
+    if (!bucket) {
+      bucket = new Map();
+      preparedExtraParamsCache.set(cfg!, bucket);
+    }
+    bucket.set(cacheKey, result);
+  }
+  return result;
 }
 
 function sanitizeExtraParamsRecord(
@@ -244,6 +322,9 @@ function applyDefaultOpenAIGptRuntimeParams(
   }
   if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
     merged.text_verbosity = "low";
+  }
+  if (params.provider === "openai" && !Object.hasOwn(merged, "transport")) {
+    merged.transport = "sse";
   }
   if (!Object.hasOwn(merged, "openaiWsWarmup")) {
     merged.openaiWsWarmup = false;

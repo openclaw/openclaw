@@ -138,6 +138,18 @@ describe("Codex app-server config", () => {
     );
   });
 
+  it("parses dynamic tool profile controls", () => {
+    expect(
+      readCodexPluginConfig({
+        codexDynamicToolsProfile: "openclaw-compat",
+        codexDynamicToolsExclude: ["custom_tool"],
+      }),
+    ).toMatchObject({
+      codexDynamicToolsProfile: "openclaw-compat",
+      codexDynamicToolsExclude: ["custom_tool"],
+    });
+  });
+
   it("treats configured and environment commands as explicit overrides", () => {
     expect(
       resolveCodexAppServerRuntimeOptions({
@@ -353,6 +365,19 @@ describe("Codex app-server config", () => {
     ).toEqual(first);
     expect(first).not.toContain("sk-first");
     expect(second).not.toContain("sk-second");
+  });
+
+  it("derives distinct shared-client keys for distinct agent dirs", () => {
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+
+    expect(codexAppServerStartOptionsKey(startOptions, { agentDir: "/tmp/agent-a" })).not.toEqual(
+      codexAppServerStartOptionsKey(startOptions, { agentDir: "/tmp/agent-b" }),
+    );
   });
 
   it("keeps runtime config keys aligned with manifest schema and UI hints", async () => {

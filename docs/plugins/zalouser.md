@@ -34,6 +34,9 @@ No external `zca`/`openzca` CLI binary is required.
 openclaw plugins install @openclaw/zalouser
 ```
 
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
+
 Restart the Gateway afterwards.
 
 ### Option B: install from a local folder (dev)

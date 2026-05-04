@@ -215,7 +215,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
     - Global defaults: `session.threadBindings.enabled`, `session.threadBindings.idleHours`, `session.threadBindings.maxAgeHours`.
     - Discord overrides: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.idleHours`, `channels.discord.threadBindings.maxAgeHours`.
-    - Auto-bind on spawn: set `channels.discord.threadBindings.spawnSubagentSessions: true`.
+    - Auto-bind on spawn: `channels.discord.threadBindings.spawnSessions` defaults to `true`; set it to `false` to disable thread-bound session spawns.
 
     Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
 
@@ -1874,7 +1874,7 @@ lives on the [Models FAQ](/help/faq-models).
     to **inherit**. Also confirm you are not using a bot profile with `verboseDefault` set
     to `on` in config.
 
-    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security#reasoning-verbose-output-in-groups).
+    Docs: [Thinking and verbose](/tools/thinking), [Security](/gateway/security/index#reasoning-and-verbose-output-in-groups).
 
   </Accordion>
 
@@ -1943,13 +1943,14 @@ lives on the [Models FAQ](/help/faq-models).
   <Accordion title='Why does it feel like the bot "ignores" rapid-fire messages?'>
     Queue mode controls how new messages interact with an in-flight run. Use `/queue` to change modes:
 
-    - `steer` - new messages redirect the current task
+    - `steer` - queue all pending steering for the next model boundary in the current run
+    - `queue` - legacy one-at-a-time steering
     - `followup` - run messages one at a time
-    - `collect` - batch messages and reply once (default)
+    - `collect` - batch messages and reply once
     - `steer-backlog` - steer now, then process backlog
     - `interrupt` - abort current run and start fresh
 
-    You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
+    Default mode is `steer`. You can add options like `debounce:0.5s cap:25 drop:summarize` for followup modes. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
   </Accordion>
 </AccordionGroup>

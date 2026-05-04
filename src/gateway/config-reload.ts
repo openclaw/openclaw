@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
 import type { ConfigWriteNotification } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { formatConfigIssueLines, formatConfigIssueSummary } from "../config/issue-format.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
@@ -11,7 +11,12 @@ import {
 import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { GatewayReloadMode } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+} from "../plugins/installed-plugin-index-records.js";
 import { isPlainObject } from "../utils.js";
 import {
   buildGatewayReloadPlan,
@@ -27,7 +32,7 @@ export {
 };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 
-export type GatewayReloadSettings = {
+type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
 };
@@ -71,6 +76,7 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartCron &&
     !plan.restartHeartbeat &&
     !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
     plan.restartChannels.size === 0
   );
@@ -154,9 +160,19 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
   return { mode, debounceMs };
 }
 
-export type GatewayConfigReloader = {
+type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };
+
+type PluginInstallRecords = Record<string, PluginInstallRecord>;
+
+function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
+  return {
+    plugins: {
+      installs: records,
+    },
+  };
+}
 
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
@@ -167,6 +183,8 @@ export function startGatewayConfigReloader(opts: {
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
+  initialPluginInstallRecords?: PluginInstallRecords;
+  readPluginInstallRecords?: () => Promise<PluginInstallRecords>;
   onRecovered?: (params: {
     reason: string;
     snapshot: ConfigFileSnapshot;
@@ -196,6 +214,10 @@ export function startGatewayConfigReloader(opts: {
     afterWrite?: ConfigWriteNotification["afterWrite"];
   } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let currentPluginInstallRecords =
+    opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
+  const readPluginInstallRecords =
+    opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -271,7 +293,10 @@ export function startGatewayConfigReloader(opts: {
     if (!recovered) {
       return null;
     }
-    opts.log.warn(`config reload restored last-known-good config after ${reason}`);
+    const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
+    opts.log.warn(
+      `config reload restored last-known-good config after ${reason}${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
+    );
     const nextSnapshot = await opts.readSnapshot();
     if (!nextSnapshot.valid) {
       const issues = formatConfigIssueLines(nextSnapshot.issues, "").join(", ");
@@ -291,17 +316,47 @@ export function startGatewayConfigReloader(opts: {
     nextCompareConfig: OpenClawConfig,
     afterWrite?: ConfigWriteNotification["afterWrite"],
   ) => {
-    const changedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
-    const pluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+    const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
+    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
       nextCompareConfig,
     );
-    const pluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
       currentCompareConfig,
       nextCompareConfig,
     );
+    let nextPluginInstallRecords = currentPluginInstallRecords;
+    try {
+      nextPluginInstallRecords = await readPluginInstallRecords();
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
+    }
+    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
+    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const pluginInstallRecordChangedPaths = diffConfigPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
+    const pluginInstallTimestampNoopPaths = [
+      ...configPluginInstallTimestampNoopPaths,
+      ...pluginInstallRecordTimestampNoopPaths,
+    ];
+    const pluginInstallWholeRecordPaths = [
+      ...configPluginInstallWholeRecordPaths,
+      ...pluginInstallRecordWholeRecordPaths,
+    ];
     currentConfig = nextConfig;
     currentCompareConfig = nextCompareConfig;
+    currentPluginInstallRecords = nextPluginInstallRecords;
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
       return;

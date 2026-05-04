@@ -351,6 +351,35 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.versionMismatch).toBeUndefined();
   });
 
+  it("accepts matching-version restart liveness when the probe lacks operator scope", async () => {
+    probeGateway.mockResolvedValue({
+      ok: false,
+      close: null,
+      connectLatencyMs: 12,
+      error: "missing scope: operator.read",
+      auth: { capability: "connected_no_operator_scope" },
+      server: { version: "2026.4.24", connId: "new" },
+    });
+
+    const snapshot = await inspectGatewayRestartWithSnapshot({
+      runtime: { status: "running", pid: 8000 },
+      expectedVersion: "2026.4.24",
+      portUsage: {
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      },
+    });
+
+    expect(snapshot).toMatchObject({
+      healthy: true,
+      gatewayVersion: "2026.4.24",
+      expectedVersion: "2026.4.24",
+    });
+    expect(snapshot.versionMismatch).toBeUndefined();
+  });
+
   it("stops waiting once the restarted gateway reports the wrong version", async () => {
     probeGateway.mockResolvedValue({
       ok: true,
@@ -396,7 +425,7 @@ describe("inspectGatewayRestart", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
             {
               id: "optional",
@@ -429,7 +458,7 @@ describe("inspectGatewayRestart", () => {
           id: "telegram",
           origin: "bundled",
           activated: true,
-          error: "failed to install bundled runtime deps: ENOSPC",
+          error: "failed to load plugin dependency: ENOSPC",
         },
       ],
     });
@@ -438,7 +467,7 @@ describe("inspectGatewayRestart", () => {
 
     const { renderRestartDiagnostics } = await import("./restart-health.js");
     expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
-      "Activated plugin load errors:\n- telegram: failed to install bundled runtime deps: ENOSPC",
+      "Activated plugin load errors:\n- telegram: failed to load plugin dependency: ENOSPC",
     );
   });
 
@@ -455,7 +484,7 @@ describe("inspectGatewayRestart", () => {
               id: "telegram",
               origin: "bundled",
               activated: true,
-              error: "failed to install bundled runtime deps: ENOSPC",
+              error: "failed to load plugin dependency: ENOSPC",
             },
           ],
         },

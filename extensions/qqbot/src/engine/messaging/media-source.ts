@@ -73,7 +73,7 @@ const DATA_URL_RE = /^data:([^;,]+);base64,(.+)$/i;
  * base64 encoding. Non-base64 data URLs are intentionally rejected because
  * the QQ upload API ingests raw base64, not arbitrary URL-encoded payloads.
  */
-export function tryParseDataUrl(value: string): { mime: string; data: string } | null {
+function tryParseDataUrl(value: string): { mime: string; data: string } | null {
   if (!value.startsWith("data:")) {
     return null;
   }
@@ -92,7 +92,7 @@ export function tryParseDataUrl(value: string): { mime: string; data: string } |
  *
  * Callers MUST call {@link OpenedLocalFile.close} (typically in a `finally`).
  */
-export interface OpenedLocalFile {
+interface OpenedLocalFile {
   handle: fs.promises.FileHandle;
   size: number;
   close(): Promise<void>;
@@ -212,44 +212,4 @@ export async function normalizeSource(
     fileName: raw.fileName,
     mime: raw.mime,
   };
-}
-
-// ============ Materialization helpers ============
-
-/**
- * Read a {@link MediaSource} into the `{ url?, fileData?, fileName? }` shape
- * expected by {@link MediaApi.uploadMedia} today (one-shot upload path).
- *
- * Chunked upload (future) should bypass this helper and feed the uploader
- * directly from the `localPath` / `buffer` branch.
- */
-export async function materializeForOneShotUpload(
-  source: MediaSource,
-): Promise<{ url?: string; fileData?: string; fileName?: string }> {
-  switch (source.kind) {
-    case "url":
-      return { url: source.url };
-    case "base64":
-      return { fileData: source.data };
-    case "localPath": {
-      const opened = await openLocalFile(source.path);
-      try {
-        const buf = await opened.handle.readFile();
-        return { fileData: buf.toString("base64") };
-      } finally {
-        await opened.close();
-      }
-    }
-    case "buffer":
-      return {
-        fileData: source.buffer.toString("base64"),
-        fileName: source.fileName,
-      };
-    default: {
-      const _exhaustive: never = source;
-      throw new Error(
-        `materializeForOneShotUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
-      );
-    }
-  }
 }

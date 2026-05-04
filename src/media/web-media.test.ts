@@ -7,6 +7,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
+let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -19,7 +20,7 @@ let workspaceDir = "";
 let workspacePngFile = "";
 
 beforeAll(async () => {
-  ({ loadWebMedia } = await import("./web-media.js"));
+  ({ loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
   fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -156,6 +157,12 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("includes resize failure details when image optimization cannot produce a JPEG", async () => {
+    await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
+      /Failed to optimize image: .+/,
+    );
+  });
+
   it("resolves relative local media paths against the provided workspace directory", async () => {
     const result = await loadWebMedia("chart.png", {
       maxBytes: 1024 * 1024,
@@ -164,6 +171,20 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("resolves home-relative local media paths through allowed local roots", async () => {
+    vi.stubEnv("OPENCLAW_HOME", fixtureRoot);
+    try {
+      const result = await loadWebMedia("~/workspace/chart.png", {
+        maxBytes: 1024 * 1024,
+        localRoots: [workspaceDir],
+      });
+      expect(result.kind).toBe("image");
+      expect(result.buffer.length).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("rejects host-read text files outside local roots", async () => {

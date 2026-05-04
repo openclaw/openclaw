@@ -123,12 +123,17 @@ const knownDeprecatedSurfaceMarkers = [
   {
     code: "bundled-channel-config-schema-legacy",
     file: "src/plugin-sdk/channel-config-schema-legacy.ts",
-    marker: "Deprecated bundled-channel compatibility surface",
+    marker: "Compatibility surface for bundled channel schemas",
   },
   {
     code: "plugin-sdk-testing-barrel",
     file: "src/plugin-sdk/testing.ts",
     marker: "@deprecated Broad compatibility barrel",
+  },
+  {
+    code: "legacy-root-sdk-import",
+    file: "src/plugin-sdk/compat.ts",
+    marker: "@deprecated Use `openclaw/plugin-sdk/channel-reply-pipeline`.",
   },
   {
     code: "channel-route-key-aliases",

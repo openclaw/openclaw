@@ -71,7 +71,8 @@ type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 
 type SkillInstallSpec = {
   id?: string;
@@ -553,6 +554,7 @@ async function scanDirectoryTarget(params: {
 function buildBlockedScanResult(params: {
   builtinScan: BuiltinInstallScan;
   dangerouslyForceUnsafeInstall?: boolean;
+  trustedSourceLinkedOfficialInstall?: boolean;
   targetLabel: string;
 }): InstallSecurityScanResult | undefined {
   if (params.builtinScan.status === "error") {
@@ -567,7 +569,7 @@ function buildBlockedScanResult(params: {
     };
   }
   if (params.builtinScan.critical > 0) {
-    if (params.dangerouslyForceUnsafeInstall) {
+    if (params.dangerouslyForceUnsafeInstall || params.trustedSourceLinkedOfficialInstall) {
       return undefined;
     }
     return {
@@ -593,6 +595,16 @@ function logDangerousForceUnsafeInstall(params: {
   );
 }
 
+function logTrustedSourceLinkedOfficialInstall(params: {
+  findings: Array<{ file: string; line: number; message: string; severity: string }>;
+  logger: InstallScanLogger;
+  targetLabel: string;
+}) {
+  params.logger.warn?.(
+    `WARNING: ${params.targetLabel} allowed because it is an official OpenClaw package: ${buildCriticalDetails({ findings: params.findings })}`,
+  );
+}
+
 function resolveBuiltinScanDecision(
   params: InstallSafetyOverrides & {
     builtinScan: BuiltinInstallScan;
@@ -603,10 +615,17 @@ function resolveBuiltinScanDecision(
   const builtinBlocked = buildBlockedScanResult({
     builtinScan: params.builtinScan,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     targetLabel: params.targetLabel,
   });
   if (params.dangerouslyForceUnsafeInstall && params.builtinScan.critical > 0) {
     logDangerousForceUnsafeInstall({
+      findings: params.builtinScan.findings,
+      logger: params.logger,
+      targetLabel: params.targetLabel,
+    });
+  } else if (params.trustedSourceLinkedOfficialInstall && params.builtinScan.critical > 0) {
+    logTrustedSourceLinkedOfficialInstall({
       findings: params.builtinScan.findings,
       logger: params.logger,
       targetLabel: params.targetLabel,
@@ -809,6 +828,7 @@ export async function scanPackageInstallSourceRuntime(
     builtinScan,
     logger: params.logger,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     targetLabel: `Plugin "${params.pluginId}" installation`,
   });
 
@@ -912,6 +932,7 @@ export async function scanSkillInstallSourceRuntime(params: {
   const builtinBlocked = buildBlockedScanResult({
     builtinScan,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: false,
     targetLabel: `Skill "${params.skillName}" installation`,
   });
   if (params.dangerouslyForceUnsafeInstall && builtinScan.critical > 0) {

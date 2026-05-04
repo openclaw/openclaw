@@ -9,7 +9,7 @@ const QUEUE_DIRNAME = "session-delivery-queue";
 const FAILED_DIRNAME = "failed";
 const TMP_SWEEP_MAX_AGE_MS = 5_000;
 
-export type SessionDeliveryContext = {
+type SessionDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
@@ -121,7 +121,7 @@ function resolveQueueEntryPaths(
   };
 }
 
-export async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
+async function ensureSessionDeliveryQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveSessionDeliveryQueueDir(stateDir);
   await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
   await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });

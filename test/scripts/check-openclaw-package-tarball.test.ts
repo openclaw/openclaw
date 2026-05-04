@@ -94,6 +94,58 @@ describe("check-openclaw-package-tarball", () => {
     );
   });
 
+  it("rejects dist files that import missing relative chunks", () => {
+    withTarball(
+      ["dist/cli/run-main.js"],
+      { "dist/cli/run-main.js": 'await import("../memory-state-old.js");\n' },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "dist/cli/run-main.js imports missing dist/memory-state-old.js",
+        );
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("accepts dist files whose relative chunks are present", () => {
+    withTarball(
+      ["dist/cli/run-main.js", "dist/memory-state-current.js"],
+      {
+        "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
+        "dist/memory-state-current.js": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects imported dist chunks omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/cli/run-main.js"],
+      {
+        "dist/cli/run-main.js": 'await import("../memory-state-current.js");\n',
+        "dist/memory-state-current.js": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "inventory omits imported dist file dist/memory-state-current.js",
+        );
+      },
+      "2026.4.27",
+    );
+  });
+
   it("rejects missing Control UI assets", () => {
     withTarball(
       ["dist/index.js"],

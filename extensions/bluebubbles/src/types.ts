@@ -2,10 +2,7 @@ import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/ru
 import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-export type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/setup";
-
-export type BlueBubblesGroupConfig = {
+type BlueBubblesGroupConfig = {
   /** If true, only respond in this group when mentioned. */
   requireMention?: boolean;
   /** Optional tool policy overrides for this group. */
@@ -17,7 +14,7 @@ export type BlueBubblesGroupConfig = {
   systemPrompt?: string;
 };
 
-export type BlueBubblesActionConfig = {
+type BlueBubblesActionConfig = {
   reactions?: boolean;
   edit?: boolean;
   unsend?: boolean;
@@ -31,7 +28,7 @@ export type BlueBubblesActionConfig = {
   sendAttachment?: boolean;
 };
 
-export type BlueBubblesNetworkConfig = {
+type BlueBubblesNetworkConfig = {
   /** Dangerous opt-in for same-host or trusted private/internal BlueBubbles deployments. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
@@ -86,6 +83,14 @@ export type BlueBubblesAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: Record<string, unknown>;
+  /**
+   * When an inbound reply lands without `replyToBody`/`replyToSender` and the
+   * in-memory reply cache misses (e.g., multi-instance deployments sharing
+   * one BlueBubbles account, after process restarts, or after long-lived
+   * cache eviction), fetch the original message from the BlueBubbles HTTP API
+   * as a best-effort fallback. Default: false.
+   */
+  replyContextApiFallback?: boolean;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /**
@@ -116,15 +121,6 @@ export type BlueBubblesAccountConfig = {
    * `associatedMessageGuid`. Default: false.
    */
   coalesceSameSenderDms?: boolean;
-};
-
-export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
-  /** Optional per-account BlueBubbles configuration (multi-account). */
-  accounts?: Record<string, BlueBubblesAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-  /** Per-action tool gating (default: true for all). */
-  actions?: BlueBubblesActionConfig;
 };
 
 export type BlueBubblesSendTarget =
@@ -163,19 +159,6 @@ export function normalizeBlueBubblesServerUrl(raw: string): string {
   }
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   return withScheme.replace(/\/+$/, "");
-}
-
-export function buildBlueBubblesApiUrl(params: {
-  baseUrl: string;
-  path: string;
-  password?: string;
-}): string {
-  const normalized = normalizeBlueBubblesServerUrl(params.baseUrl);
-  const url = new URL(params.path, `${normalized}/`);
-  if (params.password) {
-    url.searchParams.set("password", params.password);
-  }
-  return url.toString();
 }
 
 // Overridable guard for testing; production code uses fetchWithSsrFGuard.

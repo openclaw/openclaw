@@ -173,6 +173,43 @@ describe("cron tool", () => {
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("allows scoped isolated cron runs to remove the current job", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await tool.execute("call-self-remove", {
+      action: "remove",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.remove");
+    expect(params).toEqual({ id: "job-current" });
+  });
+
+  it("denies scoped isolated cron runs from removing another job", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(
+      tool.execute("call-remove-other", {
+        action: "remove",
+        jobId: "job-other",
+      }),
+    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("denies scoped isolated cron runs from using non-remove cron actions", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(
+      tool.execute("call-list", {
+        action: "list",
+      }),
+    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain(

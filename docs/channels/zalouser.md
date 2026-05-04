@@ -18,9 +18,10 @@ Zalo Personal ships as a bundled plugin in current OpenClaw releases, so normal
 packaged builds do not need a separate install.
 
 If you are on an older build or a custom install that excludes Zalo Personal,
-install it manually:
+install the npm package directly:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
+- Pinned version: `openclaw plugins install @openclaw/zalouser@2026.5.2`
 - Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 

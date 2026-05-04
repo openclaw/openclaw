@@ -13,10 +13,18 @@ import {
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
+import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 import { randomToken } from "./onboard-helpers.js";
 
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
+type ProviderChoiceModelPrompt = {
+  provider?: string;
+  allowedKeys?: string[];
+  initialSelections?: string[];
+  message?: string;
+  loadCatalog?: boolean;
+};
 
 /** Reject undefined, empty, and common JS string-coercion artifacts for token auth. */
 function sanitizeTokenValue(value: unknown): string | undefined {
@@ -30,19 +38,12 @@ function sanitizeTokenValue(value: unknown): string | undefined {
   return trimmed;
 }
 
-async function resolveProviderChoiceModelAllowlist(params: {
+async function resolveProviderChoiceModelPrompt(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<
-  | {
-      allowedKeys?: string[];
-      initialSelections?: string[];
-      message?: string;
-    }
-  | undefined
-> {
+}): Promise<ProviderChoiceModelPrompt | undefined> {
   const { resolvePluginProviders, resolveProviderPluginChoice } =
     await import("../plugins/provider-auth-choice.runtime.js");
   const providers = resolvePluginProviders({
@@ -51,10 +52,82 @@ async function resolveProviderChoiceModelAllowlist(params: {
     env: params.env,
     mode: "setup",
   });
-  return resolveProviderPluginChoice({
+  const resolved = resolveProviderPluginChoice({
     providers,
     choice: params.authChoice,
-  })?.wizard?.modelAllowlist;
+  });
+  const wizard = resolved?.provider.wizard?.setup;
+  if (!wizard) {
+    return resolved?.provider.id ? { provider: resolved.provider.id } : undefined;
+  }
+  return {
+    provider: resolved.provider.id,
+    ...wizard.modelAllowlist,
+    ...(wizard.modelSelection?.promptWhenAuthChoiceProvided === true ? { loadCatalog: true } : {}),
+  };
+}
+
+function hasConfiguredProviderModels(cfg: OpenClawConfig, provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  if ((cfg.models?.providers?.[provider]?.models?.length ?? 0) > 0) {
+    return true;
+  }
+  const providerPrefix = `${provider}/`;
+  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
+    key.trim().startsWith(providerPrefix),
+  );
+}
+
+function hasStaticManifestCatalogRows(cfg: OpenClawConfig, provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  return (
+    loadStaticManifestCatalogRowsForList({
+      cfg,
+      providerFilter: provider,
+    }).length > 0
+  );
+}
+
+function listConfiguredModelProviders(cfg: OpenClawConfig): string[] {
+  return Object.entries(cfg.models?.providers ?? {})
+    .filter(([, provider]) => (provider.models?.length ?? 0) > 0)
+    .map(([provider]) => provider);
+}
+
+function resolveSingleConfiguredProvider(cfg: OpenClawConfig): string | undefined {
+  const configuredProviders = listConfiguredModelProviders(cfg);
+  return configuredProviders.length === 1 ? configuredProviders[0] : undefined;
+}
+
+function resolveConfiguredProviderFromAuthChange(params: {
+  before: OpenClawConfig;
+  after: OpenClawConfig;
+  preferredProvider?: string;
+}): string | undefined {
+  if (hasConfiguredProviderModels(params.after, params.preferredProvider)) {
+    return params.preferredProvider;
+  }
+
+  const beforeProviders = params.before.models?.providers ?? {};
+  const configuredProviders = listConfiguredModelProviders(params.after);
+  const changedProviders = configuredProviders.filter((provider) => {
+    const beforeCount = beforeProviders[provider]?.models?.length ?? 0;
+    const afterCount = params.after.models?.providers?.[provider]?.models?.length ?? 0;
+    return afterCount > beforeCount;
+  });
+
+  if (changedProviders.length === 1) {
+    return changedProviders[0];
+  }
+
+  return (
+    params.preferredProvider ??
+    (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
+  );
 }
 
 export function buildGatewayAuthConfig(params: {
@@ -148,6 +221,7 @@ export async function promptAuthConfig(
       break;
     }
 
+    const beforeAuthConfig = next;
     const applied = await applyAuthChoice({
       authChoice,
       config: next,
@@ -157,6 +231,11 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
+    preferredProvider = resolveConfiguredProviderFromAuthChange({
+      before: beforeAuthConfig,
+      after: next,
+      preferredProvider,
+    });
     if (applied.retrySelection) {
       continue;
     }
@@ -164,20 +243,27 @@ export async function promptAuthConfig(
   }
 
   if (authChoice !== "custom-api-key") {
-    const modelAllowlist = await resolveProviderChoiceModelAllowlist({
+    const modelPrompt = await resolveProviderChoiceModelPrompt({
       authChoice,
       config: next,
       workspaceDir: resolveDefaultAgentWorkspaceDir(),
       env: process.env,
     });
+    const promptProvider =
+      modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
-      allowedKeys: modelAllowlist?.allowedKeys,
-      initialSelections: modelAllowlist?.initialSelections,
-      message: modelAllowlist?.message,
-      preferredProvider,
-      loadCatalog: false,
+      workspaceDir: resolveDefaultAgentWorkspaceDir(),
+      env: process.env,
+      allowedKeys: modelPrompt?.allowedKeys,
+      initialSelections: modelPrompt?.initialSelections,
+      message: modelPrompt?.message,
+      preferredProvider: promptProvider,
+      loadCatalog:
+        modelPrompt?.loadCatalog ??
+        (hasConfiguredProviderModels(next, promptProvider) ||
+          hasStaticManifestCatalogRows(next, promptProvider)),
     });
     if (allowlistSelection.models) {
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {

@@ -1,3 +1,10 @@
+import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import {
+  type DeliverableWhatsAppOutboundPayload,
+  normalizeWhatsAppOutboundPayload,
+  normalizeWhatsAppPayloadTextPreservingIndentation,
+} from "../../outbound-media-contract.js";
+import type { WhatsAppReplyDeliveryResult } from "../deliver-reply.js";
 import type { WebInboundMsg } from "../types.js";
 import { formatGroupMembers } from "./group-members.js";
 import type { GroupHistoryEntry } from "./inbound-context.js";
@@ -50,6 +57,29 @@ type SenderContext = {
   e164?: string;
 };
 
+function logWhatsAppReplyDeliveryError(params: {
+  err: unknown;
+  info: { kind: ReplyLifecycleKind };
+  connectionId: string;
+  conversationId: string;
+  msg: WebInboundMsg;
+  replyLogger: ReturnType<typeof getChildLogger>;
+}) {
+  params.replyLogger.error(
+    {
+      err: params.err,
+      replyKind: params.info.kind,
+      correlationId: params.msg.id ?? null,
+      connectionId: params.connectionId,
+      conversationId: params.conversationId,
+      chatId: params.msg.chatId ?? null,
+      to: params.msg.from ?? null,
+      from: params.msg.to ?? null,
+    },
+    "auto-reply delivery failed",
+  );
+}
+
 function resolveWhatsAppDisableBlockStreaming(cfg: ReturnType<LoadConfigFn>): boolean | undefined {
   if (typeof cfg.channels?.whatsapp?.blockStreaming !== "boolean") {
     return undefined;
@@ -62,6 +92,9 @@ function resolveWhatsAppDeliverablePayload(
   info: { kind: ReplyLifecycleKind },
 ): ReplyPayload | null {
   if (payload.isReasoning === true || payload.isCompactionNotice === true) {
+    return null;
+  }
+  if (payload.isError === true) {
     return null;
   }
   if (info.kind === "tool") {
@@ -241,6 +274,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
   conversationId: string;
   deliverReply: (params: {
     replyResult: ReplyPayload;
+    normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
     msg: WebInboundMsg;
     mediaLocalRoots: readonly string[];
     maxMediaBytes: number;
@@ -250,7 +284,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     connectionId?: string;
     skipLog?: boolean;
     tableMode?: ReturnType<typeof resolveMarkdownTableMode>;
-  }) => Promise<void>;
+  }) => Promise<WhatsAppReplyDeliveryResult>;
   groupHistories: Map<string, GroupHistoryEntry[]>;
   groupHistoryKey: string;
   maxMediaBytes: number;
@@ -300,8 +334,20 @@ export async function dispatchWhatsAppBufferedReply(params: {
         if (!deliveryPayload) {
           return;
         }
-        await params.deliverReply({
-          replyResult: deliveryPayload,
+        const normalizedOutboundPayload = normalizeWhatsAppOutboundPayload(deliveryPayload, {
+          normalizeText: normalizeWhatsAppPayloadTextPreservingIndentation,
+        });
+        const normalizedDeliveryPayload =
+          deliveryPayload.text === undefined
+            ? { ...normalizedOutboundPayload, text: undefined }
+            : normalizedOutboundPayload;
+        const reply = resolveSendableOutboundReplyParts(normalizedDeliveryPayload);
+        if (!reply.hasMedia && !reply.text.trim()) {
+          return;
+        }
+        const delivery = await params.deliverReply({
+          replyResult: normalizedDeliveryPayload,
+          normalizedReplyResult: normalizedDeliveryPayload,
           msg: params.msg,
           mediaLocalRoots,
           maxMediaBytes: params.maxMediaBytes,
@@ -312,22 +358,46 @@ export async function dispatchWhatsAppBufferedReply(params: {
           skipLog: false,
           tableMode,
         });
+        if (!delivery.providerAccepted) {
+          params.replyLogger.warn(
+            {
+              correlationId: params.msg.id ?? null,
+              connectionId: params.connectionId,
+              conversationId: params.conversationId,
+              chatId: params.msg.chatId,
+              to: params.msg.from,
+              from: params.msg.to,
+              replyKind: info.kind,
+            },
+            "auto-reply was not accepted by WhatsApp provider",
+          );
+          return;
+        }
         didSendReply = true;
-        const shouldLog = deliveryPayload.text ? true : undefined;
-        params.rememberSentText(deliveryPayload.text, {
+        const shouldLog = normalizedDeliveryPayload.text ? true : undefined;
+        params.rememberSentText(normalizedDeliveryPayload.text, {
           combinedBody: params.context.Body as string | undefined,
           combinedBodySessionKey: params.route.sessionKey,
           logVerboseMessage: shouldLog,
         });
         const fromDisplay =
           params.msg.chatType === "group" ? params.conversationId : (params.msg.from ?? "unknown");
-        const reply = resolveSendableOutboundReplyParts(deliveryPayload);
         if (shouldLogVerbose()) {
-          const preview = deliveryPayload.text != null ? reply.text : "<media>";
+          const preview = normalizedDeliveryPayload.text != null ? reply.text : "<media>";
           logVerbose(`Reply body: ${preview}${reply.hasMedia ? " (media)" : ""} -> ${fromDisplay}`);
         }
       },
       onReplyStart: params.msg.sendComposing,
+      onError: (err, info) => {
+        logWhatsAppReplyDeliveryError({
+          err,
+          info,
+          connectionId: params.connectionId,
+          conversationId: params.conversationId,
+          msg: params.msg,
+          replyLogger: params.replyLogger,
+        });
+      },
     },
     replyOptions: {
       disableBlockStreaming,
@@ -335,8 +405,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
   });
 
-  const didQueueVisibleReply =
-    queuedFinal || counts.tool > 0 || counts.block > 0 || counts.final > 0;
+  const didQueueVisibleReply = hasVisibleInboundReplyDispatch({ queuedFinal, counts });
   if (!didQueueVisibleReply) {
     if (params.shouldClearGroupHistory) {
       params.groupHistories.set(params.groupHistoryKey, []);

@@ -111,6 +111,12 @@ Plugins can register additional tools. Some examples:
 - [OpenProse](/prose) — markdown-first workflow orchestration
 - [Tokenjuice](/tools/tokenjuice) — compact noisy `exec` and `bash` tool results
 
+Plugin tools are still authored with `api.registerTool(...)` and declared in
+the plugin manifest's `contracts.tools` list. OpenClaw captures the validated
+tool descriptor during discovery and caches it by plugin source and contract, so
+later tool planning can skip plugin runtime loading. Tool execution still loads
+the owning plugin and calls the live registered implementation.
+
 ## Tool configuration
 
 ### Allow and deny lists
@@ -158,6 +164,10 @@ but not the full browser-control tool. Browser automation can drive real
 sessions and logged-in profiles, so add it explicitly with
 `tools.alsoAllow: ["browser"]` or a per-agent
 `agents.list[].tools.alsoAllow: ["browser"]`.
+
+<Note>
+Configuring `tools.exec` or `tools.fs` under a restrictive profile (`messaging`, `minimal`) does not implicitly widen the profile's allowlist. Add explicit `tools.alsoAllow` entries (for example `["exec", "process"]` for exec, or `["read", "write", "edit"]` for fs) when you want a restrictive profile to use those configured sections. OpenClaw logs a startup warning when a config section is present without a matching `alsoAllow` grant.
+</Note>
 
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you

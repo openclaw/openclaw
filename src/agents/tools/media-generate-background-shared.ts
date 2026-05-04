@@ -65,6 +65,8 @@ type WakeMediaGenerationTaskCompletionParams = {
   statsLine?: string;
 };
 
+type MediaGenerationDirectCompletionDelivery = "config" | "disabled";
+
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   registerAgentRunContext(handle.runId, {
     sessionKey: handle.requesterSessionKey,
@@ -72,7 +74,7 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
   });
 }
 
-export function createMediaGenerationTaskRun(params: {
+function createMediaGenerationTaskRun(params: {
   sessionKey?: string;
   requesterOrigin?: DeliveryContext;
   prompt: string;
@@ -126,7 +128,7 @@ export function createMediaGenerationTaskRun(params: {
   }
 }
 
-export function recordMediaGenerationTaskProgress(params: {
+function recordMediaGenerationTaskProgress(params: {
   handle: MediaGenerationTaskHandle | null;
   progressSummary: string;
   eventSummary?: string;
@@ -169,7 +171,7 @@ export async function withMediaGenerationTaskKeepalive<T>(params: {
   }
 }
 
-export function completeMediaGenerationTaskRun(params: {
+function completeMediaGenerationTaskRun(params: {
   handle: MediaGenerationTaskHandle | null;
   provider: string;
   model: string;
@@ -197,7 +199,7 @@ export function completeMediaGenerationTaskRun(params: {
   }
 }
 
-export function failMediaGenerationTaskRun(params: {
+function failMediaGenerationTaskRun(params: {
   handle: MediaGenerationTaskHandle | null;
   error: unknown;
   progressSummary: string;
@@ -242,8 +244,14 @@ function buildMediaGenerationReplyInstruction(params: {
   ].join(" ");
 }
 
-function isAsyncMediaDirectSendEnabled(config: OpenClawConfig | undefined): boolean {
-  return config?.tools?.media?.asyncCompletion?.directSend === true;
+function isAsyncMediaDirectSendEnabled(params: {
+  config: OpenClawConfig | undefined;
+  directCompletionDelivery: MediaGenerationDirectCompletionDelivery;
+}): boolean {
+  if (params.directCompletionDelivery === "disabled") {
+    return false;
+  }
+  return params.config?.tools?.media?.asyncCompletion?.directSend === true;
 }
 
 async function maybeDeliverMediaGenerationResultDirectly(params: {
@@ -284,7 +292,7 @@ async function maybeDeliverMediaGenerationResultDirectly(params: {
   return true;
 }
 
-export async function wakeMediaGenerationTaskCompletion(params: {
+async function wakeMediaGenerationTaskCompletion(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
@@ -296,12 +304,18 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   announceType: string;
   toolName: string;
   completionLabel: string;
+  directCompletionDelivery: MediaGenerationDirectCompletionDelivery;
 }) {
   if (!params.handle) {
     return;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
-  if (isAsyncMediaDirectSendEnabled(params.config)) {
+  if (
+    isAsyncMediaDirectSendEnabled({
+      config: params.config,
+      directCompletionDelivery: params.directCompletionDelivery,
+    })
+  ) {
     try {
       const deliveredDirect = await maybeDeliverMediaGenerationResultDirectly({
         handle: params.handle,
@@ -383,6 +397,7 @@ export function createMediaGenerationTaskLifecycle(params: {
   eventSource: AgentInternalEvent["source"];
   announceType: string;
   completionLabel: string;
+  directCompletionDelivery?: MediaGenerationDirectCompletionDelivery;
 }) {
   return {
     createTaskRun(runParams: CreateMediaGenerationTaskRunParams): MediaGenerationTaskHandle | null {
@@ -420,6 +435,7 @@ export function createMediaGenerationTaskLifecycle(params: {
         announceType: params.announceType,
         toolName: params.toolName,
         completionLabel: params.completionLabel,
+        directCompletionDelivery: params.directCompletionDelivery ?? "config",
       });
     },
   };

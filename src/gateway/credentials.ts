@@ -8,7 +8,6 @@ import {
 export {
   hasGatewayPasswordEnvCandidate,
   hasGatewayTokenEnvCandidate,
-  trimCredentialToUndefined,
   trimToUndefined,
 } from "./credential-planner.js";
 
@@ -17,7 +16,7 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
-export type ResolvedGatewayCredentials = {
+type ResolvedGatewayCredentials = {
   token?: string;
   password?: string;
 };
@@ -321,16 +320,5 @@ export function resolveGatewayProbeCredentialsFromConfig(params: {
     explicitAuth: params.explicitAuth,
     modeOverride: params.mode,
     remoteTokenFallback: "remote-only",
-  });
-}
-
-export function resolveGatewayDriftCheckCredentialsFromConfig(params: {
-  cfg: OpenClawConfig;
-}): ResolvedGatewayCredentials {
-  return resolveGatewayCredentialsFromConfig({
-    cfg: params.cfg,
-    env: {} as NodeJS.ProcessEnv,
-    modeOverride: "local",
-    localTokenPrecedence: "config-first",
   });
 }

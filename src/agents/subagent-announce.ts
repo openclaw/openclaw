@@ -7,6 +7,7 @@ import {
 } from "../auto-reply/tokens.js";
 import { defaultRuntime } from "../runtime.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -43,6 +44,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "./subagent-announce.runtime.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
@@ -60,13 +62,12 @@ const defaultSubagentAnnounceDeps: SubagentAnnounceDeps = {
 
 let subagentAnnounceDeps: SubagentAnnounceDeps = defaultSubagentAnnounceDeps;
 
-let subagentRegistryRuntimePromise: Promise<
-  typeof import("./subagent-announce.registry.runtime.js")
-> | null = null;
+const subagentRegistryRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-announce.registry.runtime.js"),
+);
 
 function loadSubagentRegistryRuntime() {
-  subagentRegistryRuntimePromise ??= import("./subagent-announce.registry.runtime.js");
-  return subagentRegistryRuntimePromise;
+  return subagentRegistryRuntimeLoader.load();
 }
 
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
@@ -588,19 +589,11 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
     if (shouldDeleteChildSession) {
-      try {
-        await subagentAnnounceDeps.callGateway({
-          method: "sessions.delete",
-          params: {
-            key: params.childSessionKey,
-            deleteTranscript: true,
-            emitLifecycleHooks: params.spawnMode === "session",
-          },
-          timeoutMs: 10_000,
-        });
-      } catch {
-        // ignore
-      }
+      await deleteSubagentSessionForCleanup({
+        callGateway: subagentAnnounceDeps.callGateway,
+        childSessionKey: params.childSessionKey,
+        spawnMode: params.spawnMode,
+      });
     }
   }
   return didAnnounce;

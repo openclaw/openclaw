@@ -66,6 +66,7 @@ describe("host-hook fixture plugin contract", () => {
         id: "host-hook-fixture",
         name: "Host Hook Fixture",
         origin: "workspace",
+        contracts: { tools: ["approval_fixture_tool"] },
       }),
       register: registerHostHookFixture,
     });
@@ -120,6 +121,40 @@ describe("host-hook fixture plugin contract", () => {
         }),
         expect.objectContaining({
           pluginId: "external-policy",
+          message: expect.stringContaining("only bundled plugins can claim reserved command"),
+        }),
+      ]),
+    );
+  });
+
+  it("allows the official npm Codex plugin to keep /codex command ownership", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    const codexRoot = path.join("/tmp", ".openclaw", "npm", "node_modules", "@openclaw", "codex");
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "codex",
+        name: "Codex",
+        origin: "global",
+        rootDir: codexRoot,
+        source: path.join(codexRoot, "index.ts"),
+      }),
+      register(api) {
+        api.registerCommand({
+          name: "codex",
+          description: "Official npm Codex command",
+          ownership: "reserved",
+          handler: async () => ({ text: "ok" }),
+        });
+      },
+    });
+
+    expect(registry.registry.commands.map((entry) => entry.command.name)).toEqual(["codex"]);
+    expect(registry.registry.diagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "codex",
           message: expect.stringContaining("only bundled plugins can claim reserved command"),
         }),
       ]),

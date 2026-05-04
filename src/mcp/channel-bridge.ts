@@ -18,6 +18,7 @@ import type {
   ConversationDescriptor,
   PendingApproval,
   QueueEvent,
+  SessionDescribeResult,
   SessionListResult,
   SessionMessagePayload,
   WaitFilter,
@@ -88,11 +89,13 @@ export class OpenClawChannelBridge {
     const [
       { resolveGatewayClientBootstrap },
       { GatewayClient: GatewayClientCtor },
+      { startGatewayClientWhenEventLoopReady },
       { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
       { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
+      import("../gateway/client-start-readiness.js"),
       import("../gateway/method-scopes.js"),
       import("../gateway/protocol/client-info.js"),
     ]);
@@ -114,6 +117,7 @@ export class OpenClawChannelBridge {
       url: bootstrap.url,
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
+      preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
@@ -142,7 +146,12 @@ export class OpenClawChannelBridge {
         this.retryingInitialConnect = false;
       },
     });
-    this.gateway.start();
+    const readiness = await startGatewayClientWhenEventLoopReady(this.gateway, {
+      clientOptions: { preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs },
+    });
+    if (!readiness.ready) {
+      this.rejectReadyOnce(new Error("gateway event loop readiness timeout"));
+    }
     await this.readyPromise;
   }
 
@@ -198,10 +207,13 @@ export class OpenClawChannelBridge {
     if (!normalizedSessionKey) {
       return null;
     }
-    const conversations = await this.listConversations({ limit: 500, includeLastMessage: true });
-    return (
-      conversations.find((conversation) => conversation.sessionKey === normalizedSessionKey) ?? null
-    );
+    await this.waitUntilReady();
+    const response: SessionDescribeResult = await this.requestGateway("sessions.describe", {
+      key: normalizedSessionKey,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+    });
+    return response.session ? toConversation(response.session) : null;
   }
 
   async readMessages(
