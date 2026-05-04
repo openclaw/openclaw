@@ -19,6 +19,13 @@ import { resolveLocalUserName } from "../user-identity.ts";
 export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
+import {
+  buildHtmlPreviewSrcdoc,
+  detectHtmlDocumentPreview,
+  HTML_PREVIEW_CSP,
+  HTML_PREVIEW_SANDBOX,
+  type HtmlDocumentPreview,
+} from "./html-preview.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
@@ -84,6 +91,32 @@ function renderChatTimestamp(timestamp: number) {
     <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
       ${display.label}
     </time>
+  `;
+}
+
+function renderHtmlDocumentPreview(preview: HtmlDocumentPreview) {
+  return html`
+    <div class="chat-html-preview">
+      <div class="chat-html-preview__header">
+        <span class="chat-html-preview__badge">HTML preview</span>
+        ${preview.truncated
+          ? html`<span class="chat-html-preview__meta">Preview truncated</span>`
+          : nothing}
+      </div>
+      <iframe
+        class="chat-html-preview__frame"
+        title="Rendered HTML response"
+        sandbox=${HTML_PREVIEW_SANDBOX}
+        csp=${HTML_PREVIEW_CSP}
+        referrerpolicy="no-referrer"
+        loading="lazy"
+        srcdoc=${buildHtmlPreviewSrcdoc(preview.html)}
+      ></iframe>
+      <details class="chat-html-preview__source">
+        <summary>Source</summary>
+        <pre><code>${preview.html}</code></pre>
+      </details>
+    </div>
   `;
 }
 
@@ -1435,13 +1468,32 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const toolMessageDisclosureId = `toolmsg:${messageKey}`;
+  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
+  let cachedHtmlDocumentPreview: HtmlDocumentPreview | null | undefined;
+  const getHtmlDocumentPreview = (): HtmlDocumentPreview | null => {
+    if (cachedHtmlDocumentPreview !== undefined) {
+      return cachedHtmlDocumentPreview;
+    }
+    cachedHtmlDocumentPreview =
+      markdown && !opts.isStreaming && (normalizedRole === "assistant" || isToolMessage)
+        ? detectHtmlDocumentPreview(markdown)
+        : null;
+    return cachedHtmlDocumentPreview;
+  };
+  const htmlDocumentPreview = isToolMessage
+    ? toolMessageExpanded
+      ? getHtmlDocumentPreview()
+      : null
+    : getHtmlDocumentPreview();
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
   const bubbleClasses = [
     "chat-bubble",
+    htmlDocumentPreview ? "chat-bubble--html-preview" : "",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
@@ -1462,8 +1514,6 @@ function renderGroupedMessage(
     return nothing;
   }
 
-  const toolMessageDisclosureId = `toolmsg:${messageKey}`;
-  const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const toolSummaryLabel =
     toolNames.length <= 3
@@ -1528,24 +1578,26 @@ function renderGroupedMessage(
                             ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
                           </div>`
                         : nothing}
-                      ${jsonResult
-                        ? html`<details
-                            class="chat-json-collapse"
-                            ?open=${Boolean(opts.autoExpandToolCalls)}
-                          >
-                            <summary class="chat-json-summary">
-                              <span class="chat-json-badge">JSON</span>
-                              <span class="chat-json-label"
-                                >${jsonSummaryLabel(jsonResult.parsed)}</span
-                              >
-                            </summary>
-                            <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                          </details>`
-                        : markdown
-                          ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                              ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                            </div>`
-                          : nothing}
+                      ${htmlDocumentPreview
+                        ? renderHtmlDocumentPreview(htmlDocumentPreview)
+                        : jsonResult
+                          ? html`<details
+                              class="chat-json-collapse"
+                              ?open=${Boolean(opts.autoExpandToolCalls)}
+                            >
+                              <summary class="chat-json-summary">
+                                <span class="chat-json-badge">JSON</span>
+                                <span class="chat-json-label"
+                                  >${jsonSummaryLabel(jsonResult.parsed)}</span
+                                >
+                              </summary>
+                              <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                            </details>`
+                          : markdown
+                            ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                                ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                              </div>`
+                            : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
                           ? renderExpandedToolCardContent(
@@ -1595,19 +1647,21 @@ function renderGroupedMessage(
                   ${block.rawText ? renderRawOutputToggle(block.rawText) : nothing}`,
                 )}`
               : nothing}
-            ${jsonResult
-              ? html`<details class="chat-json-collapse">
-                  <summary class="chat-json-summary">
-                    <span class="chat-json-badge">JSON</span>
-                    <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
-                  </summary>
-                  <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
-                </details>`
-              : markdown
-                ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
-                    ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
-                  </div>`
-                : nothing}
+            ${htmlDocumentPreview
+              ? renderHtmlDocumentPreview(htmlDocumentPreview)
+              : jsonResult
+                ? html`<details class="chat-json-collapse">
+                    <summary class="chat-json-summary">
+                      <span class="chat-json-badge">JSON</span>
+                      <span class="chat-json-label">${jsonSummaryLabel(jsonResult.parsed)}</span>
+                    </summary>
+                    <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
+                  </details>`
+                : markdown
+                  ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">
+                      ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
+                    </div>`
+                  : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
                   messageKey,

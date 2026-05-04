@@ -9,9 +9,20 @@ import {
   renderStreamingGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
+import {
+  HTML_PREVIEW_CSP,
+  HTML_PREVIEW_SANDBOX,
+  type HtmlDocumentPreview,
+} from "./html-preview.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const htmlPreviewMock = vi.hoisted(() => ({
+  actualDetectHtmlDocumentPreview: null as
+    | ((markdown: string) => HtmlDocumentPreview | null)
+    | null,
+  detectHtmlDocumentPreview: vi.fn<(markdown: string) => HtmlDocumentPreview | null>(),
+}));
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -89,7 +100,53 @@ vi.mock("../tool-display.ts", () => ({
   }),
 }));
 
+vi.mock("./html-preview.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./html-preview.ts")>();
+  htmlPreviewMock.actualDetectHtmlDocumentPreview = actual.detectHtmlDocumentPreview;
+  htmlPreviewMock.detectHtmlDocumentPreview.mockImplementation(actual.detectHtmlDocumentPreview);
+  return {
+    ...actual,
+    detectHtmlDocumentPreview: htmlPreviewMock.detectHtmlDocumentPreview,
+  };
+});
+
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
+
+const COMPLETE_HTML_DOCUMENT =
+  "<!doctype html><html><head><title>Report</title><style>body{font-family:Arial}</style></head><body><h1>Report</h1><script>window.evil=true</script></body></html>";
+const HTML_PREVIEW_CSP_META = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`;
+
+function expectHtmlPreview(container: HTMLElement, source = COMPLETE_HTML_DOCUMENT) {
+  const preview = container.querySelector<HTMLElement>(".chat-html-preview");
+  expect(preview).not.toBeNull();
+
+  const frame = preview!.querySelector<HTMLIFrameElement>("iframe.chat-html-preview__frame");
+  expect(frame).not.toBeNull();
+  expect(frame!.getAttribute("title")).toBe("Rendered HTML response");
+  expect(frame!.hasAttribute("sandbox")).toBe(true);
+  expect(frame!.getAttribute("sandbox")).toBe("");
+  expect(frame!.getAttribute("sandbox")).toBe(HTML_PREVIEW_SANDBOX);
+  expect((frame!.getAttribute("sandbox") ?? "").split(/\s+/)).not.toContain("allow-scripts");
+  expect(frame!.getAttribute("csp")).toBe(HTML_PREVIEW_CSP);
+  expect(frame!.getAttribute("csp")).not.toContain("script-src");
+  expect(frame!.getAttribute("referrerpolicy")).toBe("no-referrer");
+  expect(frame!.getAttribute("loading")).toBe("lazy");
+  const srcdoc = frame!.getAttribute("srcdoc") ?? "";
+  expect(srcdoc).toContain(HTML_PREVIEW_CSP_META);
+  expect(srcdoc.replace(HTML_PREVIEW_CSP_META, "")).toBe(source);
+
+  const sourceCode = preview!.querySelector<HTMLElement>(".chat-html-preview__source code");
+  expect(sourceCode?.textContent).toBe(source);
+}
+
+function resetHtmlPreviewDetectorMock() {
+  htmlPreviewMock.detectHtmlDocumentPreview.mockReset();
+  if (htmlPreviewMock.actualDetectHtmlDocumentPreview) {
+    htmlPreviewMock.detectHtmlDocumentPreview.mockImplementation(
+      htmlPreviewMock.actualDetectHtmlDocumentPreview,
+    );
+  }
+}
 
 function renderAssistantMessage(
   container: HTMLElement,
@@ -388,6 +445,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  resetHtmlPreviewDetectorMock();
 });
 
 describe("grouped chat rendering", () => {
@@ -655,6 +713,141 @@ describe("grouped chat rendering", () => {
 
     const avatar = named.querySelector<HTMLElement>(".chat-avatar.user");
     expect(avatar?.tagName).toBe("DIV");
+  });
+
+  it("renders complete assistant HTML documents as sandboxed previews with source", () => {
+    const container = document.createElement("div");
+    htmlPreviewMock.detectHtmlDocumentPreview.mockClear();
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: COMPLETE_HTML_DOCUMENT,
+      timestamp: Date.now(),
+    });
+
+    const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+    expect(bubble?.classList.contains("chat-bubble--html-preview")).toBe(true);
+    expectHtmlPreview(container);
+    expect(container.querySelector(".chat-text")).toBeNull();
+    expect(htmlPreviewMock.detectHtmlDocumentPreview).toHaveBeenCalledTimes(1);
+    expect(htmlPreviewMock.detectHtmlDocumentPreview).toHaveBeenCalledWith(COMPLETE_HTML_DOCUMENT);
+  });
+
+  it("keeps assistant HTML snippets on the markdown text path", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "<strong>Important</strong>",
+      timestamp: Date.now(),
+    });
+
+    expect(container.querySelector(".chat-html-preview")).toBeNull();
+    expect(container.querySelector(".chat-bubble--html-preview")).toBeNull();
+    const text = container.querySelector<HTMLElement>(".chat-text");
+    expect(text).not.toBeNull();
+    expect(text?.textContent).toContain("Important");
+  });
+
+  it("keeps streaming complete assistant HTML on the markdown text path", () => {
+    const container = document.createElement("div");
+    render(renderStreamingGroup(COMPLETE_HTML_DOCUMENT, Date.now()), container);
+
+    expect(container.querySelector(".chat-html-preview")).toBeNull();
+    expect(container.querySelector(".chat-text")).not.toBeNull();
+  });
+
+  it("keeps complete user HTML documents on the markdown text path", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: COMPLETE_HTML_DOCUMENT,
+        timestamp: Date.now(),
+      },
+      "user",
+    );
+
+    expect(container.querySelector(".chat-html-preview")).toBeNull();
+    const text = container.querySelector<HTMLElement>(".chat-text");
+    expect(text).not.toBeNull();
+    expect(text?.textContent).toContain("Report");
+  });
+
+  it.each(["system", "developer"])(
+    "keeps complete %s HTML documents on the markdown text path",
+    (role) => {
+      const container = document.createElement("div");
+      htmlPreviewMock.detectHtmlDocumentPreview.mockClear();
+      renderGroupedMessage(
+        container,
+        {
+          role,
+          content: COMPLETE_HTML_DOCUMENT,
+          timestamp: Date.now(),
+        },
+        role,
+      );
+
+      const bubble = container.querySelector<HTMLElement>(".chat-bubble");
+      expect(bubble?.classList.contains("chat-bubble--html-preview")).toBe(false);
+      expect(container.querySelector(".chat-html-preview")).toBeNull();
+      const text = container.querySelector<HTMLElement>(".chat-text");
+      expect(text).not.toBeNull();
+      expect(text?.textContent).toContain("Report");
+      expect(htmlPreviewMock.detectHtmlDocumentPreview).not.toHaveBeenCalled();
+    },
+  );
+
+  it("renders expanded complete tool-result HTML documents as sandboxed previews", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        id: "tool-html",
+        role: "tool",
+        toolCallId: "call-html",
+        toolName: "browser.open",
+        content: COMPLETE_HTML_DOCUMENT,
+        timestamp: Date.now(),
+      },
+      "tool",
+      {
+        isToolMessageExpanded: () => true,
+      },
+    );
+
+    const toolBody = container.querySelector<HTMLElement>(".chat-tool-msg-body");
+    expect(toolBody).not.toBeNull();
+    expectHtmlPreview(toolBody!);
+    expect(toolBody!.querySelector(".chat-text")).toBeNull();
+    expect(htmlPreviewMock.detectHtmlDocumentPreview).toHaveBeenCalledTimes(1);
+    expect(htmlPreviewMock.detectHtmlDocumentPreview).toHaveBeenCalledWith(COMPLETE_HTML_DOCUMENT);
+  });
+
+  it("keeps collapsed complete tool-result HTML hidden and skips preview detection", () => {
+    const container = document.createElement("div");
+    htmlPreviewMock.detectHtmlDocumentPreview.mockClear();
+
+    renderGroupedMessage(
+      container,
+      {
+        id: "tool-html-collapsed",
+        role: "tool",
+        toolCallId: "call-html-collapsed",
+        toolName: "browser.open",
+        content: COMPLETE_HTML_DOCUMENT,
+        timestamp: Date.now(),
+      },
+      "tool",
+      {
+        isToolMessageExpanded: () => false,
+      },
+    );
+
+    expect(container.querySelector(".chat-html-preview")).toBeNull();
+    expect(container.querySelector(".chat-text")).toBeNull();
+    expect(htmlPreviewMock.detectHtmlDocumentPreview).not.toHaveBeenCalled();
   });
 
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
