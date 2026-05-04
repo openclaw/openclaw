@@ -154,6 +154,9 @@ _clawdock_compose() {
   if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
     compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.extra.yml")
   fi
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.sandbox.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.sandbox.yml")
+  fi
   command docker compose "${compose_args[@]}" "$@"
 }
 
