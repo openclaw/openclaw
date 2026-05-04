@@ -8,12 +8,12 @@ const { realtimeTalkCtor, startMock, stopMock } = vi.hoisted(() => ({
   stopMock: vi.fn(),
 }));
 
-vi.mock("./chat/realtime-talk.ts", () => ({
-  RealtimeTalkSession: realtimeTalkCtor,
-}));
-
 describe("OpenClawApp Talk controls", () => {
   beforeEach(() => {
+    vi.resetModules();
+    vi.doMock("./chat/realtime-talk.ts", () => ({
+      RealtimeTalkSession: realtimeTalkCtor,
+    }));
     realtimeTalkCtor.mockReset();
     startMock.mockReset();
     stopMock.mockReset();
@@ -28,24 +28,26 @@ describe("OpenClawApp Talk controls", () => {
 
   it("retries Talk immediately when the previous session is already in error state", async () => {
     const { OpenClawApp } = await import("./app.ts");
-    const app = new OpenClawApp() as unknown as {
+    const staleStop = vi.fn();
+    const app: {
       client: unknown;
       connected: boolean;
+      lastError: string | null;
       realtimeTalkActive: boolean;
       realtimeTalkStatus: string;
       realtimeTalkSession: { stop(): void } | null;
       sessionKey: string;
-      toggleRealtimeTalk(): Promise<void>;
+    } = {
+      client: { request: vi.fn() },
+      connected: true,
+      lastError: null,
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "error",
+      realtimeTalkSession: { stop: staleStop },
+      sessionKey: "main",
     };
-    const staleStop = vi.fn();
-    app.client = { request: vi.fn() } as never;
-    app.connected = true;
-    app.sessionKey = "main";
-    app.realtimeTalkActive = true;
-    app.realtimeTalkStatus = "error";
-    app.realtimeTalkSession = { stop: staleStop };
 
-    await app.toggleRealtimeTalk();
+    await OpenClawApp.prototype.toggleRealtimeTalk.call(app as never);
 
     expect(staleStop).toHaveBeenCalledOnce();
     expect(realtimeTalkCtor).toHaveBeenCalledOnce();
