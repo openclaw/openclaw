@@ -17,8 +17,18 @@ import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 const DEFAULT_OPENROUTER_AUDIO_TRANSCRIPTION_MODEL = "openai/whisper-large-v3-turbo";
 const SUPPORTED_AUDIO_FORMATS = new Set(["wav", "mp3", "flac", "m4a", "ogg", "webm", "aac"]);
 
-function resolveFormatFromMime(mime?: string): string | undefined {
+function normalizeMimeType(mime?: string): string | undefined {
   const normalized = mime?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  const [type] = normalized.split(";");
+  const clean = type?.trim();
+  return clean || undefined;
+}
+
+function resolveFormatFromMime(mime?: string): string | undefined {
+  const normalized = normalizeMimeType(mime);
   if (!normalized) {
     return undefined;
   }
@@ -32,10 +42,12 @@ function resolveFormatFromMime(mime?: string): string | undefined {
     case "audio/flac":
       return "flac";
     case "audio/mp4":
+    case "audio/m4a":
     case "audio/x-m4a":
       return "m4a";
     case "audio/ogg":
     case "audio/oga":
+    case "audio/opus":
       return "ogg";
     case "audio/webm":
       return "webm";
