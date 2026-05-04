@@ -262,6 +262,46 @@ describe("runPreparedReply media-only handling", () => {
     expect(storeRuntimeLoads).not.toHaveBeenCalled();
   });
 
+  it("places volatile inbound context after the user message body", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce(
+      [
+        "Conversation info (untrusted metadata):",
+        "```json",
+        JSON.stringify({ chat_id: "C123", message_id: "m-1" }, null, 2),
+        "```",
+      ].join("\n"),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "please summarize the plan",
+          RawBody: "please summarize the plan",
+          CommandBody: "please summarize the plan",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "please summarize the plan",
+          BodyStripped: "please summarize the plan",
+          Provider: "slack",
+          OriginatingChannel: "slack",
+          OriginatingTo: "C123",
+          ChatType: "group",
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+
+    const prompt = vi.mocked(runReplyAgent).mock.calls[0]?.[0].followupRun.prompt;
+    expect(prompt).toBeDefined();
+    expect(prompt!.indexOf("please summarize the plan")).toBeLessThan(
+      prompt!.indexOf("Conversation info (untrusted metadata):"),
+    );
+  });
+
   it("passes approved elevated defaults to the runner", async () => {
     await runPreparedReply(
       baseParams({

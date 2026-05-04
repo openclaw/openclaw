@@ -630,7 +630,7 @@ export async function runPreparedReply(
       ]
         .filter(Boolean)
         .join("\n\n")
-    : [inboundUserContext, baseBodyFinal].filter(Boolean).join("\n\n");
+    : [baseBodyFinal, inboundUserContext].filter(Boolean).join("\n\n");
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
