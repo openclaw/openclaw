@@ -35,10 +35,8 @@ import {
   isEmbeddedPiRunActive,
   getRuntimeConfig,
   formatEmbeddedPiQueueFailureSummary,
-  isSteeringQueueMode,
   loadSessionStore,
   queueEmbeddedPiMessageWithOutcome,
-  resolvePiSteeringModeForQueueMode,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
@@ -504,10 +502,10 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const shouldSteer = isSteeringQueueMode(queueSettings.mode);
+  const shouldSteer = queueSettings.mode !== "interrupt";
   if (shouldSteer) {
     const queueOutcome = resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
-      steeringMode: resolvePiSteeringModeForQueueMode(queueSettings.mode),
+      steeringMode: "all",
       ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
     });
     if (queueOutcome.queued) {
@@ -518,12 +516,8 @@ async function maybeQueueSubagentAnnounce(params: {
   const shouldFollowup =
     queueSettings.mode === "followup" ||
     queueSettings.mode === "collect" ||
-    queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
-  if (
-    isActive &&
-    (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue")
-  ) {
+  if (isActive && shouldFollowup) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),

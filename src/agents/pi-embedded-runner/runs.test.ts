@@ -77,11 +77,11 @@ describe("pi-embedded runner run registry", () => {
 
     expect(
       queueEmbeddedPiMessageWithOutcome("session-steer", "continue", {
-        steeringMode: "one-at-a-time",
+        steeringMode: "all",
       }).queued,
     ).toBe(true);
 
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "one-at-a-time" });
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
   });
 
   it("defaults active embedded steering to all pending messages", () => {

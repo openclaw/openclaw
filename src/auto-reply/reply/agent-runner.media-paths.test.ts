@@ -61,7 +61,6 @@ vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: enqueueFollowupRunMock,
   refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
-  resolvePiSteeringModeForQueueMode: (mode: string) => (mode === "queue" ? "one-at-a-time" : "all"),
   scheduleFollowupDrain: scheduleFollowupDrainMock,
 }));
 
@@ -220,7 +219,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(outboundAttachmentOptions?.mediaAccess?.workspaceDir).toBe("/tmp/workspace");
   });
 
-  it("maps steer queue modes to Pi steering drain modes", async () => {
+  it("steers active prompts independently of fallback queue mode", async () => {
     queueEmbeddedPiMessageWithOutcomeMock.mockImplementation((sessionId: string) => ({
       queued: true,
       sessionId,
@@ -230,8 +229,9 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(
       makeRunReplyAgentParams({
-        resolvedQueue: { mode: "steer" } as QueueSettings,
+        resolvedQueue: { mode: "followup" } as QueueSettings,
         shouldSteer: true,
+        shouldFollowup: true,
         isStreaming: true,
       }),
     );
@@ -243,22 +243,7 @@ describe("runReplyAgent media path normalization", () => {
         steeringMode: "all",
       },
     );
-
-    await runReplyAgent(
-      makeRunReplyAgentParams({
-        resolvedQueue: { mode: "queue" } as QueueSettings,
-        shouldSteer: true,
-        isStreaming: true,
-      }),
-    );
-
-    expect(queueEmbeddedPiMessageWithOutcomeMock).toHaveBeenLastCalledWith(
-      "session",
-      "generate chart",
-      {
-        steeringMode: "one-at-a-time",
-      },
-    );
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {

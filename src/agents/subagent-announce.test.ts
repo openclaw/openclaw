@@ -350,7 +350,7 @@ describe("subagent announce seam flow", () => {
       messages: {
         queue: {
           byChannel: {
-            discord: "steer",
+            discord: "followup",
           },
         },
       },
