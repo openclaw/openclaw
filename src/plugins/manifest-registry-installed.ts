@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
@@ -14,6 +16,104 @@ import {
   type PackageManifest,
 } from "./manifest.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+
+// ---------------------------------------------------------------------------
+// Bounded LRU memoization cache
+// ---------------------------------------------------------------------------
+
+const MANIFEST_REGISTRY_INSTALLED_CACHE_MAX_ENTRIES = 16;
+
+type ManifestRegistryCacheEntry = {
+  registry: PluginManifestRegistry;
+  /** mtime (ms) of the persisted installs.json at the time the entry was built; null if the file was absent. */
+  indexMtimeMs: number | null;
+  /** env used to locate the persisted index path, so we can re-stat the same file on hit. */
+  env: NodeJS.ProcessEnv;
+};
+
+/**
+ * Module-level LRU cache.  Map insertion order == LRU order: oldest (least
+ * recently used) entry is the first key returned by `map.keys()`.
+ */
+const manifestRegistryInstalledCache = new Map<string, ManifestRegistryCacheEntry>();
+
+function buildManifestRegistryCacheKey(params: {
+  index: InstalledPluginIndex;
+  env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  pluginIds?: readonly string[] | null;
+  includeDisabled?: boolean;
+}): string {
+  const sortedPluginIds = params.pluginIds?.length ? [...params.pluginIds].toSorted() : null;
+  // Use the full index fingerprint (includes per-manifest safeFileSignature/mtime)
+  // rather than just policyHash so that manifest file edits invalidate the key.
+  // resolveInstalledManifestRegistryIndexFingerprint does O(n) statSync calls,
+  // which is far cheaper than the O(n) readFileSync+JSON.parse calls we're caching.
+  const indexFingerprint = resolveInstalledManifestRegistryIndexFingerprint(params.index);
+  return hashJson({
+    indexFingerprint,
+    includeDisabled: params.includeDisabled ?? false,
+    pluginIds: sortedPluginIds,
+    workspaceDir: params.workspaceDir ?? "",
+    hostContractVersion: resolveCompatibilityHostVersion(params.env),
+  });
+}
+
+function resolveIndexStoreMtimeMs(env: NodeJS.ProcessEnv): number | null {
+  try {
+    const indexPath = resolveInstalledPluginIndexStorePath({ env });
+    return fs.statSync(indexPath).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+function getCachedManifestRegistry(key: string): ManifestRegistryCacheEntry | undefined {
+  const entry = manifestRegistryInstalledCache.get(key);
+  if (!entry) {
+    return undefined;
+  }
+  // Defensive secondary: if installs.json is newer than when we cached, evict.
+  const currentMtimeMs = resolveIndexStoreMtimeMs(entry.env);
+  if (
+    currentMtimeMs !== null &&
+    (entry.indexMtimeMs === null || currentMtimeMs > entry.indexMtimeMs)
+  ) {
+    manifestRegistryInstalledCache.delete(key);
+    return undefined;
+  }
+  // Refresh LRU position (move to end).
+  manifestRegistryInstalledCache.delete(key);
+  manifestRegistryInstalledCache.set(key, entry);
+  return entry;
+}
+
+function setCachedManifestRegistry(key: string, entry: ManifestRegistryCacheEntry): void {
+  if (
+    manifestRegistryInstalledCache.size >= MANIFEST_REGISTRY_INSTALLED_CACHE_MAX_ENTRIES &&
+    !manifestRegistryInstalledCache.has(key)
+  ) {
+    // Evict least-recently-used (first entry in insertion-order Map).
+    const oldestKey = manifestRegistryInstalledCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      manifestRegistryInstalledCache.delete(oldestKey);
+    }
+  }
+  // Delete first so the re-set moves the key to the end (latest position).
+  manifestRegistryInstalledCache.delete(key);
+  manifestRegistryInstalledCache.set(key, entry);
+}
+
+/**
+ * Clears the entire manifest-registry-installed LRU cache.
+ *
+ * Called by `clearCurrentPluginMetadataSnapshotState()` co-callers in
+ * `installed-plugin-index-store.ts` whenever the persisted index is written,
+ * ensuring stale entries are never served after an install/refresh.
+ */
+export function clearManifestRegistryInstalledCache(): void {
+  manifestRegistryInstalledCache.clear();
+}
 
 function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | undefined {
   if (!record.packageJson?.path) {
@@ -164,13 +264,47 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
   includeDisabled?: boolean;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRegistry {
+  // Short-circuit: empty pluginIds is always an empty registry — no need to cache.
+  if (params.pluginIds && params.pluginIds.length === 0) {
+    return { plugins: [], diagnostics: [] };
+  }
+
+  const env = params.env ?? process.env;
+
+  // Bypass cache when a bundledChannelConfigCollector is supplied (stateful
+  // collector; result must not be shared across callers).
+  if (!params.bundledChannelConfigCollector) {
+    const cacheKey = buildManifestRegistryCacheKey({
+      index: params.index,
+      env,
+      workspaceDir: params.workspaceDir,
+      pluginIds: params.pluginIds ?? null,
+      includeDisabled: params.includeDisabled,
+    });
+    const hit = getCachedManifestRegistry(cacheKey);
+    if (hit) {
+      return hit.registry;
+    }
+
+    const registry = buildManifestRegistry(params, env);
+    setCachedManifestRegistry(cacheKey, {
+      registry,
+      indexMtimeMs: resolveIndexStoreMtimeMs(env),
+      env,
+    });
+    return registry;
+  }
+
+  return buildManifestRegistry(params, env);
+}
+
+function buildManifestRegistry(
+  params: Parameters<typeof loadPluginManifestRegistryForInstalledIndex>[0],
+  env: NodeJS.ProcessEnv,
+): PluginManifestRegistry {
   return tracePluginLifecyclePhase(
     "manifest registry",
     () => {
-      if (params.pluginIds && params.pluginIds.length === 0) {
-        return { plugins: [], diagnostics: [] };
-      }
-      const env = params.env ?? process.env;
       const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
       const diagnostics = pluginIdSet
         ? params.index.diagnostics.filter((diagnostic) => {

@@ -6,13 +6,17 @@ import {
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import {
+  clearManifestRegistryInstalledCache,
+  loadPluginManifestRegistryForInstalledIndex,
+} from "./manifest-registry-installed.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
+  clearManifestRegistryInstalledCache();
 });
 
 function makeTempDir() {
@@ -93,6 +97,8 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     writePlugin(rootDir, "installed", "updated-installed-");
     const nextMtime = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, nextMtime, nextMtime);
+    // Simulate the install flow that always clears the manifest-registry cache.
+    clearManifestRegistryInstalledCache();
 
     const second = loadPluginManifestRegistryForInstalledIndex({
       index,
