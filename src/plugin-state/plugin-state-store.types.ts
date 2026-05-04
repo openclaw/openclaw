@@ -19,6 +19,7 @@ export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
   defaultTtlMs?: number;
+  maxPluginEntries?: number;
 };
 
 export type PluginStateStoreErrorCode =

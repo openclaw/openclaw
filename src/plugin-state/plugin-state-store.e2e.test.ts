@@ -11,7 +11,7 @@ import {
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
 import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
-import { MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN } from "./plugin-state-store.sqlite.js";
+import { DEFAULT_MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN } from "./plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 afterEach(() => {
@@ -196,12 +196,12 @@ describe("limits", () => {
 
   it("enforces the per-plugin live-row cap", async () => {
     await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
-      // Spread MAX_ENTRIES_PER_PLUGIN rows across several namespaces so
-      // namespace eviction never fires (each namespace has generous room).
+      // Spread the default plugin cap across several namespaces so namespace
+      // eviction never fires (each namespace has generous room).
       const nsCount = 10;
-      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
+      const perNs = DEFAULT_MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
       seedPluginStateEntriesForTests(
-        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
+        Array.from({ length: DEFAULT_MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
           const ns = Math.floor(index / perNs);
           const k = index % perNs;
           return {

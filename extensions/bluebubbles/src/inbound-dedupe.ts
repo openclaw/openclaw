@@ -5,6 +5,7 @@ import { type ClaimableDedupe, createClaimableDedupe } from "openclaw/plugin-sdk
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
+import { tryGetBlueBubblesRuntime } from "./runtime.js";
 
 // BlueBubbles has no sequence/ack in its webhook protocol, and its
 // MessagePoller replays its ~1-week lookback window as `new-message` events
@@ -17,6 +18,8 @@ import type { NormalizedWebhookMessage } from "./monitor-normalize.js";
 const DEDUP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const MEMORY_MAX_SIZE = 5_000;
 const FILE_MAX_ENTRIES = 50_000;
+const SQLITE_NAMESPACE_PREFIX = "inbound-dedupe";
+const SQLITE_CLAIM_LEASE_MS = 30 * 60 * 1_000;
 // Cap GUID length so a malformed or hostile payload can't bloat the on-disk
 // dedupe file. Real BB GUIDs are short (<64 chars); 512 is generous.
 const MAX_GUID_CHARS = 512;
@@ -100,7 +103,88 @@ function buildMemoryOnlyImpl(): ClaimableDedupe {
   });
 }
 
+type BlueBubblesSqliteDedupeRecord = {
+  status: "claimed" | "committed";
+  at: number;
+};
+
+type BlueBubblesSqliteDedupeStore = {
+  register(
+    key: string,
+    value: BlueBubblesSqliteDedupeRecord,
+    opts?: { ttlMs?: number },
+  ): Promise<void>;
+  registerIfAbsent(
+    key: string,
+    value: BlueBubblesSqliteDedupeRecord,
+    opts?: { ttlMs?: number },
+  ): Promise<boolean>;
+  lookup(key: string): Promise<BlueBubblesSqliteDedupeRecord | undefined>;
+  delete(key: string): Promise<boolean>;
+};
+
+const sqliteInflightClaims = new Set<string>();
+const sqliteStores = new Map<string, BlueBubblesSqliteDedupeStore>();
 let impl: ClaimableDedupe = buildPersistentImpl();
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object");
+}
+
+function isExperimentalPersistentStateEnabled(): boolean {
+  const runtime = tryGetBlueBubblesRuntime();
+  if (!runtime) {
+    return false;
+  }
+  const cfg = runtime.config.current() as unknown;
+  if (!isRecord(cfg)) {
+    return false;
+  }
+  const plugins = cfg.plugins;
+  if (!isRecord(plugins)) {
+    return false;
+  }
+  const entries = plugins.entries;
+  if (!isRecord(entries)) {
+    return false;
+  }
+  const entry = entries.bluebubbles;
+  if (!isRecord(entry)) {
+    return false;
+  }
+  const pluginConfig = entry.config;
+  return isRecord(pluginConfig) && pluginConfig.experimentalPersistentState === true;
+}
+
+function resolveSqliteNamespace(accountId: string): string {
+  const safePrefix = accountId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 48) || "account";
+  const hash = createHash("sha256").update(accountId, "utf8").digest("hex").slice(0, 12);
+  return `${SQLITE_NAMESPACE_PREFIX}.${safePrefix}_${hash}`;
+}
+
+function getSqliteStore(accountId: string): BlueBubblesSqliteDedupeStore {
+  const namespace = resolveSqliteNamespace(accountId);
+  const existing = sqliteStores.get(namespace);
+  if (existing) {
+    return existing;
+  }
+  const runtime = tryGetBlueBubblesRuntime();
+  if (!runtime) {
+    throw new Error("BlueBubbles runtime not initialized");
+  }
+  const store = runtime.state.openKeyedStore<BlueBubblesSqliteDedupeRecord>({
+    namespace,
+    maxEntries: FILE_MAX_ENTRIES,
+    maxPluginEntries: FILE_MAX_ENTRIES,
+    defaultTtlMs: DEDUP_TTL_MS,
+  });
+  sqliteStores.set(namespace, store);
+  return store;
+}
+
+function resolveSqliteScopedClaimKey(accountId: string, guid: string): string {
+  return `${accountId}\0${guid}`;
+}
 
 function sanitizeGuid(guid: string | undefined | null): string | null {
   const trimmed = guid?.trim();
@@ -186,6 +270,14 @@ export async function claimBlueBubblesInboundMessage(params: {
   if (!normalized) {
     return { kind: "skip" };
   }
+  if (isExperimentalPersistentStateEnabled()) {
+    return claimBlueBubblesSqliteInboundMessage({
+      guid: normalized,
+      accountId: params.accountId,
+      onDiskError: params.onDiskError,
+    });
+  }
+
   const claim = await impl.claim(normalized, {
     namespace: params.accountId,
     onDiskError: params.onDiskError,
@@ -206,6 +298,88 @@ export async function claimBlueBubblesInboundMessage(params: {
     },
     release: () => {
       impl.release(normalized, { namespace: params.accountId });
+    },
+  };
+}
+
+async function claimBlueBubblesSqliteInboundMessage(params: {
+  guid: string;
+  accountId: string;
+  onDiskError?: (error: unknown) => void;
+}): Promise<InboundDedupeClaim> {
+  const scopedClaimKey = resolveSqliteScopedClaimKey(params.accountId, params.guid);
+  if (sqliteInflightClaims.has(scopedClaimKey)) {
+    return { kind: "inflight" };
+  }
+  sqliteInflightClaims.add(scopedClaimKey);
+  try {
+    const store = getSqliteStore(params.accountId);
+    const inserted = await store.registerIfAbsent(
+      params.guid,
+      { status: "claimed", at: Date.now() },
+      { ttlMs: SQLITE_CLAIM_LEASE_MS },
+    );
+    if (!inserted) {
+      sqliteInflightClaims.delete(scopedClaimKey);
+      const existing = await store.lookup(params.guid);
+      return existing?.status === "claimed" ? { kind: "inflight" } : { kind: "duplicate" };
+    }
+    return {
+      kind: "claimed",
+      finalize: async () => {
+        try {
+          await store.register(
+            params.guid,
+            { status: "committed", at: Date.now() },
+            { ttlMs: DEDUP_TTL_MS },
+          );
+        } catch (error) {
+          params.onDiskError?.(error);
+        } finally {
+          sqliteInflightClaims.delete(scopedClaimKey);
+        }
+      },
+      release: () => {
+        sqliteInflightClaims.delete(scopedClaimKey);
+        void store.delete(params.guid).catch(params.onDiskError);
+      },
+    };
+  } catch (error) {
+    sqliteInflightClaims.delete(scopedClaimKey);
+    params.onDiskError?.(error);
+    return claimBlueBubblesFileBackedInboundMessage({
+      guid: params.guid,
+      accountId: params.accountId,
+      onDiskError: params.onDiskError,
+    });
+  }
+}
+
+async function claimBlueBubblesFileBackedInboundMessage(params: {
+  guid: string;
+  accountId: string;
+  onDiskError?: (error: unknown) => void;
+}): Promise<InboundDedupeClaim> {
+  const claim = await impl.claim(params.guid, {
+    namespace: params.accountId,
+    onDiskError: params.onDiskError,
+  });
+  if (claim.kind === "duplicate") {
+    return { kind: "duplicate" };
+  }
+  if (claim.kind === "inflight") {
+    return { kind: "inflight" };
+  }
+  return {
+    kind: "claimed",
+    finalize: async () => {
+      await impl.commit(params.guid, {
+        namespace: params.accountId,
+        onDiskError: params.onDiskError,
+      });
+    },
+    release: () => {
+      impl.release(params.guid, { namespace: params.accountId });
     },
   };
 }
@@ -232,6 +406,19 @@ export async function commitBlueBubblesCoalescedMessageIds(params: {
     if (!normalized) {
       continue;
     }
+    if (isExperimentalPersistentStateEnabled()) {
+      try {
+        const store = getSqliteStore(params.accountId);
+        await store.registerIfAbsent(
+          normalized,
+          { status: "committed", at: Date.now() },
+          { ttlMs: DEDUP_TTL_MS },
+        );
+        continue;
+      } catch (error) {
+        params.onDiskError?.(error);
+      }
+    }
     await impl.commit(normalized, {
       namespace: params.accountId,
       onDiskError: params.onDiskError,
@@ -246,6 +433,10 @@ export async function commitBlueBubblesCoalescedMessageIds(params: {
  * file-naming convention changed between versions.
  */
 export async function warmupBlueBubblesInboundDedupe(accountId: string): Promise<void> {
+  if (isExperimentalPersistentStateEnabled()) {
+    getSqliteStore(accountId);
+    return;
+  }
   // Trigger the migration side-effect inside resolveNamespaceFilePath.
   resolveNamespaceFilePath(accountId);
   await impl.warmup(accountId);
@@ -258,4 +449,6 @@ export async function warmupBlueBubblesInboundDedupe(accountId: string): Promise
  */
 export function _resetBlueBubblesInboundDedupForTest(): void {
   impl = buildMemoryOnlyImpl();
+  sqliteInflightClaims.clear();
+  sqliteStores.clear();
 }

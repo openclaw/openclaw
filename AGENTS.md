@@ -75,6 +75,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - PR create: description/body always required. Include concise Summary + Verification sections; mention issue/PR refs, behavior changed, and exact local/Testbox/CI proof. Never open an empty-description, empty-body, or placeholder-body PR.
 - PR execution artifacts/screenshots: attach them to the PR, comment, or an external artifact store. Do not add `.github/pr-assets` or other PR-only assets to the repo.
 - PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
+- After responding to PR feedback with a pushed commit, comment `/clawsweeper re-review` on that PR.
 - When working on an issue or PR, always end the user-facing final answer with the full GitHub URL.
 - CI polling: exact SHA, needed fields only. Example: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
 - Full Release Validation exact-SHA proof: use `pnpm ci:full-release --sha <sha>`; do not dispatch `--ref main -f ref=<sha>` on moving `main`. GitHub dispatch refs cannot be raw SHAs, so the helper uses a temporary pinned branch and verifies child `headSha`.

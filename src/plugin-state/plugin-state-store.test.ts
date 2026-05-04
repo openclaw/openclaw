@@ -335,6 +335,27 @@ describe("plugin state keyed store", () => {
     });
   });
 
+  it("allows a bounded per-plugin live row ceiling increase", async () => {
+    await withOpenClawTestState({ label: "plugin-state-plugin-limit-override" }, async () => {
+      seedPluginStateEntriesForTests([
+        ...Array.from({ length: 1_000 }, (_, entryIndex) => ({
+          pluginId: "bluebubbles",
+          namespace: "dedupe",
+          key: `k-${entryIndex}`,
+          value: { entryIndex },
+        })),
+      ]);
+
+      const store = createPluginStateKeyedStore("bluebubbles", {
+        namespace: "dedupe",
+        maxEntries: 1_001,
+        maxPluginEntries: 1_001,
+      });
+      await expect(store.registerIfAbsent("overflow", { overflow: true })).resolves.toBe(true);
+      await expect(store.lookup("overflow")).resolves.toEqual({ overflow: true });
+    });
+  });
+
   it("segregates plugins sharing a namespace and key", async () => {
     await withOpenClawTestState({ label: "plugin-state-segregation" }, async () => {
       const discord = createPluginStateKeyedStore("discord", { namespace: "same", maxEntries: 10 });
@@ -358,6 +379,20 @@ describe("plugin state keyed store", () => {
       ).toThrow(PluginStateStoreError);
       expect(() =>
         createPluginStateKeyedStore("discord", { namespace: "bad-max", maxEntries: 0 }),
+      ).toThrow(PluginStateStoreError);
+      expect(() =>
+        createPluginStateKeyedStore("discord", {
+          namespace: "bad-plugin-max",
+          maxEntries: 10,
+          maxPluginEntries: 9,
+        }),
+      ).toThrow(PluginStateStoreError);
+      expect(() =>
+        createPluginStateKeyedStore("discord", {
+          namespace: "too-large-plugin-max",
+          maxEntries: 10,
+          maxPluginEntries: 50_001,
+        }),
       ).toThrow(PluginStateStoreError);
 
       const store = createPluginStateKeyedStore("discord", { namespace: "valid", maxEntries: 10 });

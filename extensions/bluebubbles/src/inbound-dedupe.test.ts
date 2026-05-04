@@ -1,10 +1,98 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetBlueBubblesInboundDedupForTest,
   claimBlueBubblesInboundMessage,
   commitBlueBubblesCoalescedMessageIds,
   resolveBlueBubblesInboundDedupeKey,
 } from "./inbound-dedupe.js";
+import type { PluginRuntime } from "./runtime-api.js";
+import { clearBlueBubblesRuntime, setBlueBubblesRuntime } from "./runtime.js";
+
+const SQLITE_CLAIM_LEASE_MS = 30 * 60 * 1_000;
+
+type RuntimeStateRecord = { status: "claimed" | "committed"; at: number };
+
+type RuntimeStateEntry = {
+  value: RuntimeStateRecord;
+  expiresAt?: number;
+};
+
+type RuntimeStateStore = {
+  register: (key: string, value: RuntimeStateRecord, opts?: { ttlMs?: number }) => Promise<void>;
+  registerIfAbsent: (
+    key: string,
+    value: RuntimeStateRecord,
+    opts?: { ttlMs?: number },
+  ) => Promise<boolean>;
+  lookup: (key: string) => Promise<RuntimeStateRecord | undefined>;
+  delete: (key: string) => Promise<boolean>;
+  entries: () => Promise<unknown[]>;
+  clear: () => Promise<void>;
+};
+
+function createMemoryRuntimeStateStore(): RuntimeStateStore {
+  const entries = new Map<string, RuntimeStateEntry>();
+
+  function isExpired(entry: RuntimeStateEntry | undefined): boolean {
+    return entry?.expiresAt != null && entry.expiresAt <= Date.now();
+  }
+
+  function pruneExpired(key: string): void {
+    if (isExpired(entries.get(key))) {
+      entries.delete(key);
+    }
+  }
+
+  function buildEntry(value: RuntimeStateRecord, opts?: { ttlMs?: number }): RuntimeStateEntry {
+    return { value, ...(opts?.ttlMs != null ? { expiresAt: Date.now() + opts.ttlMs } : {}) };
+  }
+
+  return {
+    async register(key, value, opts) {
+      entries.set(key, buildEntry(value, opts));
+    },
+    async registerIfAbsent(key, value, opts) {
+      pruneExpired(key);
+      if (entries.has(key)) {
+        return false;
+      }
+      entries.set(key, buildEntry(value, opts));
+      return true;
+    },
+    async lookup(key) {
+      pruneExpired(key);
+      return entries.get(key)?.value;
+    },
+    async delete(key) {
+      return entries.delete(key);
+    },
+    async entries() {
+      return [...entries.entries()];
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+}
+
+function installRuntimeStateStub(enabled: boolean, store = createMemoryRuntimeStateStore()) {
+  const openKeyedStore = vi.fn(() => store);
+  setBlueBubblesRuntime({
+    config: {
+      current: () => ({
+        plugins: {
+          entries: {
+            bluebubbles: {
+              config: { experimentalPersistentState: enabled },
+            },
+          },
+        },
+      }),
+    },
+    state: { openKeyedStore },
+  } as unknown as PluginRuntime);
+  return { openKeyedStore, store };
+}
 
 async function claimAndFinalize(guid: string | undefined, accountId: string): Promise<string> {
   const claim = await claimBlueBubblesInboundMessage({ guid, accountId });
@@ -14,14 +102,104 @@ async function claimAndFinalize(guid: string | undefined, accountId: string): Pr
   return claim.kind;
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("claimBlueBubblesInboundMessage", () => {
   beforeEach(() => {
+    clearBlueBubblesRuntime();
     _resetBlueBubblesInboundDedupForTest();
   });
 
   it("claims a new guid and rejects committed duplicates", async () => {
     expect(await claimAndFinalize("g1", "acc")).toBe("claimed");
     expect(await claimAndFinalize("g1", "acc")).toBe("duplicate");
+  });
+
+  it("keeps file-backed dedupe as the default when persistent state is not opted in", async () => {
+    const { openKeyedStore } = installRuntimeStateStub(false);
+
+    expect(await claimAndFinalize("g-default", "acc")).toBe("claimed");
+    expect(await claimAndFinalize("g-default", "acc")).toBe("duplicate");
+    expect(openKeyedStore).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime state registerIfAbsent when persistent state is opted in", async () => {
+    const { openKeyedStore, store } = installRuntimeStateStub(true);
+    const registerIfAbsent = vi.spyOn(store, "registerIfAbsent");
+
+    const first = await claimBlueBubblesInboundMessage({ guid: "g-sqlite", accountId: "acc" });
+    expect(first.kind).toBe("claimed");
+    const second = await claimBlueBubblesInboundMessage({ guid: "g-sqlite", accountId: "acc" });
+    expect(second.kind).toBe("inflight");
+    if (first.kind === "claimed") {
+      await first.finalize();
+    }
+
+    expect(
+      (await claimBlueBubblesInboundMessage({ guid: "g-sqlite", accountId: "acc" })).kind,
+    ).toBe("duplicate");
+    expect(openKeyedStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        namespace: expect.stringMatching(/^inbound-dedupe\./),
+        maxEntries: 50_000,
+        maxPluginEntries: 50_000,
+      }),
+    );
+    expect(registerIfAbsent).toHaveBeenCalledWith(
+      "g-sqlite",
+      expect.objectContaining({ status: "claimed" }),
+      { ttlMs: SQLITE_CLAIM_LEASE_MS },
+    );
+  });
+
+  it("reports a fresh opted-in runtime state claim as inflight", async () => {
+    const { store } = installRuntimeStateStub(true);
+    await store.register(
+      "g-fresh-claim",
+      { status: "claimed", at: Date.now() },
+      { ttlMs: SQLITE_CLAIM_LEASE_MS },
+    );
+
+    expect(
+      (await claimBlueBubblesInboundMessage({ guid: "g-fresh-claim", accountId: "acc" })).kind,
+    ).toBe("inflight");
+  });
+
+  it("reclaims expired opted-in runtime state claims after a simulated crash", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { store } = installRuntimeStateStub(true);
+
+    const first = await claimBlueBubblesInboundMessage({ guid: "g-stale-claim", accountId: "acc" });
+    expect(first.kind).toBe("claimed");
+
+    _resetBlueBubblesInboundDedupForTest();
+    vi.setSystemTime(1_000 + SQLITE_CLAIM_LEASE_MS + 1);
+
+    const replay = await claimBlueBubblesInboundMessage({
+      guid: "g-stale-claim",
+      accountId: "acc",
+    });
+    expect(replay.kind).toBe("claimed");
+    if (replay.kind === "claimed") {
+      await replay.finalize();
+    }
+    await expect(store.lookup("g-stale-claim")).resolves.toMatchObject({ status: "committed" });
+  });
+
+  it("releases opted-in runtime state claims so later replays can retry", async () => {
+    installRuntimeStateStub(true);
+
+    const first = await claimBlueBubblesInboundMessage({ guid: "g-release", accountId: "acc" });
+    expect(first.kind).toBe("claimed");
+    if (first.kind === "claimed") {
+      first.release();
+    }
+    expect(
+      (await claimBlueBubblesInboundMessage({ guid: "g-release", accountId: "acc" })).kind,
+    ).toBe("claimed");
   });
 
   it("scopes dedupe per account", async () => {
@@ -61,6 +239,7 @@ describe("claimBlueBubblesInboundMessage", () => {
 
 describe("commitBlueBubblesCoalescedMessageIds", () => {
   beforeEach(() => {
+    clearBlueBubblesRuntime();
     _resetBlueBubblesInboundDedupForTest();
   });
 

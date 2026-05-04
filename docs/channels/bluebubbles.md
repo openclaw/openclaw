@@ -576,6 +576,24 @@ Full configuration: [Configuration](/gateway/configuration)
     - `channels.bluebubbles.replyContextApiFallback`: When an inbound reply lands without `replyToBody`/`replyToSender` and the in-memory reply-context cache misses, fetch the original message from the BlueBubbles HTTP API as a best-effort fallback (default: `false`). Useful for multi-instance deployments sharing one BlueBubbles account, after process restarts, or after long-lived TTL/LRU cache eviction. The fetch is SSRF-guarded by the same policy as every other BlueBubbles client request, never throws, and populates the cache so subsequent replies amortize. Per-account override: `channels.bluebubbles.accounts.<accountId>.replyContextApiFallback`. A channel-level setting propagates to accounts that omit the flag.
 
   </Accordion>
+  <Accordion title="Experimental plugin state">
+    - `plugins.entries.bluebubbles.config.experimentalPersistentState`: Opt in to the experimental SQLite-backed plugin runtime state store for inbound webhook dedupe. Default: `false` (the existing file-backed dedupe remains the safe default). When enabled, BlueBubbles uses an atomic durable claim for each inbound GUID, keeps the same 7-day TTL, and requests a 50,000-row plugin-state capacity so high-volume replay dedupe is not reduced by the runtime state's default 1,000-row cap.
+
+    ```json5
+    {
+      plugins: {
+        entries: {
+          bluebubbles: {
+            config: {
+              experimentalPersistentState: true,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+  </Accordion>
   <Accordion title="Actions and accounts">
     - `channels.bluebubbles.actions`: Enable/disable specific actions.
     - `channels.bluebubbles.accounts`: Multi-account configuration.

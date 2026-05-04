@@ -16,6 +16,10 @@ export function getBlueBubblesRuntime(): PluginRuntime {
   return runtimeStore.getRuntime();
 }
 
+export function tryGetBlueBubblesRuntime(): PluginRuntime | null {
+  return runtimeStore.tryGetRuntime();
+}
+
 export function warnBlueBubbles(message: string): void {
   const formatted = `[bluebubbles] ${message}`;
   // Backward-compatible with tests/legacy injections that pass { log }.
