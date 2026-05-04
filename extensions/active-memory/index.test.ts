@@ -2753,6 +2753,33 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("skips colon-containing session-store channels for embedded recall (#77396)", async () => {
+    hoisted.sessionStore["agent:main:qqbot:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      channel: "c2c:10D4F7C2",
+      origin: {
+        provider: "qqbot",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? scoped stored channel", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:qqbot:direct:12345",
+        messageProvider: "qqbot",
+        channelId: "qqbot",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "qqbot",
+      messageProvider: "qqbot",
+    });
+  });
+
   it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",

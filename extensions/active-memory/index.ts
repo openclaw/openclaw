@@ -560,9 +560,17 @@ function resolveRecallRunChannelContext(params: {
       store,
       sessionKey: resolvedSessionKey,
     }).existing;
-    const strongEntryChannel =
+    const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
+    // Channel IDs containing ":" are scoped conversation IDs (e.g. QQ c2c
+    // "c2c:10D4F7C2..."), not runnable channel names. The same guard that
+    // applies to explicit channelId (#76704) must also apply to channels
+    // read from the session store (#77396).
+    const strongEntryChannel =
+      rawStrongEntryChannel && !rawStrongEntryChannel.includes(":")
+        ? rawStrongEntryChannel
+        : undefined;
     const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
     return resolveReturnValue({
       resolvedChannel: strongEntryChannel ?? weakEntryChannel,
