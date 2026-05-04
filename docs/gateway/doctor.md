@@ -169,7 +169,9 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses
     wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools
     from plugins that actually load; it does not bypass the exclusive plugin
-    allowlist.
+    allowlist. Doctor writes `plugins.bundledDiscovery: "compat"` for migrated
+    legacy allowlist configs to preserve existing bundled provider behavior, and
+    then points to the stricter `"allowlist"` setting.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
