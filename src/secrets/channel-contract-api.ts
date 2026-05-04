@@ -87,16 +87,21 @@ function orderedContractApiExtensions(): readonly string[] {
 }
 
 function resolvePluginContractApiPath(rootDir: string): string | null {
-  for (const extension of orderedContractApiExtensions()) {
-    const candidate = path.join(rootDir, `secret-contract-api${extension}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  const searchDirs = [rootDir, path.join(rootDir, "dist")];
+  for (const dir of searchDirs) {
+    for (const extension of orderedContractApiExtensions()) {
+      const candidate = path.join(dir, `secret-contract-api${extension}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
-  for (const extension of orderedContractApiExtensions()) {
-    const candidate = path.join(rootDir, `contract-api${extension}`);
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  for (const dir of searchDirs) {
+    for (const extension of orderedContractApiExtensions()) {
+      const candidate = path.join(dir, `contract-api${extension}`);
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
     }
   }
   return null;
