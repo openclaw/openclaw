@@ -81,6 +81,7 @@ Docs: https://docs.openclaw.ai
 - QA/Slack: fail the live mention-gating scenario on any unexpected SUT reply, even when the reply does not echo the expected marker. Thanks @vincentkoc.
 - QA/Matrix: steer the live tool-progress preview check away from `HEARTBEAT.md` and report final preview candidates when the live marker reply misses the exact token. Thanks @vincentkoc.
 - QA/Matrix: let the live tool-progress preview and error checks verify progress replacement events without depending on the preview saying `Working`, `tool: read`, an unlabelled/pathless `read from`, or the original draft root being observed. Thanks @vincentkoc.
+- QA/Matrix: keep the target=both approval scenario focused on channel and DM metadata delivery by resolving the accepted approval through the gateway after both Matrix events are observed. Thanks @vincentkoc.
 - QA/Matrix: wait for live approval reactions to echo before starting the threaded approval decision timeout. Thanks @vincentkoc.
 - QA/Matrix: reuse the primed driver sync stream when confirming approval reaction echoes, avoiding missed self-reactions in live release runs. Thanks @vincentkoc.
 - Tlon: expose `groupInviteAllowlist` in the channel config schema and clarify that group invite auto-accept fails closed without an invite allowlist. Thanks @vincentkoc.
