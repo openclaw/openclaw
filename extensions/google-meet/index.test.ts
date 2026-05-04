@@ -417,6 +417,29 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it("keeps realtime.provider as the transcription compatibility fallback", () => {
+    expect(
+      resolveGoogleMeetConfig({
+        realtime: {
+          provider: "custom-stt",
+        },
+      }).realtime,
+    ).toMatchObject({
+      provider: "custom-stt",
+      transcriptionProvider: "custom-stt",
+    });
+    expect(
+      resolveGoogleMeetConfig({
+        realtime: {
+          provider: "google",
+        },
+      }).realtime,
+    ).toMatchObject({
+      provider: "google",
+      transcriptionProvider: "openai",
+    });
+  });
+
   it("uses voiceProvider for bidi and transcriptionProvider for agent mode resolution", () => {
     const voiceProviders: RealtimeVoiceProviderPlugin[] = [
       {

@@ -443,6 +443,8 @@ export function resolveGoogleMeetConfigWithEnv(
   const twilio = asRecord(raw.twilio);
   const voiceCall = asRecord(raw.voiceCall);
   const realtime = asRecord(raw.realtime);
+  const realtimeProvider = normalizeOptionalString(realtime.provider);
+  const resolvedRealtimeProvider = realtimeProvider ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.provider;
   const oauth = asRecord(raw.oauth);
   const auth = asRecord(raw.auth);
 
@@ -537,11 +539,12 @@ export function resolveGoogleMeetConfigWithEnv(
         realtime.strategy,
         DEFAULT_GOOGLE_MEET_CONFIG.realtime.strategy,
       ),
-      provider:
-        normalizeOptionalString(realtime.provider) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.provider,
+      provider: resolvedRealtimeProvider,
       transcriptionProvider:
         normalizeOptionalString(realtime.transcriptionProvider) ??
-        DEFAULT_GOOGLE_MEET_CONFIG.realtime.transcriptionProvider,
+        (realtimeProvider && realtimeProvider !== "google"
+          ? resolvedRealtimeProvider
+          : DEFAULT_GOOGLE_MEET_CONFIG.realtime.transcriptionProvider),
       voiceProvider: normalizeOptionalString(realtime.voiceProvider),
       model: normalizeOptionalString(realtime.model) ?? DEFAULT_GOOGLE_MEET_CONFIG.realtime.model,
       instructions:
