@@ -207,6 +207,10 @@ function buildApprovalContext(params: {
     params.method === "item/permissions/requestApproval"
       ? describeRequestedPermissions(params.requestParams)
       : [];
+  const commandDetailLines =
+    params.method === "item/commandExecution/requestApproval"
+      ? describeCommandApprovalDetails(params.requestParams)
+      : [];
   const title =
     kind === "exec"
       ? "Codex app-server command approval"
@@ -229,7 +233,11 @@ function buildApprovalContext(params: {
   const description =
     permissionLines.length > 0
       ? joinDescriptionLinesWithinLimit(permissionLines, PERMISSION_DESCRIPTION_MAX_LENGTH)
-      : [subject, params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`]
+      : [
+          subject,
+          ...commandDetailLines,
+          params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`,
+        ]
           .filter(Boolean)
           .join("\n");
   return {
@@ -310,6 +318,35 @@ function unsupportedApprovalResponse(): JsonValue {
 
 function describeRequestedPermissions(requestParams: JsonObject | undefined): string[] {
   const permissions = requestedPermissions(requestParams);
+  return describePermissionProfile(permissions, "Permissions");
+}
+
+function describeCommandApprovalDetails(requestParams: JsonObject | undefined): string[] {
+  const lines: string[] = [];
+  const additionalPermissions = isJsonObject(requestParams?.additionalPermissions)
+    ? requestParams.additionalPermissions
+    : undefined;
+  if (additionalPermissions) {
+    lines.push(...describePermissionProfile(additionalPermissions, "Additional permissions"));
+  }
+  const execpolicySummary = summarizeStringArray(
+    requestParams?.proposedExecpolicyAmendment,
+    "Proposed exec policy",
+    sanitizePermissionScalar,
+  );
+  if (execpolicySummary) {
+    lines.push(execpolicySummary);
+  }
+  const networkAmendmentSummary = summarizeNetworkPolicyAmendments(
+    requestParams?.proposedNetworkPolicyAmendments,
+  );
+  if (networkAmendmentSummary) {
+    lines.push(networkAmendmentSummary);
+  }
+  return lines;
+}
+
+function describePermissionProfile(permissions: JsonObject, label: string): string[] {
   const lines: string[] = [];
   const kinds: string[] = [];
   const risks = new Set<string>();
@@ -320,7 +357,7 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
     kinds.push("fileSystem");
   }
   if (kinds.length > 0) {
-    lines.push(`Permissions: ${kinds.join(", ")}`);
+    lines.push(`${label}: ${kinds.join(", ")}`);
   }
   let networkSummary: string | undefined;
   if (isJsonObject(permissions.network)) {
@@ -483,6 +520,53 @@ function summarizePermissionArray(
   const remaining = values.length - sampleValues.length;
   const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
   return `${descriptor.label}: ${sampleValues.join(", ")}${remainderSuffix}`;
+}
+
+function summarizeStringArray(
+  value: JsonValue | undefined,
+  label: string,
+  sanitize: (value: string) => string,
+): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => sanitize(entry))
+    .filter(Boolean);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const samples = values.slice(0, PERMISSION_SAMPLE_LIMIT);
+  const remaining = values.length - samples.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
+}
+
+function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const samples: string[] = [];
+  let count = 0;
+  for (const entry of value) {
+    const amendment = isJsonObject(entry) ? entry : undefined;
+    const host = typeof amendment?.host === "string" ? amendment.host : "";
+    const action = typeof amendment?.action === "string" ? amendment.action : "";
+    if (!host || !action) {
+      continue;
+    }
+    count += 1;
+    if (samples.length < PERMISSION_SAMPLE_LIMIT) {
+      samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
+    }
+  }
+  if (count === 0) {
+    return undefined;
+  }
+  const remaining = count - samples.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `Proposed network policy: ${samples.join(", ")}${remainderSuffix}`;
 }
 
 function readStringArray(record: JsonObject, key: string): string[] {

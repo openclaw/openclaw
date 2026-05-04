@@ -118,6 +118,48 @@ describe("Codex app-server approval bridge", () => {
     );
   });
 
+  it("describes command approval permission and policy amendments", async () => {
+    const params = createParams();
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-command-permissions", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-command-permissions",
+        decision: "allow-always",
+      });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-permissions",
+        command: "npm install",
+        additionalPermissions: {
+          network: { enabled: true },
+          fileSystem: {
+            write: ["/"],
+          },
+        },
+        proposedExecpolicyAmendment: ["npm install"],
+        proposedNetworkPolicyAmendments: [{ host: "registry.npmjs.org", action: "allow" }],
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "acceptForSession" });
+    const [, , requestPayload] = mockCallGatewayTool.mock.calls[0] ?? [];
+    const description = (requestPayload as { description: string }).description;
+    expect(description).toContain("Command: npm install");
+    expect(description).toContain("Additional permissions: network, fileSystem");
+    expect(description).toContain("High-risk targets: network access, filesystem root");
+    expect(description).toContain("Network enabled: true");
+    expect(description).toContain("File system write: /");
+    expect(description).toContain("Proposed exec policy: npm install");
+    expect(description).toContain("Proposed network policy: allow registry.npmjs.org");
+  });
+
   it("sanitizes command previews before forwarding approval text and events", async () => {
     const params = createParams();
     mockCallGatewayTool

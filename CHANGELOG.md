@@ -130,7 +130,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: resolve malformed empty `request_user_input` prompts without posting a blank chat prompt or waiting for a user reply. Thanks @vincentkoc.
 - Providers/OpenAI Codex: keep option-only `request_user_input` prompts from accepting arbitrary free-form replies unless the prompt explicitly allows Other. Thanks @vincentkoc.
 - Providers/OpenAI Codex: keep bound conversation turns from resolving with stale same-thread notifications that arrive before the new turn id is known. Thanks @vincentkoc.
-- Providers/OpenAI Codex: show current-protocol network and filesystem permission details in app-server approval prompts before granting them. Thanks @vincentkoc.
+- Providers/OpenAI Codex: show current-protocol network, filesystem, and command policy permission details in app-server approval prompts before granting them. Thanks @vincentkoc.
 - Providers/DeepSeek: expose DeepSeek V4 `xhigh` and `max` thinking levels through the lightweight provider-policy surface, so Control UI `/think` pickers keep showing the max reasoning options when the runtime plugin registry is not active. Fixes #77139. Thanks @bittoby.
 - Release/beta smoke: resolve the dispatched Telegram beta E2E run from `gh run list` when `gh workflow run` returns no run URL, so the maintainer helper does not fail immediately after dispatch. Thanks @vincentkoc.
 - Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.
