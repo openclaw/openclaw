@@ -332,6 +332,23 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.config.plugins?.allow).toBeUndefined();
       expect(result.changes).toEqual([]);
     });
+
+    it("uses plugin manifest id (not built-in channel alias) when plugin id differs from channel id", () => {
+      // Regression: builtInId ('telegram') was incorrectly preferred over
+      // claims[0].plugin.id ('telegram-openclaw-plugin') when no preferOver was declared.
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { telegram: { botToken: "tok" } },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          { id: "telegram-openclaw-plugin", channels: ["telegram"] },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["telegram-openclaw-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.telegram).toBeUndefined();
+    });
   });
 
   describe("preferOver channel prioritization", () => {
