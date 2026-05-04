@@ -30,6 +30,22 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("runs managed proxy runtime mutation guard in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:tmp:managed-proxy-runtime-mutation",
+      command: "pnpm",
+      args: ["run", "lint:tmp:managed-proxy-runtime-mutation"],
+    });
+  });
+
+  it("runs raw socket classification guard in CI", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:tmp:raw-socket-classification",
+      command: "pnpm",
+      args: ["run", "lint:tmp:raw-socket-classification"],
+    });
+  });
+
   it("normalizes concurrency input", () => {
     expect(resolveConcurrency("6")).toBe(6);
     expect(resolveConcurrency("0")).toBe(4);
