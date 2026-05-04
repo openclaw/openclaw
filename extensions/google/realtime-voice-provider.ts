@@ -50,6 +50,11 @@ const MAX_PENDING_AUDIO_CHUNKS = 320;
 const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 500;
 const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
 const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
+const MULAW_LINEAR_SAMPLES = new Int16Array(256);
+
+for (let i = 0; i < MULAW_LINEAR_SAMPLES.length; i += 1) {
+  MULAW_LINEAR_SAMPLES[i] = decodeMulawSample(i);
+}
 
 type GoogleRealtimeSensitivity = "low" | "high";
 type GoogleRealtimeThinkingLevel = "minimal" | "low" | "medium" | "high";
@@ -330,6 +335,8 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
 
 function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {
   const functionDeclarations = buildFunctionDeclarations(config.tools);
+  const realtimeInputConfig = buildRealtimeInputConfig(config);
+  const thinkingConfig = buildThinkingConfig(config);
   return {
     responseModalities: ["AUDIO" as Modality],
     ...(typeof config.temperature === "number" && config.temperature > 0
@@ -344,15 +351,13 @@ function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveCon
     },
     systemInstruction: config.instructions,
     ...(functionDeclarations.length > 0 ? { tools: [{ functionDeclarations }] } : {}),
-    ...(buildRealtimeInputConfig(config)
-      ? { realtimeInputConfig: buildRealtimeInputConfig(config) }
-      : {}),
+    ...(realtimeInputConfig ? { realtimeInputConfig } : {}),
     inputAudioTranscription: {},
     outputAudioTranscription: {},
     ...(typeof config.enableAffectiveDialog === "boolean"
       ? { enableAffectiveDialog: config.enableAffectiveDialog }
       : {}),
-    ...(buildThinkingConfig(config) ? { thinkingConfig: buildThinkingConfig(config) } : {}),
+    ...(thinkingConfig ? { thinkingConfig } : {}),
   };
 }
 
@@ -487,12 +492,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       this.audioStreamEnded = false;
     }
 
-    const pcm = this.toInputPcm(audio);
-    const pcm16k = resamplePcm(
-      pcm,
-      this.audioFormat.sampleRateHz,
-      GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
-    );
+    const pcm16k = this.toGoogleInputPcm16k(audio);
     this.session.sendRealtimeInput({
       audio: {
         data: pcm16k.toString("base64"),
@@ -617,6 +617,21 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     return this.audioFormat.encoding === "pcm16" ? audio : mulawToPcm(audio);
   }
 
+  private toGoogleInputPcm16k(audio: Buffer): Buffer {
+    if (
+      this.audioFormat.encoding === "g711_ulaw" &&
+      this.audioFormat.sampleRateHz === 8_000 &&
+      GOOGLE_REALTIME_INPUT_SAMPLE_RATE === 16_000
+    ) {
+      return convertMulaw8kToPcm16k(audio);
+    }
+    return resamplePcm(
+      this.toInputPcm(audio),
+      this.audioFormat.sampleRateHz,
+      GOOGLE_REALTIME_INPUT_SAMPLE_RATE,
+    );
+  }
+
   private toOutputAudio(pcm: Buffer, sampleRate: number): Buffer {
     return this.audioFormat.encoding === "pcm16"
       ? resamplePcm(pcm, sampleRate, this.audioFormat.sampleRateHz)
@@ -724,6 +739,30 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
       });
     }
   }
+}
+
+function convertMulaw8kToPcm16k(muLaw: Buffer): Buffer {
+  if (muLaw.length === 0) {
+    return Buffer.alloc(0);
+  }
+  const pcm = Buffer.alloc(muLaw.length * 4);
+  for (let i = 0; i < muLaw.length; i += 1) {
+    const current = MULAW_LINEAR_SAMPLES[muLaw[i] ?? 0] ?? 0;
+    const next = MULAW_LINEAR_SAMPLES[muLaw[i + 1] ?? muLaw[i] ?? 0] ?? current;
+    pcm.writeInt16LE(current, i * 4);
+    pcm.writeInt16LE(Math.round((current + next) / 2), i * 4 + 2);
+  }
+  return pcm;
+}
+
+function decodeMulawSample(value: number): number {
+  const muLaw = ~value & 0xff;
+  const sign = muLaw & 0x80;
+  const exponent = (muLaw >> 4) & 0x07;
+  const mantissa = muLaw & 0x0f;
+  let sample = ((mantissa << 3) + 132) << exponent;
+  sample -= 132;
+  return sign ? -sample : sample;
 }
 
 async function createGoogleRealtimeBrowserSession(
