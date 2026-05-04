@@ -52,6 +52,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "mcp__openclaw__*",
         "--resume",
         "{sessionId}",
+        "--fork-session",
       ],
       output: "jsonl",
       liveSession: "claude-stdio",
