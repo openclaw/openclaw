@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Matrix: keep `streaming.progress.toolProgress` scoped to progress draft mode, so partial and quiet Matrix previews do not lose tool progress unless `streaming.preview.toolProgress` is disabled. Thanks @vincentkoc.
 - Channels/streaming: keep `streaming.progress.toolProgress` scoped to progress draft mode, so disabling compact progress lines does not silence partial/block preview tool updates. Thanks @vincentkoc.
 - Plugins/update: treat OpenClaw stable correction versions like `2026.5.3-1` as stable releases for npm installs, plugin updates, and bundled-version comparisons, so `latest` can advance official plugins without prerelease opt-in. Thanks @vincentkoc.
 - Control UI: point the Appearance tweakcn browse action and docs at the live tweakcn editor route instead of the removed `/themes` page. Fixes #77048.
