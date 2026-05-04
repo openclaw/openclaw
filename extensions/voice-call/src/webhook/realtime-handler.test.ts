@@ -629,6 +629,63 @@ describe("RealtimeCallHandler path routing", () => {
 });
 
 describe("RealtimeCallHandler websocket hardening", () => {
+  it("closes realtime streams when paced outbound audio exceeds the internal queue cap", async () => {
+    let sendProviderAudio: ((audio: Buffer) => void) | undefined;
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        sendProviderAudio = request.onAudio;
+        return makeBridge();
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(
+          (): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "CA-backpressure",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          }),
+        ),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-backpressure", callSid: "CA-backpressure" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(sendProviderAudio).toBeDefined();
+        });
+
+        sendProviderAudio?.(Buffer.alloc(8_000 * 121, 0x7f));
+        const closed = await waitForClose(ws);
+
+        expect(closed.code).toBe(1013);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("rejects oversized pre-start frames before bridge setup", async () => {
     const createBridge = vi.fn(() => makeBridge());
     const processEvent = vi.fn();

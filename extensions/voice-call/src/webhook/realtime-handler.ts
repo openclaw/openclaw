@@ -299,7 +299,15 @@ export class RealtimeCallHandler {
       }
       return true;
     };
-    const audioPacer = new RealtimeTwilioAudioPacer({ streamSid, sendJson });
+    const audioPacer = new RealtimeTwilioAudioPacer({
+      streamSid,
+      sendJson,
+      onBackpressure: () => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1013, "Backpressure: paced audio queue exceeded");
+        }
+      },
+    });
     const speechDetector = new RealtimeMulawSpeechStartDetector();
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
