@@ -3,12 +3,11 @@ import path from "node:path";
 import { URL } from "node:url";
 import { minimatch } from "minimatch";
 import { getRuntimeConfig } from "../config/io.js";
+import { type SessionEntry, type SessionRuntimeEnvelope } from "../config/sessions.js";
 import {
-  resolveSessionStoreEntry,
-  type SessionEntry,
-  type SessionRuntimeEnvelope,
-} from "../config/sessions.js";
-import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
+  resolveFreshestSessionEntryFromStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "../gateway/session-utils.js";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
@@ -260,16 +259,8 @@ export function readSessionRuntimeEnvelope(sessionKey?: string): SessionRuntimeE
     if (!storeRead.ok) {
       return storeRead;
     }
-    for (const storeKey of target.storeKeys) {
-      const { existing } = resolveSessionStoreEntry({
-        store: storeRead.store,
-        sessionKey: storeKey,
-      });
-      if (existing?.envelope) {
-        return { ok: true, envelope: existing.envelope };
-      }
-    }
-    return { ok: true };
+    const entry = resolveFreshestSessionEntryFromStoreKeys(storeRead.store, target.storeKeys);
+    return entry?.envelope ? { ok: true, envelope: entry.envelope } : { ok: true };
   } catch (err) {
     return {
       ok: false,

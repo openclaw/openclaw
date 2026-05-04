@@ -54,6 +54,34 @@ describe("session runtime envelope", () => {
     });
   });
 
+  it("uses the freshest matching session entry when reading envelopes", () => {
+    createSessionStore(
+      JSON.stringify({
+        "agent:main:work": {
+          updatedAt: 100,
+          envelope: { allowedTools: ["Read"] },
+        },
+        "agent:main:WORK": {
+          updatedAt: 200,
+        },
+        "agent:main:demo": {
+          updatedAt: 100,
+          envelope: { allowedTools: ["Read"] },
+        },
+        "agent:main:DEMO": {
+          updatedAt: 200,
+          envelope: { disallowedTools: ["Bash"] },
+        },
+      }),
+    );
+
+    expect(readSessionRuntimeEnvelope("agent:main:work")).toEqual({ ok: true });
+    expect(readSessionRuntimeEnvelope("agent:main:demo")).toEqual({
+      ok: true,
+      envelope: { disallowedTools: ["Bash"] },
+    });
+  });
+
   it("reads global envelopes from the configured default agent store", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-envelope-global-"));
     tempDirs.push(tempDir);

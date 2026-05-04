@@ -1,11 +1,24 @@
 import { statSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+
+const envelopeMocks = vi.hoisted(() => ({
+  readSessionRuntimeEnvelope: vi.fn(),
+}));
+
+vi.mock("../session-runtime-envelope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-runtime-envelope.js")>();
+  return {
+    ...actual,
+    readSessionRuntimeEnvelope: envelopeMocks.readSessionRuntimeEnvelope,
+  };
+});
+
 import {
   __testing,
   buildNativeHookRelayCommand,
@@ -13,6 +26,11 @@ import {
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
 } from "./native-hook-relay.js";
+
+beforeEach(() => {
+  envelopeMocks.readSessionRuntimeEnvelope.mockReset();
+  envelopeMocks.readSessionRuntimeEnvelope.mockReturnValue({ ok: true });
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -656,6 +674,41 @@ describe("native hook relay registry", () => {
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses Codex native cwd for relative session envelope path checks", async () => {
+    envelopeMocks.readSessionRuntimeEnvelope.mockReturnValue({
+      ok: true,
+      envelope: { deniedPaths: ["/repo/secrets/**"] },
+    });
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd: "/repo",
+        tool_name: "Read",
+        tool_use_id: "native-call-envelope",
+        tool_input: { path: "secrets/token.txt" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Path blocked by session envelope: /repo/secrets/token.txt",
+      },
+    });
   });
 
   it("maps Codex PostToolUse to OpenClaw after_tool_call observation", async () => {
