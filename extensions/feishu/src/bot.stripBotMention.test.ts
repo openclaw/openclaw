@@ -27,15 +27,17 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
     expect(ctx.content).toBe("hello world");
   });
 
-  it("strips bot mention in p2p (addressing prefix, not semantic content)", () => {
+  it("preserves bot mention in p2p", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 hello", [{ key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } }]),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    // Bot's own <at> tag is now preserved so LLM can see the complete @ context.
+    // Command detection uses normalizeFeishuCommandProbeBody which strips <at> tags anyway.
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("strips bot mention in group so slash commands work (#35994)", () => {
+  it("preserves bot mention in group so LLM sees complete @ context", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 hello",
@@ -44,10 +46,12 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("hello");
+    // Bot's own <at> tag is preserved. Slash commands still work because
+    // normalizeFeishuCommandProbeBody strips all <at> tags before command parsing.
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> hello');
   });
 
-  it("strips bot mention in group preserving slash command prefix (#35994)", () => {
+  it("preserves bot mention in group for slash commands (#35994)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent(
         "@_bot_1 /model",
@@ -56,10 +60,12 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe("/model");
+    // Bot's <at> tag is preserved, but slash command is still detected because
+    // normalizeFeishuCommandProbeBody strips <at> tags before checking for / prefix.
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> /model');
   });
 
-  it("strips bot mention but normalizes other mentions in p2p (mention-forward)", () => {
+  it("preserves bot mention and other mentions in p2p (mention-forward)", () => {
     const ctx = parseFeishuMessageEvent(
       makeEvent("@_bot_1 @_user_alice hello", [
         { key: "@_bot_1", name: "Bot", id: { open_id: "ou_bot" } },
@@ -67,7 +73,8 @@ describe("normalizeMentions (via parseFeishuMessageEvent)", () => {
       ]),
       BOT_OPEN_ID,
     );
-    expect(ctx.content).toBe('<at user_id="ou_alice">Alice</at> hello');
+    // All <at> tags are now preserved (including bot's own).
+    expect(ctx.content).toBe('<at user_id="ou_bot">Bot</at> <at user_id="ou_alice">Alice</at> hello');
   });
 
   it("falls back to @name when open_id is absent", () => {
