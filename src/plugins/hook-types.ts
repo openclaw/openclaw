@@ -299,6 +299,11 @@ export type PluginHookBeforeAgentFinalizeResult = {
    */
   action?: "continue" | "revise" | "finalize";
   reason?: string;
+  retry?: {
+    instruction: string;
+    idempotencyKey?: string;
+    maxAttempts?: number;
+  };
 };
 
 export type PluginHookBeforeCompactionEvent = {
