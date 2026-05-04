@@ -4151,6 +4151,125 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("persists session-export state and reloads it across restarts", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    const stateFile = path.join(exportDir, ".export-state.json");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot: sync should write export markdown AND persist the state cache.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      const firstExport = await fs.readFile(exportFile, "utf-8");
+      expect(firstExport).toContain("hello");
+      const stateRaw = await fs.readFile(stateFile, "utf-8");
+      const stateJson = JSON.parse(stateRaw) as {
+        version: number;
+        renderVersion: number;
+        exportDir: string;
+        entries: Array<[string, { hash: string; mtimeMs: number; size: number }]>;
+      };
+      expect(stateJson.version).toBe(1);
+      expect(stateJson.renderVersion).toBe(1);
+      expect(stateJson.exportDir).toBe(exportDir);
+      expect(stateJson.entries).toHaveLength(1);
+      expect(stateJson.entries[0][0]).toBe(sessionFile);
+      expect(typeof stateJson.entries[0][1].hash).toBe("string");
+      expect(typeof stateJson.entries[0][1].mtimeMs).toBe("number");
+      expect(typeof stateJson.entries[0][1].size).toBe("number");
+    } finally {
+      await first.manager.close();
+    }
+
+    // Capture the export markdown's mtime so we can verify the second boot's
+    // sync did NOT rewrite it (fast path takes effect).
+    const writtenStat = await fs.stat(exportFile);
+
+    // Second boot, same input files: cache load + stat fast path should skip
+    // the write entirely.
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const secondStat = await fs.stat(exportFile);
+      expect(secondStat.mtimeMs).toBe(writtenStat.mtimeMs);
+      expect(secondStat.size).toBe(writtenStat.size);
+    } finally {
+      await second.manager.close();
+    }
+  });
+
+  it("invalidates the session-export state cache when exportDir or schema changes", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const stateFile = path.join(exportDir, ".export-state.json");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    await fs.mkdir(exportDir, { recursive: true });
+    // Plant a state file that claims a different exportDir; manager should
+    // ignore it and rebuild the cache from scratch.
+    await fs.writeFile(
+      stateFile,
+      JSON.stringify({
+        version: 1,
+        renderVersion: 1,
+        exportDir: "/some/other/path",
+        entries: [[sessionFile, { hash: "stale-hash", mtimeMs: 1, size: 1 }]],
+      }),
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { manager } = await createManager();
+    try {
+      await manager.sync({ reason: "manual" });
+      const after = JSON.parse(await fs.readFile(stateFile, "utf-8")) as {
+        exportDir: string;
+        entries: Array<[string, { hash: string }]>;
+      };
+      expect(after.exportDir).toBe(exportDir);
+      expect(after.entries).toHaveLength(1);
+      expect(after.entries[0][1].hash).not.toBe("stale-hash");
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("fails closed when sqlite index is busy during doc lookup or search", async () => {
     const cases = [
       {
