@@ -155,6 +155,80 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("preserves component-only channelData payloads when text scrubs empty", async () => {
+    const channelData = {
+      discord: {
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 1,
+                label: "Open",
+                custom_id: "open",
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "analysis: internal only",
+          channelData,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ channelData, text: undefined }],
+      }),
+    );
+  });
+
+  it("preserves presentation-only payloads when text scrubs empty", async () => {
+    const presentation = {
+      title: "Action required",
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Approve", value: "approve", style: "primary" as const }],
+        },
+      ],
+    };
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "commentary: hidden",
+          presentation,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ presentation, text: undefined }],
+      }),
+    );
+  });
+
   it("does not strip ordinary code-fenced examples of tool-call labels", async () => {
     const text = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
 

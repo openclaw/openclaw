@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 - CLI/update: make package-update follow-up processes write completion results and exit explicitly, so Windows packaged upgrades do not hang after the new package finishes post-core plugin work. Thanks @vincentkoc.
 - Release validation: skip Slack live QA unless Slack credentials are explicitly configured, so release gates can keep proving non-Slack surfaces while Slack is still local and credential-gated. Thanks @vincentkoc.
 - Plugins/update: treat OpenClaw CalVer correction versions like `2026.5.3-1` as satisfying base plugin API ranges, so correction builds can install plugins that require the base runtime API. Fixes #77293. (#77450) Thanks @p3nchan.
+- Discord/reply-safety: preserve component-only channel payloads (for example `channelData.discord.components` and presentation/interactive-only replies) when final text scrubbing removes all text, so Discord still delivers non-text outbound payloads instead of dropping them. (#77478) Thanks @NikolaFC.
 - fix(gateway): clamp unbound websocket auth scopes [AI]. (#77413) Thanks @pgondhi987.
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
 - Active Memory: send a bounded latest-message search query to the recall worker so channel/runtime metadata does not become the memory search string. Fixes #65309. Thanks @joeykrug, @westley3601, @pimenov, and @tasi333.
