@@ -24,6 +24,7 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { maybeStartAgentEventSink } from "../infra/agent-event-sink.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -965,6 +966,7 @@ export async function startGatewayServer(
         heartbeatUnsub: runtimeState.heartbeatUnsub,
         transcriptUnsub: runtimeState.transcriptUnsub,
         lifecycleUnsub: runtimeState.lifecycleUnsub,
+        agentEventSinkUnsub: runtimeState.agentEventSinkUnsub,
         chatRunState,
         clients,
         configReloader: runtimeState.configReloader,
@@ -1049,6 +1051,12 @@ export async function startGatewayServer(
         chatAbortControllers,
       }),
     );
+
+    runtimeState.agentEventSinkUnsub =
+      (await maybeStartAgentEventSink({
+        config: cfgAtStart,
+        warn: (msg) => log.warn(msg),
+      })) ?? null;
 
     Object.assign(
       runtimeState,

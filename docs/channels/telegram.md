@@ -359,6 +359,50 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
+  <Accordion title="Agent event sink (external egress)">
+    The top-level `agentEventSink` config forwards thinking and reply stream events to an external HTTPS endpoint as they arrive. This is channel-agnostic — it works for all channels (Telegram, Discord, CLI, etc.) via the core `AgentEventStream` bus.
+
+    **Egress boundary:** the sink POSTs thinking/reply deltas and session metadata (`runId`, `sessionKey`) to an operator-controlled URL. Treat the receiving endpoint as a trusted internal service — it receives reasoning content before the final answer.
+
+    **Configuration:**
+
+    ```json
+    {
+      "agentEventSink": {
+        "url": "https://your-endpoint.example.com/events",
+        "secret": "your-signing-secret",
+        "headers": {
+          "Authorization": "Bearer your-token"
+        },
+        "timeoutMs": 5000
+      }
+    }
+    ```
+
+    - `url` — required, must be an `https://` endpoint
+    - `secret` — optional HMAC-SHA256 signing key; when set, each POST includes `X-Openclaw-Signature: sha256=<hex>` computed over the raw request body. Accepts a literal string or a `SecretRef`.
+    - `headers` — optional additional request headers; values accept a literal string or a `SecretRef` for per-header credentials
+    - `timeoutMs` — per-request timeout in milliseconds (default: 5000)
+
+    **Payload shape:**
+
+    Thinking events are delivered in order (`thinking_start` → one or more `thinking_stream` → `thinking_end`), followed by reply events (`reply_start` → one or more `reply_stream` → `reply_end`). Each POST body is a JSON object with an `event` field:
+
+    ```jsonl
+    { "event": "thinking_start",  "runId": "abc123", "sessionKey": "agent:main:main", "timestamp": 1700000000000 }
+    { "event": "thinking_stream", "runId": "abc123", "delta": "Let me think about...", "timestamp": 1700000000010 }
+    { "event": "thinking_end",    "runId": "abc123", "timestamp": 1700000000500 }
+    { "event": "reply_start",     "runId": "abc123", "sessionKey": "agent:main:main", "timestamp": 1700000000501 }
+    { "event": "reply_stream",    "runId": "abc123", "delta": "Here's my answer:", "timestamp": 1700000000510 }
+    { "event": "reply_end",       "runId": "abc123", "timestamp": 1700000000999 }
+    ```
+
+    **Failure behavior:** POST errors and non-2xx responses are logged and silently dropped. The sink never blocks or retries — a slow or down endpoint does not affect agent replies. If `secret` or any header value references an unresolvable `SecretRef`, the sink is disabled at startup.
+
+    **Private-network policy:** the `url` must resolve to a public host; the sink uses the same guarded outbound fetch path as other HTTP egress (DNS pinning, redirect handling, SSRF policy).
+
+  </Accordion>
+
   <Accordion title="Formatting and HTML fallback">
     Outbound text uses Telegram `parse_mode: "HTML"`.
 

@@ -1,4 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
+import type { SecretInput } from "./types.secrets.js";
 
 export type ReplyMode = "text" | "command";
 export type TypingMode = "never" | "instant" | "thinking" | "message";
@@ -348,3 +349,20 @@ export type IdentityConfig = {
   /** Avatar image: workspace-relative path, http(s) URL, or data URI. */
   avatar?: string;
 };
+
+export type AgentEventSinkConfig = {
+  /** HTTPS endpoint to POST agent event stream updates to. */
+  url: string;
+  /**
+   * HMAC-SHA256 signing secret. When set, each request includes
+   * `X-Openclaw-Signature: sha256=<hex>` so the receiver can verify authenticity.
+   */
+  secret?: SecretInput;
+  /** Extra HTTP headers merged into every request (e.g. Authorization). Values are SecretInput and resolved before use. */
+  headers?: Record<string, SecretInput>;
+  /** Per-request timeout in milliseconds. Default: 5000. */
+  timeoutMs?: number;
+};
+
+/** @deprecated Use AgentEventSinkConfig instead. */
+export type ReasoningStreamSinkConfig = AgentEventSinkConfig;

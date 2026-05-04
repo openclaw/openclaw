@@ -24274,6 +24274,160 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         },
         additionalProperties: false,
       },
+      agentEventSink: {
+        type: "object",
+        properties: {
+          url: {
+            type: "string",
+            format: "uri",
+          },
+          secret: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            ],
+          },
+          headers: {
+            type: "object",
+            propertyNames: {
+              type: "string",
+            },
+            additionalProperties: {
+              anyOf: [
+                {
+                  type: "string",
+                },
+                {
+                  oneOf: [
+                    {
+                      type: "object",
+                      properties: {
+                        source: {
+                          type: "string",
+                          const: "env",
+                        },
+                        provider: {
+                          type: "string",
+                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                        },
+                        id: {
+                          type: "string",
+                          pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                        },
+                      },
+                      required: ["source", "provider", "id"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        source: {
+                          type: "string",
+                          const: "file",
+                        },
+                        provider: {
+                          type: "string",
+                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                        },
+                        id: {
+                          type: "string",
+                        },
+                      },
+                      required: ["source", "provider", "id"],
+                      additionalProperties: false,
+                    },
+                    {
+                      type: "object",
+                      properties: {
+                        source: {
+                          type: "string",
+                          const: "exec",
+                        },
+                        provider: {
+                          type: "string",
+                          pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                        },
+                        id: {
+                          type: "string",
+                        },
+                      },
+                      required: ["source", "provider", "id"],
+                      additionalProperties: false,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          timeoutMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+          },
+        },
+        required: ["url"],
+        additionalProperties: false,
+      },
     },
     required: ["commands"],
     additionalProperties: false,
@@ -29325,6 +29479,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["security", "auth"],
     },
     "proxy.proxyUrl": {
+      sensitive: true,
+      tags: ["security"],
+    },
+    "agentEventSink.secret": {
+      sensitive: true,
+      tags: ["security", "auth"],
+    },
+    "agentEventSink.headers.*": {
       sensitive: true,
       tags: ["security"],
     },
