@@ -459,7 +459,7 @@ describe("CronService failure alerts", () => {
     await cron.run(job.id, "force");
 
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
-    const { text } = sendCronFailureAlert.mock.lastCall![0] as { text: string };
+    const [{ text }] = sendCronFailureAlert.mock.lastCall as unknown as [{ text: string }];
     // Timestamp format: YYYY-MM-DD HH:MM (from en-CA locale in UTC)
     expect(text).toMatch(/ts-test-job.*failed 2 times \(last at 2026-01-01 \d{2}:\d{2}\)/);
     expect(text).toContain("Last error: network timeout");

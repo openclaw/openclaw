@@ -448,7 +448,7 @@ function emitFailureAlert(
   const header = eventTimestamp
     ? `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times (last at ${eventTimestamp})`
     : `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`;
-  const text = [`${header}`, `${detailLabel}: ${truncatedError}`].join("\n");
+  const text = [header, `${detailLabel}: ${truncatedError}`].join("\n");
 
   if (state.deps.sendCronFailureAlert) {
     void state.deps
