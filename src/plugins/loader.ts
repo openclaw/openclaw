@@ -245,6 +245,18 @@ type CachedPluginState = {
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
 };
 
+let memoizedInstallRecords: Record<string, PluginInstallRecord> | null = null;
+let memoizedInstallRecordsEnvRef: NodeJS.ProcessEnv | null = null;
+
+function getMemoizedInstallRecords(env: NodeJS.ProcessEnv): Record<string, PluginInstallRecord> {
+  if (memoizedInstallRecords !== null && memoizedInstallRecordsEnvRef === env) {
+    return memoizedInstallRecords;
+  }
+  memoizedInstallRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
+  memoizedInstallRecordsEnvRef = env;
+  return memoizedInstallRecords;
+}
+
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
 const pluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
   MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
@@ -286,6 +298,8 @@ function createPluginCandidatesFromManifestRegistry(
 export function clearPluginLoaderCache(): void {
   pluginLoaderCacheState.clear();
   fullWorkspacePluginLoaderCacheState.clear();
+  memoizedInstallRecords = null;
+  memoizedInstallRecordsEnvRef = null;
   clearActivatedPluginRuntimeState();
 }
 
@@ -301,6 +315,8 @@ export function clearActivatedPluginRuntimeState(): void {
 
 export function clearPluginRegistryLoadCache(): void {
   pluginLoaderCacheState.clearCachedRegistries();
+  memoizedInstallRecords = null;
+  memoizedInstallRecordsEnvRef = null;
   fullWorkspacePluginLoaderCacheState.clearCachedRegistries();
 }
 
@@ -1079,7 +1095,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
-    ...loadInstalledPluginIndexInstallRecordsSync({ env }),
+    ...getMemoizedInstallRecords(env),
     ...cfg.plugins?.installs,
   };
   const cacheKey = buildCacheKey({
