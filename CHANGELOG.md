@@ -486,6 +486,7 @@ Docs: https://docs.openclaw.ai
 - Web search/SearXNG: retry empty non-general category searches once with the general category, so unsupported category engines do not return empty results when general search has matches. Fixes #73552. Thanks @Loukky.
 - CLI/message: skip gateway-stop hooks for read-only `message read` and bound stop-hook shutdown for other message actions, so one-shot Discord reads cannot hang behind plugin lifecycle cleanup.
 - Plugins/web-provider: cache repeated bundled web search and web fetch provider registry loads by default while preserving explicit cache opt-outs. Supersedes #75992. Thanks @DmitryPogodaev.
+- Plugin auto-enable: do not add unclaimed channel IDs to `plugins.allow`, which caused "plugin not found" warnings for channels (like Feishu) without an installed plugin manifest. Fixes #76580. Thanks @blaspat.
 - Agents/sandbox: preserve existing workspace file modes when sandbox edits atomically replace files, so 0644 files do not collapse to 0600 after Write/Edit/apply_patch. Fixes #44077. Thanks @patosullivan.
 - Control UI/WebChat: route typed `/new` through the New Chat dashboard-session creation flow instead of `chat.send`, while keeping `/reset` as the explicit current-session reset. Fixes #69599. Thanks @WolvenRA.
 - Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.

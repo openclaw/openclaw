@@ -427,6 +427,7 @@ describe("applyPluginAutoEnable channels", () => {
       const result = applyPluginAutoEnable({
         config: {
           channels: { feishu: { enabled: true, defaultAccount: "main" } },
+          plugins: { allow: ["discord", "telegram"] }, // restrictive allowlist without feishu
         },
         env: makeIsolatedEnv(),
         // Empty registry: no plugin claims "feishu"
