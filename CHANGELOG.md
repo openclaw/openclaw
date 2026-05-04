@@ -69,7 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Gateway/security: cap the connect-frame `auth.token`, `auth.bootstrapToken`, `auth.deviceToken`, and `auth.password` field lengths at the protocol schema, so a remote client cannot submit a 60KB token and inflate the per-stored-secret timing-safe equality scan on the pre-auth handshake path.
+- Gateway/security: cap the connect-frame `auth.bootstrapToken` and `auth.deviceToken` at 256 chars at the protocol schema, so a remote client cannot submit a 60KB token and inflate the per-stored-pairing timing-safe equality scan that runs under the bootstrap-state mutex; `auth.token` and `auth.password` keep a generous 4096-char cap that preserves the existing operator-configured shared-secret credential contract.
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.

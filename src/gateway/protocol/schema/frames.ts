@@ -2,8 +2,8 @@ import { Type } from "typebox";
 import {
   GatewayClientIdSchema,
   GatewayClientModeSchema,
-  HandshakeAuthPasswordString,
-  HandshakeAuthTokenString,
+  HandshakeBootstrapTokenString,
+  HandshakeSharedSecretString,
   NonEmptyString,
 } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
@@ -61,10 +61,10 @@ export const ConnectParamsSchema = Type.Object(
     auth: Type.Optional(
       Type.Object(
         {
-          token: Type.Optional(HandshakeAuthTokenString),
-          bootstrapToken: Type.Optional(HandshakeAuthTokenString),
-          deviceToken: Type.Optional(HandshakeAuthTokenString),
-          password: Type.Optional(HandshakeAuthPasswordString),
+          token: Type.Optional(HandshakeSharedSecretString),
+          bootstrapToken: Type.Optional(HandshakeBootstrapTokenString),
+          deviceToken: Type.Optional(HandshakeBootstrapTokenString),
+          password: Type.Optional(HandshakeSharedSecretString),
         },
         { additionalProperties: false },
       ),

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { validateConnectParams } from "./index.js";
 import {
-  HANDSHAKE_AUTH_PASSWORD_MAX_LENGTH,
-  HANDSHAKE_AUTH_TOKEN_MAX_LENGTH,
+  HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH,
+  HANDSHAKE_SHARED_SECRET_MAX_LENGTH,
 } from "./schema/primitives.js";
 
 const baseConnectParams = {
@@ -22,15 +22,15 @@ const baseConnectParams = {
 
 describe("connect frame auth field bounds", () => {
   test("accepts auth fields at the documented maximum lengths", () => {
-    const tokenAtCap = "a".repeat(HANDSHAKE_AUTH_TOKEN_MAX_LENGTH);
-    const passwordAtCap = "p".repeat(HANDSHAKE_AUTH_PASSWORD_MAX_LENGTH);
+    const sharedSecretAtCap = "a".repeat(HANDSHAKE_SHARED_SECRET_MAX_LENGTH);
+    const bootstrapTokenAtCap = "b".repeat(HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH);
     const ok = validateConnectParams({
       ...baseConnectParams,
       auth: {
-        token: tokenAtCap,
-        bootstrapToken: tokenAtCap,
-        deviceToken: tokenAtCap,
-        password: passwordAtCap,
+        token: sharedSecretAtCap,
+        bootstrapToken: bootstrapTokenAtCap,
+        deviceToken: bootstrapTokenAtCap,
+        password: sharedSecretAtCap,
       },
     });
     expect(ok).toBe(true);
@@ -39,7 +39,7 @@ describe("connect frame auth field bounds", () => {
   test("rejects oversized auth.token before any handshake work runs", () => {
     const ok = validateConnectParams({
       ...baseConnectParams,
-      auth: { token: "a".repeat(HANDSHAKE_AUTH_TOKEN_MAX_LENGTH + 1) },
+      auth: { token: "a".repeat(HANDSHAKE_SHARED_SECRET_MAX_LENGTH + 1) },
     });
     expect(ok).toBe(false);
   });
@@ -47,7 +47,7 @@ describe("connect frame auth field bounds", () => {
   test("rejects oversized auth.bootstrapToken before any handshake work runs", () => {
     const ok = validateConnectParams({
       ...baseConnectParams,
-      auth: { bootstrapToken: "a".repeat(HANDSHAKE_AUTH_TOKEN_MAX_LENGTH + 1) },
+      auth: { bootstrapToken: "a".repeat(HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH + 1) },
     });
     expect(ok).toBe(false);
   });
@@ -55,7 +55,7 @@ describe("connect frame auth field bounds", () => {
   test("rejects oversized auth.deviceToken before any handshake work runs", () => {
     const ok = validateConnectParams({
       ...baseConnectParams,
-      auth: { deviceToken: "a".repeat(HANDSHAKE_AUTH_TOKEN_MAX_LENGTH + 1) },
+      auth: { deviceToken: "a".repeat(HANDSHAKE_BOOTSTRAP_TOKEN_MAX_LENGTH + 1) },
     });
     expect(ok).toBe(false);
   });
@@ -63,7 +63,7 @@ describe("connect frame auth field bounds", () => {
   test("rejects oversized auth.password before any handshake work runs", () => {
     const ok = validateConnectParams({
       ...baseConnectParams,
-      auth: { password: "a".repeat(HANDSHAKE_AUTH_PASSWORD_MAX_LENGTH + 1) },
+      auth: { password: "a".repeat(HANDSHAKE_SHARED_SECRET_MAX_LENGTH + 1) },
     });
     expect(ok).toBe(false);
   });
