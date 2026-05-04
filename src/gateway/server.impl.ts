@@ -1329,6 +1329,7 @@ export async function startGatewayServer(
     }
 
     const { attachGatewayWsHandlers } = await import("./server-ws-runtime.js");
+    const canvasHostScheme = gatewayTls.enabled ? "https" : "http";
     attachGatewayWsHandlers({
       wss,
       clients,
@@ -1336,6 +1337,7 @@ export async function startGatewayServer(
       port,
       gatewayHost: bindHost ?? undefined,
       canvasHostEnabled: Boolean(canvasHost),
+      canvasHostScheme,
       canvasHostServerPort,
       resolvedAuth,
       getResolvedAuth,
@@ -1357,7 +1359,7 @@ export async function startGatewayServer(
     await startListening();
     if (canvasHost?.rootDir) {
       logCanvas.info(
-        `canvas host mounted at http://${bindHost}:${port}${CANVAS_HOST_PATH}/ (root ${canvasHost.rootDir})`,
+        `canvas host mounted at ${canvasHostScheme}://${bindHost}:${port}${CANVAS_HOST_PATH}/ (root ${canvasHost.rootDir})`,
       );
     }
     startupTrace.mark("http.bound");
