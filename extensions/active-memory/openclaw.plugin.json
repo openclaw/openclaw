@@ -56,6 +56,10 @@
           "preference-only"
         ]
       },
+      "toolsAllow": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
       "promptOverride": { "type": "string" },
       "promptAppend": { "type": "string" },
       "maxSummaryChars": { "type": "integer", "minimum": 40, "maximum": 1000 },
@@ -128,6 +132,10 @@
     "promptStyle": {
       "label": "Prompt Style",
       "help": "Choose how eager or strict the blocking memory sub-agent should be when deciding whether to return memory."
+    },
+    "toolsAllow": {
+      "label": "Allowed Memory Tools",
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get; configure this for non-core memory providers."
     },
     "thinking": {
       "label": "Thinking Override",

@@ -22,6 +22,20 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts custom toolsAllow entries", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.tools-allow",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts timeoutMs values at the runtime ceiling", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,
