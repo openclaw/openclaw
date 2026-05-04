@@ -341,6 +341,9 @@ describe("applyPluginAutoEnable channels", () => {
           channels: {
             wecom: { token: "enabled" },
           },
+          plugins: {
+            allow: ["existing-plugin"],
+          },
         },
         env: makeIsolatedEnv(),
         manifestRegistry: makeRegistry([
@@ -353,6 +356,7 @@ describe("applyPluginAutoEnable channels", () => {
 
       expect(result.config.plugins?.entries?.["wecom-openclaw-plugin"]?.enabled).toBe(true);
       expect(result.config.plugins?.entries?.wecom).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["existing-plugin", "wecom-openclaw-plugin"]);
       expect(result.changes.join("\n")).toContain("enabled automatically.");
     });
 
