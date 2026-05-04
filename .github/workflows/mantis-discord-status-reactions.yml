@@ -440,7 +440,7 @@ jobs:
 
       - name: Upload Mantis status reaction artifacts
         id: upload_artifact
-        if: always()
+        if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: mantis-discord-status-reactions-${{ github.run_id }}-${{ github.run_attempt }}
