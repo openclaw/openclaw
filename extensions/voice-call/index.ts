@@ -589,9 +589,9 @@ export default definePluginEntry({
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
           }
-          const rt = await ensureRuntime();
           const mode =
             params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
+          const rt = await ensureRuntime();
           await initiateCallAndRespond({
             rt,
             respond,

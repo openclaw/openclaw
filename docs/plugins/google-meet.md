@@ -445,7 +445,7 @@ Enable the Voice Call plugin on the Gateway host, not on the Chrome node:
 ```json5
 {
   plugins: {
-    allow: ["google-meet", "voice-call"],
+    allow: ["google-meet", "voice-call", "google"],
     entries: {
       "google-meet": {
         enabled: true,
@@ -458,7 +458,23 @@ Enable the Voice Call plugin on the Gateway host, not on the Chrome node:
         enabled: true,
         config: {
           provider: "twilio",
+          inboundPolicy: "allowlist",
+          realtime: {
+            enabled: true,
+            provider: "google",
+            instructions: "Join this Google Meet as an OpenClaw agent. Be brief.",
+            toolPolicy: "safe-read-only",
+            providers: {
+              google: {
+                silenceDurationMs: 500,
+                startSensitivity: "high",
+              },
+            },
+          },
         },
+      },
+      google: {
+        enabled: true,
       },
     },
   },
@@ -472,7 +488,11 @@ secrets out of `openclaw.json`:
 export TWILIO_ACCOUNT_SID=AC...
 export TWILIO_AUTH_TOKEN=...
 export TWILIO_FROM_NUMBER=+15550001234
+export GEMINI_API_KEY=...
 ```
+
+Use `realtime.provider: "openai"` with the OpenAI provider plugin and
+`OPENAI_API_KEY` instead if that is your realtime voice provider.
 
 Restart or reload the Gateway after enabling `voice-call`; plugin config changes
 do not appear in an already running Gateway process until it reloads.
