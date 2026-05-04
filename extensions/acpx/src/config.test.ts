@@ -43,6 +43,17 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.timeoutSeconds).toBe(300);
   });
 
+  it("keeps explicit codexHome config", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        codexHome: "/tmp/openclaw-acpx-codex-home",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.codexHome).toBe("/tmp/openclaw-acpx-codex-home");
+  });
+
   it("keeps explicit probeAgent config", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
@@ -216,6 +227,10 @@ describe("embedded acpx plugin config", () => {
           minLength: 1,
         },
         stateDir: {
+          type: "string",
+          minLength: 1,
+        },
+        codexHome: {
           type: "string",
           minLength: 1,
         },

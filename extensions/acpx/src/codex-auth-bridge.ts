@@ -13,7 +13,7 @@ import {
   renderIsolatedCodexConfig,
 } from "./codex-trust-config.js";
 import { quoteCommandPart, splitCommandParts } from "./command-line.js";
-import { resolveAcpxPluginRoot } from "./config.js";
+import { resolveAcpxHomePath, resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
 import {
   OPENCLAW_ACPX_LEASE_ID_ARG,
@@ -26,6 +26,7 @@ const CODEX_ACP_BIN = "codex-acp";
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
+const OPENCLAW_ACPX_CODEX_HOME_ENV_VAR = "OPENCLAW_ACPX_CODEX_HOME";
 const requireFromHere = createRequire(import.meta.url);
 
 type PackageManifest = {
@@ -530,15 +531,12 @@ child.on("close", () => {
 `;
 }
 
-function buildCodexAcpWrapperScript(installedBinPath?: string): string {
-  return buildAdapterWrapperScript({
-    displayName: "Codex",
-    packageSpec: `${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_VERSION}`,
-    binName: CODEX_ACP_BIN,
-    installedBinPath,
-    stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
-    envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
-const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
+function buildCodexHomeEnvSetup(codexHomePath?: string): string {
+  const codexHomeDeclaration = codexHomePath
+    ? `const codexHome = ${quoteCommandPart(codexHomePath)};`
+    : `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));`;
+  return `${codexHomeDeclaration}
+const codexAuthPath = path.join(codexHome, "auth.json");
 const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
 let shouldWriteCodexApiKeyAuth = false;
 if (codexApiKey) {
@@ -570,7 +568,20 @@ if (shouldWriteCodexApiKeyAuth) {
 const env = {
   ...process.env,
   CODEX_HOME: codexHome,
-};`,
+};`;
+}
+
+function buildCodexAcpWrapperScript(params: {
+  installedBinPath?: string;
+  codexHomePath?: string;
+}): string {
+  return buildAdapterWrapperScript({
+    displayName: "Codex",
+    packageSpec: `${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_VERSION}`,
+    binName: CODEX_ACP_BIN,
+    installedBinPath: params.installedBinPath,
+    stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
+    envSetup: buildCodexHomeEnvSetup(params.codexHomePath),
   });
 }
 
@@ -621,6 +632,26 @@ async function prepareIsolatedCodexHome(params: {
   return codexHome;
 }
 
+function resolveEnvCodexHomeOverride(): string | undefined {
+  const envCodexHome = process.env[OPENCLAW_ACPX_CODEX_HOME_ENV_VAR]?.trim();
+  return envCodexHome ? resolveAcpxHomePath(envCodexHome) : undefined;
+}
+
+async function prepareCodexHome(params: {
+  baseDir: string;
+  workspaceDir: string;
+  explicitCodexHome?: string;
+}): Promise<string> {
+  if (params.explicitCodexHome) {
+    await fs.mkdir(params.explicitCodexHome, { recursive: true });
+    return params.explicitCodexHome;
+  }
+  return await prepareIsolatedCodexHome({
+    baseDir: params.baseDir,
+    workspaceDir: params.workspaceDir,
+  });
+}
+
 async function makeGeneratedWrapperExecutableIfPossible(wrapperPath: string): Promise<void> {
   try {
     await fs.chmod(wrapperPath, 0o755);
@@ -629,12 +660,23 @@ async function makeGeneratedWrapperExecutableIfPossible(wrapperPath: string): Pr
   }
 }
 
-async function writeCodexAcpWrapper(baseDir: string, installedBinPath?: string): Promise<string> {
-  await fs.mkdir(baseDir, { recursive: true });
-  const wrapperPath = path.join(baseDir, "codex-acp-wrapper.mjs");
-  await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(installedBinPath), {
-    encoding: "utf8",
-  });
+async function writeCodexAcpWrapper(params: {
+  baseDir: string;
+  installedBinPath?: string;
+  codexHomePath?: string;
+}): Promise<string> {
+  await fs.mkdir(params.baseDir, { recursive: true });
+  const wrapperPath = path.join(params.baseDir, "codex-acp-wrapper.mjs");
+  await fs.writeFile(
+    wrapperPath,
+    buildCodexAcpWrapperScript({
+      installedBinPath: params.installedBinPath,
+      codexHomePath: params.codexHomePath,
+    }),
+    {
+      encoding: "utf8",
+    },
+  );
   await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
   return wrapperPath;
 }
@@ -744,9 +786,11 @@ export async function prepareAcpxCodexAuthConfig(params: {
 }): Promise<ResolvedAcpxPluginConfig> {
   void params.logger;
   const codexBaseDir = path.join(params.stateDir, "acpx");
-  await prepareIsolatedCodexHome({
+  const explicitCodexHome = params.pluginConfig.codexHome ?? resolveEnvCodexHomeOverride();
+  const codexHome = await prepareCodexHome({
     baseDir: codexBaseDir,
     workspaceDir: params.pluginConfig.cwd,
+    explicitCodexHome,
   });
   const installedCodexBinPath = await (
     params.resolveInstalledCodexAcpBinPath ?? resolveInstalledCodexAcpBinPath
@@ -754,7 +798,11 @@ export async function prepareAcpxCodexAuthConfig(params: {
   const installedClaudeBinPath = await (
     params.resolveInstalledClaudeAcpBinPath ?? resolveInstalledClaudeAcpBinPath
   )();
-  const wrapperPath = await writeCodexAcpWrapper(codexBaseDir, installedCodexBinPath);
+  const wrapperPath = await writeCodexAcpWrapper({
+    baseDir: codexBaseDir,
+    installedBinPath: installedCodexBinPath,
+    codexHomePath: explicitCodexHome ? codexHome : undefined,
+  });
   const claudeWrapperPath = await writeClaudeAcpWrapper(codexBaseDir, installedClaudeBinPath);
   const configuredCodexCommand = params.pluginConfig.agents.codex;
   const configuredClaudeCommand = params.pluginConfig.agents.claude;
