@@ -875,8 +875,20 @@ function hasMaterialPluginEntryConfig(entry: unknown): boolean {
 }
 
 function isKnownPluginId(pluginId: string, manifestRegistry: PluginManifestRegistry): boolean {
-  if (normalizeChatChannelId(pluginId)) {
-    return true;
+  const builtInChannelId = normalizeChatChannelId(pluginId);
+  if (builtInChannelId) {
+    // Only recognize a built-in channel id as a known plugin if a bundled plugin
+    // for it exists in the registry. This prevents channel ids (like "feishu")
+    // from being incorrectly treated as known plugins when they have no bundled
+    // plugin — they should not be auto-enabled or added to plugins.allow.
+    const hasBundledPlugin = manifestRegistry.plugins.some(
+      (p) => p.origin === "bundled" && normalizeChatChannelId(p.id) === builtInChannelId,
+    );
+    if (hasBundledPlugin) {
+      return true;
+    }
+    // Built-in channel id but no bundled plugin — not a known plugin.
+    return false;
   }
   return manifestRegistry.plugins.some((plugin) => plugin.id === pluginId);
 }
