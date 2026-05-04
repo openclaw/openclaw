@@ -850,6 +850,11 @@ describe("grouped chat rendering", () => {
       "Replying to current message",
     );
     expect(container.querySelector(".chat-message-image")).not.toBeNull();
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>(".chat-image-action")].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Open image", "Download image", "Copy image"]);
     expect(container.querySelector("audio")).not.toBeNull();
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent).toContain(
       "Voice note",
@@ -1038,6 +1043,104 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("scales generated image frames to the painted image size", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const objectUrl = "blob:generated-preview";
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => objectUrl),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      })) as unknown as typeof fetch,
+    );
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Generated image 1",
+            width: 1024,
+            height: 1024,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(
+          objectUrl,
+        );
+      },
+      { interval: 1, timeout: 100 },
+    );
+
+    const frame = container.querySelector<HTMLElement>(".chat-image-frame");
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(frame?.classList.contains("chat-image-frame--sized")).toBe(true);
+    expect(frame?.style.getPropertyValue("--chat-image-frame-width")).toBe("200px");
+    expect(image?.getAttribute("width")).toBe("200");
+    expect(image?.getAttribute("height")).toBe("200");
+  });
+
+  it("reserves generated image frame space while the blob preview loads", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise(() => {
+            // Keep the managed-image fetch pending so the placeholder remains rendered.
+          }),
+      ) as unknown as typeof fetch,
+    );
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Generated image 1",
+            width: 1024,
+            height: 1024,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const frame = container.querySelector<HTMLElement>(".chat-image-frame");
+    expect(frame?.classList.contains("chat-image-frame--pending")).toBe(true);
+    expect(frame?.style.getPropertyValue("--chat-image-frame-width")).toBe("200px");
+    expect(frame?.style.getPropertyValue("--chat-image-frame-aspect")).toBe("200 / 200");
+    expect(container.querySelector(".chat-message-image")).toBeNull();
+  });
+
   it("does not send auth to cross-origin managed-image-looking URLs", async () => {
     const fetchMock = vi.fn(async () => {
       throw new Error("cross-origin image URL should not be fetched with Control UI auth");
@@ -1181,6 +1284,7 @@ describe("grouped chat rendering", () => {
     const docLink = container.querySelector<HTMLAnchorElement>(
       ".chat-assistant-attachment-card__link",
     );
+    expect(container.querySelector(".chat-image-actions")).not.toBeNull();
     expect(image?.getAttribute("src")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-local",
     );
