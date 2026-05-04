@@ -25,7 +25,11 @@ import {
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
 } from "./app-chat.ts";
-import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
+import {
+  DEFAULT_CRON_FORM,
+  DEFAULT_LOG_LEVEL_FILTERS,
+  DEFAULT_SESSIONS_FILTERS,
+} from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import { connectGateway as connectGatewayInternal } from "./app-gateway.ts";
 import {
@@ -370,10 +374,12 @@ export class OpenClawApp extends LitElement {
   @state() sessionsLoading = false;
   @state() sessionsResult: SessionsListResult | null = null;
   @state() sessionsError: string | null = null;
-  @state() sessionsFilterActive = "120";
-  @state() sessionsFilterLimit = "50";
+  @state() sessionsFilterActive = DEFAULT_SESSIONS_FILTERS.activeMinutes;
+  @state() sessionsFilterLimit = DEFAULT_SESSIONS_FILTERS.limit;
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  @state() sessionsShowArchived = false;
+  @state() sessionsFiltersCollapsed = false;
   @state() sessionsHideCron = true;
   @state() sessionsSearchQuery = "";
   @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";

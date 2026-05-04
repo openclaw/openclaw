@@ -755,8 +755,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    if (isChatTurnSessionChangedPayload(evt.payload)) {
+    const result = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
       return;
     }
     void loadSessions(host as unknown as SessionsState);

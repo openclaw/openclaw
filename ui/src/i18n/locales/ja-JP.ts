@@ -163,8 +163,22 @@ export const ja_JP: TranslationMap = {
     store: "ストア: {path}",
     active: "有効",
     limit: "制限",
+    filters: "フィルター",
+    showFilters: "Show filters",
+    hideFilters: "Hide filters",
+    sourceFilters: "Session source filters",
     global: "グローバル",
     unknown: "不明",
+    showArchived: "Show archived",
+    activeTooltip:
+      "Only request sessions updated within the last N minutes. Clear the field, or show archived sessions, to remove the active-time cutoff.",
+    limitTooltip:
+      "Maximum rows to request from the Gateway. Higher limits can make large stores slower.",
+    globalTooltip:
+      "Include the special global session bucket shared outside a specific agent or chat.",
+    unknownTooltip: "Include the special unknown session bucket for legacy or unresolved traffic.",
+    showArchivedTooltip:
+      "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
     minutesPlaceholder: "分",
     searchPlaceholder: "キー、エージェント、ラベル、種類で絞り込み…",
     selected: "{count} 件選択中",

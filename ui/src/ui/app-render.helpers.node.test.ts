@@ -133,6 +133,7 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
     client: { request: vi.fn() },
     sessionsLoading: false,
     sessionsError: null,
+    sessionsShowArchived: false,
     sessionsResult: {
       ts: 0,
       path: "",
@@ -533,12 +534,10 @@ describe("resolveSessionOptionGroups", () => {
     );
   });
 
-  it("keeps scoped fallbacks for active grouped sessions without useful row metadata", () => {
+  it("does not synthesize active grouped sessions without a listed row", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
+    expect(labelsForSessionOptions({ sessionKey })).toEqual([]);
     expect(
       labelsForSessionOptions({
         sessionKey,
@@ -622,6 +621,7 @@ describe("createChatSession", () => {
         limit: 0,
         includeGlobal: true,
         includeUnknown: true,
+        showArchived: false,
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -810,6 +810,7 @@ describe("switchChatSession", () => {
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      showArchived: false,
     });
   });
 

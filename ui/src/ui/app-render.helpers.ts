@@ -650,6 +650,7 @@ export async function createChatSession(state: AppViewState) {
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      showArchived: Boolean(state.sessionsShowArchived),
     },
   );
   if (
@@ -680,6 +681,7 @@ async function refreshSessionOptions(state: AppViewState) {
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
+    showArchived: Boolean(state.sessionsShowArchived),
   });
 }
 

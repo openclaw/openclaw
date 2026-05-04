@@ -77,6 +77,7 @@ async function refreshSessionOptions(state: AppViewState) {
     limit: 0,
     includeGlobal: true,
     includeUnknown: true,
+    showArchived: Boolean(state.sessionsShowArchived),
   });
 }
 
@@ -539,7 +540,9 @@ export function resolveSessionOptionGroups(
     }
     addOption(row.key);
   }
-  addOption(sessionKey);
+  if (byKey.has(sessionKey)) {
+    addOption(sessionKey);
+  }
 
   for (const group of groups.values()) {
     const counts = new Map<string, number>();

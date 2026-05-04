@@ -1680,6 +1680,8 @@ export function renderApp(state: AppViewState) {
                 limit: state.sessionsFilterLimit,
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
+                showArchived: state.sessionsShowArchived,
+                filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
                 agentIdentityById: state.agentIdentityById,
@@ -1698,6 +1700,19 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = next.limit;
                   state.sessionsIncludeGlobal = next.includeGlobal;
                   state.sessionsIncludeUnknown = next.includeUnknown;
+                  state.sessionsShowArchived = next.showArchived;
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: Number(next.activeMinutes) || 0,
+                    limit: Number(next.limit) || 0,
+                    includeGlobal: next.includeGlobal,
+                    includeUnknown: next.includeUnknown,
+                    showArchived: next.showArchived,
+                  });
+                },
+                onToggleFiltersCollapsed: () => {
+                  state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;

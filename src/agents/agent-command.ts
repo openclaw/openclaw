@@ -1023,8 +1023,7 @@ async function agentCommandInternal(
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
-              suppressPromptPersistenceOnRetry:
-                isFallbackRetry && currentTurnUserMessagePersisted,
+              suppressPromptPersistenceOnRetry: isFallbackRetry && currentTurnUserMessagePersisted,
               onUserMessagePersisted: () => {
                 currentTurnUserMessagePersisted = true;
               },

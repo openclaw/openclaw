@@ -160,8 +160,22 @@ export const es: TranslationMap = {
     store: "Almacén: {path}",
     active: "Activo",
     limit: "Límite",
+    filters: "Filtros",
+    showFilters: "Show filters",
+    hideFilters: "Hide filters",
+    sourceFilters: "Session source filters",
     global: "Global",
     unknown: "Desconocido",
+    showArchived: "Show archived",
+    activeTooltip:
+      "Only request sessions updated within the last N minutes. Clear the field, or show archived sessions, to remove the active-time cutoff.",
+    limitTooltip:
+      "Maximum rows to request from the Gateway. Higher limits can make large stores slower.",
+    globalTooltip:
+      "Include the special global session bucket shared outside a specific agent or chat.",
+    unknownTooltip: "Include the special unknown session bucket for legacy or unresolved traffic.",
+    showArchivedTooltip:
+      "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtrar por clave, agente, etiqueta, tipo…",
     selected: "{count} seleccionados",

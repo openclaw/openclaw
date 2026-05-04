@@ -160,8 +160,22 @@ export const pt_BR: TranslationMap = {
     store: "Armazenamento: {path}",
     active: "Ativo",
     limit: "Limite",
+    filters: "Filtros",
+    showFilters: "Show filters",
+    hideFilters: "Hide filters",
+    sourceFilters: "Session source filters",
     global: "Global",
     unknown: "Desconhecido",
+    showArchived: "Show archived",
+    activeTooltip:
+      "Only request sessions updated within the last N minutes. Clear the field, or show archived sessions, to remove the active-time cutoff.",
+    limitTooltip:
+      "Maximum rows to request from the Gateway. Higher limits can make large stores slower.",
+    globalTooltip:
+      "Include the special global session bucket shared outside a specific agent or chat.",
+    unknownTooltip: "Include the special unknown session bucket for legacy or unresolved traffic.",
+    showArchivedTooltip:
+      "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtrar por chave, agente, rótulo, tipo…",
     selected: "{count} selecionado(s)",

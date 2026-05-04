@@ -158,8 +158,22 @@ export const zh_CN: TranslationMap = {
     store: "存储：{path}",
     active: "活跃",
     limit: "限制",
+    filters: "筛选",
+    showFilters: "Show filters",
+    hideFilters: "Hide filters",
+    sourceFilters: "Session source filters",
     global: "全局",
     unknown: "未知",
+    showArchived: "Show archived",
+    activeTooltip:
+      "Only request sessions updated within the last N minutes. Clear the field, or show archived sessions, to remove the active-time cutoff.",
+    limitTooltip:
+      "Maximum rows to request from the Gateway. Higher limits can make large stores slower.",
+    globalTooltip:
+      "Include the special global session bucket shared outside a specific agent or chat.",
+    unknownTooltip: "Include the special unknown session bucket for legacy or unresolved traffic.",
+    showArchivedTooltip:
+      "Include explicitly archived rows and older store-backed sessions by removing the active-time cutoff.",
     minutesPlaceholder: "分钟",
     searchPlaceholder: "按密钥、代理、标签、类型筛选…",
     selected: "已选择 {count} 项",
