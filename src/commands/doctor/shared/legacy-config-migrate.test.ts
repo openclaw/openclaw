@@ -110,6 +110,41 @@ describe("legacy thread binding spawn migrate", () => {
   });
 });
 
+describe("legacy message queue mode migrate", () => {
+  it("moves retired queue steering modes to followup fallback mode", () => {
+    const res = migrateLegacyConfigForTest({
+      messages: {
+        queue: {
+          mode: "steer",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+            slack: "queue",
+          },
+        },
+      },
+    });
+
+    expect(res.config?.messages?.queue).toEqual({
+      mode: "followup",
+      byChannel: {
+        discord: "followup",
+        telegram: "collect",
+        slack: "followup",
+      },
+    });
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.mode "steer" → "followup"; active-run steering is now automatic.',
+    );
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.byChannel.discord "steer-backlog" → "followup"; active-run steering is now automatic.',
+    );
+    expect(res.changes).toContain(
+      'Moved deprecated messages.queue.byChannel.slack "queue" → "followup"; active-run steering is now automatic.',
+    );
+  });
+});
+
 describe("legacy migrate audio transcription", () => {
   it("does not rewrite removed routing.transcribeAudio migrations", () => {
     const res = migrateLegacyConfigForTest({

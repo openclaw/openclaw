@@ -998,6 +998,26 @@ describe("config strict validation", () => {
     expect(raw.messages.tts).not.toHaveProperty("providers");
   });
 
+  it("reports retired queue steering modes without read-time auto-migration", async () => {
+    const raw = {
+      messages: {
+        queue: {
+          mode: "steer",
+          byChannel: {
+            discord: "steer-backlog",
+            telegram: "collect",
+          },
+        },
+      },
+    };
+    const issues = findLegacyConfigIssues(raw);
+
+    expect(issues.some((issue) => issue.path === "messages.queue.mode")).toBe(true);
+    expect(issues.some((issue) => issue.path === "messages.queue.byChannel")).toBe(true);
+    expect(raw.messages.queue.mode).toBe("steer");
+    expect(raw.messages.queue.byChannel.discord).toBe("steer-backlog");
+  });
+
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
