@@ -28,8 +28,8 @@ import {
 } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-registry.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
