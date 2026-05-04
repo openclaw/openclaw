@@ -1,6 +1,11 @@
-import type { APIApplicationCommand } from "discord-api-types/v10";
-import { describe, expect, test } from "vitest";
-import { __testing } from "./command-deploy.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import { describe, expect, test, vi } from "vitest";
+import { DiscordCommandDeployer, __testing } from "./command-deploy.js";
+import { BaseCommand } from "./commands.js";
+import type { RequestClient } from "./rest.js";
 
 const { commandsEqual } = __testing;
 
@@ -193,5 +198,126 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({ description: "ping the bot" });
     const desired = desiredFromLocal({ description: "ping\nthe bot" });
     expect(commandsEqual(current, desired)).toBe(true);
+  });
+});
+
+/**
+ * Regression for #77359: when two Discord accounts share the same on-disk
+ * deploy-cache file (the default in multi-bot setups) the persisted hash key
+ * must be scoped by application/client id. Otherwise a later account whose
+ * command set hashes the same as the first account's reuses the first
+ * account's hash and skips reconciling its own Discord application — leaving
+ * "This application has no commands" in the secondary bot's Integrations panel.
+ */
+describe("DiscordCommandDeployer cache scoping (multi-application)", () => {
+  class StaticCommand extends BaseCommand {
+    name: string;
+    description = "ping the bot";
+    type = ApplicationCommandType.ChatInput;
+    constructor(name: string) {
+      super();
+      this.name = name;
+    }
+    serializeOptions() {
+      return undefined;
+    }
+  }
+
+  function createRest(): RequestClient {
+    return {
+      get: vi.fn(async () => []),
+      post: vi.fn(async () => undefined),
+      patch: vi.fn(async () => undefined),
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    } as unknown as RequestClient;
+  }
+
+  test("two applications with identical command sets each reconcile their own application", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    const restA = createRest();
+    const deployerA = new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restA,
+    });
+    await deployerA.deploy({ mode: "reconcile" });
+
+    const restB = createRest();
+    const deployerB = new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands,
+      hashStorePath,
+      rest: () => restB,
+    });
+    await deployerB.deploy({ mode: "reconcile" });
+
+    // The first deploy issues a list + create against application "app-default".
+    expect(restA.get).toHaveBeenCalledTimes(1);
+    expect(restA.post).toHaveBeenCalledTimes(1);
+    // The second deploy MUST also list + create against "app-secondary"; before
+    // the fix it short-circuited on the shared `global:reconcile` hash and
+    // never touched its own Discord application.
+    expect(restB.get).toHaveBeenCalledTimes(1);
+    expect(restB.post).toHaveBeenCalledTimes(1);
+  });
+
+  test("re-deploying the same application still hits the persisted cache", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    const restFirst = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restFirst,
+    }).deploy({ mode: "reconcile" });
+
+    const restSecond = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restSecond,
+    }).deploy({ mode: "reconcile" });
+
+    expect(restFirst.get).toHaveBeenCalledTimes(1);
+    expect(restFirst.post).toHaveBeenCalledTimes(1);
+    // Same application, same command set, same hash file => skip reconcile.
+    expect(restSecond.get).not.toHaveBeenCalled();
+    expect(restSecond.post).not.toHaveBeenCalled();
+  });
+
+  test("persisted cache keys are namespaced by application id", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+
+    await new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands,
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+
+    const raw = await fs.readFile(hashStorePath, "utf8");
+    const parsed = JSON.parse(raw) as { hashes: Record<string, string> };
+    const keys = Object.keys(parsed.hashes);
+    expect(keys).toContain("app:app-default:global:reconcile");
+    expect(keys).toContain("app:app-secondary:global:reconcile");
+    expect(keys).not.toContain("global:reconcile");
   });
 });

@@ -44,7 +44,7 @@ export class DiscordCommandDeployer {
     const serializedGlobal = globalCommands.map((command) => command.serialize());
     for (const [guildId, entries] of groupGuildCommands(commands)) {
       await this.putCommandSetIfChanged(
-        `guild:${guildId}`,
+        this.scopedCacheKey(`guild:${guildId}`),
         entries,
         async () => {
           await overwriteGuildApplicationCommands(
@@ -61,7 +61,7 @@ export class DiscordCommandDeployer {
       for (const guildId of this.params.devGuilds) {
         const entries = commands.map((command) => command.serialize());
         await this.putCommandSetIfChanged(
-          `dev-guild:${guildId}`,
+          this.scopedCacheKey(`dev-guild:${guildId}`),
           entries,
           async () => {
             await overwriteGuildApplicationCommands(
@@ -78,7 +78,7 @@ export class DiscordCommandDeployer {
     }
     if (options.mode !== "overwrite") {
       await this.putCommandSetIfChanged(
-        "global:reconcile",
+        this.scopedCacheKey("global:reconcile"),
         serializedGlobal,
         async () => {
           await this.reconcileGlobalCommands(serializedGlobal);
@@ -88,7 +88,7 @@ export class DiscordCommandDeployer {
       return { mode: "reconcile" as const, usedDevGuilds: false };
     }
     await this.putCommandSetIfChanged(
-      "global:overwrite",
+      this.scopedCacheKey("global:overwrite"),
       serializedGlobal,
       async () => {
         await overwriteApplicationCommands(this.rest, this.params.clientId, serializedGlobal);
@@ -96,6 +96,17 @@ export class DiscordCommandDeployer {
       options,
     );
     return { mode: "overwrite" as const, usedDevGuilds: false };
+  }
+
+  /**
+   * Scope cache keys by Discord application id so multi-bot setups that share a
+   * single deploy-cache file still reconcile each application separately. The
+   * prior unscoped `global:reconcile` / `guild:<id>` keys let a later account
+   * with an identical command set reuse the first account's hash and skip its
+   * own application's reconcile entirely (#77359).
+   */
+  private scopedCacheKey(suffix: string): string {
+    return `app:${this.params.clientId}:${suffix}`;
   }
 
   private async reconcileGlobalCommands(desired: SerializedCommand[]) {
