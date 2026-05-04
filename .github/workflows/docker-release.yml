@@ -2,6 +2,9 @@ name: Docker Release
 
 on:
   push:
+    branches:
+      - main
+      - beta
     tags:
       - "v*"
     paths-ignore:
@@ -106,6 +109,10 @@ jobs:
             tags+=("${IMAGE}:main-amd64")
             slim_tags+=("${IMAGE}:main-slim-amd64")
           fi
+          if [[ "${SOURCE_REF}" == "refs/heads/beta" ]]; then
+            tags+=("${IMAGE}:beta-amd64")
+            slim_tags+=("${IMAGE}:beta-slim-amd64")
+          fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-amd64")
@@ -137,6 +144,9 @@ jobs:
           version="${source_sha}"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
+          fi
+          if [[ "${SOURCE_REF}" == "refs/heads/beta" ]]; then
+            version="beta"
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -223,6 +233,10 @@ jobs:
             tags+=("${IMAGE}:main-arm64")
             slim_tags+=("${IMAGE}:main-slim-arm64")
           fi
+          if [[ "${SOURCE_REF}" == "refs/heads/beta" ]]; then
+            tags+=("${IMAGE}:beta-arm64")
+            slim_tags+=("${IMAGE}:beta-slim-arm64")
+          fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-arm64")
@@ -254,6 +268,9 @@ jobs:
           version="${source_sha}"
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             version="main"
+          fi
+          if [[ "${SOURCE_REF}" == "refs/heads/beta" ]]; then
+            version="beta"
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
@@ -334,6 +351,10 @@ jobs:
           if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
             tags+=("${IMAGE}:main")
             slim_tags+=("${IMAGE}:main-slim")
+          fi
+          if [[ "${SOURCE_REF}" == "refs/heads/beta" ]]; then
+            tags+=("${IMAGE}:beta")
+            slim_tags+=("${IMAGE}:beta-slim")
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
