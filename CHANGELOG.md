@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- ACP/translator: expose `listSessions` on `AcpGatewayAgent` so SDK v0.16+ dispatcher routes `session/list` to the new canonical method instead of returning `"Method not found": session/list` (OpenClaw is pinned at SDK `0.21.0`). The legacy `unstable_listSessions` name is kept as a thin alias delegating to the same private implementation, so embedded callers still on SDK `< 0.16.0` continue to work. Fixes #48279. Thanks @thezzisu.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
