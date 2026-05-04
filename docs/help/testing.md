@@ -149,7 +149,9 @@ inside every shard.
     installs the external Kitchen Sink package, verifies the plugin SDK surface
     inventory, probes `/healthz` and `/readyz`, records gateway CPU/RSS
     evidence, runs a live OpenAI turn, and checks adversarial diagnostics.
-    Requires live OpenAI auth such as `OPENAI_API_KEY`.
+    Requires live OpenAI auth such as `OPENAI_API_KEY`. In hydrated Testbox
+    sessions it automatically sources the Testbox live-auth profile when the
+    `openclaw-testbox-env` helper is present.
 - `pnpm test:gateway:cpu-scenarios`
   - Runs the gateway startup bench plus a small mock QA Lab scenario pack
     (`channel-chat-baseline`, `memory-failure-fallback`,
