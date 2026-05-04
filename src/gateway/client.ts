@@ -937,7 +937,7 @@ export class GatewayClient {
       this.opts.onReconnectPaused?.({
         code: -1,
         reason: `max reconnect attempts reached (${GatewayClient.MAX_RECONNECT_ATTEMPTS})`,
-        detailCode: undefined,
+        detailCode: null,
       });
       return;
     }
