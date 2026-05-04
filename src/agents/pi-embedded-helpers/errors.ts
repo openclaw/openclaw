@@ -263,6 +263,15 @@ export type ProviderRuntimeFailureKind =
   | "callback_timeout"
   | "callback_validation"
   | "auth_html_403"
+  /**
+   * Plain HTTP 401 with an "Invalid token" / "expired" / "Unauthorized"
+   * message body, classified by `classifyFailoverSignal` as `auth` rather
+   * than by an explicit OAuth-refresh signal. Provider plugins for plain
+   * API-key auth (e.g. Z.AI/AutoGLM) emit this when their JWT expires
+   * mid-session; surfacing the raw "HTTP 401: Invalid token" to the end
+   * user is the symptom captured by [Github #56197].
+   */
+  | "auth_invalid_token"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
@@ -953,6 +962,19 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isSchemaErrorMessage(message)) {
     return "schema";
   }
+  // Plain HTTP 401 / "Invalid token" / "Unauthorized" — surface a friendly
+  // re-auth hint rather than the raw provider error. Distinct from
+  // `auth_refresh` (explicit OAuth-refresh failure messages) and
+  // `auth_html_403` (HTML 403 bodies). The `classifyFailoverSignal` path
+  // at status 401/403 already returns the `auth` reason for non-permanent /
+  // non-billing 401s, so we reuse it here instead of duplicating the
+  // message regex set. Placed AFTER replay-invalid / schema so 401s with
+  // structurally-meaningful bodies (e.g. "401 input item ID does not belong
+  // to this conversation" → `replay_invalid`) keep their existing copy.
+  // See [Github #56197].
+  if (failoverClassification?.kind === "reason" && failoverClassification.reason === "auth") {
+    return "auth_invalid_token";
+  }
   if (
     failoverClassification?.kind === "reason" &&
     (failoverClassification.reason === "timeout" || failoverClassification.reason === "overloaded")
@@ -1049,6 +1071,21 @@ export function formatAssistantErrorText(
     return (
       "Authentication failed with an HTML 403 response from the provider. " +
       "Re-authenticate and verify your provider account access."
+    );
+  }
+
+  if (providerRuntimeFailureKind === "auth_invalid_token") {
+    // Plain HTTP 401 path. Common on Z.AI/AutoGLM and other API-key providers
+    // when the upstream JWT expires mid-session and the provider plugin lacks
+    // a `prepareRuntimeAuth` refresh hook. Reply with a sanitized re-auth
+    // hint so end users on chat surfaces (Feishu, Telegram, etc.) do not
+    // see the raw "HTTP 401: Invalid token" string. The full retry-with-
+    // refresh path remains a provider-level follow-up per #56197 — this
+    // change only suppresses the raw error from user-visible replies.
+    return (
+      "Authentication failed (provider returned HTTP 401). " +
+      "Your provider token may have expired — try the request again in a moment. " +
+      "If the failure persists, re-authenticate this provider."
     );
   }
 

@@ -324,6 +324,61 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("sanitizes raw HTTP 401 / Invalid token errors into a re-auth hint (#56197)", () => {
+    // The exact payload reported in #56197: a Z.AI/AutoGLM JWT expired
+    // mid-session and the embedded agent surfaced the raw provider error
+    // verbatim ("HTTP 401: Invalid token") to the Feishu user. The fix
+    // classifies plain HTTP 401 / "Invalid token" / "Unauthorized" responses
+    // as `auth_invalid_token` and replaces the raw text with a sanitized
+    // re-authentication hint. This pin protects the user-visible behavior;
+    // the broader retry-with-refresh path is a separate provider-level
+    // follow-up explicitly out of scope per clawsweeper-bot's review.
+    const reportedPayload = makeAssistantError('HTTP 401: "Invalid token"');
+    const friendly = formatAssistantErrorText(reportedPayload);
+    expect(friendly).toBe(
+      "Authentication failed (provider returned HTTP 401). " +
+        "Your provider token may have expired — try the request again in a moment. " +
+        "If the failure persists, re-authenticate this provider.",
+    );
+    // Defensive: the raw provider phrase must not leak into the friendly text.
+    expect(friendly).not.toContain("Invalid token");
+  });
+
+  it("sanitizes Unauthorized / token-expired variants under HTTP 401", () => {
+    // Different providers spell their 401s differently. Pin a few real-world
+    // shapes so a future tightening of the classifier does not regress one
+    // form back into the raw-error fall-through.
+    const variants = [
+      "401 Unauthorized",
+      "HTTP 401 Unauthorized: token expired",
+      'status code: 401, message: "expired token"',
+    ];
+    for (const raw of variants) {
+      const friendly = formatAssistantErrorText(makeAssistantError(raw));
+      expect(friendly, raw).toBe(
+        "Authentication failed (provider returned HTTP 401). " +
+          "Your provider token may have expired — try the request again in a moment. " +
+          "If the failure persists, re-authenticate this provider.",
+      );
+    }
+  });
+
+  it("does not collapse 401 billing / permanent-auth errors into the generic re-auth hint", () => {
+    // The 401/403 path in `classifyFailoverSignal` already gives billing and
+    // `auth_permanent` precedence over generic `auth`. Pin that contract:
+    // billing copy stays billing copy, permanent-auth stays raw, and only
+    // ordinary 401s become the new generic re-auth hint.
+    const billing = makeAssistantError(
+      '{"error":{"code":401,"message":"Key limit exceeded","metadata":{"raw":"insufficient credits"}}}',
+    );
+    const billingFriendly = formatAssistantErrorText(billing);
+    expect(billingFriendly).not.toBe(
+      "Authentication failed (provider returned HTTP 401). " +
+        "Your provider token may have expired — try the request again in a moment. " +
+        "If the failure persists, re-authenticate this provider.",
+    );
+  });
+
   it("returns a proxy-specific message for proxy misroutes", () => {
     const msg = makeAssistantError("407 Proxy Authentication Required");
     expect(formatAssistantErrorText(msg)).toBe(

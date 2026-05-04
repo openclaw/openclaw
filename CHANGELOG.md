@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/embedded runner: sanitize raw HTTP 401 / "Invalid token" / "Unauthorized" provider errors into a friendly re-authentication hint instead of surfacing the raw provider phrase to chat users. Adds an `auth_invalid_token` runtime-failure kind sourced from the existing `classifyFailoverSignal` `auth` reason, ordered after `replay_invalid` / `schema` so structurally-meaningful 401 bodies (e.g. "401 input item ID does not belong to this conversation") keep their existing copy. Fixes #56197. Thanks @lokamir.
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
 - Cron: surface failed isolated-run diagnostics in `cron show`, status, and run history when requested tools are unavailable, so blocked cron runs report the actual tool-policy failure instead of a misleading green result. Fixes #75763. Thanks @RyanSandoval.
 - TUI/escape abort: track the in-flight runId after `chat.send` resolves so pressing Esc during the gap before the first gateway event aborts the run instead of repeatedly printing `no active run`. Fixes #1296. Thanks @Lukavyi and @romneyda.
