@@ -188,6 +188,51 @@ describe("server-channels approval bootstrap", () => {
     ).toBeUndefined();
   });
 
+  it("does not wait forever for approval cleanup when force-retiring a hung lifecycle", async () => {
+    vi.useFakeTimers();
+    try {
+      const channelRuntime = createRuntimeChannel();
+      const stopApprovalBootstrap = vi.fn(() => new Promise<void>(() => {}));
+      hoisted.startChannelApprovalHandlerBootstrap.mockResolvedValue(stopApprovalBootstrap);
+      const startAccount = vi.fn(
+        async ({
+          channelRuntime,
+        }: Parameters<NonNullable<NonNullable<ChannelPlugin["gateway"]>["startAccount"]>>[0]) => {
+          channelRuntime?.runtimeContexts.register({
+            channelId: "discord",
+            accountId: DEFAULT_ACCOUNT_ID,
+            capability: "approval.native",
+            context: { token: "tracked" },
+          });
+          await new Promise<void>(() => {});
+        },
+      );
+
+      installTestRegistry(createTestPlugin({ startAccount }));
+      const manager = createManager(createChannelManager, { channelRuntime });
+
+      await manager.startChannels();
+      await Promise.resolve();
+
+      const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+        forceRetireOnTimeout: true,
+      });
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(stopTask).resolves.toBeUndefined();
+      expect(stopApprovalBootstrap).toHaveBeenCalledTimes(1);
+      expect(
+        channelRuntime.runtimeContexts.get({
+          channelId: "discord",
+          accountId: DEFAULT_ACCOUNT_ID,
+          capability: "approval.native",
+        }),
+      ).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("continues account startup when approval bootstrap startup fails", async () => {
     const channelRuntime = createRuntimeChannel();
     const stopped = createDeferred();

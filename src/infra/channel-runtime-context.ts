@@ -99,15 +99,16 @@ export function createTaskScopedChannelRuntime(params: {
   const runtimeContexts = resolveScopedRuntimeContextRegistry({ channelRuntime: baseRuntime });
 
   const trackedLeases = new Set<{ dispose: () => void }>();
+  let disposed = false;
   const trackLease = (lease: { dispose: () => void }) => {
     trackedLeases.add(lease);
-    let disposed = false;
+    let leaseDisposed = false;
     return {
       dispose: () => {
-        if (disposed) {
+        if (leaseDisposed) {
           return;
         }
-        disposed = true;
+        leaseDisposed = true;
         trackedLeases.delete(lease);
         lease.dispose();
       },
@@ -119,6 +120,9 @@ export function createTaskScopedChannelRuntime(params: {
     runtimeContexts: {
       ...runtimeContexts,
       register: (registerParams) => {
+        if (disposed) {
+          return { dispose: NOOP_DISPOSE };
+        }
         const lease = runtimeContexts.register(registerParams);
         return trackLease(lease);
       },
@@ -128,6 +132,10 @@ export function createTaskScopedChannelRuntime(params: {
   return {
     channelRuntime: scopedRuntime,
     dispose: () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
       for (const lease of Array.from(trackedLeases)) {
         lease.dispose();
       }

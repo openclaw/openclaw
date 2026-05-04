@@ -131,7 +131,11 @@ async function expectRestartedChannel(
   accountId = "default",
 ) {
   const monitor = await startAndRunCheck(manager);
-  expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId);
+  expect(manager.stopChannel).toHaveBeenCalledWith(
+    channel,
+    accountId,
+    expect.objectContaining({ forceRetireOnTimeout: true }),
+  );
   expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId);
   monitor.stop();
 }
@@ -286,7 +290,11 @@ describe("channel-health-monitor", () => {
       },
     );
     const monitor = await startAndRunCheck(manager);
-    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.stopChannel).toHaveBeenCalledWith(
+      "discord",
+      "default",
+      expect.objectContaining({ forceRetireOnTimeout: true }),
+    );
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet");
     expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
@@ -308,7 +316,11 @@ describe("channel-health-monitor", () => {
       },
     });
     const monitor = await startAndRunCheck(manager);
-    expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default");
+    expect(manager.stopChannel).toHaveBeenCalledWith(
+      "whatsapp",
+      "default",
+      expect.objectContaining({ forceRetireOnTimeout: true }),
+    );
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
     monitor.stop();
@@ -613,7 +625,11 @@ describe("channel-health-monitor", () => {
       const monitor = await startAndRunCheck(manager, {
         staleEventThresholdMs: customThreshold,
       });
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.stopChannel).toHaveBeenCalledWith(
+        "slack",
+        "default",
+        expect.objectContaining({ forceRetireOnTimeout: true }),
+      );
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
     });

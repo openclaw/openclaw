@@ -117,4 +117,27 @@ describe("channel runtime context helpers", () => {
     persistentLease?.dispose();
     unsubscribe?.();
   });
+
+  it("ignores registrations through a disposed task-scoped runtime", () => {
+    const channelRuntime = createRuntimeChannel();
+    const scoped = createTaskScopedChannelRuntime({ channelRuntime });
+
+    scoped.dispose();
+    registerChannelRuntimeContext({
+      channelRuntime: scoped.channelRuntime,
+      channelId: "slack",
+      accountId: "default",
+      capability: "approval.native",
+      context: { app: "stale" },
+    });
+
+    expect(
+      getChannelRuntimeContext({
+        channelRuntime,
+        channelId: "slack",
+        accountId: "default",
+        capability: "approval.native",
+      }),
+    ).toBeUndefined();
+  });
 });

@@ -442,6 +442,35 @@ describe("createExecApprovalChannelRuntime", () => {
     );
   });
 
+  it("stops the gateway client when shutdown wins the startup handshake", async () => {
+    mockCreateOperatorApprovalsGatewayClient.mockImplementationOnce(async () => ({
+      start: mockGatewayClientStarts,
+      stop: mockGatewayClientStops,
+      request: mockGatewayClientRequests,
+    }));
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    const startPromise = runtime.start();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
+
+    await expect(runtime.stop()).resolves.toBeUndefined();
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
+    await expect(runtime.request("exec.approval.resolve", { id: "abc" })).rejects.toThrow(
+      "gateway client not connected",
+    );
+  });
+
   it("logs async request handling failures from gateway events", async () => {
     const runtime = createExecApprovalChannelRuntime<
       { id: string },

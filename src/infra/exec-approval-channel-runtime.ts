@@ -84,10 +84,12 @@ export function createExecApprovalChannelRuntime<
   const nowMs = adapter.nowMs ?? Date.now;
   const eventKinds = new Set<ExecApprovalChannelRuntimeEventKind>(adapter.eventKinds ?? ["exec"]);
   const pending = new Map<string, PendingApprovalEntry<TPending, TRequest, TResolved>>();
+  const stoppedGatewayClients = new WeakSet<GatewayClient>();
   let gatewayClient: GatewayClient | null = null;
   let started = false;
   let shouldRun = false;
   let startPromise: Promise<void> | null = null;
+  let cancelStartupWait: (() => void) | null = null;
   let replayPromise: Promise<void> | null = null;
 
   const shouldKeepRunning = (): boolean => shouldRun;
@@ -99,13 +101,32 @@ export function createExecApprovalChannelRuntime<
     });
   };
 
+  const stopGatewayClient = (client: GatewayClient): boolean => {
+    if (stoppedGatewayClients.has(client)) {
+      return false;
+    }
+    stoppedGatewayClients.add(client);
+    if (gatewayClient === client) {
+      gatewayClient = null;
+    }
+    client.stop();
+    return true;
+  };
+
   const stopClientIfInactive = (client: GatewayClient): boolean => {
     if (shouldKeepRunning()) {
       return false;
     }
-    gatewayClient = null;
-    client.stop();
+    stopGatewayClient(client);
     return true;
+  };
+
+  const stopActiveGatewayClient = (): boolean => {
+    const client = gatewayClient;
+    if (!client) {
+      return false;
+    }
+    return stopGatewayClient(client);
   };
 
   const clearPendingEntry = (
@@ -300,6 +321,7 @@ export function createExecApprovalChannelRuntime<
       }
 
       shouldRun = true;
+      let cancelReadyWait: (() => void) | null = null;
       startPromise = (async () => {
         if (!adapter.isConfigured()) {
           log.debug("disabled");
@@ -321,6 +343,8 @@ export function createExecApprovalChannelRuntime<
           readySettled = true;
           fn();
         };
+        cancelReadyWait = () => settleReady(resolveReady);
+        cancelStartupWait = cancelReadyWait;
 
         const client = await createOperatorApprovalsGatewayClient({
           config: adapter.cfg,
@@ -353,7 +377,7 @@ export function createExecApprovalChannelRuntime<
         });
 
         if (!shouldRun) {
-          client.stop();
+          stopGatewayClient(client);
           return;
         }
         await adapter.beforeGatewayClientStart?.();
@@ -376,10 +400,13 @@ export function createExecApprovalChannelRuntime<
         } catch (error) {
           gatewayClient = null;
           started = false;
-          client.stop();
+          stopGatewayClient(client);
           throw error;
         }
       })().finally(() => {
+        if (cancelReadyWait && cancelStartupWait === cancelReadyWait) {
+          cancelStartupWait = null;
+        }
         startPromise = null;
       });
 
@@ -388,13 +415,14 @@ export function createExecApprovalChannelRuntime<
 
     async stop(): Promise<void> {
       shouldRun = false;
+      const wasActive = started || gatewayClient !== null || replayPromise !== null;
+      stopActiveGatewayClient();
+      cancelStartupWait?.();
       if (startPromise) {
         await startPromise.catch(() => {});
       }
-      const wasActive = started || gatewayClient !== null || replayPromise !== null;
       started = false;
-      gatewayClient?.stop();
-      gatewayClient = null;
+      stopActiveGatewayClient();
       await waitForPendingApprovalReplay();
       if (!wasActive) {
         await adapter.onStopped?.();
