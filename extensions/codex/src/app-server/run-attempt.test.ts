@@ -924,6 +924,62 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("blocks before_model_call before Codex turn/start and llm_input", async () => {
+    const beforeModelCall = vi.fn(async () => ({ block: true, blockReason: "state invalid" }));
+    const llmInput = vi.fn();
+    const llmOutput = vi.fn();
+    const agentEnd = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        { hookName: "before_model_call", handler: beforeModelCall },
+        { hookName: "llm_input", handler: llmInput },
+        { hookName: "llm_output", handler: llmOutput },
+        { hookName: "agent_end", handler: agentEnd },
+      ]),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage(assistantMessage("existing context", Date.now()));
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParamsWithRuntimePlan(sessionFile, workspaceDir));
+    await harness.waitForMethod("thread/start");
+    await expect(run).rejects.toThrow(
+      "model call blocked by before_model_call hook: state invalid",
+    );
+
+    expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
+    expect(llmInput).not.toHaveBeenCalled();
+    expect(llmOutput).not.toHaveBeenCalled();
+    expect(beforeModelCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        prompt: "hello",
+        historyMessages: [expect.objectContaining({ role: "assistant" })],
+        systemPrompt: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
+        resolvedRef: "codex/gpt-5.4-codex",
+        harnessId: "codex",
+        workspaceDir,
+      }),
+      expect.objectContaining({
+        runId: "run-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+      }),
+    );
+    expect(agentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: "model call blocked by before_model_call hook: state invalid",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("forwards Codex app-server verbose tool summaries and completed output", async () => {
     const onToolResult = vi.fn();
     const sessionFile = path.join(tempDir, "session.jsonl");

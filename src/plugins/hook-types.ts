@@ -73,6 +73,7 @@ export type PluginHookName =
   | "before_prompt_build"
   | "before_agent_start"
   | "before_agent_reply"
+  | "before_model_call"
   | "model_call_started"
   | "model_call_ended"
   | "llm_input"
@@ -110,6 +111,7 @@ export const PLUGIN_HOOK_NAMES = [
   "before_prompt_build",
   "before_agent_start",
   "before_agent_reply",
+  "before_model_call",
   "model_call_started",
   "model_call_ended",
   "llm_input",
@@ -167,6 +169,7 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
   promptInjectionHookNameSet.has(hookName);
 
 export const CONVERSATION_HOOK_NAMES = [
+  "before_model_call",
   "llm_input",
   "llm_output",
   "before_agent_finalize",
@@ -214,6 +217,26 @@ export type PluginHookLlmInputEvent = {
   prompt: string;
   historyMessages: unknown[];
   imagesCount: number;
+};
+
+export type PluginHookBeforeModelCallEvent = {
+  runId: string;
+  sessionId: string;
+  provider: string;
+  model: string;
+  prompt: string;
+  historyMessages: unknown[];
+  imagesCount: number;
+  systemPrompt?: string;
+  sessionKey?: string;
+  workspaceDir?: string;
+  resolvedRef?: string;
+  harnessId?: string;
+};
+
+export type PluginHookBeforeModelCallResult = {
+  block?: boolean;
+  blockReason?: string;
 };
 
 export type PluginHookModelCallBaseEvent = {
@@ -811,6 +834,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeAgentReplyEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentReplyResult | void> | PluginHookBeforeAgentReplyResult | void;
+  before_model_call: (
+    event: PluginHookBeforeModelCallEvent,
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeModelCallResult | void> | PluginHookBeforeModelCallResult | void;
   model_call_started: (
     event: PluginHookModelCallStartedEvent,
     ctx: PluginHookAgentContext,

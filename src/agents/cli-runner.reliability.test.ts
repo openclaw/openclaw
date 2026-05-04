@@ -690,6 +690,73 @@ describe("runCliAgent reliability", () => {
     );
   });
 
+  it("blocks before_model_call before llm_input and CLI spawn", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_model_call", "llm_input", "agent_end"].includes(hookName),
+      ),
+      runBeforeModelCall: vi.fn(async () => ({ block: true, blockReason: "state invalid" })),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier context" }],
+    });
+    const supervisorSpawnCallsBefore = supervisorSpawnMock.mock.calls.length;
+
+    try {
+      await expect(
+        runPreparedCliAgent({
+          ...buildPreparedContext({
+            openClawHistoryPrompt: "earlier context\n\nhi",
+          }),
+          params: {
+            ...buildPreparedContext().params,
+            sessionFile,
+            workspaceDir: dir,
+            sessionKey: "agent:main:main",
+            agentId: "main",
+          },
+          workspaceDir: dir,
+        }),
+      ).rejects.toThrow("model call blocked by before_model_call hook: state invalid");
+
+      expect(supervisorSpawnMock.mock.calls).toHaveLength(supervisorSpawnCallsBefore);
+      expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      expect(hookRunner.runBeforeModelCall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: "run-2",
+          sessionId: "s1",
+          provider: "codex-cli",
+          model: "gpt-5.4",
+          prompt: "earlier context\n\nhi",
+          systemPrompt: "You are a helpful assistant.",
+          historyMessages: [expect.objectContaining({ role: "user" })],
+          imagesCount: 0,
+          harnessId: "cli",
+          resolvedRef: "codex-cli/gpt-5.4",
+        }),
+        expect.objectContaining({
+          runId: "run-2",
+          sessionKey: "agent:main:main",
+          sessionId: "s1",
+          workspaceDir: dir,
+        }),
+      );
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: "model call blocked by before_model_call hook: state invalid",
+        }),
+        expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not emit duplicate llm_input when session-expired recovery succeeds", async () => {
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) =>

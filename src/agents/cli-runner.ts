@@ -9,6 +9,7 @@ import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failove
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
   runAgentHarnessAgentEndHook,
+  runAgentHarnessBeforeModelCallHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
@@ -124,11 +125,12 @@ export async function runPreparedCliAgent(
   const { executePreparedCliRun } = await import("./cli-runner/execute.runtime.js");
   const { params } = context;
   const hookRunner = getGlobalHookRunner();
+  const hasBeforeModelCallHooks = hookRunner?.hasHooks("before_model_call") === true;
   const hasLlmInputHooks = hookRunner?.hasHooks("llm_input") === true;
   const hasLlmOutputHooks = hookRunner?.hasHooks("llm_output") === true;
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const historyMessages =
-    hasLlmInputHooks || hasAgentEndHooks
+    hasBeforeModelCallHooks || hasLlmInputHooks || hasAgentEndHooks
       ? await loadCliSessionHistoryMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
@@ -137,13 +139,16 @@ export async function runPreparedCliAgent(
           config: params.config,
         })
       : [];
+  const preparedPromptForModel = context.reusableCliSession.sessionId
+    ? params.prompt
+    : (context.openClawHistoryPrompt ?? params.prompt);
   const llmInputEvent = {
     runId: params.runId,
     sessionId: params.sessionId,
     provider: params.provider,
     model: context.modelId,
     systemPrompt: context.systemPrompt,
-    prompt: params.prompt,
+    prompt: preparedPromptForModel,
     historyMessages,
     imagesCount: params.images?.length ?? 0,
   } as const;
@@ -304,6 +309,37 @@ export async function runPreparedCliAgent(
 
   // Try with the provided CLI session ID first
   try {
+    try {
+      const beforeModelCall = await runAgentHarnessBeforeModelCallHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          provider: params.provider,
+          model: context.modelId,
+          resolvedRef: `${params.provider}/${context.modelId}`,
+          harnessId: "cli",
+          workspaceDir: params.workspaceDir,
+          systemPrompt: context.systemPrompt,
+          prompt: preparedPromptForModel,
+          historyMessages,
+          imagesCount: params.images?.length ?? 0,
+        },
+        ctx: hookContext,
+        hookRunner,
+      });
+      if (beforeModelCall.action === "block") {
+        throw new Error(`model call blocked by before_model_call hook: ${beforeModelCall.reason}`);
+      }
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      runAgentHarnessAgentEndHook({
+        event: buildFailedAgentEndEvent(message),
+        ctx: hookContext,
+        hookRunner,
+      });
+      return toCliRunFailure(err);
+    }
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,

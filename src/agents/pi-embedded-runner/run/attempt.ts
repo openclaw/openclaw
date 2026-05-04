@@ -77,6 +77,7 @@ import {
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import { runAgentHarnessBeforeModelCallHook } from "../../harness/lifecycle-hook-helpers.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
@@ -2904,35 +2905,6 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          if (!isRawModelRun && hookRunner?.hasHooks("llm_input")) {
-            hookRunner
-              .runLlmInput(
-                {
-                  runId: params.runId,
-                  sessionId: params.sessionId,
-                  provider: params.provider,
-                  model: params.modelId,
-                  systemPrompt: systemPromptText,
-                  prompt: effectivePrompt,
-                  historyMessages: activeSession.messages,
-                  imagesCount: imageResult.images.length,
-                },
-                {
-                  runId: params.runId,
-                  trace: freezeDiagnosticTraceContext(diagnosticTrace),
-                  agentId: hookAgentId,
-                  sessionKey: params.sessionKey,
-                  sessionId: params.sessionId,
-                  workspaceDir: params.workspaceDir,
-                  trigger: params.trigger,
-                  ...buildAgentHookContextChannelFields(params),
-                },
-              )
-              .catch((err) => {
-                log.warn(`llm_input hook failed: ${String(err)}`);
-              });
-          }
-
           const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
             messages: activeSession.messages,
             ...(contextEnginePromptAuthority === "preassembly_may_overflow"
@@ -3022,51 +2994,136 @@ export async function runEmbeddedAttempt(
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
             }
-            finalPromptText = promptForModel;
-            trajectoryRecorder?.recordEvent("prompt.submitted", {
-              prompt: promptForModel,
-              systemPrompt: systemPromptText,
-              messages: activeSession.messages,
-              imagesCount: imageResult.images.length,
-            });
-            const btwSnapshotMessages = normalizedReplayMessages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
-            updateActiveEmbeddedRunSnapshot(params.sessionId, {
-              transcriptLeafId,
-              messages: btwSnapshotMessages,
-              inFlightPrompt: promptForModel,
-            });
-            if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptForModel));
-            } else {
-              const runtimeContext = promptSubmission.runtimeContext?.trim();
-              const runtimeSystemPrompt = runtimeContext
-                ? composeSystemPromptWithHookContext({
-                    baseSystemPrompt: systemPromptText,
-                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
-                  })
-                : undefined;
-              if (runtimeSystemPrompt) {
-                applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
-              }
-              try {
+            const runtimeContext = promptSubmission.runtimeOnly
+              ? undefined
+              : promptSubmission.runtimeContext?.trim();
+            const runtimeSystemPrompt = runtimeContext
+              ? composeSystemPromptWithHookContext({
+                  baseSystemPrompt: systemPromptText,
+                  appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
+                })
+              : undefined;
+            const systemPromptForModel = runtimeSystemPrompt ?? systemPromptText;
+            if (runtimeSystemPrompt) {
+              applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
+            }
+            try {
+              if (!promptSubmission.runtimeOnly) {
                 await queueRuntimeContextForNextTurn({
                   session: activeSession,
                   runtimeContext,
                 });
+              }
 
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
+              let beforeModelCall: Awaited<ReturnType<typeof runAgentHarnessBeforeModelCallHook>> =
+                { action: "continue" };
+              try {
+                beforeModelCall = await runAgentHarnessBeforeModelCallHook({
+                  event: {
+                    runId: params.runId,
+                    sessionId: params.sessionId,
+                    sessionKey: params.sessionKey,
+                    provider: params.provider,
+                    model: params.modelId,
+                    resolvedRef: `${params.provider}/${params.modelId}`,
+                    harnessId: "pi-embedded",
+                    workspaceDir: params.workspaceDir,
+                    systemPrompt: systemPromptForModel,
+                    prompt: promptForModel,
+                    historyMessages: activeSession.messages,
+                    imagesCount: imageResult.images.length,
+                  },
+                  ctx: {
+                    runId: params.runId,
+                    trace: freezeDiagnosticTraceContext(diagnosticTrace),
+                    agentId: hookAgentId,
+                    sessionKey: params.sessionKey,
+                    sessionId: params.sessionId,
+                    workspaceDir: params.workspaceDir,
+                    trigger: params.trigger,
+                    ...buildAgentHookContextChannelFields(params),
+                  },
+                  hookRunner,
+                });
+              } catch (error) {
+                promptError = error;
+                promptErrorSource = "precheck";
+                log.warn(
+                  `before_model_call hook failed before model request: runId=${params.runId} ` +
+                    `sessionId=${params.sessionId} provider=${params.provider}/${params.modelId} ` +
+                    `error=${String(error)}`,
+                );
+                skipPromptSubmission = true;
+              }
+              if (beforeModelCall.action === "block") {
+                promptError = new Error(
+                  `model call blocked by before_model_call hook: ${beforeModelCall.reason}`,
+                );
+                promptErrorSource = "precheck";
+                log.warn(
+                  `before_model_call blocked model request: runId=${params.runId} ` +
+                    `sessionId=${params.sessionId} provider=${params.provider}/${params.modelId} ` +
+                    `reason=${beforeModelCall.reason}`,
+                );
+                skipPromptSubmission = true;
+              } else if (!skipPromptSubmission) {
+                finalPromptText = promptForModel;
+                trajectoryRecorder?.recordEvent("prompt.submitted", {
+                  prompt: promptForModel,
+                  systemPrompt: systemPromptForModel,
+                  messages: activeSession.messages,
+                  imagesCount: imageResult.images.length,
+                });
+                const btwSnapshotMessages =
+                  normalizedReplayMessages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+                updateActiveEmbeddedRunSnapshot(params.sessionId, {
+                  transcriptLeafId,
+                  messages: btwSnapshotMessages,
+                  inFlightPrompt: promptForModel,
+                });
+                if (!isRawModelRun && hookRunner?.hasHooks("llm_input")) {
+                  hookRunner
+                    .runLlmInput(
+                      {
+                        runId: params.runId,
+                        sessionId: params.sessionId,
+                        provider: params.provider,
+                        model: params.modelId,
+                        systemPrompt: systemPromptForModel,
+                        prompt: promptForModel,
+                        historyMessages: activeSession.messages,
+                        imagesCount: imageResult.images.length,
+                      },
+                      {
+                        runId: params.runId,
+                        trace: freezeDiagnosticTraceContext(diagnosticTrace),
+                        agentId: hookAgentId,
+                        sessionKey: params.sessionKey,
+                        sessionId: params.sessionId,
+                        workspaceDir: params.workspaceDir,
+                        trigger: params.trigger,
+                        ...buildAgentHookContextChannelFields(params),
+                      },
+                    )
+                    .catch((err) => {
+                      log.warn(`llm_input hook failed: ${String(err)}`);
+                    });
+                }
+
+                if (promptSubmission.runtimeOnly) {
+                  await abortable(activeSession.prompt(promptForModel));
+                } else if (imageResult.images.length > 0) {
+                  // Only pass images option when there are images to pass.
                   await abortable(
                     activeSession.prompt(promptForModel, { images: imageResult.images }),
                   );
                 } else {
                   await abortable(activeSession.prompt(promptForModel));
                 }
-              } finally {
-                if (runtimeSystemPrompt) {
-                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
-                }
+              }
+            } finally {
+              if (runtimeSystemPrompt) {
+                applySystemPromptOverrideToSession(activeSession, systemPromptText);
               }
             }
           }

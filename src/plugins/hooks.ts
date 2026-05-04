@@ -28,6 +28,8 @@ import type {
   PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
+  PluginHookBeforeModelCallEvent,
+  PluginHookBeforeModelCallResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
@@ -95,6 +97,8 @@ export type {
   PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
+  PluginHookBeforeModelCallEvent,
+  PluginHookBeforeModelCallResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookModelCallEndedEvent,
@@ -762,6 +766,37 @@ export function createHookRunner(
   }
 
   /**
+   * Run before_model_call hook.
+   * Allows trusted plugins to block the final prepared model input before submission.
+   */
+  async function runBeforeModelCall(
+    event: PluginHookBeforeModelCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeModelCallResult | undefined> {
+    return runModifyingHook<"before_model_call", PluginHookBeforeModelCallResult>(
+      "before_model_call",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          if (next.block === true) {
+            return {
+              block: true,
+              blockReason: next.blockReason,
+            };
+          }
+          return acc ?? {};
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
+    );
+  }
+
+  /**
    * Run model_call_started hook.
    * Allows plugins to observe sanitized model-call metadata.
    * Runs in parallel (fire-and-forget).
@@ -1359,6 +1394,7 @@ export function createHookRunner(
     runBeforePromptBuild,
     runBeforeAgentStart,
     runBeforeAgentReply,
+    runBeforeModelCall,
     runModelCallStarted,
     runModelCallEnded,
     runLlmInput,

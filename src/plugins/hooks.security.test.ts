@@ -2,12 +2,26 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addStaticTestHooks } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
-import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
+import type {
+  PluginHookBeforeModelCallResult,
+  PluginHookBeforeToolCallResult,
+  PluginHookMessageSendingResult,
+} from "./types.js";
 
 const toolEvent = { toolName: "bash", params: { command: "echo hello" } };
 const toolCtx = { toolName: "bash" };
 const messageEvent = { to: "user-1", content: "hello" };
 const messageCtx = { channelId: "forum" };
+const beforeModelCallEvent = {
+  runId: "run-1",
+  sessionId: "session-1",
+  provider: "openai",
+  model: "gpt-5",
+  prompt: "hello",
+  historyMessages: [],
+  imagesCount: 0,
+};
+const beforeModelCallCtx = { runId: "run-1", sessionId: "session-1" };
 
 async function runBeforeToolCallWithHooks(
   registry: PluginRegistry,
@@ -43,6 +57,24 @@ async function runMessageSendingWithHooks(
   });
   const runner = createHookRunner(registry, { catchErrors });
   return await runner.runMessageSending(messageEvent, messageCtx);
+}
+
+async function runBeforeModelCallWithHooks(
+  registry: PluginRegistry,
+  hooks: ReadonlyArray<{
+    pluginId: string;
+    result: PluginHookBeforeModelCallResult;
+    priority?: number;
+    handler?: () => PluginHookBeforeModelCallResult | Promise<PluginHookBeforeModelCallResult>;
+  }>,
+  catchErrors = true,
+) {
+  addStaticTestHooks(registry, {
+    hookName: "before_model_call",
+    hooks,
+  });
+  const runner = createHookRunner(registry, { catchErrors });
+  return await runner.runBeforeModelCall(beforeModelCallEvent, beforeModelCallCtx);
 }
 
 function expectTerminalHookState<
@@ -217,6 +249,78 @@ describe("before_tool_call terminal block semantics", () => {
     );
     expect(message).not.toContain("\n");
     expect(message).not.toContain("sk-test1234567890");
+  });
+});
+
+describe("before_model_call terminal block semantics", () => {
+  let registry: PluginRegistry;
+
+  beforeEach(() => {
+    registry = createEmptyPluginRegistry();
+  });
+
+  it("treats block=false as no decision and lets a lower-priority hook block", async () => {
+    const high = vi.fn().mockReturnValue({ block: false });
+    const low = vi.fn().mockReturnValue({ block: true, blockReason: "policy" });
+
+    const result = await runBeforeModelCallWithHooks(registry, [
+      { pluginId: "high", result: { block: false }, priority: 100, handler: high },
+      {
+        pluginId: "low",
+        result: { block: true, blockReason: "policy" },
+        priority: 10,
+        handler: low,
+      },
+    ]);
+
+    expect(result).toEqual({ block: true, blockReason: "policy" });
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).toHaveBeenCalledTimes(1);
+  });
+
+  it("short-circuits lower-priority hooks after block=true", async () => {
+    const high = vi.fn().mockReturnValue({ block: true, blockReason: "stop" });
+    const low = vi.fn().mockReturnValue({ block: true, blockReason: "late" });
+
+    const result = await runBeforeModelCallWithHooks(registry, [
+      {
+        pluginId: "high",
+        result: { block: true, blockReason: "stop" },
+        priority: 100,
+        handler: high,
+      },
+      { pluginId: "low", result: { block: true, blockReason: "late" }, priority: 10, handler: low },
+    ]);
+
+    expect(result).toEqual({ block: true, blockReason: "stop" });
+    expect(high).toHaveBeenCalledTimes(1);
+    expect(low).not.toHaveBeenCalled();
+  });
+
+  it("throws for before_model_call when configured as fail-closed", async () => {
+    addStaticTestHooks(registry, {
+      hookName: "before_model_call",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: {},
+          priority: 100,
+          handler: () => {
+            throw new Error("boom");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, {
+      catchErrors: true,
+      failurePolicyByHook: {
+        before_model_call: "fail-closed",
+      },
+    });
+
+    await expect(
+      runner.runBeforeModelCall(beforeModelCallEvent, beforeModelCallCtx),
+    ).rejects.toThrow("before_model_call handler from failing failed: boom");
   });
 });
 

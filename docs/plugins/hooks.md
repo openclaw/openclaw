@@ -111,6 +111,7 @@ observation-only.
 
 **Conversation observation**
 
+- **`before_model_call`** — inspect the final prepared provider input and block before any model request is sent
 - `model_call_started` / `model_call_ended` — observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` — observe provider input (system prompt, prompt, history)
 - `llm_output` — observe provider output
@@ -256,6 +257,15 @@ bodies, or provider request IDs. These hooks include stable metadata such as
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
 bounded provider request-id hash.
 
+Use `before_model_call` when a trusted plugin needs a fail-closed policy gate
+after OpenClaw has prepared the final model input and before Pi, a CLI runtime,
+or the Codex harness starts the model turn. The event includes `runId`,
+`sessionId`, `provider`, `model`, `prompt`, `historyMessages`, `imagesCount`,
+and optional `systemPrompt`, `sessionKey`, `workspaceDir`, `resolvedRef`, and
+`harnessId`. Return `{ block: true, blockReason?: string }` to prevent the
+model request; `{ block: false }` is treated as no decision so lower-priority
+hooks can still block. Handler failures and timeouts fail closed for this hook.
+
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not
 run when the user aborts a turn. Return `{ action: "revise", reason }` to ask
@@ -264,7 +274,7 @@ the harness for one more model pass before finalization, `{ action:
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
 
-Non-bundled plugins that need `llm_input`, `llm_output`,
+Non-bundled plugins that need `before_model_call`, `llm_input`, `llm_output`,
 `before_agent_finalize`, or `agent_end` must set:
 
 ```json
