@@ -1458,6 +1458,7 @@ function renderAssistantAttachments(
           availability.status === "available"
             ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
             : null;
+        const mediaTicket = availability.status === "available" ? availability.mediaTicket : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -1468,14 +1469,9 @@ function renderAssistantAttachments(
             });
           }
           return renderImageFrame({
-            previewUrl: buildAssistantAttachmentUrl(
-              attachment.url,
-              basePath,
-              availability.mediaTicket,
-              {
-                thumbnail: true,
-              },
-            ),
+            previewUrl: buildAssistantAttachmentUrl(attachment.url, basePath, mediaTicket, {
+              thumbnail: true,
+            }),
             openUrl: attachmentUrl,
             actionUrl: attachmentUrl,
             alt: attachment.label,

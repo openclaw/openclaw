@@ -619,7 +619,7 @@ export async function handleControlUiAssistantMediaRequest(
     if (req.method === "GET" && url.searchParams.get("thumbnail") === "1") {
       const thumbnail = await tryBuildAssistantMediaThumbnail(
         opened,
-        mime,
+        mime ?? null,
         resolveControlUiImageThumbnailMaxSide(opts?.config),
       );
       if (thumbnail) {
