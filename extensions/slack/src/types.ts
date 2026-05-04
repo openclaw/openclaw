@@ -1,3 +1,5 @@
+import type { MessageMetadata } from "@slack/types";
+
 export type SlackFile = {
   id?: string;
   name?: string;
@@ -41,6 +43,7 @@ export type SlackMessageEvent = {
   parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
+  metadata?: MessageMetadata;
   blocks?: unknown[];
   files?: SlackFile[];
   attachments?: SlackAttachment[];

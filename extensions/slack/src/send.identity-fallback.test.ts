@@ -1,6 +1,7 @@
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import { OPENCLAW_GATEWAY_FAILURE_METADATA_EVENT_TYPE } from "./gateway-failure-metadata.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -75,6 +76,46 @@ describe("sendMessageSlack customize-scope fallback", () => {
       "slack send: missing chat:write.customize, retrying without custom identity",
     );
     expect(result.messageId).toBe("171234.567");
+  });
+
+  it("tags OpenClaw gateway failure messages with Slack metadata (#51832)", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack(
+      "channel:C123",
+      "\u26a0\ufe0f Agent failed before reply: OAuth token refresh failed. Please try again.",
+      {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      },
+    );
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: {
+          event_type: OPENCLAW_GATEWAY_FAILURE_METADATA_EVENT_TYPE,
+          event_payload: {
+            source: "openclaw",
+            kind: "agent_failed_before_reply",
+            schema_version: 1,
+          },
+        },
+      }),
+    );
+  });
+
+  it("does not tag ordinary Slack messages as gateway failures (#51832)", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    const [payload] = vi.mocked(client.chat.postMessage).mock.calls[0];
+    expect(payload).not.toHaveProperty("metadata");
   });
 
   it("retries when chat:write.customize appears only in response_metadata.acceptedScopes", async () => {
