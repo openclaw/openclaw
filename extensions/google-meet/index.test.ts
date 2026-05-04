@@ -3517,7 +3517,7 @@ describe("google-meet plugin", () => {
           updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
           resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
         },
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -3717,7 +3717,7 @@ describe("google-meet plugin", () => {
           updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
           resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
         },
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "The launch is still on track." }],
           meta: {},
         })),
