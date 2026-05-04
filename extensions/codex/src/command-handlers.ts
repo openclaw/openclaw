@@ -223,10 +223,10 @@ export async function handleCodexSubcommand(
     return { text: await setConversationModel(deps, ctx, options.pluginConfig, rest.join(" ")) };
   }
   if (normalized === "fast") {
-    return { text: await setConversationFastMode(deps, ctx, options.pluginConfig, rest[0]) };
+    return { text: await setConversationFastMode(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "permissions") {
-    return { text: await setConversationPermissions(deps, ctx, options.pluginConfig, rest[0]) };
+    return { text: await setConversationPermissions(deps, ctx, options.pluginConfig, rest) };
   }
   if (normalized === "compact") {
     return {
@@ -519,12 +519,16 @@ async function setConversationFastMode(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-  value: string | undefined,
+  args: string[],
 ): Promise<string> {
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot set Codex fast mode because this command did not include an OpenClaw session file.";
   }
+  if (args.length > 1) {
+    return "Usage: /codex fast [on|off|status]";
+  }
+  const value = args[0];
   const parsed = parseCodexFastModeArg(value);
   if (value && parsed == null && value.trim().toLowerCase() !== "status") {
     return "Usage: /codex fast [on|off|status]";
@@ -540,12 +544,16 @@ async function setConversationPermissions(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
-  value: string | undefined,
+  args: string[],
 ): Promise<string> {
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot set Codex permissions because this command did not include an OpenClaw session file.";
   }
+  if (args.length > 1) {
+    return "Usage: /codex permissions [default|yolo|status]";
+  }
+  const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
   if (value && !parsed && value.trim().toLowerCase() !== "status") {
     return "Usage: /codex permissions [default|yolo|status]";

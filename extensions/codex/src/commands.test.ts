@@ -1696,6 +1696,26 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects extra fast and permissions arguments", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn();
+    const deps = createDeps({
+      setCodexConversationFastMode,
+      setCodexConversationPermissions,
+    });
+
+    await expect(
+      handleCodexCommand(createContext("fast on now", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Usage: /codex fast [on|off|status]" });
+    await expect(
+      handleCodexCommand(createContext("permissions yolo now", sessionFile), { deps }),
+    ).resolves.toEqual({ text: "Usage: /codex permissions [default|yolo|status]" });
+
+    expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationPermissions).not.toHaveBeenCalled();
+  });
+
   it("uses current plugin binding data for follow-up control commands", async () => {
     const hostSessionFile = path.join(tempDir, "host-session.jsonl");
     const pluginSessionFile = path.join(tempDir, "plugin-session.jsonl");
