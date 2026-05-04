@@ -32,6 +32,7 @@ import {
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
+  transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -525,7 +526,7 @@ const CORE_CODING_TOOL_ALLOWLIST_NAMES = new Set([
   "write",
 ]);
 
-function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
+export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
   if (!toolsAllow || toolsAllow.length === 0) {
     return true;
   }
@@ -1291,6 +1292,7 @@ export async function runEmbeddedAttempt(
     const attemptSystemPrompt = buildAttemptSystemPrompt({
       isRawModelRun,
       systemPromptOverrideText,
+      transformProviderSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: effectiveWorkspace,
         defaultThinkLevel: params.thinkLevel,
