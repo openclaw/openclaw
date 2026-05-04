@@ -1,12 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
-import { getActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
 import { MAX_SEARCH_COUNT, SEARCH_CACHE } from "./web-search-provider-common.js";
+import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const WebSearchSchema = {
   type: "object",
@@ -87,32 +85,11 @@ export function createWebSearchTool(options?: {
       "Search the web. Returns provider-normalized results for current information lookup.",
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args, signal) => {
-      const runtimeWebSearch =
-        options?.lateBindRuntimeConfig === true
-          ? (getActiveRuntimeWebToolsMetadata()?.search ?? options?.runtimeWebSearch)
-          : options?.runtimeWebSearch;
-      const runtimeProviderId =
-        runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured;
-      const config =
-        options?.lateBindRuntimeConfig === true
-          ? (getActiveSecretsRuntimeSnapshot()?.config ?? options?.config)
-          : options?.config;
-      // The active gateway plugin registry may omit the configured search
-      // provider; fall back to the provider id captured in config so the
-      // first-class assistant tool still resolves the right plugin instead of
-      // reporting "no provider available".
-      const configuredProviderId =
-        typeof config?.tools?.web?.search?.provider === "string"
-          ? config.tools.web.search.provider.trim().toLowerCase()
-          : "";
-      const providerSelectionId = runtimeProviderId || configuredProviderId;
-      const preferRuntimeProviders =
-        !providerSelectionId ||
-        !resolveManifestContractOwnerPluginId({
-          contract: "webSearchProviders",
-          value: providerSelectionId,
-          origin: "bundled",
-          config,
+      const { config, preferRuntimeProviders, runtimeWebSearch } =
+        resolveWebSearchToolRuntimeContext({
+          config: options?.config,
+          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+          runtimeWebSearch: options?.runtimeWebSearch,
         });
       const result = await runWebSearch({
         config,
