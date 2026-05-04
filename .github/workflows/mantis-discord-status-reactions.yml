@@ -255,23 +255,23 @@ jobs:
       - name: Build Mantis harness
         run: pnpm build
 
+      - name: Setup Go for Crabbox CLI
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.x"
+          cache: false
+
       - name: Install Crabbox CLI
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
           install_dir="${RUNNER_TEMP}/crabbox"
           mkdir -p "$install_dir" "$HOME/.local/bin"
-          gh release download \
-            --repo openclaw/crabbox \
-            --pattern 'crabbox_*_linux_amd64.tar.gz' \
-            --dir "$install_dir" \
-            --clobber
-          tar -xzf "$install_dir"/crabbox_*_linux_amd64.tar.gz -C "$install_dir"
-          install -m 0755 "$install_dir/crabbox" "$HOME/.local/bin/crabbox"
+          git clone --depth 1 https://github.com/openclaw/crabbox.git "$install_dir/src"
+          go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
+          "$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "--desktop"
 
       - name: Prepare baseline and candidate worktrees
         shell: bash
