@@ -1,14 +1,8 @@
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch";
 import { enablePluginInConfig } from "openclaw/plugin-sdk/provider-web-fetch";
+import { resolveTavilyFetchApiKey, resolveTavilyFetchBaseUrl } from "./config.js";
 import { runTavilyExtract } from "./tavily-client.js";
 import { TAVILY_WEB_FETCH_PROVIDER_SHARED } from "./tavily-fetch-provider-shared.js";
-
-function applyMaxChars(value: unknown, maxChars: number): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-  return value.length <= maxChars ? value : value.slice(0, maxChars);
-}
 
 export function createTavilyWebFetchProvider(): WebFetchProviderPlugin {
   return {
@@ -20,34 +14,35 @@ export function createTavilyWebFetchProvider(): WebFetchProviderPlugin {
       execute: async (args) => {
         const url = typeof args.url === "string" ? args.url : "";
         const format = args.extractMode === "text" ? "text" : "markdown";
-        const maxChars =
-          typeof args.maxChars === "number" && Number.isFinite(args.maxChars)
-            ? Math.floor(args.maxChars)
-            : undefined;
+        const apiKey = resolveTavilyFetchApiKey(config);
+        const baseUrl = resolveTavilyFetchBaseUrl(config);
         const payload = await runTavilyExtract({
           cfg: config,
           urls: [url],
           format,
           extractDepth: "advanced",
+          ...(apiKey ? { apiKey } : {}),
+          ...(baseUrl ? { baseUrl } : {}),
         });
-        if (maxChars === undefined) {
-          return payload;
-        }
         const rawResults = Array.isArray(payload.results) ? payload.results : [];
-        const truncated = rawResults.map((r) => {
-          if (!r || typeof r !== "object" || Array.isArray(r)) {
-            return r;
-          }
-          const entry = Object.assign({}, r) as Record<string, unknown>;
-          if (entry.rawContent !== undefined) {
-            entry.rawContent = applyMaxChars(entry.rawContent, maxChars);
-          }
-          if (entry.content !== undefined) {
-            entry.content = applyMaxChars(entry.content, maxChars);
-          }
-          return entry;
-        });
-        return Object.assign({}, payload, { results: truncated });
+        const first = rawResults.find(
+          (r): r is Record<string, unknown> => !!r && typeof r === "object" && !Array.isArray(r),
+        );
+        const text =
+          (typeof first?.rawContent === "string" && first.rawContent) ||
+          (typeof first?.content === "string" && first.content) ||
+          "";
+        const finalUrl = typeof first?.url === "string" && first.url ? first.url : url;
+        const result: Record<string, unknown> = {
+          url,
+          finalUrl,
+          extractor: "tavily",
+          text,
+        };
+        if (typeof payload.tookMs === "number" && Number.isFinite(payload.tookMs)) {
+          result.tookMs = payload.tookMs;
+        }
+        return result;
       },
     }),
   };
