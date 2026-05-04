@@ -55,7 +55,7 @@ export function buildSlackProgressDraftBlocks(params: {
     });
   }
   const availableLineBlocks = Math.max(0, SLACK_MAX_BLOCKS - blocks.length);
-  for (const line of params.lines.slice(0, availableLineBlocks)) {
+  for (const line of params.lines.slice(-availableLineBlocks)) {
     blocks.push({
       type: "section",
       fields: [field(lineTitle(line)), field(lineDetail(line))],

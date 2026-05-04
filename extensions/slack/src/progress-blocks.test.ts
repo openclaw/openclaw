@@ -64,7 +64,7 @@ describe("buildSlackProgressDraftBlocks", () => {
     });
   });
 
-  it("caps rich progress blocks to Slack's maximum while leaving caller text fallback independent", () => {
+  it("keeps newest rich progress lines when capping Slack blocks", () => {
     const blocksWithLabel = buildSlackProgressDraftBlocks({
       label: "Shelling...",
       lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
@@ -74,18 +74,26 @@ describe("buildSlackProgressDraftBlocks", () => {
       type: "section",
       text: { text: "*Shelling...*" },
     });
+    expect(blocksWithLabel?.[1]).toMatchObject({
+      type: "section",
+      fields: [{ text: "🛠️ *Exec 11*" }, { text: "run 11" }],
+    });
     expect(blocksWithLabel?.at(-1)).toMatchObject({
       type: "section",
-      fields: [{ text: "🛠️ *Exec 48*" }, { text: "run 48" }],
+      fields: [{ text: "🛠️ *Exec 59*" }, { text: "run 59" }],
     });
 
     const blocksWithoutLabel = buildSlackProgressDraftBlocks({
       lines: Array.from({ length: 60 }, (_value, index) => progressLine(index)),
     });
     expect(blocksWithoutLabel).toHaveLength(50);
+    expect(blocksWithoutLabel?.[0]).toMatchObject({
+      type: "section",
+      fields: [{ text: "🛠️ *Exec 10*" }, { text: "run 10" }],
+    });
     expect(blocksWithoutLabel?.at(-1)).toMatchObject({
       type: "section",
-      fields: [{ text: "🛠️ *Exec 49*" }, { text: "run 49" }],
+      fields: [{ text: "🛠️ *Exec 59*" }, { text: "run 59" }],
     });
   });
 });
