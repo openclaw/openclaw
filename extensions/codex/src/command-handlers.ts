@@ -323,7 +323,7 @@ export async function handleCodexSubcommand(
     ]);
     return { text: formatAccount(account, limits) };
   }
-  return { text: `Unknown Codex command: ${subcommand}\n\n${buildHelp()}` };
+  return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };
 }
 
 async function handleComputerUseCommand(

@@ -240,7 +240,7 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string) => {
         if (method === "turn/start") {
           throw new Error(
-            "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+            "unexpected status 401 Unauthorized: Missing bearer <@U123> [trusted](https://evil) @here",
           );
         }
         throw new Error(`unexpected method: ${method}`);
@@ -283,9 +283,12 @@ describe("codex conversation binding", () => {
       expect(result).toEqual({
         handled: true,
         reply: {
-          text: "Codex app-server turn failed: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+          text: "Codex app-server turn failed: unexpected status 401 Unauthorized: Missing bearer &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
         },
       });
+      expect(result.reply?.text).not.toContain("<@U123>");
+      expect(result.reply?.text).not.toContain("[trusted](https://evil)");
+      expect(result.reply?.text).not.toContain("@here");
       expect(unhandledRejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);

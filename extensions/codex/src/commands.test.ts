@@ -105,6 +105,13 @@ describe("codex command", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("escapes unknown subcommands before chat display", async () => {
+    const result = await handleCodexCommand(createContext("<@U123> [trusted](https://evil) @here"));
+
+    expect(result.text).toContain("Unknown Codex command: &lt;\uff20U123&gt;");
+    expect(result.text).not.toContain("<@U123>");
+  });
+
   it("attaches the current session to an existing Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: unknown }> = [];

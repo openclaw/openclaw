@@ -26,6 +26,7 @@ import {
   type CodexAppServerAuthProfileLookup,
 } from "./app-server/session-binding.js";
 import { getSharedCodexAppServerClient } from "./app-server/shared-client.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
   readCodexConversationBindingData,
@@ -149,7 +150,7 @@ export async function handleCodexConversationInboundClaim(
     return {
       handled: true,
       reply: {
-        text: `Codex app-server turn failed: ${formatErrorMessage(error)}`,
+        text: `Codex app-server turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
       },
     };
   }
