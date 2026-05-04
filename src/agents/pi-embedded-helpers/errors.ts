@@ -965,14 +965,39 @@ export function classifyProviderRuntimeFailureKind(
   // Plain HTTP 401 / "Invalid token" / "Unauthorized" — surface a friendly
   // re-auth hint rather than the raw provider error. Distinct from
   // `auth_refresh` (explicit OAuth-refresh failure messages) and
-  // `auth_html_403` (HTML 403 bodies). The `classifyFailoverSignal` path
-  // at status 401/403 already returns the `auth` reason for non-permanent /
-  // non-billing 401s, so we reuse it here instead of duplicating the
+  // `auth_html_403` (HTML 403 bodies). Reuses the existing
+  // `classifyFailoverSignal` `auth` reason instead of duplicating the
   // message regex set. Placed AFTER replay-invalid / schema so 401s with
   // structurally-meaningful bodies (e.g. "401 input item ID does not belong
   // to this conversation" → `replay_invalid`) keep their existing copy.
-  // See [Github #56197].
-  if (failoverClassification?.kind === "reason" && failoverClassification.reason === "auth") {
+  //
+  // The 401-evidence gate is load-bearing: `classifyFailoverSignal` returns
+  // the same `auth` reason for two non-401 shapes that must NOT get the
+  // "HTTP 401" copy:
+  //   1. Plain HTTP 403 fall-through (key revoked, scope-missing) without
+  //      an HTML body or `permission_error` JSON — same branch at status
+  //      401/403 in `classifyFailoverClassificationFromHttpStatus`.
+  //   2. Message-only auth errors with no HTTP status prefix at all
+  //      (e.g. `{"error":{"code":"invalid_api_key"}}`) classified by
+  //      `isAuthErrorMessage(raw)`.
+  // We require positive 401 evidence: either `status === 401` (parsed from
+  // a leading HTTP status), or `status` is unknown AND the message embeds
+  // `401` at a word boundary while not also embedding `403`. The latter
+  // covers real-world variants like `'status code: 401, message: ...'`
+  // where `extractLeadingHttpStatus` cannot pick up the code because it
+  // is not at the start. Billing 401s (e.g. `{"code":401,"message":"Key
+  // limit exceeded"}`) are already caught upstream by the billing reason
+  // taking precedence over `auth` in the 401/403 branch, so they never
+  // reach this gate. See [Github #56197] and PR #77394 review.
+  const messageMentions401 = /\b401\b/.test(message);
+  const messageMentions403 = /\b403\b/.test(message);
+  const has401Evidence =
+    status === 401 || (status === undefined && messageMentions401 && !messageMentions403);
+  if (
+    failoverClassification?.kind === "reason" &&
+    failoverClassification.reason === "auth" &&
+    has401Evidence
+  ) {
     return "auth_invalid_token";
   }
   if (

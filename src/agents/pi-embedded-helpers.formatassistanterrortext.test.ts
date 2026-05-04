@@ -379,6 +379,53 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("does not claim HTTP 401 for plain 403 errors that fall through to the generic auth reason (#77394 review)", () => {
+    // `classifyFailoverClassificationFromHttpStatus` returns the same
+    // `auth` reason for both `status === 401` AND `status === 403` after
+    // the billing/`auth_permanent` precedence at line 661 of errors.ts.
+    // A real 403 (key revoked, scope-missing) without an HTML body or
+    // `permission_error` JSON falls through to that generic `auth` branch.
+    // Before the 401-evidence gate, my new `auth_invalid_token` branch
+    // would pick those up and tell the user "HTTP 401" when the provider
+    // actually returned 403. The gate now requires `status === 401` or
+    // (status unknown AND message embeds 401 but not 403); a plain 403
+    // satisfies neither leg and falls through to the existing copy.
+    // Pin both directions: the 403 must NOT get the new "HTTP 401" copy,
+    // and it must still produce a non-empty user-facing message.
+    const plain403 = makeAssistantError("403 Forbidden");
+    const friendly = formatAssistantErrorText(plain403);
+    expect(friendly).toBeDefined();
+    expect(friendly).not.toContain("HTTP 401");
+    expect(friendly).not.toBe(
+      "Authentication failed (provider returned HTTP 401). " +
+        "Your provider token may have expired — try the request again in a moment. " +
+        "If the failure persists, re-authenticate this provider.",
+    );
+  });
+
+  it("does not claim HTTP 401 for message-only auth errors with no HTTP status prefix (#77394 review)", () => {
+    // `classifyFailoverSignal`'s message-only path at line 848 of errors.ts
+    // returns the `auth` reason via `isAuthErrorMessage(raw)` for payloads
+    // that have no leading HTTP status at all — for example a plain
+    // `{"error":{"code":"invalid_api_key"}}` envelope. Before the 401-
+    // evidence gate, the new `auth_invalid_token` branch would catch those
+    // too and surface "HTTP 401" copy when no HTTP status was ever present.
+    // `status` is `undefined` here and the message contains no `401`, so
+    // the second leg of the gate (`messageMentions401 && !messageMentions403`)
+    // is false and the gate falls through. Pin the negative behavior so a
+    // future widening that drops the gate fails this test rather than
+    // silently shipping the regression.
+    const messageOnly = makeAssistantError('{"error":{"code":"invalid_api_key"}}');
+    const friendly = formatAssistantErrorText(messageOnly);
+    expect(friendly).toBeDefined();
+    expect(friendly).not.toContain("HTTP 401");
+    expect(friendly).not.toBe(
+      "Authentication failed (provider returned HTTP 401). " +
+        "Your provider token may have expired — try the request again in a moment. " +
+        "If the failure persists, re-authenticate this provider.",
+    );
+  });
+
   it("returns a proxy-specific message for proxy misroutes", () => {
     const msg = makeAssistantError("407 Proxy Authentication Required");
     expect(formatAssistantErrorText(msg)).toBe(
