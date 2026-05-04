@@ -9,6 +9,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
+import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { logDebug, logError } from "../logger.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
@@ -49,13 +50,7 @@ function resolveTrustedWindowsCmdExe(): string {
   if (process.platform !== "win32") {
     return "cmd.exe";
   }
-  for (const key of ["SystemRoot", "SYSTEMROOT", "windir", "WINDIR"] as const) {
-    const systemRoot = process.env[key]?.trim();
-    if (systemRoot && path.win32.isAbsolute(systemRoot)) {
-      return path.win32.join(systemRoot, "System32", "cmd.exe");
-    }
-  }
-  return "cmd.exe";
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
 }
 
 /**
