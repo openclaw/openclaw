@@ -766,15 +766,35 @@ async function runUpgradeLane(params) {
     logLanePhase(lane, "update");
     const updateEnv = buildRealUpdateEnv(env);
     const updateArgs = buildPackagedUpgradeUpdateArgs(params.candidateUrl);
-    const updateResult = await runOpenClaw({
-      lane,
-      env: updateEnv,
-      args: updateArgs,
-      logPath: join(params.logsDir, "upgrade-update.log"),
-      timeoutMs: updateTimeoutMs(),
-      check: false,
-    });
+    const updateLogPath = join(params.logsDir, "upgrade-update.log");
+    let updateResult;
+    let usedWindowsPackagedUpgradeTimeoutFallback = false;
+    try {
+      updateResult = await runOpenClaw({
+        lane,
+        env: updateEnv,
+        args: updateArgs,
+        logPath: updateLogPath,
+        timeoutMs: updateTimeoutMs(),
+        check: false,
+      });
+    } catch (error) {
+      if (!isRecoverableWindowsPackagedUpgradeTimeoutError(error, process.platform)) {
+        throw error;
+      }
+      usedWindowsPackagedUpgradeTimeoutFallback = true;
+      appendFileSync(
+        updateLogPath,
+        `\n[release-checks] Windows baseline updater timed out after fetching candidate; falling back to direct candidate install: ${formatError(error)}\n`,
+      );
+      updateResult = {
+        exitCode: 124,
+        stdout: "",
+        stderr: formatError(error),
+      };
+    }
     const usedWindowsPackagedUpgradeFallback =
+      usedWindowsPackagedUpgradeTimeoutFallback ||
       isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
     if (usedWindowsPackagedUpgradeFallback) {
       logLanePhase(lane, "update-fallback-install");
@@ -1364,6 +1384,22 @@ export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
     /\bunlink\b/iu.test(output) &&
     /[/\\]\.openclaw-\d+-\d+[/\\]/u.test(output) &&
     /\.node['"]?/iu.test(output)
+  );
+}
+
+export function isRecoverableWindowsPackagedUpgradeTimeoutError(
+  error,
+  platform = process.platform,
+) {
+  if (platform !== "win32") {
+    return false;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    /\bCommand timed out:/u.test(message) &&
+    /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw-current\.tgz --yes --json --timeout \d+/u.test(
+      message,
+    )
   );
 }
 

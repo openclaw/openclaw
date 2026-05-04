@@ -38,6 +38,7 @@ import {
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
   isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
+  isRecoverableWindowsPackagedUpgradeTimeoutError,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
@@ -742,6 +743,21 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         "win32",
       ),
     ).toBe(true);
+  });
+
+  it("recognizes the shipped Windows updater packaged-upgrade timeout", () => {
+    const error = new Error(
+      "Command timed out: C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64\\node.exe C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\openclaw-upgrade-q9DsA7\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-current.tgz --yes --json --timeout 1500",
+    );
+
+    expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
+    expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "linux")).toBe(false);
+    expect(
+      isRecoverableWindowsPackagedUpgradeTimeoutError(
+        new Error("Command timed out: node openclaw.mjs update --tag openclaw@beta"),
+        "win32",
+      ),
+    ).toBe(false);
   });
 
   it("skips the packaged upgrade status probe after the Windows fallback install", () => {
