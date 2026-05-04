@@ -17,6 +17,7 @@ import {
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
+  shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
@@ -308,6 +309,37 @@ describe("shouldUpdateMattermostDraftToolProgress", () => {
           progress: {
             toolProgress: true,
           },
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
+  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
+
+  function resolveSuppressDefaultProgress(mattermostConfig: MattermostConfig) {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: mattermostConfig,
+        },
+      },
+      accountId: "default",
+      allowUnresolvedSecretRef: true,
+    });
+    return shouldSuppressMattermostDefaultToolProgressMessages(account);
+  }
+
+  it("suppresses standalone progress messages while draft previews are active", () => {
+    expect(resolveSuppressDefaultProgress({ enabled: true })).toBe(true);
+  });
+
+  it("keeps standalone progress messages available when draft streaming is off", () => {
+    expect(
+      resolveSuppressDefaultProgress({
+        streaming: {
+          mode: "off",
         },
       }),
     ).toBe(false);
