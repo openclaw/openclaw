@@ -9,7 +9,8 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
-export type GoogleMeetMode = "realtime" | "transcribe";
+export type GoogleMeetMode = "agent" | "bidi" | "transcribe";
+export type GoogleMeetModeInput = GoogleMeetMode | "realtime";
 export type GoogleMeetRealtimeStrategy = "agent" | "bidi";
 type GoogleMeetChromeAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 export type GoogleMeetToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
@@ -162,7 +163,7 @@ const DEFAULT_GOOGLE_MEET_BARGE_IN_RMS_THRESHOLD = 650;
 const DEFAULT_GOOGLE_MEET_BARGE_IN_PEAK_THRESHOLD = 2500;
 const DEFAULT_GOOGLE_MEET_BARGE_IN_COOLDOWN_MS = 900;
 
-const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS = `You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent strategy, wait for OpenClaw consult results and speak them exactly. In bidi strategy, answer directly and call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} for deeper reasoning, current information, or tools.`;
+const DEFAULT_GOOGLE_MEET_REALTIME_INSTRUCTIONS = `You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} for deeper reasoning, current information, or tools.`;
 const DEFAULT_GOOGLE_MEET_REALTIME_INTRO_MESSAGE = "Say exactly: I'm here and listening.";
 
 const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
@@ -172,7 +173,7 @@ const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
     enrollmentAcknowledged: false,
   },
   defaultTransport: "chrome",
-  defaultMode: "realtime",
+  defaultMode: "agent",
   chrome: {
     audioBackend: "blackhole-2ch",
     audioFormat: DEFAULT_GOOGLE_MEET_CHROME_AUDIO_FORMAT,
@@ -325,7 +326,12 @@ function resolveTransport(value: unknown, fallback: GoogleMeetTransport): Google
 
 function resolveMode(value: unknown, fallback: GoogleMeetMode): GoogleMeetMode {
   const normalized = normalizeOptionalLowercaseString(value);
-  return normalized === "realtime" || normalized === "transcribe" ? normalized : fallback;
+  if (normalized === "realtime") {
+    return "agent";
+  }
+  return normalized === "agent" || normalized === "bidi" || normalized === "transcribe"
+    ? normalized
+    : fallback;
 }
 
 function resolveRealtimeStrategy(

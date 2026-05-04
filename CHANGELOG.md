@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Realtime transcription: report socket closes before provider readiness as closed-before-ready failures instead of mislabeling them as connection timeouts for OpenAI, xAI, and Deepgram streaming transcription. Thanks @vincentkoc.
 - OpenAI/Google Meet: fail realtime voice connection attempts when the socket closes before `session.updated`, avoiding stuck Meet joins waiting on a bridge that never became ready. Thanks @vincentkoc.
 - Google Meet: avoid treating repeated participant words as multiple assistant-overlap matches when suppressing realtime echo transcripts. Thanks @vincentkoc.
+- Google Meet: make `mode: "agent"` the default Chrome talk-back path, using realtime transcription for input and regular OpenClaw TTS for speech output, while keeping direct realtime voice answers available as `mode: "bidi"` and accepting `mode: "realtime"` as an agent-mode compatibility alias.
 - QA/cache: require the full `CACHE-OK <suffix>` marker before live cache probes stop retrying, so suffix-only prose cannot hide a broken probe response. Thanks @vincentkoc.
 - Slack/Matrix: avoid creating blank progress-draft messages when `streaming.progress.label=false` and progress tool lines are disabled. Thanks @vincentkoc.
 - Slack/Discord: suppress standalone tool-progress chatter when partial preview streaming has `streaming.preview.toolProgress: false`, matching the documented quiet-preview behavior. Thanks @vincentkoc.

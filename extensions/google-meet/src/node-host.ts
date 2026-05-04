@@ -284,7 +284,7 @@ function startChrome(params: Record<string, unknown>) {
 
   let bridgeId: string | undefined;
   let audioBridge: { type: "external-command" | "node-command-pair" } | undefined;
-  if (mode === "realtime") {
+  if (mode === "agent" || mode === "bidi" || mode === "realtime") {
     assertBlackHoleAvailable(Math.min(timeoutMs, 10_000));
 
     const healthCommand = readStringArray(params.audioBridgeHealthCommand);
@@ -299,6 +299,11 @@ function startChrome(params: Record<string, unknown>) {
 
     const bridgeCommand = readStringArray(params.audioBridgeCommand);
     if (bridgeCommand) {
+      if (mode === "agent") {
+        throw new Error(
+          "Chrome agent mode requires audioInputCommand and audioOutputCommand so OpenClaw can run STT and regular TTS directly.",
+        );
+      }
       const bridge = runCommandWithTimeout(bridgeCommand, timeoutMs);
       if (bridge.code !== 0) {
         throw new Error(

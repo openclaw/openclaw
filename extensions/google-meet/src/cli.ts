@@ -1481,10 +1481,7 @@ export function registerGoogleMeetCli(params: {
     )
     .option("--no-join", "Only create the meeting URL; do not join it")
     .option("--transport <transport>", "Join transport: chrome, chrome-node, or twilio")
-    .option(
-      "--mode <mode>",
-      "Join mode: realtime for live talk-back, transcribe for observe/control",
-    )
+    .option("--mode <mode>", "Join mode: agent, bidi, or transcribe")
     .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
@@ -1665,10 +1662,7 @@ export function registerGoogleMeetCli(params: {
     .command("join")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option(
-      "--mode <mode>",
-      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
-    )
+    .option("--mode <mode>", "Mode: agent, bidi, or transcribe")
     .option("--message <text>", "Realtime speech to trigger after join")
     .option("--dial-in-number <phone>", "Meet dial-in number for Twilio transport")
     .option("--pin <pin>", "Meet phone PIN; # is appended if omitted")
@@ -1703,10 +1697,7 @@ export function registerGoogleMeetCli(params: {
     .command("test-speech")
     .argument("[url]", "Explicit https://meet.google.com/... URL")
     .option("--transport <transport>", "Transport: chrome, chrome-node, or twilio")
-    .option(
-      "--mode <mode>",
-      "Mode: realtime for live talk-back, transcribe to join without the realtime voice bridge",
-    )
+    .option("--mode <mode>", "Mode: agent, bidi, or transcribe")
     .option(
       "--message <text>",
       "Realtime speech to trigger",

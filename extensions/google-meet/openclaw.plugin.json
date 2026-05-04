@@ -28,7 +28,7 @@
     },
     "defaultMode": {
       "label": "Default Mode",
-      "help": "Realtime voice is the default."
+      "help": "Agent uses realtime transcription plus regular OpenClaw TTS. Bidi uses the realtime voice model directly. Transcribe observes only."
     },
     "chrome.audioBackend": {
       "label": "Chrome Audio Backend",
@@ -145,7 +145,7 @@
     },
     "realtime.strategy": {
       "label": "Realtime Strategy",
-      "help": "Agent routes participant speech through OpenClaw before speaking; bidi lets the realtime model answer directly."
+      "help": "Legacy realtime alias setting. Use mode=agent or mode=bidi for new Meet joins."
     },
     "realtime.provider": {
       "label": "Realtime Provider",
@@ -227,8 +227,8 @@
       },
       "defaultMode": {
         "type": "string",
-        "enum": ["realtime", "transcribe"],
-        "default": "realtime"
+        "enum": ["agent", "bidi", "realtime", "transcribe"],
+        "default": "agent"
       },
       "chrome": {
         "type": "object",
@@ -422,7 +422,7 @@
           },
           "instructions": {
             "type": "string",
-            "default": "You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent strategy, wait for OpenClaw consult results and speak them exactly. In bidi strategy, answer directly and call openclaw_agent_consult for deeper reasoning, current information, or tools."
+            "default": "You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call openclaw_agent_consult for deeper reasoning, current information, or tools."
           },
           "introMessage": {
             "type": "string",
