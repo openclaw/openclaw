@@ -53,6 +53,9 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
 }));
+const embeddedRunsState = vi.hoisted(() => ({
+  queueEmbeddedPiMessageMock: vi.fn(() => false),
+}));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -84,6 +87,14 @@ vi.mock("../../agents/pi-embedded.js", () => {
   };
 });
 
+vi.mock("../../agents/pi-embedded-runner/runs.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../../agents/pi-embedded-runner/runs.js")>();
+  return {
+    ...mod,
+    queueEmbeddedPiMessage: embeddedRunsState.queueEmbeddedPiMessageMock,
+  };
+});
+
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
 }));
@@ -104,6 +115,8 @@ vi.mock("./queue.js", () => {
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
+    resolvePiSteeringModeForQueueMode: (mode: string) =>
+      mode === "queue" ? "one-at-a-time" : "all",
   };
 });
 
@@ -162,6 +175,8 @@ beforeEach(() => {
     compacted: false,
     reason: "test-preflight-disabled",
   });
+  embeddedRunsState.queueEmbeddedPiMessageMock.mockReset();
+  embeddedRunsState.queueEmbeddedPiMessageMock.mockReturnValue(false);
   clearSessionQueuesMock.mockReset();
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
@@ -2601,5 +2616,146 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       mediaUrl: "https://example.test/image.png",
     });
     expect(payload?.text).toBeUndefined();
+  });
+});
+
+describe("runReplyAgent queued post-rotation startup messages", () => {
+  function createQueuedPostRotationParams(params: {
+    senderIsOwner: boolean;
+    storePath: string;
+    sessionEntry: SessionEntry;
+    sessionStore: Record<string, SessionEntry>;
+  }): Parameters<typeof runReplyAgent>[0] {
+    const sessionKey = "agent:main:discord:channel:c1";
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "discord",
+      ChatType: "channel",
+      OriginatingChannel: "discord",
+      AccountId: "default",
+      MessageSid: "msg-1",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const followupRun = {
+      prompt: "please continue startup",
+      summaryLine: "please continue startup",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "session-current",
+        sessionKey,
+        messageProvider: "discord",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: {},
+        skillsSnapshot: {},
+        senderIsOwner: params.senderIsOwner,
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    return {
+      commandBody: "please continue startup",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: true,
+      shouldFollowup: false,
+      isActive: true,
+      isStreaming: true,
+      typing,
+      sessionCtx,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      sessionKey,
+      storePath: params.storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    };
+  }
+
+  it("wraps and consumes the Discord post-reset window when an owner message is queued into an active run", async () => {
+    vi.setSystemTime(new Date("2026-05-04T15:00:00Z"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-rotation-owner-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:c1";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-current",
+      updatedAt: Date.now(),
+      postRotationStartupUntilMs: Date.now() + 30_000,
+    };
+    await saveSessionStore(storePath, { [sessionKey]: sessionEntry });
+    embeddedRunsState.queueEmbeddedPiMessageMock.mockReturnValueOnce(true);
+
+    const result = await runReplyAgent(
+      createQueuedPostRotationParams({
+        senderIsOwner: true,
+        storePath,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(embeddedRunsState.queueEmbeddedPiMessageMock).toHaveBeenCalledTimes(1);
+    const firstQueueCall = embeddedRunsState.queueEmbeddedPiMessageMock.mock.calls[0] as
+      | unknown[]
+      | undefined;
+    expect(firstQueueCall?.[0]).toBe("session-current");
+    const queuedPrompt = firstQueueCall?.[1] as string;
+    expect(queuedPrompt).toContain("first owner message after /new or /reset");
+    expect(queuedPrompt).toContain("Owner message:\n\nplease continue startup");
+
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.postRotationStartupUntilMs).toBeUndefined();
+  });
+
+  it("does not consume the Discord post-reset window for a non-owner queued message", async () => {
+    vi.setSystemTime(new Date("2026-05-04T15:00:00Z"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-post-rotation-non-owner-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:c1";
+    const untilMs = Date.now() + 30_000;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-current",
+      updatedAt: Date.now(),
+      postRotationStartupUntilMs: untilMs,
+    };
+    await saveSessionStore(storePath, { [sessionKey]: sessionEntry });
+    embeddedRunsState.queueEmbeddedPiMessageMock.mockReturnValueOnce(true);
+
+    const result = await runReplyAgent(
+      createQueuedPostRotationParams({
+        senderIsOwner: false,
+        storePath,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(embeddedRunsState.queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
+      "session-current",
+      "please continue startup",
+      { steeringMode: "all" },
+    );
+    const persisted = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+    expect(persisted?.postRotationStartupUntilMs).toBe(untilMs);
   });
 });

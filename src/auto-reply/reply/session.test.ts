@@ -729,6 +729,53 @@ describe("initSessionState RawBody", () => {
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
   });
 
+  it("marks explicit Discord channel resets with a short post-rotation startup window", async () => {
+    vi.setSystemTime(new Date("2026-05-04T15:00:00Z"));
+    const root = await makeCaseDir("openclaw-discord-channel-reset-startup-window-");
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath, resetTriggers: ["/new"] } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        ChatType: "channel",
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: "agent:main:discord:channel:c1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.postRotationStartupUntilMs).toBe(Date.now() + 30_000);
+  });
+
+  it("does not mark non-Discord group resets with a post-rotation startup window", async () => {
+    vi.setSystemTime(new Date("2026-05-04T15:00:00Z"));
+    const root = await makeCaseDir("openclaw-whatsapp-reset-no-startup-window-");
+    const storePath = path.join(root, "sessions.json");
+    const cfg = { session: { store: storePath, resetTriggers: ["/new"] } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Provider: "whatsapp",
+        ChatType: "group",
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionEntry.postRotationStartupUntilMs).toBeUndefined();
+  });
+
   it("drains stale system events when /new rotates an existing session", async () => {
     const root = await makeCaseDir("openclaw-rawbody-reset-system-events-");
     const storePath = path.join(root, "sessions.json");

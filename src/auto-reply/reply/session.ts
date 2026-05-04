@@ -66,6 +66,7 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 
 const log = createSubsystemLogger("session-init");
+const POST_ROTATION_STARTUP_WINDOW_MS = 30_000;
 const sessionArchiveRuntimeLoader = createLazyImportLoader(
   () => import("../../gateway/session-archive.runtime.js"),
 );
@@ -609,6 +610,15 @@ export async function initSessionState(params: {
   const lastTo = deliveryFields.lastTo ?? lastToRaw;
   const lastAccountId = deliveryFields.lastAccountId ?? lastAccountIdRaw;
   const lastThreadId = deliveryFields.lastThreadId ?? lastThreadIdRaw;
+  const isDiscordSession = ctx.Provider === "discord" || ctx.Surface === "discord";
+  const postRotationStartupUntilMs =
+    isDiscordSession && resetTriggered && (isGroup || isThread)
+      ? now + POST_ROTATION_STARTUP_WINDOW_MS
+      : isDiscordSession &&
+          typeof baseEntry?.postRotationStartupUntilMs === "number" &&
+          baseEntry.postRotationStartupUntilMs > now
+        ? baseEntry.postRotationStartupUntilMs
+        : undefined;
   sessionEntry = {
     ...baseEntry,
     sessionId,
@@ -619,6 +629,7 @@ export async function initSessionState(params: {
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
     systemSent,
     abortedLastRun,
+    postRotationStartupUntilMs,
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
