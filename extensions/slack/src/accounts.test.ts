@@ -2,6 +2,77 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveSlackAccount } from "./accounts.js";
 
+describe("resolveSlackAccount env token fallback", () => {
+  it("prefers injected env token over unresolved default-account SecretRef", () => {
+    const originalBot = process.env.SLACK_BOT_TOKEN;
+    const originalApp = process.env.SLACK_APP_TOKEN;
+    process.env.SLACK_BOT_TOKEN = "xoxb-env-token";
+    process.env.SLACK_APP_TOKEN = "xapp-env-token";
+
+    try {
+      const resolved = resolveSlackAccount({
+        cfg: {
+          channels: {
+            slack: {
+              accounts: {
+                default: {
+                  botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+                  appToken: { source: "env", provider: "default", id: "SLACK_APP_TOKEN" },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      expect(resolved.botToken).toBe("xoxb-env-token");
+      expect(resolved.appToken).toBe("xapp-env-token");
+      expect(resolved.botTokenSource).toBe("env");
+      expect(resolved.appTokenSource).toBe("env");
+    } finally {
+      if (originalBot === undefined) {
+        delete process.env.SLACK_BOT_TOKEN;
+      } else {
+        process.env.SLACK_BOT_TOKEN = originalBot;
+      }
+      if (originalApp === undefined) {
+        delete process.env.SLACK_APP_TOKEN;
+      } else {
+        process.env.SLACK_APP_TOKEN = originalApp;
+      }
+    }
+  });
+
+  it("does not override unrelated env secret refs with injected env tokens", () => {
+    const originalBot = process.env.SLACK_BOT_TOKEN;
+    process.env.SLACK_BOT_TOKEN = "xoxb-env-token";
+
+    try {
+      expect(() =>
+        resolveSlackAccount({
+          cfg: {
+            channels: {
+              slack: {
+                accounts: {
+                  default: {
+                    botToken: { source: "env", provider: "default", id: "OTHER_SLACK_TOKEN" },
+                  },
+                },
+              },
+            },
+          },
+        }),
+      ).toThrow(/unresolved SecretRef/);
+    } finally {
+      if (originalBot === undefined) {
+        delete process.env.SLACK_BOT_TOKEN;
+      } else {
+        process.env.SLACK_BOT_TOKEN = originalBot;
+      }
+    }
+  });
+});
+
 describe("resolveSlackAccount allowFrom precedence", () => {
   it("uses configured defaultAccount when accountId is omitted", () => {
     const resolved = resolveSlackAccount({

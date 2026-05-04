@@ -5,6 +5,7 @@ import {
   resolveMergedAccountConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SlackAccountSurfaceFields } from "./account-surface-fields.js";
 import type { SlackAccountConfig } from "./runtime-api.js";
@@ -38,15 +39,10 @@ function resolveSlackConfiguredTokenWithEnvFallback(params: {
   path: string;
   envToken?: string;
   normalize: SlackTokenNormalizer;
+  expectedEnvId: string;
 }): { token?: string; source: SlackTokenSource } {
-  if (
-    params.envToken &&
-    typeof params.value === "object" &&
-    params.value !== null &&
-    typeof (params.value as { source?: unknown }).source === "string" &&
-    typeof (params.value as { provider?: unknown }).provider === "string" &&
-    typeof (params.value as { id?: unknown }).id === "string"
-  ) {
+  const ref = coerceSecretRef(params.value);
+  if (params.envToken && ref?.source === "env" && ref.id === params.expectedEnvId) {
     return {
       token: params.envToken,
       source: "env",
@@ -98,6 +94,7 @@ export function resolveSlackAccount(params: {
         path: `channels.slack.accounts.${accountId}.botToken`,
         envToken: envBot,
         normalize: resolveSlackBotToken,
+        expectedEnvId: "SLACK_BOT_TOKEN",
       })
     : { token: undefined, source: "none" as const };
   const configApp = appActive
@@ -106,6 +103,7 @@ export function resolveSlackAccount(params: {
         path: `channels.slack.accounts.${accountId}.appToken`,
         envToken: envApp,
         normalize: resolveSlackAppToken,
+        expectedEnvId: "SLACK_APP_TOKEN",
       })
     : { token: undefined, source: "none" as const };
   const configUser = userActive
@@ -114,6 +112,7 @@ export function resolveSlackAccount(params: {
         path: `channels.slack.accounts.${accountId}.userToken`,
         envToken: envUser,
         normalize: resolveSlackUserToken,
+        expectedEnvId: "SLACK_USER_TOKEN",
       })
     : { token: undefined, source: "none" as const };
   const botToken = configBot.token ?? envBot;
