@@ -29,9 +29,83 @@ jobs:
         shell: pwsh
     steps:
       - name: Begin Testbox
-        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
-        with:
-          testbox_id: ${{ inputs.testbox_id }}
+        shell: bash
+        env:
+          TESTBOX_ID: ${{ inputs.testbox_id }}
+        run: |
+          set -euo pipefail
+
+          metadata_port="${METADATA_PORT:-}"
+          if [ -z "$metadata_port" ]; then
+            metadata_port="$(cat /proc/cmdline | tr ' ' '\n' | grep '^metadata_port=' | cut -d= -f2)"
+          fi
+          if [ -z "$metadata_port" ]; then
+            echo "metadata_port not found in kernel cmdline" >&2
+            exit 1
+          fi
+
+          metadata_addr="192.168.127.1:${metadata_port}"
+          state=/tmp/.testbox
+          mkdir -p "$state"
+          chmod 700 "$state"
+
+          installation_model_id="$(curl -s --connect-timeout 2 --max-time 5 "http://${metadata_addr}/installationModelID")"
+          api_url="$(curl -s --connect-timeout 2 --max-time 5 "http://${metadata_addr}/backendURL")"
+          auth_token="$(curl -s --connect-timeout 2 --max-time 5 "http://${metadata_addr}/stickyDiskToken")"
+
+          if [ -z "$api_url" ] || [ -z "$installation_model_id" ] || [ -z "$auth_token" ]; then
+            echo "could not read required Blacksmith metadata" >&2
+            exit 1
+          fi
+
+          if [ -n "${BLACKSMITH_HOSTNAME:-}" ]; then
+            runner_host="$BLACKSMITH_HOSTNAME"
+          else
+            runner_host="${BLACKSMITH_HOST_PUBLIC_IP:-}"
+          fi
+          runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
+
+          response="$(curl -s -f -X POST "${api_url}/api/testbox/phone-home" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${auth_token}" \
+            -d "{
+              \"testbox_id\": \"${TESTBOX_ID}\",
+              \"installation_model_id\": ${installation_model_id},
+              \"status\": \"hydrating\",
+              \"ip_address\": \"${runner_host}\",
+              \"ssh_port\": \"${runner_ssh_port}\",
+              \"working_directory\": \"${GITHUB_WORKSPACE}\",
+              \"adopted_run_id\": \"${GITHUB_RUN_ID}\",
+              \"metadata\": {}
+            }" 2>/dev/null || true)"
+
+          echo "$TESTBOX_ID" > "$state/testbox_id"
+          echo "$installation_model_id" > "$state/installation_model_id"
+          echo "$auth_token" > "$state/auth_token"
+          echo "$api_url" > "$state/api_url"
+          echo "$runner_host" > "$state/runner_host"
+          echo "$runner_ssh_port" > "$state/runner_ssh_port"
+          echo "$GITHUB_WORKSPACE" > "$state/working_directory"
+          echo "$GITHUB_RUN_ID" > "$state/adopted_run_id"
+
+          if [ -n "$response" ] && echo "$response" | jq -e . >/dev/null 2>&1; then
+            echo "$response" | jq -r '.ssh_public_key // empty' > "$state/ssh_public_key"
+            idle_timeout="$(echo "$response" | jq -r '.idle_timeout // empty')"
+            echo "${idle_timeout:-10}" > "$state/idle_timeout"
+            echo "phone-home response=json"
+          else
+            printf '%s\n' "$response" > "$state/ssh_public_key"
+            echo "10" > "$state/idle_timeout"
+            echo "phone-home response=raw"
+          fi
+
+          ssh_public_key="$(cat "$state/ssh_public_key" 2>/dev/null || true)"
+          if [ -n "$ssh_public_key" ]; then
+            mkdir -p ~/.ssh
+            printf '%s\n' "$ssh_public_key" >> ~/.ssh/authorized_keys
+            chmod 700 ~/.ssh
+            chmod 600 ~/.ssh/authorized_keys
+          fi
 
       - name: Checkout
         uses: actions/checkout@v6
