@@ -200,7 +200,12 @@ async function closeCliMemoryManagers(): Promise<void> {
       return;
     }
     const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
-    await closeActiveMemorySearchManagers();
+    const closePromise = closeActiveMemorySearchManagers().catch(() => {});
+    const timeoutPromise = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 5_000);
+      timer.unref?.();
+    });
+    await Promise.race([closePromise, timeoutPromise]);
   } catch {
     // Best-effort teardown for short-lived CLI processes. Package updates can
     // replace hashed chunks before this finalizer runs.
@@ -352,7 +357,7 @@ export async function runCli(argv: string[] = process.argv) {
     throw new Error("--container cannot be combined with --profile/--dev");
   }
 
-  const containerTarget = maybeRunCliInContainer(originalArgv);
+  containerTarget = maybeRunCliInContainer(originalArgv);
   if (containerTarget.handled) {
     if (containerTarget.exitCode !== 0) {
       process.exitCode = containerTarget.exitCode;

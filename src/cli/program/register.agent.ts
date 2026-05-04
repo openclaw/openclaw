@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { disposeRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import { agentCliCommand } from "../../commands/agent-via-gateway.js";
 import {
   agentsAddCommand,
@@ -19,6 +20,22 @@ import { hasExplicitOptions } from "../command-options.js";
 import { createDefaultDeps } from "../deps.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
+
+async function disposeAgentHarnessesForCli(): Promise<void> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      disposeRegisteredAgentHarnesses().catch(() => {}),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, 5_000);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
 
 export function registerAgentCommands(program: Command, args: { agentChannelOptions: string }) {
   program
@@ -84,7 +101,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       // Build default deps (keeps parity with other commands; future-proofing).
       const deps = createDefaultDeps();
       await runCommandWithRuntime(defaultRuntime, async () => {
-        await agentCliCommand(opts, defaultRuntime, deps);
+        try {
+          await agentCliCommand(opts, defaultRuntime, deps);
+        } finally {
+          await disposeAgentHarnessesForCli();
+        }
       });
     });
 
