@@ -12,6 +12,7 @@ const tempDirs: string[] = [];
 const pluginModuleLoaderJitiFactoryOverrideKey = Symbol.for(
   "openclaw.pluginModuleLoaderJitiFactoryOverride",
 );
+const testRequire = createRequire(import.meta.url);
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
@@ -87,6 +88,12 @@ describe("channel plugin module loader helpers", () => {
       target,
     }));
     const createJiti = vi.fn(() => loadWithJiti);
+    const sourceExtensions = [".ts", ".tsx", ".mts", ".cts"] as const;
+    const sourceHooks = new Map<string, NodeJS.RequireExtensions[string] | undefined>();
+    for (const extension of sourceExtensions) {
+      sourceHooks.set(extension, testRequire.extensions[extension]);
+      delete testRequire.extensions[extension];
+    }
     vi.resetModules();
     stubPluginModuleLoaderJitiFactory(createJiti as unknown as PluginModuleLoaderFactory);
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
@@ -98,9 +105,6 @@ describe("channel plugin module loader helpers", () => {
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
 
-    const testRequire = createRequire(import.meta.url);
-    const originalTsHook = testRequire.extensions[".ts"];
-    delete testRequire.extensions[".ts"];
     try {
       expect(
         loaderModule.loadChannelPluginModule({
@@ -111,16 +115,20 @@ describe("channel plugin module loader helpers", () => {
         loadedBy: "jiti",
         target: fs.realpathSync.native(modulePath),
       });
+      expect(createJiti).toHaveBeenCalledOnce();
+      expect(createJiti).toHaveBeenCalledWith(
+        expect.stringContaining("module-loader.ts"),
+        expect.objectContaining({ tryNative: false }),
+      );
+      expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
     } finally {
-      if (originalTsHook) {
-        testRequire.extensions[".ts"] = originalTsHook;
+      for (const [extension, hook] of sourceHooks) {
+        if (hook) {
+          testRequire.extensions[extension] = hook;
+        } else {
+          delete testRequire.extensions[extension];
+        }
       }
     }
-    expect(createJiti).toHaveBeenCalledOnce();
-    expect(createJiti).toHaveBeenCalledWith(
-      expect.stringContaining("module-loader.ts"),
-      expect.objectContaining({ tryNative: false }),
-    );
-    expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
   });
 });
