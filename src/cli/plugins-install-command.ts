@@ -22,6 +22,7 @@ import {
   resolveMarketplaceInstallShortcut,
 } from "../plugins/marketplace.js";
 import {
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
@@ -42,6 +43,7 @@ import {
   resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
   resolveOfficialExternalInstallPlanBeforeNpm,
+  resolveOfficialExternalNpmPackageTrust,
 } from "./plugin-install-plan.js";
 import {
   createHookPackInstallLogger,
@@ -59,6 +61,29 @@ function resolveInstallMode(force?: boolean): "install" | "update" {
 function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): InstallSafetyOverrides {
   return {
     dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
+  };
+}
+
+function findTrustedOfficialExternalPackageInstall(packageName: string):
+  | {
+      pluginId: string;
+      npmSpec?: string;
+      expectedIntegrity?: string;
+    }
+  | undefined {
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  if (entry?.source !== "official") {
+    return undefined;
+  }
+  const pluginId = resolveOfficialExternalPluginId(entry);
+  if (!pluginId) {
+    return undefined;
+  }
+  const install = resolveOfficialExternalPluginInstall(entry);
+  return {
+    pluginId,
+    ...(install?.npmSpec ? { npmSpec: install.npmSpec } : {}),
+    ...(install?.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
   };
 }
 
@@ -693,6 +718,10 @@ export async function runPluginInstallCommand(params: {
       runtime.error("unsupported npm: spec: missing package");
       return runtime.exit(1);
     }
+    const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: npmPrefixSpec,
+      findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+    });
     const npmPrefixResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
       installMode,
@@ -701,6 +730,15 @@ export async function runPluginInstallCommand(params: {
       safetyOverrides,
       allowBundledFallback: false,
       extensionsDir,
+      ...(officialNpmTrust
+        ? {
+            expectedPluginId: officialNpmTrust.pluginId,
+            ...(officialNpmTrust.expectedIntegrity
+              ? { expectedIntegrity: officialNpmTrust.expectedIntegrity }
+              : {}),
+            trustedSourceLinkedOfficialInstall: true,
+          }
+        : {}),
       runtime,
     });
     if (!npmPrefixResult.ok) {
@@ -827,6 +865,10 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
+  const officialNpmTrust = resolveOfficialExternalNpmPackageTrust({
+    npmSpec: raw,
+    findOfficialExternalPackage: findTrustedOfficialExternalPackageInstall,
+  });
   const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
     snapshot,
     installMode,
@@ -835,6 +877,15 @@ export async function runPluginInstallCommand(params: {
     safetyOverrides,
     allowBundledFallback: true,
     extensionsDir,
+    ...(officialNpmTrust
+      ? {
+          expectedPluginId: officialNpmTrust.pluginId,
+          ...(officialNpmTrust.expectedIntegrity
+            ? { expectedIntegrity: officialNpmTrust.expectedIntegrity }
+            : {}),
+          trustedSourceLinkedOfficialInstall: true,
+        }
+      : {}),
     runtime,
   });
   if (!npmResult.ok) {
