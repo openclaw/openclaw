@@ -508,9 +508,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
   // Tests: `src/agents/pi-embedded-subscribe.test.ts` (e.g. late text_end cases).
   const shouldEmitToolResult = () =>
-    typeof params.shouldEmitToolResult === "function"
+    reasoningMode === "verbose" ||
+    (typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
-      : params.verboseLevel === "on" || params.verboseLevel === "full";
+      : params.verboseLevel === "on" || params.verboseLevel === "full");
   const shouldEmitToolOutput = () =>
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
