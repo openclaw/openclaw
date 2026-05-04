@@ -3653,6 +3653,12 @@ td.data-table-key-col {
   z-index: 5;
   margin-top: 0;
   padding-top: 12px;
+  /* iOS PWA standalone (`display: standalone` + `viewport-fit=cover`) clips
+     the bottom toolbar (send/voice/attach) behind the home indicator since
+     the bottom edge sits inside the unsafe inset. Reserve room for the inset
+     on every sticky chat compose, not just the focus mode. In regular Safari
+     env(safe-area-inset-bottom) resolves to 0 so the layout is unchanged. See #76505. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   background: linear-gradient(180deg, transparent 0%, var(--bg) 40%);
 }
 
