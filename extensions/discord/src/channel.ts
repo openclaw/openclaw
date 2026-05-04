@@ -103,12 +103,12 @@ function startDiscordStartupProbe(params: {
       if (params.abortSignal.aborted) {
         return;
       }
+      params.setStatus({
+        accountId: params.accountId,
+        bot: probe.bot,
+        application: probe.application,
+      });
       if (probe.ok) {
-        params.setStatus({
-          accountId: params.accountId,
-          bot: probe.bot,
-          application: probe.application,
-        });
         const username = probe.bot?.username?.trim();
         if (username) {
           params.log?.info?.(`[${params.accountId}] Discord bot probe resolved @${username}`);
