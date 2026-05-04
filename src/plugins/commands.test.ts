@@ -319,6 +319,19 @@ describe("registerPluginCommand", () => {
         error: "Agent prompt guidance must be an array of strings",
       },
     },
+    {
+      name: "rejects invalid channel scopes",
+      command: {
+        name: "demo",
+        description: "Demo",
+        channels: ["telegram", "   "],
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command channel 2 cannot be empty",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
     expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
   });
@@ -382,6 +395,31 @@ describe("registerPluginCommand", () => {
       { provider: "telegram", expectedNames: ["talkvoice"] },
       { provider: "slack", expectedNames: [] },
     ]);
+  });
+
+  it("scopes plugin command matches and native specs to configured channels", () => {
+    const result = registerVoiceCommandForTest({
+      channels: [" Telegram "],
+      description: "Demo command",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(matchPluginCommand("/voice", { channel: "telegram" })).toMatchObject({
+      command: expect.objectContaining({
+        name: "voice",
+        channels: ["telegram"],
+      }),
+    });
+    expect(matchPluginCommand("/voice", { channel: "discord" })).toBeNull();
+    expect(matchPluginCommand("/voice")).toMatchObject({
+      command: expect.objectContaining({ name: "voice" }),
+    });
+    expectProviderCommandSpecCases([
+      { provider: undefined, expectedNames: ["voice"] },
+      { provider: "telegram", expectedNames: ["voice"] },
+      { provider: "discord", expectedNames: [] },
+    ]);
+    expect(listProviderPluginCommandSpecs("discord")).toEqual([]);
   });
 
   it("allows Slack to resolve provider-native plugin specs without changing shared native gating", () => {
@@ -568,6 +606,31 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("skips direct plugin command execution on unsupported channels", async () => {
+    let handlerCalled = false;
+    const handler = async () => {
+      handlerCalled = true;
+      return { text: "ok" };
+    };
+
+    const result = await executePluginCommand({
+      command: {
+        name: "voice",
+        description: "Voice command",
+        channels: ["qqbot"],
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "discord",
+      isAuthorizedSender: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(result).toEqual({ continueAgent: true });
+    expect(handlerCalled).toBe(false);
   });
 
   it("does not allow direct reserved command registrations to claim owner status", () => {

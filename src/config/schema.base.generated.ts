@@ -5336,6 +5336,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              toolProgressDetail: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "explain",
+                  },
+                  {
+                    type: "string",
+                    const: "raw",
+                  },
+                ],
+              },
               reasoningDefault: {
                 anyOf: [
                   {
@@ -6338,6 +6350,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+                },
+                verboseDefault: {
+                  type: "string",
+                  enum: ["off", "on", "full"],
+                },
+                toolProgressDetail: {
+                  type: "string",
+                  enum: ["explain", "raw"],
                 },
                 reasoningDefault: {
                   type: "string",
@@ -8758,6 +8778,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Web Fetch Readability Extraction",
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+                  },
+                  useTrustedEnvProxy: {
+                    type: "boolean",
+                    title: "Web Fetch Trusted Env Proxy",
+                    description:
+                      "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
                   },
                   ssrfPolicy: {
                     type: "object",
@@ -25987,6 +26013,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
       tags: ["tools"],
     },
+    "tools.web.fetch.useTrustedEnvProxy": {
+      label: "Web Fetch Trusted Env Proxy",
+      help: "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
+      tags: ["tools"],
+    },
     "tools.web.fetch.ssrfPolicy": {
       label: "Web Fetch SSRF Policy",
       help: "Scoped SSRF policy overrides for web_fetch. Keep this narrow and opt in only for known local-network proxy environments.",
@@ -29349,6 +29380,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.5.3",
+  version: "2026.5.4",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

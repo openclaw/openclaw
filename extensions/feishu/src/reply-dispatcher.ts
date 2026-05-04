@@ -1,6 +1,10 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
+  formatChannelProgressDraftLineForEntry,
+  isChannelProgressDraftWorkToolName,
+} from "openclaw/plugin-sdk/channel-streaming";
+import {
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
@@ -695,10 +699,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         : undefined,
       onReasoningEnd: reasoningPreviewEnabled ? () => {} : undefined,
       onToolStart: streamingEnabled
-        ? (payload: { name?: string; phase?: string }) => {
-            updateStreamingStatusLine(
-              `🔧 **Using: ${payload.name ?? payload.phase ?? "tool"}...**`,
+        ? (payload: {
+            name?: string;
+            phase?: string;
+            args?: Record<string, unknown>;
+            detailMode?: "explain" | "raw";
+          }) => {
+            if (!isChannelProgressDraftWorkToolName(payload.name)) {
+              return;
+            }
+            const statusLine = formatChannelProgressDraftLineForEntry(
+              account.config,
+              {
+                event: "tool",
+                name: payload.name,
+                phase: payload.phase,
+                args: payload.args,
+              },
+              {
+                detailMode: payload.detailMode,
+              },
             );
+            if (statusLine) {
+              updateStreamingStatusLine(statusLine);
+            }
           }
         : undefined,
       onAssistantMessageStart: streamingEnabled

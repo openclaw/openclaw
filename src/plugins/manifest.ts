@@ -458,7 +458,9 @@ export type PluginManifestCapabilityProviderMetadata = {
   configSignals?: PluginManifestCapabilityProviderConfigSignal[];
 };
 
-export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata;
+export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
+  optional?: boolean;
+};
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */
@@ -715,6 +717,22 @@ function normalizeCapabilityProviderConfigSignals(
   return signals.length > 0 ? signals : undefined;
 }
 
+function normalizeCapabilityProviderMetadataEntry(
+  rawMetadata: Record<string, unknown>,
+): PluginManifestCapabilityProviderMetadata | undefined {
+  const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
+  const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
+  const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
+  const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
+  const metadata = {
+    ...(aliases.length > 0 ? { aliases } : {}),
+    ...(authProviders.length > 0 ? { authProviders } : {}),
+    ...(authSignals ? { authSignals } : {}),
+    ...(configSignals ? { configSignals } : {}),
+  } satisfies PluginManifestCapabilityProviderMetadata;
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 function normalizeCapabilityProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestCapabilityProviderMetadata> | undefined {
@@ -727,18 +745,33 @@ function normalizeCapabilityProviderMetadata(
     if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
       continue;
     }
-    const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
-    const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
-    const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
-    const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
-    const metadata = {
-      ...(aliases.length > 0 ? { aliases } : {}),
-      ...(authProviders.length > 0 ? { authProviders } : {}),
-      ...(authSignals ? { authSignals } : {}),
-      ...(configSignals ? { configSignals } : {}),
-    } satisfies PluginManifestCapabilityProviderMetadata;
-    if (Object.keys(metadata).length > 0) {
+    const metadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    if (metadata) {
       normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizePluginToolMetadata(
+  value: unknown,
+): Record<string, PluginManifestToolMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestToolMetadata> = Object.create(null);
+  for (const [rawToolName, rawMetadata] of Object.entries(value)) {
+    const toolName = normalizeOptionalString(rawToolName) ?? "";
+    if (!toolName || isBlockedObjectKey(toolName) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const providerMetadata = normalizeCapabilityProviderMetadataEntry(rawMetadata);
+    const metadata = {
+      ...providerMetadata,
+      ...(rawMetadata.optional === true ? { optional: true } : {}),
+    } satisfies PluginManifestToolMetadata;
+    if (Object.keys(metadata).length > 0) {
+      normalized[toolName] = metadata;
     }
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
@@ -1596,7 +1629,7 @@ export function loadPluginManifest(
   const musicGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
     raw.musicGenerationProviderMetadata,
   );
-  const toolMetadata = normalizeCapabilityProviderMetadata(raw.toolMetadata);
+  const toolMetadata = normalizePluginToolMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 

@@ -24,6 +24,10 @@ import {
   type SessionAttentionClassification,
 } from "./diagnostic-session-attention.js";
 import {
+  formatCronSessionDiagnosticFields,
+  resolveCronSessionDiagnosticContext,
+} from "./diagnostic-session-context.js";
+import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
   getDiagnosticSessionStateCountForTest as getDiagnosticSessionStateCountForTestImpl,
@@ -604,6 +608,26 @@ function sessionAttentionFields(params: {
   };
 }
 
+function formatSessionActivityLogFields(activity: DiagnosticSessionActivitySnapshot): string {
+  const fields: string[] = [];
+  if (activity.lastProgressReason) {
+    fields.push(`lastProgress=${activity.lastProgressReason}`);
+  }
+  if (activity.lastProgressAgeMs !== undefined) {
+    fields.push(`lastProgressAge=${Math.round(activity.lastProgressAgeMs / 1000)}s`);
+  }
+  if (activity.activeToolName) {
+    fields.push(`activeTool=${activity.activeToolName}`);
+  }
+  if (activity.activeToolCallId) {
+    fields.push(`activeToolCallId=${activity.activeToolCallId}`);
+  }
+  if (activity.activeToolAgeMs !== undefined) {
+    fields.push(`activeToolAge=${Math.round(activity.activeToolAgeMs / 1000)}s`);
+  }
+  return fields.join(" ");
+}
+
 export function logSessionAttention(
   params: SessionRef & {
     state: SessionStateValue;
@@ -660,13 +684,18 @@ export function logSessionAttention(
       : classification.eventType === "session.stalled"
         ? "stalled session"
         : "long-running session";
+  const activityFields = formatSessionActivityLogFields(activity);
+  const cronFields = formatCronSessionDiagnosticFields(
+    resolveCronSessionDiagnosticContext({ sessionKey: state.sessionKey }),
+  );
+  const detailFields = [activityFields, cronFields].filter(Boolean).join(" ");
   const message = `${label}: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
     state.sessionKey ?? "unknown"
   } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
     state.queueDepth
   } reason=${classification.reason} classification=${classification.classification}${
     classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-  } recovery=${recoveryEligible ? "checking" : "none"}`;
+  }${detailFields ? ` ${detailFields}` : ""} recovery=${recoveryEligible ? "checking" : "none"}`;
   if (classification.eventType === "session.long_running" && state.queueDepth <= 0) {
     diag.debug(message);
   } else {

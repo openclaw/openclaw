@@ -276,6 +276,24 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("applies global tool policy before optional media factories run", () => {
+    const config: OpenClawConfig = { tools: { deny: ["pdf"] } };
+    installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["anthropic"] },
+        setupProviders: [{ id: "anthropic", envVars: ["ANTHROPIC_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["anthropic"]),
+      }).pdf,
+    ).toBe(false);
+  });
+
   it("applies wildcard deny patterns to optional factory planning", () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, [

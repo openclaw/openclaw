@@ -30,6 +30,8 @@ import {
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
   CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
+  CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS,
+  CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
@@ -53,6 +55,7 @@ import {
   resolveRunnerMatrix,
   resolveStaticFileContentType,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
+  shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
@@ -79,6 +82,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(20 * 60);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
+      CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
+    );
+    expect(
+      CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
+        CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
+    ).toBeGreaterThanOrEqual(5 * 60 * 1000);
   });
 
   it("accepts OK agent output from the captured log when stdout is empty", () => {
@@ -713,6 +727,27 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         },
         "win32",
       ),
+    ).toBe(true);
+  });
+
+  it("skips the packaged upgrade status probe after the Windows fallback install", () => {
+    expect(
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: "win32",
+        usedWindowsPackagedUpgradeFallback: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: "win32",
+        usedWindowsPackagedUpgradeFallback: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: "linux",
+        usedWindowsPackagedUpgradeFallback: true,
+      }),
     ).toBe(true);
   });
 
