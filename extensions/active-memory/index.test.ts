@@ -1074,9 +1074,12 @@ describe("active-memory plugin", () => {
       "Your job is to search memory and return only the most relevant memory context for that model.",
     );
     expect(runParams?.prompt).toContain(
-      "You receive conversation context, including the user's latest message.",
+      "You receive a bounded search query plus conversation context, including the user's latest message.",
     );
     expect(runParams?.prompt).toContain("Use only the available memory tools.");
+    expect(runParams?.prompt).toContain(
+      "Use the bounded search query as the memory_search or memory_recall query.",
+    );
     expect(runParams?.prompt).toContain("Prefer memory_recall when available.");
     expect(runParams?.prompt).toContain(
       "If memory_recall is unavailable, use memory_search and memory_get.",
@@ -2894,8 +2897,52 @@ describe("active-memory plugin", () => {
     );
 
     const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: [
+          "Conversation info:",
+          "Sender: discord:user-123",
+          "Untrusted Discord message body",
+          "---",
+          "do you remember my flight preferences?",
+        ].join("\n"),
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain(
+      "Bounded memory search query:\ndo you remember my flight preferences?",
+    );
+    expect(prompt).toContain(
+      "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
+    );
+    expect(prompt).toContain("Conversation context:");
+    expect(prompt).toContain("Conversation info:");
+    expect(prompt).not.toContain("Bounded memory search query:\nConversation info:");
+    expect(prompt).not.toContain("Bounded memory search query:\nSender:");
+    expect(prompt).not.toContain("Bounded memory search query:\nUntrusted Discord message body");
   });
 
   it("supports full mode by sending the whole conversation", async () => {

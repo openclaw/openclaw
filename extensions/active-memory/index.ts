@@ -46,6 +46,7 @@ const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
 const TIMEOUT_PARTIAL_DATA_GRACE_MS = 50;
+const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
 const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
 const NO_RECALL_VALUES = new Set([
@@ -940,13 +941,16 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
 function buildRecallPrompt(params: {
   config: ResolvedActiveRecallPluginConfig;
   query: string;
+  searchQuery: string;
 }): string {
   const defaultInstructions = [
     "You are a memory search agent.",
     "Another model is preparing the final user-facing answer.",
     "Your job is to search memory and return only the most relevant memory context for that model.",
-    "You receive conversation context, including the user's latest message.",
+    "You receive a bounded search query plus conversation context, including the user's latest message.",
     "Use only the available memory tools.",
+    "Use the bounded search query as the memory_search or memory_recall query.",
+    "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
     "Prefer memory_recall when available.",
     "If memory_recall is unavailable, use memory_search and memory_get.",
     "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
@@ -998,7 +1002,11 @@ function buildRecallPrompt(params: {
   ]
     .filter((section) => section.length > 0)
     .join("\n\n");
-  return `${instructionBlock}\n\nConversation context:\n${params.query}`;
+  return [
+    instructionBlock,
+    `Bounded memory search query:\n${params.searchQuery}`,
+    `Conversation context:\n${params.query}`,
+  ].join("\n\n");
 }
 
 function isEnabledForAgent(
@@ -2056,6 +2064,83 @@ function buildQuery(params: {
   ].join("\n");
 }
 
+function stripExternalUntrustedBlocks(text: string): string {
+  return text.replace(
+    /<<<EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT\b[^>]*>>>/g,
+    " ",
+  );
+}
+
+function stripJsonFences(text: string): string {
+  return text.replace(/```(?:json)?\s*[\s\S]*?```/gi, " ");
+}
+
+function stripActiveMemoryXmlBlocks(text: string): string {
+  return text.replace(/<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>/gi, " ");
+}
+
+function normalizeSearchQueryText(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) {
+        return false;
+      }
+      if (/^(conversation info|sender|untrusted context)\b/i.test(line)) {
+        return false;
+      }
+      if (/^(source: external|---|untrusted discord message body)$/i.test(line)) {
+        return false;
+      }
+      if (/^⚠️?\s*Agent couldn't generate a response/i.test(line)) {
+        return false;
+      }
+      if (/^Please try again\.?$/i.test(line)) {
+        return false;
+      }
+      return true;
+    })
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function clampSearchQuery(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  return normalized.length > MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS
+    ? normalized.slice(0, MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS).trim()
+    : normalized;
+}
+
+function buildSearchQuery(params: {
+  latestUserMessage: string;
+  recentTurns?: ActiveRecallRecentTurn[];
+}): string {
+  const latest = clampSearchQuery(
+    normalizeSearchQueryText(
+      stripActiveMemoryXmlBlocks(
+        stripJsonFences(stripExternalUntrustedBlocks(params.latestUserMessage)),
+      ),
+    ),
+  );
+  if (latest.length >= 12 || !params.recentTurns?.length) {
+    return latest || clampSearchQuery(params.latestUserMessage);
+  }
+  const previousUser = [...params.recentTurns]
+    .toReversed()
+    .find((turn) => turn.role === "user" && turn.text.trim() !== params.latestUserMessage.trim());
+  if (!previousUser) {
+    return latest || clampSearchQuery(params.latestUserMessage);
+  }
+  const context = clampSearchQuery(
+    normalizeSearchQueryText(stripRecalledContextNoise(previousUser.text)),
+  )
+    .slice(0, 120)
+    .trim();
+  return clampSearchQuery(context ? `${context} ${latest}` : latest);
+}
+
 function extractTextContent(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -2224,6 +2309,7 @@ async function runRecallSubagent(params: {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
@@ -2278,6 +2364,7 @@ async function runRecallSubagent(params: {
   const prompt = buildRecallPrompt({
     config: params.config,
     query: params.query,
+    searchQuery: params.searchQuery,
   });
   const { messageChannel, messageProvider } = resolveRecallRunChannelContext({
     api: params.api,
@@ -2367,6 +2454,7 @@ async function maybeResolveActiveRecall(params: {
   messageProvider?: string;
   channelId?: string;
   query: string;
+  searchQuery: string;
   currentModelProviderId?: string;
   currentModelId?: string;
 }): Promise<ActiveRecallResult> {
@@ -2444,7 +2532,9 @@ async function maybeResolveActiveRecall(params: {
 
   if (params.config.logging) {
     params.api.logger.info?.(
-      `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(params.query.length)}`,
+      `${logPrefix} start timeoutMs=${String(params.config.timeoutMs)} queryChars=${String(
+        params.query.length,
+      )} searchQueryChars=${String(params.searchQuery.length)}`,
     );
   }
 
@@ -2813,10 +2903,15 @@ export default definePluginEntry({
             });
             return undefined;
           }
+          const recentTurns = extractRecentTurns(event.messages);
           const query = buildQuery({
             latestUserMessage: event.prompt,
-            recentTurns: extractRecentTurns(event.messages),
+            recentTurns,
             config,
+          });
+          const searchQuery = buildSearchQuery({
+            latestUserMessage: event.prompt,
+            recentTurns,
           });
           const result = await maybeResolveActiveRecall({
             api,
@@ -2827,6 +2922,7 @@ export default definePluginEntry({
             messageProvider: ctx.messageProvider,
             channelId: ctx.channelId,
             query,
+            searchQuery,
             currentModelProviderId: ctx.modelProviderId,
             currentModelId: ctx.modelId,
           });
