@@ -3,7 +3,7 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-runtime";
 
 const DISCORD_INTERNAL_TRACE_LINE_RE =
-  /^(?:>\s*)?(?:(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*)?(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
+  /^(?:>\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
 const DISCORD_INTERNAL_CHANNEL_LINE_RE =
   /^(?:>\s*)?(?:analysis|commentary|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call|thinking|reasoning)\s*[:=]/i;
 

@@ -249,6 +249,31 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("does not strip ordinary visible labeled lines", async () => {
+    const text = [
+      "Command: restart the gateway",
+      "Search: check recent Discord logs",
+      "Open: the channel status page",
+      "Find: the failing account",
+    ].join("\n");
+
+    await deliverDiscordReply({
+      replies: [{ text }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text }],
+      }),
+    );
+  });
+
   it("passes resolved Discord formatting options as explicit delivery options", async () => {
     const baseCfg = {
       channels: {
