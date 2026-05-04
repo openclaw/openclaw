@@ -1,11 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveCodexAppServerProtocolSource } from "./lib/codex-app-server-protocol-source.js";
 
-const codexRepo = process.env.OPENCLAW_CODEX_REPO
-  ? path.resolve(process.env.OPENCLAW_CODEX_REPO)
-  : path.resolve(process.cwd(), "../codex");
-
-const sourceRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema");
+const { sourceRoot } = await resolveCodexAppServerProtocolSource(process.cwd());
 const targetRoot = path.resolve(
   process.cwd(),
   "extensions/codex/src/app-server/protocol-generated",
