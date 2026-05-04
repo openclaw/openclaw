@@ -580,6 +580,7 @@ function isBridgeAlreadyInstalledFromPreferredSource(params: {
   if (npmSpec && params.record.source === "npm") {
     const bridgePackageName = resolveNpmSpecPackageName(npmSpec);
     const recordPackageName =
+      params.record.resolvedName ??
       resolveNpmSpecPackageName(params.record.spec) ??
       resolveNpmSpecPackageName(params.record.resolvedSpec);
     if (bridgePackageName && recordPackageName === bridgePackageName) {
