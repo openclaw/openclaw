@@ -30,6 +30,7 @@ import {
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
+import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -327,6 +328,11 @@ function buildCompactionContextEngineRuntimeContext(params: {
       extraSystemPrompt: params.params.extraSystemPrompt,
       sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
+    }),
+    ...resolveContextEngineCapabilities({
+      config: params.params.config,
+      sessionKey: params.params.sessionKey,
+      purpose: "context-engine.compaction",
     }),
     tokenBudget: params.contextTokenBudget,
     currentTokenCount: params.params.currentTokenCount,

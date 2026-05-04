@@ -63,6 +63,10 @@ async function waitForAssertion(
   }
 }
 
+vi.mock("./context-engine-capabilities.js", () => ({
+  resolveContextEngineCapabilities: () => ({ llm: undefined }),
+}));
+
 vi.mock("./transcript-rewrite.js", () => ({
   rewriteTranscriptEntriesInSessionManager: (params: unknown) =>
     rewriteTranscriptEntriesInSessionManagerMock(params),

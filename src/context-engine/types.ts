@@ -173,6 +173,12 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   rewriteTranscriptEntries?: (
     request: TranscriptRewriteRequest,
   ) => Promise<TranscriptRewriteResult>;
+  /** LLM completion capability for engines that need model inference. */
+  llm?: {
+    complete: (
+      params: import("../plugins/runtime/types-core.js").PluginLlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").PluginLlmCompleteResult>;
+  };
 };
 
 /**
