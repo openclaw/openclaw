@@ -1,3 +1,5 @@
+import type { RateLimitSnapshot } from "./app-server/protocol-generated/typescript/v2/RateLimitSnapshot.js";
+import type { GetAccountRateLimitsResponse } from "./app-server/protocol-generated/typescript/v2/GetAccountRateLimitsResponse.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
@@ -31,7 +33,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
     `Account: ${probes.account.ok ? summarizeAccount(probes.account.value) : probes.account.error}`,
   );
   lines.push(
-    `Rate limits: ${probes.limits.ok ? summarizeArrayLike(probes.limits.value) : probes.limits.error}`,
+    `Rate limits: ${probes.limits.ok ? formatRateLimits(probes.limits.value) : probes.limits.error}`,
   );
   lines.push(
     `MCP servers: ${probes.mcps.ok ? summarizeArrayLike(probes.mcps.value) : probes.mcps.error}`,
@@ -86,7 +88,7 @@ export function formatAccount(
 ): string {
   return [
     `Account: ${account.ok ? summarizeAccount(account.value) : account.error}`,
-    `Rate limits: ${limits.ok ? summarizeArrayLike(limits.value) : limits.error}`,
+    `Rate limits: ${limits.ok ? formatRateLimits(limits.value) : limits.error}`,
   ].join("\n");
 }
 
@@ -172,6 +174,39 @@ function summarizeAccount(value: JsonValue | undefined): string {
     readString(account, "id") ??
     "available"
   );
+}
+
+function formatRateLimitWindow(window: RateLimitSnapshot["primary"], label: string): string {
+  if (!window) return `${label}: N/A`;
+  const percent = Math.round(window.usedPercent * 100);
+  if (window.resetsAt) {
+    const resetDate = new Date(window.resetsAt * 1000);
+    const resetStr = resetDate.toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `${label}: ${percent}% used · resets ${resetStr}`;
+  }
+  return `${label}: ${percent}% used`;
+}
+
+function formatRateLimits(value: JsonValue | undefined): string {
+  if (!isJsonObject(value)) {
+    return "unavailable";
+  }
+  const response = value as GetAccountRateLimitsResponse;
+  const snapshot = response.rateLimits ?? response;
+  const primary = snapshot.primary;
+  const secondary = snapshot.secondary;
+  if (!primary && !secondary) {
+    return "unavailable";
+  }
+  const lines = [];
+  lines.push(formatRateLimitWindow(primary, "Primary"));
+  lines.push(formatRateLimitWindow(secondary, "Secondary"));
+  return lines.join("\n");
 }
 
 function summarizeArrayLike(value: JsonValue | undefined): string {
