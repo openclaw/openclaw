@@ -108,7 +108,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         }
         return GatewayConnectDeepLink(
             host: host,
-            port: payload.port ?? 18789,
+            port: payload.port ?? (tls ? 443 : 18789),
             tls: tls,
             bootstrapToken: payload.bootstrapToken,
             token: payload.token,
