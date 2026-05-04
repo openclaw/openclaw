@@ -702,6 +702,37 @@ describe("runCodexAppServerAttempt", () => {
     expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
   });
 
+  it("releases the session when transport goes silent mid-stream", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    // Transport idle is the short watchdog (default 60s in production) that
+    // arms at turn:start independent of completion-watch arming. It catches
+    // the case where the upstream Responses websocket stalls mid-stream and
+    // codex stops emitting notifications while the turn is still in progress.
+    const run = runCodexAppServerAttempt(params, { turnTransportIdleTimeoutMs: 5 });
+    await harness.waitForMethod("turn/start");
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server transport idle timed out (no notifications/requests received)",
+    });
+    await vi.waitFor(
+      () =>
+        expect(harness.request).toHaveBeenCalledWith("turn/interrupt", {
+          threadId: "thread-1",
+          turnId: "turn-1",
+        }),
+      { interval: 1 },
+    );
+    expect(queueAgentHarnessMessage("session-1", "after transport idle")).toBe(false);
+  });
+
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
     const beforePromptBuild = vi.fn(async () => ({
       systemPrompt: "custom codex system",

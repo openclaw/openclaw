@@ -105,6 +105,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_TRANSPORT_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
@@ -343,6 +344,7 @@ export async function runCodexAppServerAttempt(
       hookTimeoutSec?: number;
     };
     turnCompletionIdleTimeoutMs?: number;
+    turnTransportIdleTimeoutMs?: number;
     turnTerminalIdleTimeoutMs?: number;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
@@ -675,11 +677,16 @@ export async function runCodexAppServerAttempt(
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs,
   );
+  const turnTransportIdleTimeoutMs = resolveCodexTurnTransportIdleTimeoutMs(
+    options.turnTransportIdleTimeoutMs,
+  );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
+  let turnTransportIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let turnTransportIdleWatchArmed = false;
   let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
@@ -690,6 +697,13 @@ export async function runCodexAppServerAttempt(
     if (turnCompletionIdleTimer) {
       clearTimeout(turnCompletionIdleTimer);
       turnCompletionIdleTimer = undefined;
+    }
+  };
+
+  const clearTurnTransportIdleTimer = () => {
+    if (turnTransportIdleTimer) {
+      clearTimeout(turnTransportIdleTimer);
+      turnTransportIdleTimer = undefined;
     }
   };
 
@@ -734,6 +748,45 @@ export async function runCodexAppServerAttempt(
       lastActivityReason: turnCompletionLastActivityReason,
     });
     runAbortController.abort("turn_completion_idle_timeout");
+  };
+
+  const fireTurnTransportIdleTimeout = () => {
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnTransportIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    if (idleMs < turnTransportIdleTimeoutMs) {
+      scheduleTurnTransportIdleWatch();
+      return;
+    }
+    timedOut = true;
+    turnCompletionIdleTimedOut = true;
+    turnCompletionIdleTimeoutMessage =
+      "codex app-server transport idle timed out (no notifications/requests received)";
+    projector?.markTimedOut();
+    trajectoryRecorder?.recordEvent("turn.transport_idle_timeout", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnTransportIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    embeddedAgentLog.warn(
+      "codex app-server transport idle timed out (no transport activity for active turn)",
+      {
+        threadId: thread.threadId,
+        turnId,
+        idleMs,
+        timeoutMs: turnTransportIdleTimeoutMs,
+        lastActivityReason: turnCompletionLastActivityReason,
+      },
+    );
+    runAbortController.abort("turn_transport_idle_timeout");
   };
 
   const fireTurnTerminalIdleTimeout = () => {
@@ -788,6 +841,22 @@ export async function runCodexAppServerAttempt(
     turnCompletionIdleTimer.unref?.();
   }
 
+  function scheduleTurnTransportIdleWatch() {
+    clearTurnTransportIdleTimer();
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnTransportIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const delayMs = Math.max(1, turnTransportIdleTimeoutMs - elapsedMs);
+    turnTransportIdleTimer = setTimeout(fireTurnTransportIdleTimeout, delayMs);
+    turnTransportIdleTimer.unref?.();
+  }
+
   function scheduleTurnTerminalIdleWatch() {
     clearTurnTerminalIdleTimer();
     if (
@@ -818,6 +887,7 @@ export async function runCodexAppServerAttempt(
       turnCompletionIdleWatchArmed = true;
     }
     scheduleTurnCompletionIdleWatch();
+    scheduleTurnTransportIdleWatch();
     scheduleTurnTerminalIdleWatch();
   };
 
@@ -871,6 +941,7 @@ export async function runCodexAppServerAttempt(
         }
         completed = true;
         clearTurnCompletionIdleTimer();
+        clearTurnTransportIdleTimer();
         clearTurnTerminalIdleTimer();
         resolveCompletion?.();
       }
@@ -888,6 +959,7 @@ export async function runCodexAppServerAttempt(
   const requestCleanup = client.addRequestHandler(async (request) => {
     activeAppServerTurnRequests += 1;
     clearTurnCompletionIdleTimer();
+    clearTurnTransportIdleTimer();
     touchTurnCompletionActivity(`request:${request.method}`);
     let armCompletionWatchOnResponse = false;
     try {
@@ -1116,6 +1188,7 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  turnTransportIdleWatchArmed = true;
   turnTerminalIdleWatchArmed = true;
   touchTurnCompletionActivity("turn:start");
 
@@ -1283,6 +1356,7 @@ export async function runCodexAppServerAttempt(
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
+    clearTurnTransportIdleTimer();
     clearTurnTerminalIdleTimer();
     notificationCleanup();
     requestCleanup();
@@ -1587,6 +1661,16 @@ function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): num
   }
   if (!Number.isFinite(value)) {
     return CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function resolveCodexTurnTransportIdleTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return CODEX_TURN_TRANSPORT_IDLE_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return CODEX_TURN_TRANSPORT_IDLE_TIMEOUT_MS;
   }
   return Math.max(1, Math.floor(value));
 }
