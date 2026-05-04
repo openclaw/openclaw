@@ -321,6 +321,19 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             additionalProperties: false,
           },
         },
+        direct: {
+          type: "object",
+          properties: {},
+          additionalProperties: {
+            type: "object",
+            properties: {
+              systemPrompt: {
+                type: "string",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
         coalesceSameSenderDms: {
           type: "boolean",
         },
@@ -641,6 +654,19 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   additionalProperties: false,
                 },
               },
+              direct: {
+                type: "object",
+                properties: {},
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    systemPrompt: {
+                      type: "string",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
               coalesceSameSenderDms: {
                 type: "boolean",
               },
@@ -664,6 +690,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       dmPolicy: {
         label: "BlueBubbles DM Policy",
         help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+      },
+      "direct.*.systemPrompt": {
+        label: "Per-DM System Prompt",
+        help: 'Free-form directive appended to the system prompt for DMs from a specific sender handle (e.g. "+15551234567") or "*" for all DMs. Mirrors the groups.<id>.systemPrompt pattern.',
       },
     },
   },
