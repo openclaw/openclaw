@@ -48,6 +48,9 @@ function testModelDefinition(id: string): Model<Api> {
   return {
     id,
     name: id,
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.example.com/v1",
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
