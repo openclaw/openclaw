@@ -161,7 +161,9 @@ describe("Codex app-server user input bridge", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
-    const text = (vi.mocked(params.onBlockReply).mock.calls[0]?.[0] as { text: string }).text;
+    const payload = vi.mocked(params.onBlockReply).mock.calls[0]?.[0];
+    expect(payload).toEqual(expect.objectContaining({ text: expect.any(String) }));
+    const text = payload?.text ?? "";
     expect(text).toContain("Mode &lt;\uff20U123&gt;");
     expect(text).toContain("Pick \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here");
     expect(text).toContain(

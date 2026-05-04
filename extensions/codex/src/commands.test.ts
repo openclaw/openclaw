@@ -317,7 +317,10 @@ describe("codex command", () => {
             ],
           },
         },
-        account: { ok: true as const, value: { account: { id: unsafe } } },
+        account: {
+          ok: true as const,
+          value: { account: { id: unsafe }, requiresOpenaiAuth: false },
+        },
         limits: { ok: true as const, value: [] },
         mcps: { ok: true as const, value: [] },
         skills: { ok: true as const, value: [] },

@@ -286,9 +286,10 @@ describe("codex conversation binding", () => {
           text: "Codex app-server turn failed: unexpected status 401 Unauthorized: Missing bearer &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
         },
       });
-      expect(result.reply?.text).not.toContain("<@U123>");
-      expect(result.reply?.text).not.toContain("[trusted](https://evil)");
-      expect(result.reply?.text).not.toContain("@here");
+      const replyText = result?.reply?.text ?? "";
+      expect(replyText).not.toContain("<@U123>");
+      expect(replyText).not.toContain("[trusted](https://evil)");
+      expect(replyText).not.toContain("@here");
       expect(unhandledRejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
