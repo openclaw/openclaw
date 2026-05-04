@@ -205,7 +205,7 @@ function escapeCodexChatTextPreservingAt(value: string): string {
 }
 
 function isLikelyEmailAddress(value: string): boolean {
-  return /^[^\s@<>()\[\]`]+@[^\s@<>()\[\]`]+\.[^\s@<>()\[\]`]+$/.test(value);
+  return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(value);
 }
 
 function isUnsafeDisplayCodePoint(codePoint: number): boolean {
