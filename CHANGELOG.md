@@ -71,9 +71,9 @@ Docs: https://docs.openclaw.ai
 - Plugins/commands: scope QQBot framework slash commands to the QQBot channel so `/bot-*` command handlers and native specs do not leak onto unrelated chat surfaces. Thanks @vincentkoc.
 - fix: harden backend message action gateway routing [AI]. (#76374) Thanks @pgondhi987.
 - Gate QQBot streaming command auth [AI]. (#76375) Thanks @pgondhi987.
-- Plugins/discovery: ignore managed npm plugin packages that only expose TypeScript source entries without compiled runtime output, so stale/broken installs cannot hide a working bundled or reinstallable channel plugin during setup.
-- CLI/update: treat OpenClaw stable correction versions like `2026.5.3-1` as newer than their base stable release, so package updates no longer ask for downgrade confirmation.
-- Plugins/install: suppress dangerous-pattern scanner warnings for trusted official OpenClaw npm installs, so installing `@openclaw/discord` no longer prints credential-harvesting warnings for the official package.
+- Plugins/discovery: ignore managed npm plugin packages that only expose TypeScript source entries without compiled runtime output, so stale/broken installs cannot hide a working bundled or reinstallable channel plugin during setup. Thanks @vincentkoc.
+- CLI/update: treat OpenClaw stable correction versions like `2026.5.3-1` as newer than their base stable release, so package updates no longer ask for downgrade confirmation. Thanks @vincentkoc.
+- Plugins/install: suppress dangerous-pattern scanner warnings for trusted official OpenClaw npm installs, so installing `@openclaw/discord` no longer prints credential-harvesting warnings for the official package. Thanks @vincentkoc.
 - Plugins/release: make the published npm runtime verifier reject blank `openclaw.runtimeExtensions` entries instead of treating them as absent and passing via inferred outputs. Thanks @vincentkoc.
 - Plugins/security: ignore inline and block comments when matching source-rule context in plugin install scans, so comment-only `fetch`/`post` references near environment defaults do not block clean plugins. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed install records for bundled plugins even when the bundled plugin is not explicitly configured, so doctor cleanup cannot leave orphaned install metadata behind. Thanks @vincentkoc.
@@ -81,7 +81,7 @@ Docs: https://docs.openclaw.ai
 - Web search: honor late-bound `tools.web.search.enabled: false` during tool execution so config reloads cannot leave an already-created `web_search` tool runnable. Thanks @vincentkoc.
 - Plugins/packages: reject inferred built runtime entries that exist but fail package-boundary checks instead of falling back to TypeScript source for installed packages. Thanks @vincentkoc.
 - Plugins/loader: do not retry native-loaded JavaScript plugin modules through the source transformer after native evaluation has already reached a missing dependency, avoiding duplicate top-level side effects. Thanks @vincentkoc.
-- Plugins/security: stop the install scanner from blocking official bundled plugin packages when `process.env` access and normal API sends only appear in distant parts of the same compiled bundle.
+- Plugins/security: stop the install scanner from blocking official bundled plugin packages when `process.env` access and normal API sends only appear in distant parts of the same compiled bundle. Thanks @vincentkoc.
 - Plugins/packages: reject blank `openclaw.runtimeExtensions` entries instead of silently ignoring them and falling back to inferred TypeScript runtime entries. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed npm plugin shadow entries from the managed package lock as well as `package.json` and `node_modules`, so future npm operations do not keep referencing repaired bundled-plugin shadows. Thanks @vincentkoc.
 - Plugins/runtime state: keep the key being registered when namespace eviction runs in the same millisecond as existing entries, so `register` and `registerIfAbsent` do not report success while evicting their own fresh value. Thanks @vincentkoc.
