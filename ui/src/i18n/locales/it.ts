@@ -167,7 +167,7 @@ export const it: TranslationMap = {
     global: "Globale",
     unknown: "Sconosciuto",
     showArchived: "Mostra archiviate",
-    activeTooltip: "Aggiornate negli ultimi N minuti.",
+    activeTooltip: "Aggiornate negli ultimi {count} minuti.",
     limitTooltip: "Numero massimo di sessioni da caricare.",
     globalTooltip: "Includi sessioni globali.",
     unknownTooltip: "Includi sessioni sconosciute.",

@@ -22,6 +22,7 @@ export type ControlUiRefreshRun = {
 const EVENT_LOG_LIMIT = 250;
 const SLOW_RPC_MS = 1_000;
 const RESPONSIVENESS_ENTRY_MS = 50;
+const RESPONSIVENESS_EVENT_LOG_LIMIT = 50;
 
 type ControlUiResponsivenessObserver = {
   disconnect: () => void;
@@ -86,11 +87,19 @@ export function recordControlUiPerformanceEvent(
   host: ControlUiPerformanceHost,
   event: string,
   payload: Record<string, unknown>,
-  opts?: { warn?: boolean; console?: boolean },
+  opts?: { warn?: boolean; console?: boolean; maxBufferedEventsForType?: number },
 ) {
   const entry: EventLogEntry = { ts: Date.now(), event, payload };
   if (Array.isArray(host.eventLogBuffer)) {
-    host.eventLogBuffer = [entry, ...host.eventLogBuffer].slice(0, EVENT_LOG_LIMIT);
+    const existingBuffer =
+      typeof opts?.maxBufferedEventsForType === "number"
+        ? keepLatestBufferedEventsForType(
+            host.eventLogBuffer,
+            event,
+            Math.max(0, opts.maxBufferedEventsForType - 1),
+          )
+        : host.eventLogBuffer;
+    host.eventLogBuffer = [entry, ...existingBuffer].slice(0, EVENT_LOG_LIMIT);
     if (host.tab === "debug" || host.tab === "overview") {
       host.eventLog = host.eventLogBuffer;
     }
@@ -99,6 +108,26 @@ export function recordControlUiPerformanceEvent(
     return;
   }
   logPerformanceEvent(event, payload, opts?.warn === true);
+}
+
+function keepLatestBufferedEventsForType(
+  entries: unknown[],
+  event: string,
+  maxExistingForType: number,
+): unknown[] {
+  let keptForType = 0;
+  return entries.filter((entry) => {
+    if (
+      !entry ||
+      typeof entry !== "object" ||
+      !("event" in entry) ||
+      (entry as { event?: unknown }).event !== event
+    ) {
+      return true;
+    }
+    keptForType += 1;
+    return keptForType <= maxExistingForType;
+  });
 }
 
 export function scheduleControlUiTabVisibleTiming(
@@ -256,7 +285,7 @@ function recordResponsivenessEntry(
       scriptCount: Array.isArray(entry.scripts) ? entry.scripts.length : undefined,
       topScript: getTopLongAnimationFrameScript(entry.scripts),
     },
-    { warn: true },
+    { warn: true, maxBufferedEventsForType: RESPONSIVENESS_EVENT_LOG_LIMIT },
   );
 }
 

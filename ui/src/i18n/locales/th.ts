@@ -165,7 +165,7 @@ export const th: TranslationMap = {
     global: "ส่วนกลาง",
     unknown: "ไม่ทราบ",
     showArchived: "แสดงที่เก็บถาวร",
-    activeTooltip: "อัปเดตในช่วง N นาทีที่ผ่านมา",
+    activeTooltip: "อัปเดตในช่วง {count} นาทีที่ผ่านมา",
     limitTooltip: "จำนวนเซสชันสูงสุดที่จะโหลด",
     globalTooltip: "รวมเซสชันส่วนกลาง",
     unknownTooltip: "รวมเซสชันที่ไม่รู้จัก",

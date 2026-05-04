@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
+- Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
 - Gateway/startup: keep model-catalog test helpers, run-session lookup code, QR pairing helpers, and TypeBox memory-tool schema construction out of hot startup import paths, reducing default gateway benchmark plugin-load and memory pressure.
 - Control UI/performance: record browser long animation frame or long task entries in the debug event log when supported, making slow dashboard renders easier to attribute from the UI.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
@@ -58,10 +59,21 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: add a tree-sitter-backed shell command explainer for future approval and command-review surfaces. (#75004) Thanks @jesse-merhi.
 - Agents/sandbox: store sandbox container and browser registry entries as per-runtime shard files, reducing unrelated session lock contention while `openclaw doctor --fix` migrates legacy monolithic registry files. (#74831) Thanks @luckylhb90.
 - Plugins/ClawHub: annotate 429 errors from ClawHub with the reset window from `RateLimit-Reset`/`Retry-After` and append a `Sign in for higher rate limits.` hint when the request was unauthenticated, so users can see when downloads will recover and how to lift the cap. Thanks @romneyda.
+- Plugins/runtime state: add `registerIfAbsent` for atomic keyed-store dedupe claims that return whether a plugin successfully claimed a key without overwriting an existing live value. Thanks @amknight.
 
 ### Fixes
 
+- Plugins/runtime state: keep the key being registered when namespace eviction runs in the same millisecond as existing entries, so `register` and `registerIfAbsent` do not report success while evicting their own fresh value. Thanks @vincentkoc.
 - Control UI/Talk: make failed Talk startup errors dismissable and clear the stale Talk error state when dismissed, so missing realtime voice provider configuration does not leave a permanent chat banner. Fixes #77071. Thanks @ijoshdavis.
+- Control UI/Talk: stop and clear failed realtime Talk sessions when dismissing runtime error banners, so the next Talk click starts a fresh session instead of only stopping the stale one. Thanks @vincentkoc.
+- Control UI/Talk: retry from a failed realtime Talk session on the next Talk click instead of requiring a separate stale-session stop click first. Thanks @vincentkoc.
+- Canvas host: preserve the Gateway TLS scheme in browser canvas host URLs and startup mount logs, so direct HTTPS gateways do not advertise insecure canvas links. Thanks @vincentkoc.
+- WhatsApp/login: route login success and failure messages through the injected runtime, so setup/onboarding surfaces capture all login output instead of only the QR. Thanks @vincentkoc.
+- Google Chat: create an isolated Google auth transport per auth client, so google-auth-library interceptor mutations do not accumulate across webhook verification and access-token clients. Thanks @vincentkoc.
+- Doctor/plugins: remove orphaned managed npm copies of bundled `@openclaw/*` plugins during `doctor --fix`, so stale package manifests cannot shadow the current bundled plugin config schema.
+- Control UI/performance: cap long-task and long-animation-frame diagnostics in the shared event log, so slow-render telemetry does not evict gateway/plugin events from the Debug and Overview views. Thanks @vincentkoc.
+- Gateway/startup: log the canvas host mount only after the HTTP server has bound, so startup logs no longer report the canvas host as mounted before it can serve requests.
+- Control UI/i18n: render the Sessions active filter tooltip with the configured minute count in every locale and make the i18n check reject placeholder drift. Thanks @BunsDev.
 - Web fetch: late-bind `web_fetch` config and provider fallback metadata from the active runtime snapshot, matching `web_search` so long-lived tools do not use stale fetch provider settings. Thanks @vincentkoc.
 - Discord: clear stale startup probe bot/application status when the async bot probe throws, not just when it returns a degraded probe result. Thanks @vincentkoc.
 - Web search: scope explicit bundled `web_search` provider runtime loading through manifest ownership, so selecting DuckDuckGo/Gemini/etc. does not import unrelated bundled providers or log their optional dependency failures. Thanks @vincentkoc.
@@ -72,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.
 - Google Meet: fork the caller's current agent transcript into agent-mode meeting consultant sessions, so Meet replies inherit the context from the tool call that joined the meeting.
 - iOS/mobile pairing: reject non-loopback `ws://` setup URLs before QR/setup-code issuance and let the iOS Gateway settings screen scan QR codes or paste full setup-code messages. Thanks @BunsDev.
+- Control UI: keep Gateway Access inputs and locale picker contained inside the card at narrow and tablet widths.
 - Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
 - UI/chat: remove the unsupported `line-clamp` declaration from the chat queue text rule to eliminate Firefox console noise without changing visible truncation behavior. Thanks @ZanderH-code.
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
@@ -207,6 +220,8 @@ Docs: https://docs.openclaw.ai
 - Feishu: accept and honor `channels.feishu.blockStreaming` at the top level and per account, while keeping the legacy default off so Feishu cards no longer reject documented config or silently drop block replies. Fixes #75555. Thanks @vincentkoc.
 - Gateway/update: avoid `launchctl kickstart -k` immediately after fresh macOS update bootstraps, and unlink dangling global plugin-runtime symlinks during packaged postinstall and `doctor --fix` so upgrades no longer SIGTERM the newly booted Gateway or leave bundled plugin imports pointed at pruned `plugin-runtime-deps` trees. Completes #76261 and fixes #76466. (#76929)
 - Google Chat: normalize custom Google auth transport headers before google-auth/gaxios interceptors run, restoring webhook token verification when certificate retrieval expects Fetch `Headers`. Fixes #76742. Thanks @donbowman.
+- Google Chat: normalize Google auth certificate response headers before google-auth-library reads cache-control, so inbound webhook auth no longer rejects with `res?.headers.get is not a function`. Fixes #76880. Thanks @donbowman.
+- WhatsApp: route terminal login QR output through the active runtime for initial and restart sockets, so `openclaw channels login --channel whatsapp` does not lose the QR behind direct stdout writes. Fixes #76213. Thanks @dougvk.
 - Doctor/plugins: reset stale `plugins.slots.memory` and `plugins.slots.contextEngine` references during `doctor --fix`, so cleanup of missing plugin config does not leave unrecoverable slot owners behind. Fixes #76550 and #76551. Thanks @vincentkoc.
 - Docs/WhatsApp: merge the duplicate top-level `web` objects in the gateway channel config example so copy-pasted WhatsApp config keeps both `web.whatsapp` and reconnect settings. Fixes #76619. Thanks @WadydX.
 - Plugins/Anthropic: expose Claude thinking profiles from the bundled provider-policy artifact so non-runtime callers keep Opus 4.7 `adaptive`, `xhigh`, and `max` instead of downgrading to `high`. Fixes #76779. Thanks @tomascupr and @iAbhi001.

@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { CANVAS_HOST_PATH } from "../canvas-host/a2ui-shared.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
@@ -1328,6 +1329,7 @@ export async function startGatewayServer(
     }
 
     const { attachGatewayWsHandlers } = await import("./server-ws-runtime.js");
+    const canvasHostScheme = gatewayTls.enabled ? "https" : "http";
     attachGatewayWsHandlers({
       wss,
       clients,
@@ -1335,6 +1337,7 @@ export async function startGatewayServer(
       port,
       gatewayHost: bindHost ?? undefined,
       canvasHostEnabled: Boolean(canvasHost),
+      canvasHostScheme,
       canvasHostServerPort,
       resolvedAuth,
       getResolvedAuth,
@@ -1354,6 +1357,11 @@ export async function startGatewayServer(
       context: gatewayRequestContext,
     });
     await startListening();
+    if (canvasHost?.rootDir) {
+      logCanvas.info(
+        `canvas host mounted at ${canvasHostScheme}://${bindHost}:${port}${CANVAS_HOST_PATH}/ (root ${canvasHost.rootDir})`,
+      );
+    }
     startupTrace.mark("http.bound");
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;

@@ -1462,6 +1462,13 @@
       "kind": "html-attribute",
       "name": "aria-label",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Dismiss error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Exit focus mode"
     },
     {
@@ -1505,6 +1512,13 @@
       "name": "title",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Attach file"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
+      "name": "title",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Dismiss error"
     },
     {
       "count": 1,

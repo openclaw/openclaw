@@ -166,7 +166,7 @@ export const ko: TranslationMap = {
     global: "전역",
     unknown: "알 수 없음",
     showArchived: "보관된 세션 표시",
-    activeTooltip: "최근 N분 이내에 업데이트됨.",
+    activeTooltip: "최근 {count}분 이내에 업데이트됨.",
     limitTooltip: "로드할 최대 세션 수.",
     globalTooltip: "전역 세션 포함.",
     unknownTooltip: "알 수 없는 세션 포함.",

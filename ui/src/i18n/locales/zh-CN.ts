@@ -165,7 +165,7 @@ export const zh_CN: TranslationMap = {
     global: "全局",
     unknown: "未知",
     showArchived: "显示已归档",
-    activeTooltip: "在过去 N 分钟内更新。",
+    activeTooltip: "在过去 {count} 分钟内更新。",
     limitTooltip: "要加载的最大会话数。",
     globalTooltip: "包含全局会话。",
     unknownTooltip: "包含未知会话。",
