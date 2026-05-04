@@ -42,6 +42,25 @@ describe("codex conversation turn input", () => {
     ]);
   });
 
+  it("keeps protocol-relative image urls remote", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "look",
+        event: {
+          content: "look",
+          channel: "webchat",
+          isGroup: false,
+          metadata: {
+            mediaUrl: "//cdn.example.test/photo.webp",
+          },
+        },
+      }),
+    ).toEqual([
+      { type: "text", text: "look", text_elements: [] },
+      { type: "image", url: "//cdn.example.test/photo.webp" },
+    ]);
+  });
+
   it("decodes local file URLs for Codex local image input", () => {
     expect(
       buildCodexConversationTurnInput({
@@ -60,6 +79,23 @@ describe("codex conversation turn input", () => {
       { type: "text", text: "look", text_elements: [] },
       { type: "localImage", path: "/tmp/OpenClaw QA/photo.png" },
     ]);
+  });
+
+  it("drops malformed local file URLs instead of throwing", () => {
+    expect(
+      buildCodexConversationTurnInput({
+        prompt: "look",
+        event: {
+          content: "look",
+          channel: "webchat",
+          isGroup: false,
+          metadata: {
+            mediaPath: "file:///tmp/%zz/photo.png",
+            mediaType: "image/png",
+          },
+        },
+      }),
+    ).toEqual([{ type: "text", text: "look", text_elements: [] }]);
   });
 
   it("treats local media URLs as Codex local image input", () => {

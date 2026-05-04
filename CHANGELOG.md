@@ -133,6 +133,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: escape app-server status model ids and fallback account summaries while keeping normal account emails readable. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape bound-thread ids, workspace paths, and model names in bind, resume, binding, thread-action, and model-control replies. Thanks @vincentkoc.
 - Providers/OpenAI Codex: harden command readouts and parsing for markdown underscores, bound model status, bind errors, generated rate-limit summaries, blank option values, and duplicate command flags. Thanks @vincentkoc.
+- Providers/OpenAI Codex: keep protocol-relative bound-image URLs remote and ignore malformed `file://` image paths instead of crashing turn input construction. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape `request_user_input` question and option text before prompting users in chat. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape unknown command names and bound app-server turn failures before posting them back into chat. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape app-server approval and MCP elicitation prompt text before forwarding approval requests. Thanks @vincentkoc.

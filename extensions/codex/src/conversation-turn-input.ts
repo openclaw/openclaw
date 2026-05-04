@@ -51,7 +51,8 @@ function toCodexImageInput(media: InboundMedia): CodexUserInput | undefined {
   }
   const localPath = media.path ?? readLocalMediaPath(media.url);
   if (localPath) {
-    return { type: "localImage", path: normalizeFileUrl(localPath) };
+    const normalized = normalizeFileUrl(localPath);
+    return normalized ? { type: "localImage", path: normalized } : undefined;
   }
   return media.url ? { type: "image", url: media.url } : undefined;
 }
@@ -67,8 +68,15 @@ function isImageMedia(media: InboundMedia): boolean {
   return IMAGE_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
 }
 
-function normalizeFileUrl(value: string): string {
-  return value.startsWith("file://") ? fileURLToPath(value) : value;
+function normalizeFileUrl(value: string): string | undefined {
+  if (!value.startsWith("file://")) {
+    return value;
+  }
+  try {
+    return fileURLToPath(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function readLocalMediaPath(value: string | undefined): string | undefined {
@@ -77,6 +85,9 @@ function readLocalMediaPath(value: string | undefined): string | undefined {
   }
   if (value.startsWith("file://")) {
     return value;
+  }
+  if (value.startsWith("//")) {
+    return undefined;
   }
   if (path.isAbsolute(value) || path.win32.isAbsolute(value)) {
     return value;
