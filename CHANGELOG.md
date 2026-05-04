@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
+- Task Flow: rebuild legacy `flow_runs` SQLite tables that still require `owner_session_key`, preserving existing rows while restoring managed-flow writes on upgraded installs. Fixes #65563. Thanks @Xer0x-official.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.
