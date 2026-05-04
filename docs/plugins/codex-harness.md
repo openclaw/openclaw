@@ -26,6 +26,11 @@ Codex heartbeat turns also get the `heartbeat_respond` tool by default, so the
 agent can record whether the wake should stay quiet or notify without encoding
 that control flow in final text.
 
+Heartbeat-specific initiative guidance is sent as a Codex collaboration-mode
+developer instruction on the heartbeat turn itself. Ordinary chat turns restore
+Codex Default mode instead of carrying heartbeat philosophy in their normal
+runtime prompt.
+
 If you are trying to orient yourself, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,
@@ -61,7 +66,6 @@ Then enable the bundled `codex` plugin and force the Codex runtime:
       model: "openai/gpt-5.5",
       agentRuntime: {
         id: "codex",
-        fallback: "none",
       },
     },
   },
@@ -305,7 +309,6 @@ adds a separate Codex agent:
     defaults: {
       agentRuntime: {
         id: "auto",
-        fallback: "pi",
       },
     },
     list: [
@@ -358,8 +361,8 @@ routing.
 ## Codex-only deployments
 
 Force the Codex harness when you need to prove that every embedded agent turn
-uses Codex. Explicit plugin runtimes default to no PI fallback, so
-`fallback: "none"` is optional but often useful as documentation:
+uses Codex. Explicit plugin runtimes fail closed and are never silently retried
+through PI:
 
 ```json5
 {
@@ -368,7 +371,6 @@ uses Codex. Explicit plugin runtimes default to no PI fallback, so
       model: "openai/gpt-5.5",
       agentRuntime: {
         id: "codex",
-        fallback: "none",
       },
     },
   },
@@ -382,9 +384,7 @@ OPENCLAW_AGENT_RUNTIME=codex openclaw gateway run
 ```
 
 With Codex forced, OpenClaw fails early if the Codex plugin is disabled, the
-app-server is too old, or the app-server cannot start. Set
-`OPENCLAW_AGENT_HARNESS_FALLBACK=pi` only if you intentionally want PI to handle
-missing harness selection.
+app-server is too old, or the app-server cannot start.
 
 ## Per-agent Codex
 
@@ -397,7 +397,6 @@ auto-selection:
     defaults: {
       agentRuntime: {
         id: "auto",
-        fallback: "pi",
       },
     },
     list: [
@@ -412,7 +411,6 @@ auto-selection:
         model: "openai/gpt-5.5",
         agentRuntime: {
           id: "codex",
-          fallback: "none",
         },
       },
     ],
@@ -711,7 +709,6 @@ Minimal config:
       model: "openai/gpt-5.5",
       agentRuntime: {
         id: "codex",
-        fallback: "none",
       },
     },
   },
@@ -1059,9 +1056,8 @@ new configs. Select an `openai/gpt-*` model with
 **OpenClaw uses PI instead of Codex:** `agentRuntime.id: "auto"` can still use PI as the
 compatibility backend when no Codex harness claims the run. Set
 `agentRuntime.id: "codex"` to force Codex selection while testing. A
-forced Codex runtime now fails instead of falling back to PI unless you
-explicitly set `agentRuntime.fallback: "pi"`. Once Codex app-server is
-selected, its failures surface directly without extra fallback config.
+forced Codex runtime fails instead of falling back to PI. Once Codex app-server
+is selected, its failures surface directly.
 
 **The app-server is rejected:** upgrade Codex so the app-server handshake
 reports version `0.125.0` or newer. Same-version prereleases or build-suffixed

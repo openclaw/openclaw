@@ -90,6 +90,7 @@ describe("tsdown config", () => {
         "media-understanding/apply.runtime",
         "index",
         "commands/status.summary.runtime",
+        "provider-dispatcher.runtime",
         "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
@@ -107,6 +108,16 @@ describe("tsdown config", () => {
     expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
       expect.objectContaining({
         "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+      }),
+    );
+  });
+
+  it("keeps reply dispatcher lazy runtime behind one root stable dist entry", () => {
+    const distGraph = unifiedDistGraph();
+
+    expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
+      expect.objectContaining({
+        "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
       }),
     );
   });
@@ -147,13 +158,19 @@ describe("tsdown config", () => {
 
     if (typeof neverBundle === "function") {
       expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
       expect(neverBundle).toEqual(
-        expect.arrayContaining(["@lancedb/lancedb", "matrix-js-sdk", "qrcode-terminal"]),
+        expect.arrayContaining([
+          "@lancedb/lancedb",
+          "@larksuiteoapi/node-sdk",
+          "matrix-js-sdk",
+          "qrcode-terminal",
+        ]),
       );
     }
     expect(typeof external).toBe("function");

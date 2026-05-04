@@ -137,12 +137,7 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
         plugin.manifestPath,
         plugin.manifestFile,
       );
-      if (manifestSignatureMatches === false) {
-        const manifestHash = hashExistingFile(plugin.manifestPath);
-        if (manifestHash && manifestHash !== plugin.manifestHash) {
-          return true;
-        }
-      } else {
+      if (manifestSignatureMatches !== true) {
         const manifestHash = hashExistingFile(plugin.manifestPath);
         if (manifestHash && manifestHash !== plugin.manifestHash) {
           return true;
@@ -160,6 +155,9 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
       packageJsonPath,
       plugin.packageJson.fileSignature,
     );
+    if (packageJsonSignatureMatches === true && plugin.origin === "bundled") {
+      return false;
+    }
     if (packageJsonSignatureMatches === false) {
       return hashExistingFile(packageJsonPath) !== plugin.packageJson.hash;
     }
