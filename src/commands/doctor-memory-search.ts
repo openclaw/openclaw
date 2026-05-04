@@ -29,6 +29,7 @@ import {
   getActiveMemorySearchManager,
   resolveActiveMemoryBackendConfig,
 } from "../plugins/memory-runtime.js";
+import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -334,7 +335,7 @@ export async function noteMemorySearchHealth(
 
   // QMD backend handles embeddings internally (e.g. embeddinggemma) — no
   // separate embedding provider is needed. Skip the provider check entirely.
-  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId }) ?? resolveMemoryBackendConfig({ cfg, agentId });
   if (!backendConfig) {
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
@@ -342,6 +343,8 @@ export async function noteMemorySearchHealth(
     note("No active memory plugin is registered for the current config.", "Memory search");
     return;
   }
+  // builtin backend: always resolvable from config, no plugin required
+  if (backendConfig.backend === "builtin") return;
   if (backendConfig.backend === "qmd") {
     const qmdCheck = await checkQmdBinaryAvailability({
       command: backendConfig.qmd?.command ?? "qmd",
