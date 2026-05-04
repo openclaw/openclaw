@@ -8,6 +8,15 @@ on:
         required: false
         default: "main"
         type: string
+      runner_label:
+        description: "Windows runner label"
+        required: false
+        default: "blacksmith-16vcpu-windows-2025"
+        type: choice
+        options:
+          - blacksmith-16vcpu-windows-2025
+          - blacksmith-32vcpu-windows-2025
+          - windows-2025
       keepalive_minutes:
         description: "Minutes to keep the Windows runner alive for SSH inspection"
         required: false
@@ -23,6 +32,11 @@ on:
         required: false
         default: false
         type: boolean
+      enable_wsl2_features:
+        description: "Try enabling Windows WSL2/VM optional features before probing"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -33,7 +47,7 @@ env:
 jobs:
   probe:
     name: Windows probe
-    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-windows-2025' || 'windows-2025' }}
+    runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75
     defaults:
       run:
@@ -62,6 +76,7 @@ jobs:
       - name: Probe WSL2
         id: wsl2
         env:
+          ENABLE_WSL2_FEATURES: ${{ inputs.enable_wsl2_features }}
           IMPORT_UBUNTU_WSL2: ${{ inputs.import_ubuntu_wsl2 }}
           UBUNTU_WSL_ROOTFS_URL: https://cloud-images.ubuntu.com/wsl/releases/24.04/current/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz
         run: |
@@ -93,6 +108,14 @@ jobs:
             Write-Warning "wsl.exe is not available on this runner."
           } else {
             Write-Host "wsl.exe=$($wsl.Source)"
+            if ($env:ENABLE_WSL2_FEATURES -eq "true") {
+              Write-Host "enable_wsl2_features=true"
+              foreach ($feature in @("Microsoft-Windows-Subsystem-Linux", "VirtualMachinePlatform", "HypervisorPlatform", "Microsoft-Hyper-V-All")) {
+                dism.exe /online /enable-feature /featurename:$feature /all /norestart
+                Write-Host "enable_feature_${feature}_exit=$LASTEXITCODE"
+              }
+            }
+
             $status = Invoke-WslText -Arguments @("--status")
             Write-Host $status.Text
             Write-Host "wsl_status_exit=$($status.Code)"
