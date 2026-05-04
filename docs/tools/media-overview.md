@@ -61,7 +61,7 @@ provider is configured.
 | MiniMax     |   ✓   |   ✓   |   ✓   |  ✓  |     |                |                     |
 | Mistral     |       |       |       |     |  ✓  |                |                     |
 | OpenAI      |   ✓   |   ✓   |       |  ✓  |  ✓  |       ✓        |          ✓          |
-| OpenRouter  |   ✓   |   ✓   |       |  ✓  |     |                |          ✓          |
+| OpenRouter  |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
 | Qwen        |       |   ✓   |       |     |     |                |                     |
 | Runway      |       |   ✓   |       |     |     |                |                     |
 | SenseAudio  |       |       |       |     |  ✓  |                |                     |
@@ -99,7 +99,7 @@ the generated media fallback directly to the original channel.
 
 ## Speech-to-text and Voice Call
 
-Deepgram, DeepInfra, ElevenLabs, Mistral, OpenAI, SenseAudio, and xAI can all transcribe
+Deepgram, DeepInfra, ElevenLabs, Mistral, OpenAI, OpenRouter, SenseAudio, and xAI can all transcribe
 inbound audio through the batch `tools.media.audio` path when configured.
 Channel plugins that preflight a voice note for mention gating or command
 parsing mark the transcribed attachment on the inbound context, so the shared
