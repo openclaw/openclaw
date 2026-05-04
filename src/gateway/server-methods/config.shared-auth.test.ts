@@ -31,8 +31,18 @@ vi.mock("../../config/config.js", async () => {
     readConfigFileSnapshotForWrite: readConfigFileSnapshotForWriteMock,
     validateConfigObjectWithPlugins: validateConfigObjectWithPluginsMock,
     writeConfigFile: writeConfigFileMock,
-    replaceConfigFile: async (params: { nextConfig: unknown; writeOptions?: unknown }) =>
-      await writeConfigFileMock(params.nextConfig, params.writeOptions),
+    replaceConfigFile: async (params: { nextConfig: unknown; writeOptions?: unknown }) => {
+      await writeConfigFileMock(params.nextConfig, params.writeOptions);
+      return {
+        persistedConfig: undefined,
+        path: "/tmp/openclaw.json",
+        previousHash: null,
+        snapshot: {},
+        nextConfig: params.nextConfig,
+        afterWrite: { mode: "auto" },
+        followUp: { mode: "auto", requiresRestart: false },
+      };
+    },
   };
 });
 
