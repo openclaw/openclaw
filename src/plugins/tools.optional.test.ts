@@ -1144,6 +1144,74 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("does not materialize manifest-unavailable optional sibling tools under alsoAllow", () => {
+    const config = createContext().config;
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: {
+        id: "multi",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        providerAuthEnvVars: {
+          xai: ["XAI_API_KEY"],
+        },
+        contracts: {
+          tools: ["other_tool", "optional_tool"],
+        },
+        toolMetadata: {
+          optional_tool: {
+            optional: true,
+            authSignals: [{ provider: "xai" }],
+          },
+        },
+      },
+    });
+    const defaultFactory = vi.fn(() => makeTool("other_tool"));
+    const optionalFactory = vi.fn(() => makeTool("optional_tool"));
+    setActivePluginRegistry(
+      createToolRegistry([
+        {
+          pluginId: "multi",
+          optional: false,
+          source: "/tmp/multi.js",
+          names: ["other_tool"],
+          declaredNames: ["other_tool"],
+          factory: defaultFactory,
+        },
+        {
+          pluginId: "multi",
+          optional: true,
+          source: "/tmp/multi.js",
+          names: ["optional_tool"],
+          declaredNames: ["optional_tool"],
+          factory: optionalFactory,
+        },
+      ]) as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          config,
+        },
+        env: {},
+        toolAllowlist: [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "optional_tool"],
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["other_tool"]);
+    expect(defaultFactory).toHaveBeenCalledTimes(1);
+    expect(optionalFactory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("rejects plugin id collisions with core tool names", () => {
     const registry = setRegistry([
       {

@@ -349,6 +349,40 @@ function listManifestToolNamesForAvailability(params: {
   return listManifestToolNamesForAllowlist(params);
 }
 
+function isManifestToolNameAvailable(params: {
+  plugin: PluginManifestRecord;
+  toolName: string;
+  config: PluginLoadOptions["config"];
+  env: NodeJS.ProcessEnv;
+  hasAuthForProvider?: (providerId: string) => boolean;
+}): boolean {
+  return hasManifestToolAvailability({
+    plugin: params.plugin,
+    toolNames: [params.toolName],
+    config: params.config,
+    env: params.env,
+    hasAuthForProvider: params.hasAuthForProvider,
+  });
+}
+
+function filterManifestToolNamesForAvailability(params: {
+  plugin: PluginManifestRecord;
+  toolNames: readonly string[];
+  config: PluginLoadOptions["config"];
+  env: NodeJS.ProcessEnv;
+  hasAuthForProvider?: (providerId: string) => boolean;
+}): string[] {
+  return params.toolNames.filter((toolName) =>
+    isManifestToolNameAvailable({
+      plugin: params.plugin,
+      toolName,
+      config: params.config,
+      env: params.env,
+      hasAuthForProvider: params.hasAuthForProvider,
+    }),
+  );
+}
+
 function resolvePluginToolRuntimePluginIds(params: {
   config: PluginLoadOptions["config"];
   availabilityConfig?: PluginLoadOptions["config"];
@@ -546,21 +580,20 @@ function resolveCachedPluginTools(params: {
       continue;
     }
     const contractToolNames = plugin.contracts?.tools ?? [];
-    const availableToolNames = listManifestToolNamesForAvailability({
+    const allowedToolNames = listManifestToolNamesForAvailability({
       plugin,
       toolNames: contractToolNames,
       pluginId: plugin.id,
       allowlist: params.allowlist,
     });
-    if (
-      !hasManifestToolAvailability({
-        plugin,
-        toolNames: availableToolNames,
-        config: params.availabilityConfig,
-        env: params.env,
-        hasAuthForProvider: params.hasAuthForProvider,
-      })
-    ) {
+    const availableToolNames = filterManifestToolNamesForAvailability({
+      plugin,
+      toolNames: allowedToolNames,
+      config: params.availabilityConfig,
+      env: params.env,
+      hasAuthForProvider: params.hasAuthForProvider,
+    });
+    if (availableToolNames.length === 0) {
       continue;
     }
     if (params.existingNormalized.has(normalizeToolName(plugin.id))) {
@@ -904,10 +937,25 @@ export function resolvePluginTools(params: {
       blockedPlugins.add(entry.pluginId);
       continue;
     }
+    const manifestPlugin = manifestPluginsById.get(entry.pluginId);
     const declaredNames = entry.names ?? [];
+    const availabilityNames =
+      declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);
+    const allowlistNames = manifestPlugin
+      ? filterManifestToolNamesForAvailability({
+          plugin: manifestPlugin,
+          toolNames: availabilityNames,
+          config: params.context.runtimeConfig ?? context.config,
+          env,
+          hasAuthForProvider: params.hasAuthForProvider,
+        })
+      : declaredNames;
+    if (manifestPlugin && availabilityNames.length > 0 && allowlistNames.length === 0) {
+      continue;
+    }
     if (
       !pluginToolNamesMatchAllowlist({
-        names: declaredNames,
+        names: allowlistNames,
         pluginId: entry.pluginId,
         optional: entry.optional,
         allowlist,
@@ -936,15 +984,26 @@ export function resolvePluginTools(params: {
       continue;
     }
     const listRaw: unknown[] = Array.isArray(resolved) ? resolved : [resolved];
-    const list = entry.optional
+    const availableList = manifestPlugin
       ? listRaw.filter((tool) =>
+          isManifestToolNameAvailable({
+            plugin: manifestPlugin,
+            toolName: readPluginToolName(tool),
+            config: params.context.runtimeConfig ?? context.config,
+            env,
+            hasAuthForProvider: params.hasAuthForProvider,
+          }),
+        )
+      : listRaw;
+    const list = entry.optional
+      ? availableList.filter((tool) =>
           isOptionalToolAllowed({
             toolName: readPluginToolName(tool),
             pluginId: entry.pluginId,
             allowlist,
           }),
         )
-      : listRaw;
+      : availableList;
     if (list.length === 0) {
       continue;
     }
@@ -1003,7 +1062,6 @@ export function resolvePluginTools(params: {
         pluginId: entry.pluginId,
         optional: entry.optional,
       });
-      const manifestPlugin = manifestPluginsById.get(entry.pluginId);
       if (manifestPlugin) {
         const capturedDescriptors = capturedDescriptorsByPluginId.get(entry.pluginId) ?? [];
         capturedDescriptors.push(
