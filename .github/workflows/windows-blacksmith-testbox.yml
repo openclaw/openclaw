@@ -1,0 +1,53 @@
+name: Windows Blacksmith Testbox
+
+on:
+  workflow_dispatch:
+    inputs:
+      testbox_id:
+        type: string
+        description: "Testbox session ID"
+        required: true
+      runner_label:
+        type: string
+        description: "Windows runner label"
+        required: false
+        default: "blacksmith-16vcpu-windows-2025"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  windows:
+    name: windows
+    runs-on: ${{ inputs.runner_label }}
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Begin Testbox
+        uses: useblacksmith/begin-testbox@d0e04585c26905fdd92c94a09c159544c7ee1b67
+        with:
+          testbox_id: ${{ inputs.testbox_id }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Prepare Windows shell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "runner=$env:RUNNER_NAME"
+          Write-Host "machine=$env:COMPUTERNAME"
+          Write-Host ("os=" + [System.Environment]::OSVersion.VersionString)
+          Write-Host ("powershell=" + $PSVersionTable.PSVersion.ToString())
+          git --version
+
+      - name: Run Testbox
+        uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
+        if: always()
