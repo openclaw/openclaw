@@ -18,6 +18,7 @@ import {
   buildHelp,
   formatAccount,
   formatComputerUseStatus,
+  formatCodexDisplayText,
   formatCodexStatus,
   formatList,
   formatModels,
@@ -396,7 +397,11 @@ async function bindConversation(
     throw error;
   }
   if (request.status === "bound") {
-    return { text: `Bound this conversation to Codex thread ${threadId} in ${workspaceDir}.` };
+    return {
+      text: `Bound this conversation to Codex thread ${formatCodexDisplayText(
+        threadId,
+      )} in ${formatCodexDisplayText(workspaceDir)}.`,
+    };
   }
   if (request.status === "pending") {
     return request.reply;
@@ -435,13 +440,13 @@ async function describeConversationBinding(
   const active = deps.readCodexConversationActiveTurn(data.sessionFile);
   return [
     "Codex conversation binding:",
-    `- Thread: ${threadBinding?.threadId ?? "unknown"}`,
-    `- Workspace: ${data.workspaceDir}`,
-    `- Model: ${threadBinding?.model ?? "default"}`,
+    `- Thread: ${formatCodexDisplayText(threadBinding?.threadId ?? "unknown")}`,
+    `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
+    `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
     `- Fast: ${threadBinding?.serviceTier === "fast" ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
-    `- Active run: ${active ? active.turnId : "none"}`,
-    `- Session: ${data.sessionFile}`,
+    `- Active run: ${formatCodexDisplayText(active ? active.turnId : "none")}`,
+    `- Session: ${formatCodexDisplayText(data.sessionFile)}`,
   ].join("\n");
 }
 
@@ -487,7 +492,9 @@ async function resumeThread(
     model: isJsonObject(response) ? readString(response, "model") : undefined,
     modelProvider: isJsonObject(response) ? readString(response, "modelProvider") : undefined,
   });
-  return `Attached this OpenClaw session to Codex thread ${effectiveThreadId}.`;
+  return `Attached this OpenClaw session to Codex thread ${formatCodexDisplayText(
+    effectiveThreadId,
+  )}.`;
 }
 
 async function stopConversationTurn(
@@ -1484,7 +1491,7 @@ async function startThreadAction(
   } else {
     await deps.codexControlRequest(pluginConfig, method, { threadId: binding.threadId });
   }
-  return `Started Codex ${label} for thread ${binding.threadId}.`;
+  return `Started Codex ${label} for thread ${formatCodexDisplayText(binding.threadId)}.`;
 }
 
 function splitArgs(value: string | undefined): string[] {

@@ -154,6 +154,26 @@ describe("codex command", () => {
     expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
   });
 
+  it("escapes resumed Codex thread ids before chat display", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const unsafe = "thread-123 <@U123> [trusted](https://evil)";
+    const deps = createDeps({
+      codexControlRequest: vi.fn(async () => ({
+        thread: { id: unsafe, cwd: "/repo" },
+      })),
+    });
+
+    const result = await handleCodexCommand(createContext("resume thread-123", sessionFile), {
+      deps,
+    });
+
+    expect(result.text).toContain(
+      "thread-123 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+  });
+
   it("shows model ids from Codex app-server", async () => {
     const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
     const deps = createDeps({
@@ -494,6 +514,22 @@ describe("codex command", () => {
       text: "Usage: /codex review",
     });
     expect(codexControlRequest).not.toHaveBeenCalled();
+  });
+
+  it("escapes started thread-action ids before chat display", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-123 <@U123>", cwd: "/repo" }),
+    );
+    const codexControlRequest = vi.fn(async () => ({}));
+
+    const result = await handleCodexCommand(createContext("compact", sessionFile), {
+      deps: createDeps({ codexControlRequest }),
+    });
+
+    expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
+    expect(result.text).not.toContain("<@U123>");
   });
 
   it("checks Codex Computer Use setup", async () => {
@@ -1839,6 +1875,47 @@ describe("codex command", () => {
     });
   });
 
+  it("escapes bound Codex thread ids and workspace paths before chat display", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const unsafeThread = "thread-123 <@U123>";
+    const unsafeWorkspace = "/repo [trusted](https://evil)";
+    const startCodexConversationThread = vi.fn(async () => ({
+      kind: "codex-app-server-session" as const,
+      version: 1 as const,
+      sessionFile,
+      workspaceDir: unsafeWorkspace,
+    }));
+    const requestConversationBinding = vi.fn(async () => ({
+      status: "bound" as const,
+      binding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: "/plugin",
+        channel: "test",
+        accountId: "default",
+        conversationId: "conversation",
+        boundAt: 1,
+      },
+    }));
+
+    const result = await handleCodexCommand(
+      createContext(`bind "${unsafeThread}" --cwd "${unsafeWorkspace}"`, sessionFile, {
+        requestConversationBinding,
+      }),
+      {
+        deps: createDeps({
+          startCodexConversationThread,
+          resolveCodexDefaultWorkspaceDir: vi.fn(() => "/default"),
+        }),
+      },
+    );
+
+    expect(result.text).toContain("thread-123 &lt;\uff20U123&gt;");
+    expect(result.text).toContain("/repo \uff3btrusted\uff3d\uff08https://evil\uff09");
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+  });
+
   it("rejects bind options with missing values before starting Codex", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const startCodexConversationThread = vi.fn();
@@ -2188,6 +2265,46 @@ describe("codex command", () => {
         `- Session: ${sessionFile}`,
       ].join("\n"),
     });
+  });
+
+  it("escapes active binding fields before chat display", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-123 <@U123>",
+        cwd: "/repo",
+        model: "gpt [trusted](https://evil)",
+      }),
+    );
+
+    const result = await handleCodexCommand(
+      createContext("binding", sessionFile, {
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: "/repo <@U123>",
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+
+    expect(result.text).toContain("Thread: thread-123 &lt;\uff20U123&gt;");
+    expect(result.text).toContain("Workspace: /repo &lt;\uff20U123&gt;");
+    expect(result.text).toContain("Model: gpt \uff3btrusted\uff3d\uff08https://evil\uff09");
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
   });
 });
 

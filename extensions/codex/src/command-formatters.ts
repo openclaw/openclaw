@@ -163,7 +163,7 @@ function formatCodexResumeHint(threadId: string): string {
   return `/codex resume ${safe}`;
 }
 
-function formatCodexDisplayText(value: string): string {
+export function formatCodexDisplayText(value: string): string {
   return escapeCodexChatText(formatCodexTextForDisplay(value));
 }
 

@@ -131,6 +131,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: escape app-server thread, model, MCP, skill, and Computer Use readouts before posting them back into chat. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape app-server status and account probe errors before posting them back into chat. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape app-server status model ids and fallback account summaries while keeping normal account emails readable. Thanks @vincentkoc.
+- Providers/OpenAI Codex: escape bound-thread ids, workspace paths, and model names in bind, resume, binding, thread-action, and model-control replies. Thanks @vincentkoc.
 - Providers/OpenAI Codex: resolve malformed empty `request_user_input` prompts without posting a blank chat prompt or waiting for a user reply. Thanks @vincentkoc.
 - Providers/OpenAI Codex: keep option-only `request_user_input` prompts from accepting arbitrary free-form replies unless the prompt explicitly allows Other. Thanks @vincentkoc.
 - Providers/OpenAI Codex: keep bound conversation turns from resolving with stale same-thread notifications that arrive before the new turn id is known. Thanks @vincentkoc.
