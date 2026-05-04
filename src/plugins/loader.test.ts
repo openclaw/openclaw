@@ -2526,24 +2526,31 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(listMemoryEmbeddingProviders()).toEqual([]);
   });
 
-  it("preserves corpus supplements registered via register(api) across activating re-loads (#77039)", () => {
+  it("preserves corpus supplements that were not re-registered on a second activating load (#77039)", () => {
     useNoBundledPlugins();
-    // Plugin registers its supplement through register(api). A second activating load calls
-    // clearActivatedPluginRuntimeState() before re-running register(api), temporarily wiping
-    // the supplement. The restore loop must put it back for still-active plugins.
+    // Reproduces the service.start() scenario: on first load the plugin registers a corpus
+    // supplement; on second activating load clearActivatedPluginRuntimeState() wipes it and
+    // register(api) does NOT re-add it (module-level flag prevents double registration, just
+    // as service.start() only fires once and register() doesn't call registerMemoryCorpusSupplement
+    // on subsequent loads).  Without the restore loop the supplement stays gone; with it, the
+    // loader detects the still-active plugin didn't re-register and puts the supplement back.
     const plugin = writePlugin({
       id: "corpus-supplement-plugin",
       filename: "corpus-supplement-plugin.cjs",
-      body: `module.exports = {
-        id: "corpus-supplement-plugin",
-        kind: "memory",
-        register(api) {
-          api.registerMemoryCorpusSupplement({
-            search: async () => [],
-            get: async () => null,
-          });
-        },
-      };`,
+      body: `let registered = false;
+module.exports = {
+  id: "corpus-supplement-plugin",
+  kind: "memory",
+  register(api) {
+    if (!registered) {
+      registered = true;
+      api.registerMemoryCorpusSupplement({
+        search: async () => [],
+        get: async () => null,
+      });
+    }
+  },
+};`,
     });
     const pluginConfig = {
       cache: false,
@@ -2557,11 +2564,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     };
 
-    // First load: supplement registered via register(api).
+    // First load: supplement registered (register() fires, flag unset).
     loadOpenClawPlugins(pluginConfig);
     expect(listMemoryCorpusSupplements()).toHaveLength(1);
 
-    // Second activating load: restore loop must preserve the supplement for still-active plugin.
+    // Second activating load: clearActivatedPluginRuntimeState() wipes the supplement;
+    // register() fires again but the flag prevents re-registration.
+    // The restore loop must put the supplement back for this still-active plugin.
     loadOpenClawPlugins(pluginConfig);
     const supplements = listMemoryCorpusSupplements();
     expect(supplements).toHaveLength(1);
