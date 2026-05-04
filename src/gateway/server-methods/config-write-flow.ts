@@ -13,7 +13,7 @@ import {
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
-import { resolveEffectiveSharedGatewayAuth } from "../auth.js";
+import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
 import { formatControlPlaneActor, type ControlPlaneActor } from "../control-plane-audit.js";
@@ -32,6 +32,26 @@ export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "p
 }
 
 export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
+  const prevResolvedAuth = resolveGatewayAuth({
+    authConfig: prev.gateway?.auth,
+    env: process.env,
+    tailscaleMode: prev.gateway?.tailscale?.mode,
+  });
+  const nextResolvedAuth = resolveGatewayAuth({
+    authConfig: next.gateway?.auth,
+    env: process.env,
+    tailscaleMode: next.gateway?.tailscale?.mode,
+  });
+  if (prevResolvedAuth.mode === "trusted-proxy" || nextResolvedAuth.mode === "trusted-proxy") {
+    if (prevResolvedAuth.mode !== nextResolvedAuth.mode) {
+      return true;
+    }
+    return (
+      !isDeepStrictEqual(prevResolvedAuth.trustedProxy, nextResolvedAuth.trustedProxy) ||
+      !isDeepStrictEqual(prev.gateway?.trustedProxies ?? [], next.gateway?.trustedProxies ?? [])
+    );
+  }
+
   const prevAuth = resolveEffectiveSharedGatewayAuth({
     authConfig: prev.gateway?.auth,
     env: process.env,

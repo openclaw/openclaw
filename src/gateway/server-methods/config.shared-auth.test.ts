@@ -168,6 +168,46 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
+  it("disconnects gateway-auth clients when active trusted-proxy policy changes", async () => {
+    const prevConfig: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: ["alice@example.com"],
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+      },
+    };
+    readConfigFileSnapshotForWriteMock.mockResolvedValue(createConfigWriteSnapshot(prevConfig));
+
+    const { options, disconnectClientsUsingSharedGatewayAuth } = createConfigHandlerHarness({
+      method: "config.patch",
+      params: {
+        baseHash: "base-hash",
+        raw: JSON.stringify({
+          gateway: {
+            auth: {
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["bob@example.com"],
+              },
+            },
+          },
+        }),
+        restartDelayMs: 1_000,
+      },
+    });
+
+    await configHandlers["config.patch"](options);
+    await flushConfigHandlerMicrotasks();
+
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
+  });
+
   it("still schedules a direct restart for hot mode when the reloader cannot apply the change", async () => {
     const prevConfig: OpenClawConfig = {
       gateway: {
