@@ -220,6 +220,7 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private pending = new Map<string, Pending>();
   private backoffMs = 1000;
+  private reconnectAttempts = 0;
   private closed = false;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
@@ -435,6 +436,7 @@ export class GatewayClient {
     this.closed = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.reconnectAttempts = 0;
     this.pendingStartupReconnectDelayMs = null;
     this.pendingConnectErrorDetailCode = null;
     this.clearReconnectTimer();
@@ -595,6 +597,7 @@ export class GatewayClient {
           });
         }
         this.backoffMs = 1000;
+        this.reconnectAttempts = 0;
         this.tickIntervalMs =
           typeof helloOk.policy?.tickIntervalMs === "number"
             ? helloOk.policy.tickIntervalMs
@@ -922,8 +925,20 @@ export class GatewayClient {
     }, connectChallengeTimeoutMs);
   }
 
+  private static readonly MAX_RECONNECT_ATTEMPTS = 30;
+
   private scheduleReconnect() {
     if (this.closed) {
+      return;
+    }
+    if (this.reconnectAttempts >= GatewayClient.MAX_RECONNECT_ATTEMPTS) {
+      logDebug(`gateway reconnect giving up after ${this.reconnectAttempts} attempts`);
+      this.closed = true;
+      this.opts.onReconnectPaused?.({
+        code: -1,
+        reason: `max reconnect attempts reached (${GatewayClient.MAX_RECONNECT_ATTEMPTS})`,
+        detailCode: undefined,
+      });
       return;
     }
     if (this.tickTimer) {
@@ -936,6 +951,7 @@ export class GatewayClient {
     const delay = startupDelay ?? this.backoffMs;
     if (startupDelay === null) {
       this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+      this.reconnectAttempts++;
     }
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
