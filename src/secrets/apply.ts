@@ -411,10 +411,6 @@ function scrubAuthStoresForProviderTargets(params: {
           delete profile.profile[profile.valueField];
           mutated = true;
         }
-        if (profile.refField in profile.profile) {
-          delete profile.profile[profile.refField];
-          mutated = true;
-        }
         continue;
       }
       if (profile.kind === "oauth" && (profile.hasAccess || profile.hasRefresh)) {
