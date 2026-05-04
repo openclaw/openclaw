@@ -98,6 +98,41 @@ describe("Codex app-server user input bridge", () => {
     });
   });
 
+  it("rejects free-form option replies when Other is disabled", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    const response = bridge.handleRequest({
+      id: "input-options",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "tool-1",
+        questions: [
+          {
+            id: "mode",
+            header: "Mode",
+            question: "Pick a mode",
+            isOther: false,
+            isSecret: false,
+            options: [{ label: "Fast", description: "Use less reasoning" }],
+          },
+        ],
+      },
+    });
+
+    await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1));
+    expect(bridge.handleQueuedMessage("banana")).toBe(true);
+
+    await expect(response).resolves.toEqual({
+      answers: { mode: { answers: [] } },
+    });
+  });
+
   it("clears pending prompts when Codex resolves the server request itself", async () => {
     const params = createParams();
     const bridge = createCodexUserInputBridge({

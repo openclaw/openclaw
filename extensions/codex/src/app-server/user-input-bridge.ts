@@ -232,7 +232,8 @@ function buildUserInputResponse(questions: UserInputQuestion[], inputText: strin
   if (questions.length === 1) {
     const question = questions[0];
     if (question) {
-      answers[question.id] = { answers: [normalizeAnswer(inputText, question)] };
+      const answer = normalizeAnswer(inputText, question);
+      answers[question.id] = { answers: answer ? [answer] : [] };
     }
     return { answers };
   }
@@ -249,12 +250,13 @@ function buildUserInputResponse(questions: UserInputQuestion[], inputText: strin
       keyed.get(question.question.toLowerCase()) ??
       keyed.get(String(index + 1));
     const answer = key ?? fallbackLines[index] ?? "";
-    answers[question.id] = { answers: answer ? [normalizeAnswer(answer, question)] : [] };
+    const normalized = answer ? normalizeAnswer(answer, question) : undefined;
+    answers[question.id] = { answers: normalized ? [normalized] : [] };
   });
   return { answers };
 }
 
-function normalizeAnswer(answer: string, question: UserInputQuestion): string {
+function normalizeAnswer(answer: string, question: UserInputQuestion): string | undefined {
   const trimmed = answer.trim();
   const options = question.options ?? [];
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
@@ -263,7 +265,13 @@ function normalizeAnswer(answer: string, question: UserInputQuestion): string {
     return indexed.label;
   }
   const exact = options.find((option) => option.label.toLowerCase() === trimmed.toLowerCase());
-  return exact?.label ?? trimmed;
+  if (exact) {
+    return exact.label;
+  }
+  if (options.length > 0 && !question.isOther) {
+    return undefined;
+  }
+  return trimmed || undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {
