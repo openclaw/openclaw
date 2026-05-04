@@ -197,7 +197,7 @@ const baseRoute = {
 function callProcessMessage(overrides: { cfg?: unknown; msg?: Record<string, unknown> } = {}) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
-    msg: { ...baseMsg, ...(overrides.msg ?? {}) } as never,
+    msg: { ...baseMsg, ...overrides.msg } as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
     groupHistories: new Map(),

@@ -272,7 +272,7 @@ function collectSelfPullTokens(params: {
 
 function stripSelfPullTokens(body: string, tokens: readonly string[]): string {
   let residual = body;
-  for (const token of [...tokens].sort((left, right) => right.length - left.length)) {
+  for (const token of tokens.toSorted((left, right) => right.length - left.length)) {
     const escaped = escapeInlineReplyPullToken(token).replace(/\s+/g, "\\s+");
     residual = residual.replace(
       new RegExp(`(^|[^\\p{L}\\p{N}_])@?${escaped}(?=$|[^\\p{L}\\p{N}_])`, "giu"),

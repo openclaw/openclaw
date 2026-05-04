@@ -549,10 +549,10 @@ function isOwnerSelfReferencePull(params: {
   secondPersonAddress: boolean;
   text: string;
 }): boolean {
-  return Boolean(
+  return (
     params.senderIsOwner &&
     params.incidentalSelfReference &&
-    (params.taskLike || params.secondPersonAddress || GENERIC_BOT_REQUEST_RE.test(params.text)),
+    (params.taskLike || params.secondPersonAddress || GENERIC_BOT_REQUEST_RE.test(params.text))
   );
 }
 
@@ -562,12 +562,12 @@ function isOwnerShoarBehaviorPull(params: {
   incidentalSelfReference: boolean;
   secondPersonAddress: boolean;
 }): boolean {
-  return Boolean(
+  return (
     params.senderIsOwner &&
     OWNER_SHOAR_BEHAVIOR_RE.test(params.text) &&
     (params.incidentalSelfReference ||
       params.secondPersonAddress ||
-      OWNER_DIRECT_SHOAR_BEHAVIOR_RE.test(params.text)),
+      OWNER_DIRECT_SHOAR_BEHAVIOR_RE.test(params.text))
   );
 }
 
@@ -576,8 +576,8 @@ function isOwnerMultiAgentPull(params: {
   text: string;
   multiAgentContext: boolean;
 }): boolean {
-  return Boolean(
-    params.senderIsOwner && params.multiAgentContext && OWNER_MULTI_AGENT_PULL_RE.test(params.text),
+  return (
+    params.senderIsOwner && params.multiAgentContext && OWNER_MULTI_AGENT_PULL_RE.test(params.text)
   );
 }
 

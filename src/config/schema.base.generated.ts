@@ -3363,6 +3363,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     description:
                       "Agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id uses built-in OpenClaw Pi.",
                   },
+                  fallback: {
+                    type: "string",
+                  },
                 },
                 additionalProperties: false,
                 title: "Default Agent Runtime Settings",
@@ -6308,6 +6311,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       title: "Agent Runtime",
                       description:
                         "Per-agent agent runtime id: pi, auto, a registered plugin harness id such as codex, or a supported CLI backend alias such as claude-cli. Omitted id inherits the default OpenClaw Pi behavior.",
+                    },
+                    fallback: {
+                      type: "string",
                     },
                   },
                   additionalProperties: false,

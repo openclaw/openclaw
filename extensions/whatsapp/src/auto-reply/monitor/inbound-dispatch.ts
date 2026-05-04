@@ -212,16 +212,20 @@ function buildConversationStatePacket(params: {
 }) {
   const history = params.groupHistory ?? [];
   const nowMs = normalizeTimestampMs(params.msg.timestamp) ?? Date.now();
-  const lastGroupTimestamp = history
-    .map((entry) => normalizeTimestampMs(entry.timestamp))
-    .filter((value): value is number => value !== undefined)
-    .at(-1);
-  const lastSelf = [...history]
-    .reverse()
+  let lastGroupTimestamp: number | undefined;
+  for (const entry of history.toReversed()) {
+    const timestamp = normalizeTimestampMs(entry.timestamp);
+    if (timestamp !== undefined) {
+      lastGroupTimestamp = timestamp;
+      break;
+    }
+  }
+  const lastSelf = history
+    .toReversed()
     .find((entry) => isLikelySelfHistoryEntry(entry, params.msg));
   const lastSelfTimestamp = normalizeTimestampMs(lastSelf?.timestamp);
-  const lastSibling = [...history]
-    .reverse()
+  const lastSibling = history
+    .toReversed()
     .find((entry) => isLikelySiblingBotEntry(entry, params.msg));
   const lastSiblingTimestamp = normalizeTimestampMs(lastSibling?.timestamp);
   const senderRecentEntries = history.filter((entry) => {

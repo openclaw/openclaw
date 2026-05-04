@@ -278,7 +278,7 @@ function resolvePriorityLaneEntry(
             : lanes?.otherTargetAmbient;
   return {
     ...DEFAULT_PRIORITY_LANES[laneId],
-    ...(configured ?? {}),
+    ...configured,
   };
 }
 
@@ -310,6 +310,7 @@ function lanePriority(id: WhatsAppQueueLaneId): number {
     case "other_target_ambient":
       return 5;
   }
+  return 6;
 }
 
 function isInlineReplyToSelf(msg: WebInboundMessage): boolean {
