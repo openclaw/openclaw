@@ -43,7 +43,9 @@ function collectApiKeyProfileAssignment(params: {
   if (!keyRef && inlineKeyRef) {
     params.profile.keyRef = inlineKeyRef;
   }
-  if (keyRef && isNonEmptyString(params.profile.key)) {
+  const plaintextKey = params.profile.key;
+  params.profile.key = undefined;
+  if (keyRef && isNonEmptyString(plaintextKey)) {
     pushWarning(params.context, {
       code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
       path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
@@ -56,6 +58,9 @@ function collectApiKeyProfileAssignment(params: {
     expected: "string",
     apply: (value) => {
       params.profile.key = String(value);
+    },
+    onUnresolved: () => {
+      params.profile.keyRef = undefined;
     },
   });
 }
@@ -82,7 +87,9 @@ function collectTokenProfileAssignment(params: {
   if (!tokenRef && inlineTokenRef) {
     params.profile.tokenRef = inlineTokenRef;
   }
-  if (tokenRef && isNonEmptyString(params.profile.token)) {
+  const plaintextToken = params.profile.token;
+  params.profile.token = undefined;
+  if (tokenRef && isNonEmptyString(plaintextToken)) {
     pushWarning(params.context, {
       code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
       path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
@@ -95,6 +102,9 @@ function collectTokenProfileAssignment(params: {
     expected: "string",
     apply: (value) => {
       params.profile.token = String(value);
+    },
+    onUnresolved: () => {
+      params.profile.tokenRef = undefined;
     },
   });
 }

@@ -36,6 +36,9 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
     assignments: [],
   }),
   collectConfigAssignments: () => {},
+  pushWarning: (context: { warnings: unknown[] }, warning: unknown) => {
+    context.warnings.push(warning);
+  },
   collectAuthStoreAssignments: ({
     store,
     context,

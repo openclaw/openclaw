@@ -327,6 +327,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   env?: NodeJS.ProcessEnv;
   agentDirs?: string[];
   includeAuthStoreRefs?: boolean;
+  degradeAuthStoreRefFailures?: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
@@ -335,6 +336,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
+  const degradeAuthStoreRefFailures = params.degradeAuthStoreRefFailures ?? false;
   let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const fastPathLoadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreWithoutExternalProfiles;
   const candidateDirs = params.agentDirs?.length
@@ -370,6 +372,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     collectAuthStoreAssignments,
     collectConfigAssignments,
     createResolverContext,
+    pushWarning,
     resolveRuntimeWebTools,
     resolveSecretRefValues,
   } = await loadRuntimePrepareHelpers();
@@ -389,6 +392,22 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     loadablePluginOrigins,
   });
 
+  if (context.assignments.length > 0) {
+    const resolved = await resolveSecretRefValues(
+      context.assignments.map((assignment) => assignment.ref),
+      {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      },
+    );
+    applyResolvedAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
+    context.assignments.length = 0;
+  }
+
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
@@ -398,25 +417,37 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       }));
     }
     for (const entry of authStores) {
+      const assignmentStart = context.assignments.length;
       collectAuthStoreAssignments({
         store: entry.store,
         context,
         agentDir: entry.agentDir,
       });
+      const authAssignments = context.assignments.splice(assignmentStart);
+      for (const assignment of authAssignments) {
+        try {
+          const resolved = await resolveSecretRefValues([assignment.ref], {
+            config: sourceConfig,
+            env: context.env,
+            cache: context.cache,
+          });
+          applyResolvedAssignments({
+            assignments: [assignment],
+            resolved,
+          });
+        } catch (err) {
+          if (!degradeAuthStoreRefFailures) {
+            throw err;
+          }
+          assignment.onUnresolved?.();
+          pushWarning(context, {
+            code: "SECRETS_AUTH_PROFILE_REF_UNRESOLVED",
+            path: assignment.path,
+            message: `${assignment.path}: auth-profile SecretRef could not be resolved; this credential is unavailable until the ref is fixed. ${String(err)}`,
+          });
+        }
+      }
     }
-  }
-
-  if (context.assignments.length > 0) {
-    const refs = context.assignments.map((assignment) => assignment.ref);
-    const resolved = await resolveSecretRefValues(refs, {
-      config: sourceConfig,
-      env: context.env,
-      cache: context.cache,
-    });
-    applyResolvedAssignments({
-      assignments: context.assignments,
-      resolved,
-    });
   }
 
   const snapshot = {

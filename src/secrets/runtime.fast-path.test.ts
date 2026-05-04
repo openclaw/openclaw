@@ -28,6 +28,7 @@ vi.mock("./runtime-prepare.runtime.js", () => {
     }),
     collectConfigAssignments: () => undefined,
     collectAuthStoreAssignments: () => undefined,
+    pushWarning: () => undefined,
     resolveSecretRefValues: async () => new Map(),
     applyResolvedAssignments: () => undefined,
     resolveRuntimeWebTools: resolveRuntimeWebToolsMock,

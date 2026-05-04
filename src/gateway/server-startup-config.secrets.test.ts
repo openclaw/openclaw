@@ -126,6 +126,7 @@ describe("gateway startup config secret preflight", () => {
 
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
       config: expect.any(Object),
+      degradeAuthStoreRefFailures: true,
       loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
     });
   });
@@ -183,6 +184,7 @@ describe("gateway startup config secret preflight", () => {
     expect(emitStateEvent).not.toHaveBeenCalled();
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledWith({
       config: expect.any(Object),
+      degradeAuthStoreRefFailures: false,
     });
   });
 
@@ -273,6 +275,7 @@ describe("gateway startup config secret preflight", () => {
       config: expect.not.objectContaining({
         channels: expect.anything(),
       }),
+      degradeAuthStoreRefFailures: true,
       loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
     });
   });
@@ -323,6 +326,7 @@ describe("gateway startup config secret preflight", () => {
           }),
         }),
       }),
+      degradeAuthStoreRefFailures: true,
       loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
     });
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
@@ -357,6 +361,7 @@ describe("gateway startup config secret preflight", () => {
           }),
         }),
       }),
+      degradeAuthStoreRefFailures: true,
       loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles,
     });
   });

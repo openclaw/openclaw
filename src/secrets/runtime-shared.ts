@@ -8,6 +8,7 @@ import { isRecord } from "./shared.js";
 export type SecretResolverWarningCode =
   | "SECRETS_REF_OVERRIDES_PLAINTEXT"
   | "SECRETS_REF_IGNORED_INACTIVE_SURFACE"
+  | "SECRETS_AUTH_PROFILE_REF_UNRESOLVED"
   | "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
   | "WEB_SEARCH_AUTODETECT_SELECTED"
   | "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED"
@@ -28,6 +29,7 @@ export type SecretAssignment = {
   path: string;
   expected: "string" | "string-or-object";
   apply: (value: unknown) => void;
+  onUnresolved?: () => void;
 };
 
 export type ResolverContext = {

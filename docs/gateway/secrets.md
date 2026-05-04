@@ -20,6 +20,7 @@ Secrets are resolved into an in-memory runtime snapshot.
 
 - Resolution is eager during activation, not lazy on request paths.
 - Startup fails fast when an effectively active SecretRef cannot be resolved.
+- Auth-profile SecretRefs are resolved during activation. During startup and restart preflight, stale profile refs degrade only that credential and emit `SECRETS_AUTH_PROFILE_REF_UNRESOLVED`; reload keeps failures strict so the last-known-good runtime snapshot remains active. Config-level required refs remain startup-fatal.
 - Reload uses atomic swap: full success, or keep the last-known-good snapshot.
 - SecretRef policy violations (for example OAuth-mode auth profiles combined with SecretRef input) fail activation before runtime swap.
 - Runtime requests read from the active in-memory snapshot only.

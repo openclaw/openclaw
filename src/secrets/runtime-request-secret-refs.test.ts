@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
+import { resolveApiKeyFromCredential } from "../agents/models-config.providers.secret-helpers.js";
 import {
   asConfig,
   loadAuthStoreWithProfiles,
@@ -8,7 +10,7 @@ import {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("secrets runtime snapshot request secret refs", () => {
-  it("can skip auth-profile SecretRef resolution when includeAuthStoreRefs is false", async () => {
+  it("degrades unresolved auth-profile SecretRefs without failing startup", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
     delete process.env[missingEnvVar];
 
@@ -19,16 +21,47 @@ describe("secrets runtime snapshot request secret refs", () => {
           provider: "custom",
           tokenRef: { source: "env", provider: "default", id: missingEnvVar },
         },
+        "custom:key": {
+          type: "api_key",
+          provider: "custom",
+          keyRef: { source: "env", provider: "default", id: "OPENCLAW_PRESENT_AUTH_KEY" },
+        },
       });
 
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: asConfig({}),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore,
+    const degradedSnapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: { OPENCLAW_PRESENT_AUTH_KEY: "resolved-auth-key" },
+      degradeAuthStoreRefFailures: true,
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore,
+    });
+
+    expect(degradedSnapshot.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_AUTH_PROFILE_REF_UNRESOLVED",
+        path: "/tmp/openclaw-agent-main.auth-profiles.custom:token.token",
       }),
-    ).rejects.toThrow(`Environment variable "${missingEnvVar}" is missing or empty.`);
+    );
+    expect(degradedSnapshot.authStores[0]?.store.profiles["custom:token"]).toEqual({
+      type: "token",
+      provider: "custom",
+    });
+    expect(
+      resolveAuthProfileEligibility({
+        store: degradedSnapshot.authStores[0].store,
+        provider: "custom",
+        profileId: "custom:token",
+      }),
+    ).toEqual({ eligible: false, reasonCode: "missing_credential" });
+    expect(degradedSnapshot.authStores[0]?.store.profiles["custom:key"]).toEqual({
+      type: "api_key",
+      provider: "custom",
+      keyRef: { source: "env", provider: "default", id: "OPENCLAW_PRESENT_AUTH_KEY" },
+      key: "resolved-auth-key",
+    });
+    expect(
+      resolveApiKeyFromCredential(degradedSnapshot.authStores[0]?.store.profiles["custom:token"]),
+    ).toBeUndefined();
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({}),
@@ -39,6 +72,44 @@ describe("secrets runtime snapshot request secret refs", () => {
     });
 
     expect(snapshot.authStores).toEqual([]);
+  });
+
+  it("keeps auth-profile SecretRef failures strict unless degradation is requested", async () => {
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({}),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () =>
+          loadAuthStoreWithProfiles({
+            "custom:token": {
+              type: "token",
+              provider: "custom",
+              tokenRef: { source: "env", provider: "default", id: missingEnvVar },
+            },
+          }),
+      }),
+    ).rejects.toThrow(`Environment variable "${missingEnvVar}" is missing or empty.`);
+  });
+
+  it("still fails startup for unresolved config SecretRefs", async () => {
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          gateway: {
+            auth: {
+              token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN_REF" },
+            },
+          },
+        }),
+        env: {},
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow('Environment variable "MISSING_GATEWAY_TOKEN_REF" is missing or empty.');
   });
 
   it("resolves model provider request secret refs for headers, auth, and tls material", async () => {

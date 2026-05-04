@@ -176,6 +176,7 @@ export function createRuntimeSecretsActivator(params: {
           : undefined;
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
+          degradeAuthStoreRefFailures: startupPreflight,
           ...(loadAuthStore ? { loadAuthStore } : {}),
         });
         assertRuntimeGatewayAuthNotKnownWeak(prepared.config);

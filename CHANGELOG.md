@@ -94,6 +94,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/packages: reject blank `openclaw.runtimeExtensions` entries instead of silently ignoring them and falling back to inferred TypeScript runtime entries. Thanks @vincentkoc.
 - Doctor/plugins: remove stale managed npm plugin shadow entries from the managed package lock as well as `package.json` and `node_modules`, so future npm operations do not keep referencing repaired bundled-plugin shadows. Thanks @vincentkoc.
 - Plugins/runtime state: keep the key being registered when namespace eviction runs in the same millisecond as existing entries, so `register` and `registerIfAbsent` do not report success while evicting their own fresh value. Thanks @vincentkoc.
+- Gateway/secrets: keep startup online when a stale SecretRef appears only in a stored non-default auth profile, marking that profile credential unavailable instead of failing unrelated routes and the Control UI. Fixes #75814. Thanks @kAIborg24.
 - Control UI/Talk: make failed Talk startup errors dismissable and clear the stale Talk error state when dismissed, so missing realtime voice provider configuration does not leave a permanent chat banner. Fixes #77071. Thanks @ijoshdavis.
 - Control UI/Talk: stop and clear failed realtime Talk sessions when dismissing runtime error banners, so the next Talk click starts a fresh session instead of only stopping the stale one. Thanks @vincentkoc.
 - Control UI/Talk: retry from a failed realtime Talk session on the next Talk click instead of requiring a separate stale-session stop click first. Thanks @vincentkoc.
