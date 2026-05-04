@@ -60,6 +60,8 @@ export type ProxyValidationApnsCheckParams = {
 
 export type ProxyValidationApnsCheckResult = {
   status: number;
+  /** Present when the response originated from a real APNs server (Apple always returns this UUID). */
+  apnsId?: string;
 };
 
 export type ProxyValidationApnsCheck = (
@@ -201,7 +203,7 @@ async function defaultProxyValidationApnsCheck({
   timeoutMs,
 }: ProxyValidationApnsCheckParams): Promise<ProxyValidationApnsCheckResult> {
   const result = await probeApnsHttp2ReachabilityViaProxy({ proxyUrl, authority, timeoutMs });
-  return { status: result.status };
+  return { status: result.status, apnsId: result.responseHeaders?.["apns-id"] };
 }
 
 function normalizeTimeoutMs(value: number | undefined): number {
@@ -420,6 +422,16 @@ async function runApnsReachabilityCheck(params: {
       authority: params.authority,
       timeoutMs: params.timeoutMs,
     });
+    if (!result.apnsId) {
+      return {
+        kind: "apns",
+        url: params.authority,
+        ok: false,
+        error:
+          "APNs reachability check failed: response did not include an apns-id header. " +
+          "The proxy may be intercepting the connection instead of tunneling it.",
+      };
+    }
     return {
       kind: "apns",
       url: params.authority,

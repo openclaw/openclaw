@@ -30,6 +30,8 @@ export type ProbeApnsHttp2ReachabilityViaProxyParams = {
 export type ProbeApnsHttp2ReachabilityViaProxyResult = {
   status: number;
   body: string;
+  /** Raw response headers from APNs. Includes apns-id when the connection was truly tunneled to Apple. */
+  responseHeaders: Record<string, string>;
 };
 
 function assertApnsAuthority(authority: string): ApnsAuthority {
@@ -96,6 +98,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let settled = false;
       let body = "";
       let status: number | undefined;
+      let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
         fail(
           new Error(`APNs reachability probe timed out after ${Math.trunc(params.timeoutMs)}ms`),
@@ -132,6 +135,11 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       request.on("response", (headers) => {
         const rawStatus = headers[":status"];
         status = typeof rawStatus === "number" ? rawStatus : Number(rawStatus);
+        responseHeaders = Object.fromEntries(
+          Object.entries(headers)
+            .filter(([k]) => !k.startsWith(":"))
+            .map(([k, v]) => [k, String(v)]),
+        );
       });
       request.on("data", (chunk) => {
         body += String(chunk);
@@ -147,7 +155,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
           reject(new Error("APNs reachability probe ended without an HTTP/2 status"));
           return;
         }
-        resolve({ status, body });
+        resolve({ status, body, responseHeaders });
       });
       request.end(JSON.stringify({ aps: { alert: "OpenClaw APNs proxy validation" } }));
     });

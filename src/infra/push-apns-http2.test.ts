@@ -185,7 +185,11 @@ describe("connectApnsHttp2Session", () => {
       timeoutMs: 10_000,
     });
 
-    expect(result).toEqual({ status: 403, body: '{"reason":"InvalidProviderToken"}' });
+    expect(result).toEqual({
+      status: 403,
+      body: '{"reason":"InvalidProviderToken"}',
+      responseHeaders: {},
+    });
     const tunnelCall = tunnelSpy.mock.calls.at(-1)?.[0];
     const proxyUrl = tunnelCall?.proxyUrl;
     expect(proxyUrl).toBeInstanceOf(URL);

@@ -423,7 +423,9 @@ describe("proxy validation", () => {
 
   it("adds an APNs reachability check when requested", async () => {
     const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
-    const apnsCheck = vi.fn().mockResolvedValue({ status: 403 });
+    const apnsCheck = vi
+      .fn()
+      .mockResolvedValue({ status: 403, apnsId: "00000000-0000-0000-0000-000000000000" });
 
     const result = await runProxyValidation({
       config: {
@@ -463,6 +465,30 @@ describe("proxy validation", () => {
         },
       ],
     });
+  });
+
+  it("fails APNs reachability when response has no apns-id (proxy intercept)", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: [],
+      apnsReachability: true,
+      apnsCheck: vi.fn().mockResolvedValue({ status: 200 }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "apns",
+        url: "https://api.sandbox.push.apple.com",
+        ok: false,
+        error: expect.stringContaining("apns-id"),
+      },
+    ]);
   });
 
   it("fails APNs reachability when the proxy blocks CONNECT", async () => {
