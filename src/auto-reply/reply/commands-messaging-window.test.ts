@@ -141,6 +141,27 @@ describe("handleMessagingWindowCommand", () => {
     });
   });
 
+  it("authorizes global writes against safe external origin channels", async () => {
+    const params = buildParams("/messaging_window 4s");
+    params.command.channel = "custom-sms";
+    params.command.channelId = undefined;
+    params.command.surface = "custom-sms";
+
+    const result = await handleMessagingWindowCommand(params, true);
+
+    expect(result?.reply?.text).toContain("global set to 4s");
+    expect(resolveConfigWriteDeniedTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: "custom-sms",
+        target: { kind: "global" },
+      }),
+    );
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      nextConfig: { messages: { inbound: { debounceMs: 4000 } } },
+      afterWrite: { mode: "auto" },
+    });
+  });
+
   it("sets a named channel inbound debounce window with shorthand", async () => {
     const result = await handleMessagingWindowCommand(
       buildParams("/messaging_window telegram 5s"),

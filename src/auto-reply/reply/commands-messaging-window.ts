@@ -43,14 +43,18 @@ function formatMs(ms: number | undefined): string {
 
 function resolveCurrentChannel(params: Parameters<CommandHandler>[0], raw: string): string | null {
   if (raw === "current" || raw === "this") {
-    return (
-      params.command.channelId ??
-      normalizeAnyChannelId(params.command.channel) ??
-      normalizeChannelId(params.command.channel) ??
-      normalizeSafeChannelId(params.command.channel)
-    );
+    return resolveOriginChannelId(params);
   }
   return normalizeAnyChannelId(raw) ?? normalizeChannelId(raw) ?? normalizeSafeChannelId(raw);
+}
+
+function resolveOriginChannelId(params: Parameters<CommandHandler>[0]): string | null {
+  return (
+    params.command.channelId ??
+    normalizeAnyChannelId(params.command.channel) ??
+    normalizeChannelId(params.command.channel) ??
+    normalizeSafeChannelId(params.command.channel)
+  );
 }
 
 function normalizeSafeChannelId(raw: string): string | null {
@@ -117,10 +121,7 @@ export const handleMessagingWindowCommand: CommandHandler = async (params, allow
     return unauthorized;
   }
 
-  const currentChannel =
-    params.command.channelId ??
-    normalizeChannelId(params.command.channel) ??
-    params.command.channel;
+  const currentChannel = resolveOriginChannelId(params) ?? params.command.channel;
 
   if (command.action === "status") {
     const loaded = await loadEditableConfig();
@@ -175,7 +176,7 @@ export const handleMessagingWindowCommand: CommandHandler = async (params, allow
   const deniedText = resolveConfigWriteDeniedText({
     cfg: params.cfg,
     channel: params.command.channel,
-    channelId: params.command.channelId ?? normalizeChannelId(params.command.channel),
+    channelId: resolveOriginChannelId(params),
     accountId: resolveChannelAccountId({
       cfg: params.cfg,
       ctx: params.ctx,
