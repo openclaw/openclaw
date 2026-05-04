@@ -4,10 +4,6 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-### Highlights
-
-- Channels/iMessage: bundled `imessage` plugin upgraded with full BlueBubbles parity over `imsg` JSON-RPC, offering a complete replacement for BlueBubbles-backed setups. See [docs/channels/imessage-from-bluebubbles.md](docs/channels/imessage-from-bluebubbles.md) for the migration guide. (#78317) Thanks @omarshahine.
-
 ### Changes
 
 - Agents/failover: harden state-aware lane suspension by persisting quota resume transitions, restoring configured lane concurrency, preserving non-quota failure reasons, and exporting model failover events through diagnostics OTLP. Thanks @BunsDev.
@@ -159,7 +155,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/hooks: add a `before_agent_run` pass/block gate that can stop a user prompt before model submission while preserving a redacted transcript entry for the user, and clarify that raw conversation hooks require `hooks.allowConversationAccess=true`. (#75035) Thanks @jesse-merhi.
 - Config/Nix: keep startup-derived plugin enablement, gateway auth tokens, control UI origins, and owner-display secrets runtime-only instead of rewriting `openclaw.json`; in Nix mode, config writers, mutating `openclaw update`, plugin lifecycle mutators, and doctor repair/token-generation now refuse with agent-first nix-openclaw guidance. (#78047) Thanks @joshp123.
 - Agents/context engine: invalidate cached assembled context views when source history shrinks or assembly fails, preventing stale pre-reset history from being reused. Fixes #77968. (#78163) Thanks @brokemac79 and @ChrisBot2026.
-- Channels/iMessage: drive the bundled `imessage` plugin over `imsg` JSON-RPC so private API actions (`react`, `edit`, `unsend`, `reply`, `sendWithEffect`, `renameGroup`, `setGroupIcon`, `addParticipant`, `removeParticipant`, `leaveGroup`, `sendAttachment`) are reachable when `imsg launch` is running, capability-gated per-method via `imsg status --json`, and inbound chats are marked read with a typing bubble before dispatch unless `channels.imessage.sendReadReceipts: false` [AI-assisted]. (#78317) Thanks @omarshahine.
+- Plugin SDK: add a generic `api.runtime.llm.complete` host completion helper with runtime-derived caller attribution, config-gated model/agent overrides, session-bound context-engine access, request-scoped config, audit metadata, and normalized usage attribution. (#64294) Thanks @DaevMithran.
 
 ### Breaking
 
@@ -263,11 +259,6 @@ Docs: https://docs.openclaw.ai
 - LINE: reject `dmPolicy: "open"` configs without wildcard `allowFrom` so webhook DMs fail validation instead of being acknowledged and silently blocked before inbound processing. Fixes #78316.
 - Telegram/Codex: keep message-tool-only progress drafts visible and render native Codex tool progress once per tool instead of duplicating item/tool draft lines. Fixes #75641. (#77949) Thanks @keshavbotagent.
 - Telegram/sessions: gap-fill delivered embedded final replies into the session JSONL even when the runner trace is missing, so Telegram answers after tool calls do not vanish from the durable transcript. Fixes #77814. (#78426) Thanks @obviyus, @ChushulSuri, and @DougButdorf.
-- Channels/iMessage: probe all persistable echo-cache scope shapes (`chat_id:N`, `chat_guid:<guid>`, `chat_identifier:<id>`, `imessage:<handle>`) on inbound match, so an outbound message addressed by `chat_guid` no longer bypasses the chat_id-only inbound lookup and re-feeds the agent its own reply [AI-assisted]. Thanks @omarshahine.
-- Security/iMessage: clamp `reply-cache.jsonl` to `0600` (parent dir `0700`) on every write/append and chmod existing entries from older gateway versions, blocking same-UID enumeration of conversation guids and shortId injection on multi-user hosts [AI-assisted]. Thanks @omarshahine.
-- Security/iMessage: apply the same `0600`/`0700` clamp to `sent-echoes.jsonl` so outbound message text and scope keys are not world-readable on multi-user hosts [AI-assisted]. Thanks @omarshahine.
-- Config/iMessage: add `probeTimeoutMs` to `IMessageAccountSchemaBase` so the `channels.imessage.probeTimeoutMs` option declared on `IMessageAccountConfig` actually round-trips through validation instead of being silently stripped by zod parse [AI-assisted]. Thanks @omarshahine.
-- Security/iMessage: gate `edit` and `unsend` private API actions on `isFromMe`, so an agent in a group chat can only modify messages the gateway itself sent, not messages received from other participants. Records `isFromMe: true` for outbound sends and `false` for inbound, then refuses to resolve message ids that fail the check before dispatch [AI-assisted]. Thanks @omarshahine.
 - Providers/xAI: stop sending OpenAI-style reasoning effort controls to native Grok Responses models, so `xai/grok-4.3` no longer fails live Docker/Gateway runs with `Invalid reasoning effort`.
 - Providers/xAI: clamp the bundled xAI thinking profile to `off` so live Gateway runs cannot send unsupported reasoning levels to native Grok Responses models.
 - Matrix/approvals: retry approval delivery up to 3 times with a short backoff so transient Matrix send failures do not strand pending approval prompts. (#78179) Thanks @Patrick-Erichsen.
