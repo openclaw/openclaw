@@ -2,6 +2,7 @@ import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isContainerEnvironment } from "../gateway/net.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -81,10 +82,35 @@ export async function setupSkills(
     return cfg;
   }
 
-  const installable = missing.filter(
-    (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
-  );
+  const brewAvailable = await detectBinary("brew");
+  const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
+  const installable = missing.filter((skill) => {
+    if (skill.install.length === 0 || skill.missing.bins.length === 0) {
+      return false;
+    }
+    if (!inLinuxContainer || brewAvailable) {
+      return true;
+    }
+    return !skill.install.every((option) => option.kind === "brew");
+  });
   let next: OpenClawConfig = cfg;
+  if (inLinuxContainer && !brewAvailable) {
+    const hiddenBrewOnly = missing.filter(
+      (skill) =>
+        skill.install.length > 0 &&
+        skill.missing.bins.length > 0 &&
+        skill.install.every((option) => option.kind === "brew"),
+    );
+    if (hiddenBrewOnly.length > 0) {
+      await prompter.note(
+        [
+          "Brew-only skill installs are hidden in Linux containers because the official image does not ship Homebrew.",
+          "Use a custom image with Homebrew preinstalled or install those dependencies manually.",
+        ].join("\n"),
+        "Container skill installs",
+      );
+    }
+  }
   if (installable.length > 0) {
     const toInstall = await prompter.multiselect({
       message: "Install missing skill dependencies",
@@ -111,7 +137,7 @@ export async function setupSkills(
     const needsBrewPrompt =
       process.platform !== "win32" &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
-      !(await detectBinary("brew"));
+      !brewAvailable;
 
     if (needsBrewPrompt) {
       await prompter.note(
