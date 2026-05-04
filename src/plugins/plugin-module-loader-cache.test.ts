@@ -406,6 +406,7 @@ describe("getCachedPluginModuleLoader", () => {
     // allowWindows must be passed so the native fast path works on Windows too.
     expect(nativeStub).toHaveBeenCalledWith("/repo/dist/extensions/demo/api.js", {
       allowWindows: true,
+      fallbackOnMissingDependency: true,
     });
     expect(getPluginModuleLoaderStats()).toMatchObject({
       calls: 1,
