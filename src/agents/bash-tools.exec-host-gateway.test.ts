@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PolicyResult } from "../security/action-sink-policy.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
@@ -93,7 +94,7 @@ const actionSinkRuntimeMocks = vi.hoisted(() => {
   }
   return {
     ActionSinkPolicyDeniedError,
-    evaluateConfiguredActionSinkPolicySync: vi.fn(() => ({
+    evaluateConfiguredActionSinkPolicySync: vi.fn<() => PolicyResult>(() => ({
       decision: "allow" as const,
       policyId: "action-sink-policy",
       reasonCode: "allowed" as const,

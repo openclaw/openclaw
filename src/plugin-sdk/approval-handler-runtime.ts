@@ -21,6 +21,7 @@ export {
   type ChannelApprovalHandler,
   type ChannelApprovalHandlerAdapter,
   type ChannelApprovalCapabilityHandlerContext,
+  type ChannelApprovalKind,
   type ExpiredApprovalView,
   type PendingApprovalView,
   type PluginApprovalExpiredView,

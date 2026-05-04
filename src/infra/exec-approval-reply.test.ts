@@ -302,6 +302,47 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
+  it("omits manual approval commands when an interactive client can render actions", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-buttons",
+      approvalSlug: "slug-buttons",
+      command: "echo ok",
+      host: "gateway",
+      includeManualApprovalInstructions: false,
+    });
+
+    expect(payload.text).toContain("Approval required.");
+    expect(payload.text).toContain("Pending command:");
+    expect(payload.text).toContain("```sh\necho ok\n```");
+    expect(payload.text).not.toContain("/approve");
+    expect(payload.text).not.toContain("Run:");
+    expect(payload.text).not.toContain("Other options:");
+    expect(payload.interactive).toEqual({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Allow Once",
+              value: "/approve slug-buttons allow-once",
+              style: "success",
+            },
+            {
+              label: "Allow Always",
+              value: "/approve slug-buttons allow-always",
+              style: "primary",
+            },
+            {
+              label: "Deny",
+              value: "/approve slug-buttons deny",
+              style: "danger",
+            },
+          ],
+        },
+      ],
+    });
+  });
+
   it("omits allow-always actions when the effective policy requires approval every time", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",

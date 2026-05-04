@@ -85,3 +85,13 @@ export function resolveTelegramInlineButtons(params: {
     params.buttons ?? buildTelegramInteractiveButtons(normalizeInteractiveReply(params.interactive))
   );
 }
+
+export function stackTelegramInlineButtons(
+  buttons: TelegramInlineButtons | undefined,
+): TelegramInlineButtons | undefined {
+  if (!buttons) {
+    return undefined;
+  }
+  const stacked = buttons.flatMap((row) => row.map((button) => [button]));
+  return stacked.length > 0 ? stacked : undefined;
+}

@@ -1802,6 +1802,34 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("91");
   });
 
+  it("chunks long markdown-mode approval text and keeps buttons on the last chunk only", async () => {
+    const chatId = "123";
+    const approvalText = `Approval required.\n\n\`\`\`sh\nprintf '${"A".repeat(9000)}'\n\`\`\``;
+    const sendMessage = vi.fn().mockImplementation(async () => ({
+      message_id: 100 + sendMessage.mock.calls.length,
+      chat: { id: chatId },
+    }));
+    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+    const buttons = [[{ text: "Allow once", callback_data: "/approve abc12345 allow-once" }]];
+
+    await sendMessageTelegram(chatId, approvalText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      buttons,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessage.mock.calls.every((call) => String(call[1] ?? "").length <= 4000)).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
+    for (const call of sendMessage.mock.calls.slice(0, -1)) {
+      expect(call[2]?.reply_markup).toBeUndefined();
+    }
+    expect(sendMessage.mock.calls.at(-1)?.[2]?.reply_markup).toEqual({
+      inline_keyboard: buttons,
+    });
+  });
+
   it("preserves caller plain-text fallback across chunked html parse retries", async () => {
     const chatId = "123";
     const htmlText = `<b>${"A".repeat(5000)}</b>`;

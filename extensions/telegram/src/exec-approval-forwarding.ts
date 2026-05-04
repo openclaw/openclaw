@@ -6,8 +6,11 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type { ExecApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import { normalizeMessageChannel } from "openclaw/plugin-sdk/routing";
-import { resolveTelegramInlineButtons } from "./button-types.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTelegramInlineButtons, stackTelegramInlineButtons } from "./button-types.js";
 import { isTelegramExecApprovalClientEnabled } from "./exec-approvals.js";
+
+const log = createSubsystemLogger("telegram/exec-approval-forwarding");
 
 export function shouldSuppressTelegramExecApprovalForwardingFallback(params: {
   cfg: OpenClawConfig;
@@ -27,11 +30,12 @@ export function shouldSuppressTelegramExecApprovalForwardingFallback(params: {
   return isTelegramExecApprovalClientEnabled({ cfg: params.cfg, accountId });
 }
 
-export function buildTelegramExecApprovalPendingPayload(params: {
+function buildTelegramExecApprovalBasePendingPayload(params: {
   request: ExecApprovalRequest;
   nowMs: number;
+  includeManualApprovalInstructions: boolean;
 }) {
-  const payload = buildExecApprovalPendingReplyPayload({
+  return buildExecApprovalPendingReplyPayload({
     approvalId: params.request.id,
     approvalSlug: params.request.id.slice(0, 8),
     approvalCommandId: params.request.id.slice(0, 8),
@@ -42,16 +46,36 @@ export function buildTelegramExecApprovalPendingPayload(params: {
     allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
     expiresAtMs: params.request.expiresAtMs,
     nowMs: params.nowMs,
+    includeManualApprovalInstructions: params.includeManualApprovalInstructions,
   });
-  const buttons = resolveTelegramInlineButtons({ interactive: payload.interactive });
+}
+
+export function buildTelegramExecApprovalPendingPayload(params: {
+  request: ExecApprovalRequest;
+  nowMs: number;
+}) {
+  const manualPayload = buildTelegramExecApprovalBasePendingPayload({
+    ...params,
+    includeManualApprovalInstructions: true,
+  });
+  const buttons = stackTelegramInlineButtons(
+    resolveTelegramInlineButtons({ interactive: manualPayload.interactive }),
+  );
   if (!buttons) {
-    return payload;
+    log.warn(
+      "telegram exec approval forwarding: falling back to manual approval text because no inline approval buttons were generated",
+    );
+    return manualPayload;
   }
+  const buttonPayload = buildTelegramExecApprovalBasePendingPayload({
+    ...params,
+    includeManualApprovalInstructions: false,
+  });
 
   return {
-    ...payload,
+    ...buttonPayload,
     channelData: {
-      ...(payload.channelData ?? {}),
+      ...(buttonPayload.channelData ?? {}),
       telegram: {
         buttons,
       },

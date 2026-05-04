@@ -50,6 +50,7 @@ export type ExecApprovalPendingReplyParams = {
   command: string;
   cwd?: string;
   host: ExecHost;
+  includeManualApprovalInstructions?: boolean;
   nodeId?: string;
   sessionKey?: string | null;
   expiresAtMs?: number;
@@ -289,6 +290,7 @@ export function buildExecApprovalPendingReplyPayload(
 ): ReplyPayload {
   const approvalCommandId = params.approvalCommandId?.trim() || params.approvalSlug;
   const allowedDecisions = resolveAllowedDecisions(params);
+  const includeManualApprovalInstructions = params.includeManualApprovalInstructions !== false;
   const descriptors = buildExecApprovalActionDescriptors({
     approvalCommandId,
     allowedDecisions,
@@ -301,16 +303,18 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(warningText);
   }
   lines.push("Approval required.");
-  if (primaryAction) {
+  if (includeManualApprovalInstructions && primaryAction) {
     lines.push("Run:");
     lines.push(buildFence(primaryAction.command, "txt"));
   }
   lines.push("Pending command:");
   lines.push(buildFence(params.command, "sh"));
-  const secondaryFence = buildApprovalCommandFence(secondaryActions);
-  if (secondaryFence) {
-    lines.push("Other options:");
-    lines.push(secondaryFence);
+  if (includeManualApprovalInstructions) {
+    const secondaryFence = buildApprovalCommandFence(secondaryActions);
+    if (secondaryFence) {
+      lines.push("Other options:");
+      lines.push(secondaryFence);
+    }
   }
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(

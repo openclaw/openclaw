@@ -184,6 +184,7 @@ const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
+const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
@@ -748,35 +749,47 @@ export async function sendMessageTelegram(
     return { messageId: lastMessageId, chatId: lastChatId };
   };
 
-  const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
-    const fallbackText = opts.plainText ?? rawText;
+  const buildChunkedTextPlan = (
+    htmlText: string,
+    context: string,
+    fallbackText: string,
+  ): TelegramTextChunk[] => {
     let htmlChunks: string[];
     try {
-      htmlChunks = splitTelegramHtmlChunks(rawText, 4000);
+      htmlChunks = splitTelegramHtmlChunks(htmlText, TELEGRAM_TEXT_CHUNK_LIMIT);
     } catch (error) {
       logVerbose(
         `telegram ${context} failed HTML chunk planning, retrying as plain text: ${formatErrorMessage(
           error,
         )}`,
       );
-      return splitTelegramPlainTextChunks(fallbackText, 4000).map((plainText) => ({ plainText }));
+      return splitTelegramPlainTextChunks(fallbackText, TELEGRAM_TEXT_CHUNK_LIMIT).map(
+        (plainText) => ({ plainText }),
+      );
     }
-    const fixedPlainTextChunks = splitTelegramPlainTextChunks(fallbackText, 4000);
+    const fixedPlainTextChunks = splitTelegramPlainTextChunks(
+      fallbackText,
+      TELEGRAM_TEXT_CHUNK_LIMIT,
+    );
     if (fixedPlainTextChunks.length > htmlChunks.length) {
       logVerbose(
         `telegram ${context} plain-text fallback needs more chunks than HTML; sending plain text`,
       );
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
-    const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
+    const plainTextChunks = splitTelegramPlainTextFallback(
+      fallbackText,
+      htmlChunks.length,
+      TELEGRAM_TEXT_CHUNK_LIMIT,
+    );
     return htmlChunks.map((htmlText, index) => ({
       htmlText,
       plainText: plainTextChunks[index] ?? htmlText,
     }));
   };
 
-  const sendChunkedText = async (rawText: string, context: string) =>
-    await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+  const sendChunkedText = async (htmlText: string, context: string, fallbackText: string) =>
+    await sendTelegramTextChunks(buildChunkedTextPlan(htmlText, context, fallbackText), context);
 
   async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
     try {
@@ -977,13 +990,10 @@ export async function sendMessageTelegram(
     // If text was too long for a caption, send it as a separate follow-up message.
     // Use HTML conversion so markdown renders like captions.
     if (needsSeparateText && followUpText) {
-      if (textMode === "html") {
-        const textResult = await sendChunkedText(followUpText, "text follow-up send");
-        return { messageId: textResult.messageId, chatId: resolvedChatId };
-      }
-      const textResult = await sendTelegramTextChunks(
-        [{ plainText: followUpText, htmlText: renderHtmlText(followUpText) }],
+      const textResult = await sendChunkedText(
+        renderHtmlText(followUpText),
         "text follow-up send",
+        textMode === "html" ? (opts.plainText ?? followUpText) : followUpText,
       );
       return { messageId: textResult.messageId, chatId: resolvedChatId };
     }
@@ -995,14 +1005,7 @@ export async function sendMessageTelegram(
     throw new Error("Message must be non-empty for Telegram sends");
   }
   let textResult: { messageId: string; chatId: string };
-  if (textMode === "html") {
-    textResult = await sendChunkedText(text, "text send");
-  } else {
-    textResult = await sendTelegramTextChunks(
-      [{ plainText: opts.plainText ?? text, htmlText: renderHtmlText(text) }],
-      "text send",
-    );
-  }
+  textResult = await sendChunkedText(renderHtmlText(text), "text send", opts.plainText ?? text);
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,

@@ -20,7 +20,7 @@ import {
   unbindTelegramApprovalReply,
   type TelegramApprovalReplyBinding,
 } from "./approval-reply-bindings.js";
-import { resolveTelegramInlineButtons } from "./button-types.js";
+import { resolveTelegramInlineButtons, stackTelegramInlineButtons } from "./button-types.js";
 import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
@@ -70,39 +70,58 @@ function buildPendingPayload(params: {
   view: PendingApprovalView;
 }): TelegramPendingDelivery {
   const approvalCommandId = params.request.id.slice(0, 8);
+  if (params.approvalKind === "plugin") {
+    const payload = buildPluginApprovalPendingReplyPayload({
+      request: params.request as PluginApprovalRequest,
+      nowMs: params.nowMs,
+    });
+    return {
+      text: payload.text ?? "",
+      buttons: stackTelegramInlineButtons(
+        resolveTelegramInlineButtons({
+          interactive: payload.interactive,
+        }),
+      ),
+    };
+  }
+
   const execAllowedDecisions =
-    params.approvalKind === "exec"
-      ? params.view.actions.length > 0
-        ? params.view.actions.map((action) => action.decision)
-        : resolveExecApprovalRequestAllowedDecisions(
-            (params.request as ExecApprovalRequest).request,
-          )
-      : [];
-  const payload =
-    params.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
-          request: params.request as PluginApprovalRequest,
-          nowMs: params.nowMs,
-        })
-      : buildExecApprovalPendingReplyPayload({
-          approvalId: params.request.id,
-          approvalSlug: approvalCommandId,
-          approvalCommandId,
-          command: params.view.approvalKind === "exec" ? params.view.commandText : "",
-          cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
-          host:
-            params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
-          nodeId:
-            params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions: execAllowedDecisions,
-          expiresAtMs: params.request.expiresAtMs,
-          nowMs: params.nowMs,
-        } satisfies ExecApprovalPendingReplyParams);
-  return {
-    text: payload.text ?? "",
-    buttons: resolveTelegramInlineButtons({
-      interactive: payload.interactive,
+    params.view.actions.length > 0
+      ? params.view.actions.map((action) => action.decision)
+      : resolveExecApprovalRequestAllowedDecisions((params.request as ExecApprovalRequest).request);
+  const buildExecPayload = (includeManualApprovalInstructions: boolean) =>
+    buildExecApprovalPendingReplyPayload({
+      approvalId: params.request.id,
+      approvalSlug: approvalCommandId,
+      approvalCommandId,
+      command: params.view.approvalKind === "exec" ? params.view.commandText : "",
+      cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
+      host: params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
+      nodeId: params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
+      allowedDecisions: execAllowedDecisions,
+      expiresAtMs: params.request.expiresAtMs,
+      nowMs: params.nowMs,
+      includeManualApprovalInstructions,
+    } satisfies ExecApprovalPendingReplyParams);
+  const manualPayload = buildExecPayload(true);
+  const buttons = stackTelegramInlineButtons(
+    resolveTelegramInlineButtons({
+      interactive: manualPayload.interactive,
     }),
+  );
+  if (!buttons) {
+    log.warn(
+      "telegram approvals: falling back to manual exec approval text because no inline approval buttons were generated",
+    );
+    return {
+      text: manualPayload.text ?? "",
+      buttons,
+    };
+  }
+  const buttonPayload = buildExecPayload(false);
+  return {
+    text: buttonPayload.text ?? "",
+    buttons,
   };
 }
 

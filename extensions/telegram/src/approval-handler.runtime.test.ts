@@ -45,9 +45,14 @@ describe("telegramApprovalNativeRuntime", () => {
       } as never,
     })) as TelegramPayload;
 
-    expect(payload.text).toContain("/approve req-1 allow-once");
+    expect(payload.text).not.toContain("/approve");
+    expect(payload.text).not.toContain("Run:");
+    expect(payload.text).not.toContain("Other options:");
     expect(payload.text).not.toContain("allow-always");
-    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+    expect(payload.buttons?.map((row) => row.map((button) => button.text))).toEqual([
+      ["Allow Once"],
+      ["Deny"],
+    ]);
   });
 
   it("falls back to request allowed decisions when the native exec view has no actions", async () => {
@@ -76,9 +81,14 @@ describe("telegramApprovalNativeRuntime", () => {
       } as never,
     })) as TelegramPayload;
 
-    expect(payload.text).toContain("/approve req-1 allow-once");
+    expect(payload.text).not.toContain("/approve");
+    expect(payload.text).not.toContain("Run:");
+    expect(payload.text).not.toContain("Other options:");
     expect(payload.text).not.toContain("allow-always");
-    expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
+    expect(payload.buttons?.map((row) => row.map((button) => button.text))).toEqual([
+      ["Allow Once"],
+      ["Deny"],
+    ]);
   });
 
   it("keeps exec approval callbacks compact enough for Telegram inline buttons", async () => {
@@ -127,17 +137,50 @@ describe("telegramApprovalNativeRuntime", () => {
       } as never,
     })) as TelegramPayload;
 
-    expect(payload.text).toContain(`/approve ${approvalSlug} allow-once`);
-    expect(payload.buttons?.[0]?.map((button) => button.callback_data)).toEqual([
-      `/approve ${approvalSlug} allow-once`,
-      `/approve ${approvalSlug} always`,
-      `/approve ${approvalSlug} deny`,
+    expect(payload.text).not.toContain("/approve");
+    expect(payload.buttons?.map((row) => row.map((button) => button.callback_data))).toEqual([
+      [`/approve ${approvalSlug} allow-once`],
+      [`/approve ${approvalSlug} always`],
+      [`/approve ${approvalSlug} deny`],
     ]);
     expect(
-      payload.buttons?.[0]?.every(
-        (button) => Buffer.byteLength(button.callback_data, "utf8") <= 64,
-      ),
+      payload.buttons
+        ?.flat()
+        .every((button) => Buffer.byteLength(button.callback_data, "utf8") <= 64),
     ).toBe(true);
+  });
+
+  it("includes Allow Always for native exec approvals when policy permits it", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "req-allow-always",
+        request: {
+          command: "echo hi",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-allow-always",
+        commandText: "echo hi",
+        actions: [],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).not.toContain("/approve");
+    expect(payload.buttons?.map((row) => row.map((button) => button.text))).toEqual([
+      ["Allow Once"],
+      ["Allow Always"],
+      ["Deny"],
+    ]);
   });
 
   it("passes topic thread ids to typing and message delivery", async () => {
