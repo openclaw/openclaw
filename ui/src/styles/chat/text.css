@@ -25,6 +25,60 @@
   overflow-wrap: break-word;
 }
 
+.chat-bubble.chat-bubble--html-preview {
+  width: min(100%, 760px);
+}
+
+.chat-html-preview {
+  box-sizing: border-box;
+  display: grid;
+  gap: 0.5rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.chat-html-preview__header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.chat-html-preview__badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.chat-html-preview__meta {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chat-html-preview__frame {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-height: 420px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: white;
+}
+
+.chat-html-preview__source {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.chat-html-preview__source pre {
+  box-sizing: border-box;
+  max-width: 100%;
+  max-height: 18rem;
+  overflow: auto;
+}
+
 .chat-text :where(p, ul, ol, pre, blockquote, table) {
   margin: 0;
 }
