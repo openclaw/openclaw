@@ -2429,7 +2429,7 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
-): Promise<void> {
+): Promise<{ persistedConfig: OpenClawConfig }> {
   const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
@@ -2458,7 +2458,7 @@ export async function writeConfigFile(
     !hadRuntimeSnapshot &&
     !getRuntimeConfigSnapshotRefreshHandlerState()
   ) {
-    return;
+    return { persistedConfig: writeResult.persistedConfig };
   }
   // Re-read the freshly persisted file so the sourceConfig we publish matches
   // exactly what readConfigFileSnapshot() will produce when the file-watcher
@@ -2512,4 +2512,5 @@ export async function writeConfigFile(
         { cause },
       ),
   });
+  return { persistedConfig: writeResult.persistedConfig };
 }

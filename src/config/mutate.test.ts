@@ -284,6 +284,24 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.installs).toBeUndefined();
   });
 
+  it("forwards persistedConfig from writeConfigFile in the result", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-persist",
+      sourceConfig: { gateway: { port: 18789 } },
+    });
+    const onDiskConfig: OpenClawConfig = { gateway: { port: 18789, auth: { mode: "token" } } };
+    ioMocks.writeConfigFile.mockResolvedValue({ persistedConfig: onDiskConfig });
+
+    const result = await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig: { gateway: { port: 18789 } },
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(result.persistedConfig).toEqual(onDiskConfig);
+  });
+
   it("falls back to the root writer when a plugins include write is not isolated", async () => {
     const snapshot = createSnapshot({
       hash: "hash-multi",

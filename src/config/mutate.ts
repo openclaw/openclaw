@@ -47,13 +47,19 @@ export type ConfigReplaceResult = {
   previousHash: string | null;
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
+  /** What was actually written to disk (env-var refs restored, tilde paths, version stamp applied).
+   * Undefined when the include fast-path was used (single top-level key written atomically). */
+  persistedConfig?: OpenClawConfig;
   afterWrite: ConfigWriteAfterWrite;
   followUp: ConfigWriteFollowUp;
 };
 
 type ConfigMutationIO = {
   readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
-  writeConfigFile: (cfg: OpenClawConfig, options?: ConfigWriteOptions) => Promise<unknown>;
+  writeConfigFile: (
+    cfg: OpenClawConfig,
+    options?: ConfigWriteOptions,
+  ) => Promise<{ persistedConfig: OpenClawConfig } | undefined>;
 };
 
 function assertBaseHashMatches(snapshot: ConfigFileSnapshot, expectedHash?: string): string | null {
@@ -251,19 +257,22 @@ export async function replaceConfigFile(params: {
     writeOptions: params.writeOptions ?? writeOptions,
     io: params.io,
   });
+  let persistedConfig: OpenClawConfig | undefined;
   if (!wroteInclude) {
-    await (params.io?.writeConfigFile ?? writeConfigFile)(params.nextConfig, {
+    const writeResult = await (params.io?.writeConfigFile ?? writeConfigFile)(params.nextConfig, {
       baseSnapshot: snapshot,
       ...writeOptions,
       ...params.writeOptions,
       afterWrite,
     });
+    persistedConfig = writeResult?.persistedConfig;
   }
   return {
     path: snapshot.path,
     previousHash,
     snapshot,
     nextConfig: params.nextConfig,
+    persistedConfig,
     afterWrite,
     followUp: resolveConfigWriteFollowUp(afterWrite),
   };
