@@ -332,11 +332,14 @@ flowchart LR
   I --> M["Main Reply"]
 ```
 
-The blocking memory sub-agent can use only the available memory recall tools:
+The blocking memory sub-agent can use only the configured memory recall tools.
+By default that is:
 
-- `memory_recall`
 - `memory_search`
 - `memory_get`
+
+Set `config.toolsAllow` when your memory provider exposes a different recall
+tool contract.
 
 If the connection is weak, it should return `NONE`.
 
@@ -462,6 +465,101 @@ skips recall for that turn.
 `config.modelFallbackPolicy` is retained only as a deprecated compatibility
 field for older configs. It no longer changes runtime behavior.
 
+## Memory tools
+
+By default Active Memory lets the blocking recall sub-agent call
+`memory_search` and `memory_get`. That matches the built-in `memory-core`
+contract.
+
+If you use another memory plugin, set `config.toolsAllow` to the exact tool
+names that plugin registers. Active Memory lists those tools in the recall
+prompt and passes the same list to the embedded sub-agent. If none of the
+configured tools are available, or the memory sub-agent fails, Active Memory
+skips recall for that turn and the main reply continues without memory context.
+
+### Built-in memory-core
+
+The default setup does not need an explicit `toolsAllow`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          // Default: ["memory_search", "memory_get"]
+        },
+      },
+    },
+  },
+}
+```
+
+### LanceDB memory
+
+The bundled `memory-lancedb` plugin exposes `memory_recall`, so opt Active
+Memory into that tool explicitly:
+
+```json5
+{
+  plugins: {
+    slots: {
+      memory: "memory-lancedb",
+    },
+    entries: {
+      "memory-lancedb": {
+        enabled: true,
+        config: {
+          embedding: {
+            provider: "openai",
+            model: "text-embedding-3-small",
+          },
+        },
+      },
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          toolsAllow: ["memory_recall"],
+          promptAppend: "Use memory_recall for long-term user preferences, past decisions, and previously discussed topics. If recall finds nothing useful, return NONE.",
+        },
+      },
+    },
+  },
+}
+```
+
+### Lossless Claw
+
+Lossless Claw is a context-engine plugin with its own recall tools. Install and
+configure it as a context engine first; see [Context engine](/concepts/context-engine).
+Then let Active Memory use the Lossless Claw recall tools:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "lossless-claw": {
+        enabled: true,
+      },
+      "active-memory": {
+        enabled: true,
+        config: {
+          agents: ["main"],
+          toolsAllow: ["lcm_grep", "lcm_describe", "lcm_expand_query"],
+          promptAppend: "Use lcm_grep first for compacted conversation recall. Use lcm_describe to inspect a specific summary. Use lcm_expand_query only when the latest user message needs exact details that may have been compacted away. Return NONE if the retrieved context is not clearly useful.",
+        },
+      },
+    },
+  },
+}
+```
+
+Do not include `lcm_expand` in `toolsAllow` for the main Active Memory sub-agent.
+Lossless Claw uses that as a lower-level delegated expansion tool.
+
 ## Advanced escape hatches
 
 These options are intentionally not part of the recommended setup.
@@ -487,6 +585,9 @@ Memory prompt and before the conversation context:
 ```json5
 promptAppend: "Prefer stable long-term preferences over one-off events."
 ```
+
+Use `promptAppend` with custom `toolsAllow` when a non-core memory plugin needs
+provider-specific tool order or query-shaping instructions.
 
 `config.promptOverride` replaces the default Active Memory prompt. OpenClaw
 still appends the conversation context afterward:
@@ -568,6 +669,7 @@ The most important fields are:
 | `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                                                                                          |
 | `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                                                                                                |
 | `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory                                                                             |
+| `config.toolsAllow`          | `string[]`                                                                                           | Memory tool names the blocking memory sub-agent may call; defaults to `["memory_search", "memory_get"]`                                                                          |
 | `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                                                                                            |
 | `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                 |
 | `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                         |
@@ -692,8 +794,9 @@ If active memory is too slow:
 
 Active Memory rides on the configured memory plugin's recall pipeline, so most
 recall surprises are embedding-provider problems, not Active Memory bugs. The
-default `memory-core` path uses `memory_search`; `memory-lancedb` uses
-`memory_recall`.
+default `memory-core` path uses `memory_search` and `memory_get`. If you use
+another memory plugin, confirm `config.toolsAllow` names the tools that plugin
+actually registers.
 
 <AccordionGroup>
   <Accordion title="Embedding provider switched or stopped working">
