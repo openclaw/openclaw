@@ -397,7 +397,7 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("terminalProgressStale=true"));
-    expect(events.filter((event) => event.type === "session.stalled").at(-1)).toMatchObject({
+    expect(events.findLast((event) => event.type === "session.stalled")).toMatchObject({
       terminalProgressStale: true,
       lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
     });
@@ -754,9 +754,7 @@ describe("stuck session diagnostics threshold", () => {
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("phase=startup.plugins.load"));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("work=[queued=main("));
-    expect(
-      events.filter((event) => event.type === "diagnostic.liveness.warning").at(-1),
-    ).toMatchObject({
+    expect(events.findLast((event) => event.type === "diagnostic.liveness.warning")).toMatchObject({
       phase: "startup.plugins.load",
       queuedWorkLabels: [expect.stringContaining("main(")],
     });

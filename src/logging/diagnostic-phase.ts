@@ -39,7 +39,7 @@ export function getCurrentDiagnosticPhase(): string | undefined {
 }
 
 export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] {
-  return recentPhases.slice(-Math.max(0, limit)).map((phase) => ({ ...phase }));
+  return recentPhases.slice(-Math.max(0, limit)).map((phase) => Object.assign({}, phase));
 }
 
 export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
