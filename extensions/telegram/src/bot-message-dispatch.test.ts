@@ -928,7 +928,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("suppresses default tool progress messages when answer preview streaming is off", async () => {
+  it("allows default tool progress messages when answer preview streaming is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({ progressText: "exec ls ~/Desktop" });
@@ -938,13 +938,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "off" });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyOptions: expect.objectContaining({
-          suppressDefaultToolProgressMessages: true,
-        }),
-      }),
-    );
+    const replyOptions =
+      dispatchReplyWithBufferedBlockDispatcher.mock.calls.at(-1)?.[0]?.replyOptions;
+    expect(replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
   });
 
   it("keeps non-command Telegram tool progress links inside code formatting", async () => {

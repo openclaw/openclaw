@@ -1194,7 +1194,7 @@ export const dispatchTelegramMessage = async ({
                         })
                     : undefined,
                   suppressDefaultToolProgressMessages:
-                    !previewStreamingEnabled || Boolean(answerLane.stream),
+                    previewStreamingEnabled && answerLane.stream ? true : undefined,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     if (statusReactionController && toolName) {
