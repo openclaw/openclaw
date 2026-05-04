@@ -1407,6 +1407,33 @@ function payloadMediaUrlSet(payload: ReplyPayload): Set<string> {
   );
 }
 
+function buildMediaReplacementProbePayload(
+  payloads: readonly ReplyPayload[],
+  message?: string,
+): ReplyPayload | undefined {
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  for (const payload of payloads) {
+    for (const mediaUrl of resolveSendableOutboundReplyParts(payload).mediaUrls) {
+      if (seen.has(mediaUrl)) {
+        continue;
+      }
+      seen.add(mediaUrl);
+      mediaUrls.push(mediaUrl);
+    }
+  }
+  if (mediaUrls.length === 0) {
+    return undefined;
+  }
+  return {
+    ...(message ? { text: message } : {}),
+    mediaUrls,
+    ...(payloads.some((payload) => payload.trustedLocalMedia === true)
+      ? { trustedLocalMedia: true }
+      : {}),
+  };
+}
+
 function normalizeMediaSourceForEquivalence(source: string): string | undefined {
   const trimmed = source.trim();
   if (!trimmed) {
@@ -2765,6 +2792,43 @@ export const chatHandlers: GatewayRequestHandlers = {
                 transcriptReply ||
                 persistedContentForAppend?.length ||
                 assistantContent?.length
+              ) {
+                const replacementPayload = buildMediaReplacementProbePayload(
+                  finalPayloads,
+                  transcriptReply,
+                );
+                if (resolvedTranscriptPath && replacementPayload) {
+                  const replaced = await replaceLatestAssistantMediaDirectiveTranscriptMessage({
+                    transcriptPath: resolvedTranscriptPath,
+                    sessionKey,
+                    payload: replacementPayload,
+                    message: transcriptReply,
+                    ...(persistedContentForAppend?.length
+                      ? { content: persistedContentForAppend }
+                      : {}),
+                    idempotencyKey: `${clientRunId}:assistant-media`,
+                  });
+                  if (replaced.error) {
+                    context.logGateway.warn(
+                      `webchat final media reply transcript replacement failed: ${replaced.error}`,
+                    );
+                  }
+                  if (replaced.replaced) {
+                    if (replaced.messageId && assistantContent?.length) {
+                      await attachManagedOutgoingImagesToMessage({
+                        messageId: replaced.messageId,
+                        blocks: assistantContent,
+                      });
+                    }
+                    message = broadcastAssistantContent?.length
+                      ? { ...replaced.message, content: broadcastAssistantContent }
+                      : replaced.message;
+                  }
+                }
+              }
+              if (
+                !message &&
+                (transcriptReply || persistedContentForAppend?.length || assistantContent?.length)
               ) {
                 const appended = await appendAssistantTranscriptMessage({
                   message: transcriptReply,
