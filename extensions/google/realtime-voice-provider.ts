@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
-import {
+import type {
   ActivityHandling,
   Behavior,
   EndSensitivity,
+  FunctionDeclaration,
+  FunctionResponse,
   FunctionResponseScheduling,
+  LiveConnectConfig,
+  LiveServerContent,
+  LiveServerMessage,
+  LiveServerToolCall,
   Modality,
+  RealtimeInputConfig,
   StartSensitivity,
+  ThinkingConfig,
   TurnCoverage,
-  type FunctionDeclaration,
-  type FunctionResponse,
-  type LiveConnectConfig,
-  type LiveServerContent,
-  type LiveServerMessage,
-  type LiveServerToolCall,
-  type RealtimeInputConfig,
-  type ThinkingConfig,
 } from "@google/genai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import type {
@@ -47,7 +47,7 @@ const GOOGLE_REALTIME_BROWSER_API_VERSION = "v1alpha";
 const GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 const MAX_PENDING_AUDIO_CHUNKS = 320;
-const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 700;
+const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 500;
 const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
 const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 
@@ -70,6 +70,8 @@ type GoogleRealtimeVoiceProviderConfig = {
   turnCoverage?: GoogleRealtimeTurnCoverage;
   automaticActivityDetectionDisabled?: boolean;
   enableAffectiveDialog?: boolean;
+  sessionResumption?: boolean;
+  contextWindowCompression?: boolean;
   thinkingLevel?: GoogleRealtimeThinkingLevel;
   thinkingBudget?: number;
 };
@@ -90,6 +92,8 @@ type GoogleRealtimeLiveConfig = {
   turnCoverage?: GoogleRealtimeTurnCoverage;
   automaticActivityDetectionDisabled?: boolean;
   enableAffectiveDialog?: boolean;
+  sessionResumption?: boolean;
+  contextWindowCompression?: boolean;
   thinkingLevel?: GoogleRealtimeThinkingLevel;
   thinkingBudget?: number;
 };
@@ -209,6 +213,8 @@ function normalizeProviderConfig(
     turnCoverage: asTurnCoverage(raw?.turnCoverage),
     automaticActivityDetectionDisabled: asBoolean(raw?.automaticActivityDetectionDisabled),
     enableAffectiveDialog: asBoolean(raw?.enableAffectiveDialog),
+    sessionResumption: asBoolean(raw?.sessionResumption),
+    contextWindowCompression: asBoolean(raw?.contextWindowCompression),
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
     thinkingBudget: asFiniteNumber(raw?.thinkingBudget),
   };
@@ -223,9 +229,9 @@ function mapStartSensitivity(
 ): StartSensitivity | undefined {
   switch (value) {
     case "high":
-      return StartSensitivity.START_SENSITIVITY_HIGH;
+      return "START_SENSITIVITY_HIGH" as StartSensitivity;
     case "low":
-      return StartSensitivity.START_SENSITIVITY_LOW;
+      return "START_SENSITIVITY_LOW" as StartSensitivity;
     default:
       return undefined;
   }
@@ -236,9 +242,9 @@ function mapEndSensitivity(
 ): EndSensitivity | undefined {
   switch (value) {
     case "high":
-      return EndSensitivity.END_SENSITIVITY_HIGH;
+      return "END_SENSITIVITY_HIGH" as EndSensitivity;
     case "low":
-      return EndSensitivity.END_SENSITIVITY_LOW;
+      return "END_SENSITIVITY_LOW" as EndSensitivity;
     default:
       return undefined;
   }
@@ -249,9 +255,9 @@ function mapActivityHandling(
 ): ActivityHandling | undefined {
   switch (value) {
     case "no-interruption":
-      return ActivityHandling.NO_INTERRUPTION;
+      return "NO_INTERRUPTION" as ActivityHandling;
     case "start-of-activity-interrupts":
-      return ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
+      return "START_OF_ACTIVITY_INTERRUPTS" as ActivityHandling;
     default:
       return undefined;
   }
@@ -260,11 +266,11 @@ function mapActivityHandling(
 function mapTurnCoverage(value: GoogleRealtimeTurnCoverage | undefined): TurnCoverage | undefined {
   switch (value) {
     case "only-activity":
-      return TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY;
+      return "TURN_INCLUDES_ONLY_ACTIVITY" as TurnCoverage;
     case "all-input":
-      return TurnCoverage.TURN_INCLUDES_ALL_INPUT;
+      return "TURN_INCLUDES_ALL_INPUT" as TurnCoverage;
     case "audio-activity-and-all-video":
-      return TurnCoverage.TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO;
+      return "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO" as TurnCoverage;
     default:
       return undefined;
   }
@@ -316,7 +322,7 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
       parametersJsonSchema: tool.parameters,
     };
     if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      declaration.behavior = Behavior.NON_BLOCKING;
+      declaration.behavior = "NON_BLOCKING" as Behavior;
     }
     return declaration;
   });
@@ -325,7 +331,7 @@ function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): Func
 function buildGoogleLiveConnectConfig(config: GoogleRealtimeLiveConfig): LiveConnectConfig {
   const functionDeclarations = buildFunctionDeclarations(config.tools);
   return {
-    responseModalities: [Modality.AUDIO],
+    responseModalities: ["AUDIO" as Modality],
     ...(typeof config.temperature === "number" && config.temperature > 0
       ? { temperature: config.temperature }
       : {}),
@@ -359,7 +365,7 @@ function buildBrowserInitialSetup(model: string) {
     setup: {
       model: toGoogleModelResource(model),
       generationConfig: {
-        responseModalities: [Modality.AUDIO],
+        responseModalities: ["AUDIO" as Modality],
       },
       inputAudioTranscription: {},
       outputAudioTranscription: {},
@@ -403,6 +409,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private audioStreamEnded = false;
   private pendingFunctionNames = new Map<string, string>();
   private readonly audioFormat: RealtimeVoiceAudioFormat;
+  private resumptionHandle: string | undefined;
 
   constructor(private readonly config: GoogleRealtimeVoiceBridgeConfig) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
@@ -425,7 +432,17 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
     this.session = (await ai.live.connect({
       model: this.config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL,
-      config: buildGoogleLiveConnectConfig(this.config),
+      config: {
+        ...buildGoogleLiveConnectConfig(this.config),
+        ...(this.config.sessionResumption === false
+          ? {}
+          : {
+              sessionResumption: this.resumptionHandle ? { handle: this.resumptionHandle } : {},
+            }),
+        ...(this.config.contextWindowCompression === false
+          ? {}
+          : { contextWindowCompression: { slidingWindow: {} } }),
+      },
       callbacks: {
         onopen: () => {
           this.connected = true;
@@ -548,7 +565,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
             : { output: result },
       };
       if (isConsultTool) {
-        functionResponse.scheduling = FunctionResponseScheduling.WHEN_IDLE;
+        functionResponse.scheduling = "WHEN_IDLE" as FunctionResponseScheduling;
         if (options?.willContinue === true) {
           functionResponse.willContinue = true;
         }
@@ -607,6 +624,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private handleMessage(message: LiveServerMessage): void {
+    this.captureSessionLifecycle(message);
     if (message.setupComplete) {
       this.handleSetupComplete();
     }
@@ -615,6 +633,20 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
     if (message.toolCall) {
       this.handleToolCall(message.toolCall);
+    }
+  }
+
+  private captureSessionLifecycle(message: LiveServerMessage): void {
+    const raw = message as unknown as {
+      goAway?: { timeLeft?: string };
+      sessionResumptionUpdate?: { newHandle?: string; resumable?: boolean };
+    };
+    const update = raw.sessionResumptionUpdate;
+    if (update?.resumable && update.newHandle) {
+      this.resumptionHandle = update.newHandle;
+    }
+    if (raw.goAway?.timeLeft) {
+      this.config.onError?.(new Error(`Google Live session goAway: ${raw.goAway.timeLeft}`));
     }
   }
 
@@ -784,6 +816,8 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         turnCoverage: config.turnCoverage,
         automaticActivityDetectionDisabled: config.automaticActivityDetectionDisabled,
         enableAffectiveDialog: config.enableAffectiveDialog,
+        sessionResumption: config.sessionResumption,
+        contextWindowCompression: config.contextWindowCompression,
         thinkingLevel: config.thinkingLevel,
         thinkingBudget: config.thinkingBudget,
       });

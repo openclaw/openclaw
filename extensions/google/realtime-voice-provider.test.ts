@@ -107,6 +107,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       turnCoverage: "only-activity",
       automaticActivityDetectionDisabled: false,
       enableAffectiveDialog: undefined,
+      sessionResumption: undefined,
+      contextWindowCompression: undefined,
       thinkingLevel: undefined,
       thinkingBudget: undefined,
     });
@@ -181,6 +183,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           },
           turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
         },
+        sessionResumption: {},
+        contextWindowCompression: { slidingWindow: {} },
         tools: [
           {
             functionDeclarations: [
@@ -310,6 +314,42 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         },
       },
     });
+  });
+
+  it("can opt out of Google Live session resumption and context compression", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        contextWindowCompression: false,
+        sessionResumption: false,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("contextWindowCompression");
+    expect(lastConnectParams().config).not.toHaveProperty("sessionResumption");
+  });
+
+  it("captures Google Live resumption handles and reuses them on reconnect", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
   });
 
   it("waits for setup completion before draining audio and firing ready", async () => {
