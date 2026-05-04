@@ -1032,6 +1032,61 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("disables enabled tracked plugin update failures when requested", async () => {
+    const warn = vi.fn();
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: false,
+      error: "registry timeout",
+    });
+    const config = {
+      plugins: {
+        entries: {
+          demo: {
+            enabled: true,
+            config: { preserved: true },
+          },
+        },
+        installs: {
+          demo: {
+            source: "npm" as const,
+            spec: "@acme/demo",
+            installPath: "/tmp/demo",
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      skipDisabledPlugins: true,
+      disableOnFailure: true,
+      logger: { warn },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@acme/demo",
+        expectedPluginId: "demo",
+      }),
+    );
+    const message =
+      'Disabled "demo" after plugin update failure; OpenClaw will continue without it. Failed to update demo: registry timeout';
+    expect(warn).toHaveBeenCalledWith(message);
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.demo).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.installs?.demo).toEqual(config.plugins.installs.demo);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "demo",
+        status: "skipped",
+        message,
+      },
+    ]);
+  });
+
   it("aborts exact pinned npm plugin updates on integrity drift by default", async () => {
     const warn = vi.fn();
     installPluginFromNpmSpecMock.mockImplementation(
