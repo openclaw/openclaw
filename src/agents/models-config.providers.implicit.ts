@@ -484,7 +484,9 @@ export async function resolveImplicitProviders(
     ...(params.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
       : {}),
-    ...(params.providerDiscoveryEntriesOnly === true ? { discoveryEntriesOnly: true } : {}),
+    ...(params.providerDiscoveryEntriesOnly === true
+      ? { discoveryEntriesOnly: true, includeUntrustedWorkspacePlugins: false }
+      : {}),
   });
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
