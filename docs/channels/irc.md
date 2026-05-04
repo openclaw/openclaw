@@ -39,6 +39,7 @@ openclaw gateway run
 
 ## Security defaults
 
+- IRC uses raw TCP/TLS sockets. OpenClaw managed HTTP proxy mode does not proxy IRC traffic; disable IRC in managed-proxy deployments unless direct IRC egress is explicitly approved.
 - `channels.irc.dmPolicy` defaults to `"pairing"`.
 - `channels.irc.groupPolicy` defaults to `"allowlist"`.
 - With `groupPolicy="allowlist"`, set `channels.irc.groups` to define allowed channels.
