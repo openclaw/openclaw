@@ -108,6 +108,49 @@ function resolveDefaultManagedSkillsDir(): string {
 }
 
 /**
+ * Collect skill dir targets from a resolved directory.
+ * If the directory contains a direct SKILL.md it is published as-is.
+ * Otherwise child subdirectories that contain SKILL.md are expanded.
+ */
+function collectSkillTargets(dir: string, targets: Map<string, string>): void {
+  if (fs.existsSync(path.join(dir, "SKILL.md"))) {
+    const basename = path.basename(dir);
+    const existing = targets.get(basename);
+    if (existing) {
+      log.warn(
+        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
+          `only the first will be published to managed skills`,
+      );
+      return;
+    }
+    targets.set(basename, dir);
+    return;
+  }
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const childPath = path.join(dir, entry.name);
+    if (!fs.existsSync(path.join(childPath, "SKILL.md"))) continue;
+    const basename = entry.name;
+    const existing = targets.get(basename);
+    if (existing) {
+      log.warn(
+        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${childPath}; ` +
+          `only the first will be published to managed skills`,
+      );
+      continue;
+    }
+    targets.set(basename, childPath);
+  }
+}
+
+/**
  * Creates symlinks from each resolved plugin skill directory into the
  * managed skills directory (~/.openclaw/skills/) so the agent SDK can
  * discover them at the conventional file-system path.
@@ -120,25 +163,15 @@ function publishPluginSkillsToManagedSkillsDir(
   const managedTargets = new Map<string, string>();
 
   // Collect basename → target mappings, reporting collisions.
-  // Only publish directories that contain a SKILL.md (actual skill dirs,
-  // not parent containers like ./skills/ that hold multiple skills).
+  // Directories that contain SKILL.md are published as-is.
+  // Parent containers (e.g. ./skills/) are expanded to their child
+  // directories that each contain a SKILL.md.
   for (const dir of skillDirs) {
-    if (!fs.existsSync(path.join(dir, "SKILL.md"))) {
-      continue;
-    }
-    const basename = path.basename(dir);
-    const existing = managedTargets.get(basename);
-    if (existing) {
-      log.warn(
-        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
-          `only the first will be published to managed skills`,
-      );
-      continue;
-    }
-    managedTargets.set(basename, dir);
+    collectSkillTargets(dir, managedTargets);
   }
 
-  // Create or update symlinks.
+  // Create symlinks — but never replace an existing managed entry.
+  // Managed skills outrank plugin extra dirs.
   for (const [name, target] of managedTargets) {
     const linkPath = path.join(managedSkillsDir, name);
     try {
@@ -152,9 +185,9 @@ function publishPluginSkillsToManagedSkillsDir(
         continue;
       }
       log.warn(
-        `managed skill symlink "${linkPath}" points to ${existingTarget}, replacing with ${target}`,
+        `managed skill symlink "${linkPath}" already exists, skipping plugin skill "${target}"`,
       );
-      fs.unlinkSync(linkPath);
+      continue;
     } catch (err) {
       if (!isNotFoundError(err)) {
         log.warn(`failed to inspect managed skill symlink "${linkPath}": ${String(err)}`);
