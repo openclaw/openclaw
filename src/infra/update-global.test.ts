@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -152,6 +153,9 @@ describe("update global helpers", () => {
 
   it("uses an absolute POSIX script shell for npm lifecycle scripts during global installs", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    const existsSyncSpy = vi
+      .spyOn(fsSync, "existsSync")
+      .mockImplementation((candidate) => candidate === "/bin/sh");
     try {
       await expect(
         createGlobalInstallEnv({
@@ -163,6 +167,7 @@ describe("update global helpers", () => {
         NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
       });
     } finally {
+      existsSyncSpy.mockRestore();
       platformSpy.mockRestore();
     }
   });

@@ -41,6 +41,7 @@ const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -492,6 +493,38 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.trim();
+  const prefix = "No callable tools remain after resolving explicit tool allowlist (";
+  const suffix =
+    "); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.";
+  if (!message.startsWith(prefix) || !message.endsWith(suffix)) {
+    return false;
+  }
+  const sources = message.slice(prefix.length, -suffix.length);
+  const runtimeSource = `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`;
+  const sourceParts = sources
+    .split(";")
+    .map((source) => source.trim())
+    .filter(Boolean);
+  if (!sourceParts.includes(runtimeSource)) {
+    return false;
+  }
+  return sourceParts.every((source) => {
+    if (source === runtimeSource) {
+      return true;
+    }
+    const entries = source
+      .slice(source.indexOf(":") + 1)
+      .split(",")
+      .map((entry) => entry.trim());
+    return entries.includes("*");
+  });
 }
 
 function resolveRecallRunChannelContext(params: {
@@ -2394,7 +2427,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: ["memory_recall", "memory_search", "memory_get"],
+      toolsAllow: [...ACTIVE_MEMORY_TOOL_ALLOWLIST],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
@@ -2436,6 +2469,12 @@ async function runRecallSubagent(params: {
       const partialReply = await readPartialAssistantText(sessionFile);
       const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
+    }
+    if (!params.abortSignal?.aborted && isMissingRegisteredMemoryToolsError(error)) {
+      params.api.logger.debug?.(
+        `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
+      );
+      return { rawReply: "NONE" };
     }
     throw error;
   } finally {
@@ -2959,6 +2998,7 @@ const testing = {
   buildPromptPrefix,
   getCachedResult,
   isCircuitBreakerOpen,
+  isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
