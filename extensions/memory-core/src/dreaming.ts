@@ -718,6 +718,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
   };
 
+  const hasCronManagementContext = (): boolean =>
+    Boolean(resolveStartupCron || gatewayContext?.getCron);
+
   const disposeStartupCronRetry = (): void => {
     disposed = true;
     clearStartupCronRetry();
@@ -745,7 +748,6 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     reason: "startup" | "runtime";
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
-    warnOnUnavailableCron?: boolean;
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
@@ -779,8 +781,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       }
     }
     const configKey = runtimeConfigKey(config);
-    const warnOnUnavailableCron = params.warnOnUnavailableCron !== false;
-    if (!cron && config.enabled && warnOnUnavailableCron && !unavailableCronWarningEmitted) {
+    if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
       // The runtime reconciliation path (heartbeat-driven) will still warn if the
       // cron service remains unavailable after boot.
@@ -899,9 +900,11 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       const isManagedCronTrigger = ctx.trigger === "cron";
       const shouldHandleManagedDreaming =
         hasManagedDreamingToken && (isManagedHeartbeatTrigger || isManagedCronTrigger);
+      if (!shouldHandleManagedDreaming && !hasCronManagementContext()) {
+        return undefined;
+      }
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
-        warnOnUnavailableCron: shouldHandleManagedDreaming,
       });
       if (!shouldHandleManagedDreaming) {
         return undefined;

@@ -43,7 +43,7 @@ Docs: https://docs.openclaw.ai
 
 - Release validation: install the cross-OS TypeScript harness through Windows-safe Node/npm shims so native Windows package checks reach the OpenClaw smoke suites instead of exiting before artifact capture. Thanks @vincentkoc.
 - Agents/bootstrap: keep pending `BOOTSTRAP.md` and bootstrap truncation notices in system-prompt Project Context instead of copying setup text or raw warning diagnostics into WebChat user/runtime context. Fixes #76946.
-- Memory/dreaming: keep ordinary heartbeat turns from warning that the managed dreaming cron is unavailable when no managed dreaming event is being handled.
+- Memory/dreaming: keep hook contexts without a gateway cron handle from warning that managed dreaming cron reconciliation is unavailable, while preserving gateway-side cron failure warnings.
 - Channels/WhatsApp: allow `@whiskeysockets/libsignal-node` in `onlyBuiltDependencies` so pnpm v9+ `blockExoticSubdeps` no longer rejects the baileys git-tarball subdep and silences all inbound agent replies. Fixes #76539. Thanks @ottodeng and @vincentkoc.
 - Gateway/install: keep `.env`-managed values in the macOS LaunchAgent env file while still tracking `OPENCLAW_SERVICE_MANAGED_ENV_KEYS`, so regenerated services do not boot without managed auth/provider keys. Fixes #75374.
 - Gateway/restart: verify listener PIDs by argv when `lsof` reports only the Node process name, so stale gateway cleanup can find macOS `cnode` listeners. Fixes #70664.
