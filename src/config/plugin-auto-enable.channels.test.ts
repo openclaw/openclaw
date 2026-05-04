@@ -360,6 +360,31 @@ describe("applyPluginAutoEnable channels", () => {
       expect(result.changes.join("\n")).toContain("enabled automatically.");
     });
 
+    it("preserves same-name official channel plugin ids", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            discord: { token: "enabled" },
+          },
+          plugins: {
+            allow: ["existing-plugin"],
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "discord",
+            channels: ["discord"],
+          },
+        ]),
+      });
+
+      expect(result.config.channels?.discord?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.discord).toBeUndefined();
+      expect(result.config.plugins?.allow).toEqual(["existing-plugin", "discord"]);
+      expect(result.changes.join("\n")).toContain("Discord configured, enabled automatically.");
+    });
+
     it("uses manifest channel config preferOver metadata for plugin channels", () => {
       const result = applyPluginAutoEnable({
         config: {
