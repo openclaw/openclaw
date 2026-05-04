@@ -97,6 +97,7 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
   if (benchmarkFlagSeen) {
     nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] =
       benchmarkDir || nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || DEFAULT_BENCHMARK_PROFILE_DIR;
+    nextEnv.OPENCLAW_TRACE_SYNC_IO ??= "0";
   }
   return {
     args: benchmarkNoForceSeen
