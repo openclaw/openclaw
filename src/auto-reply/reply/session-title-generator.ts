@@ -5,9 +5,12 @@ import { updateSessionStoreEntry, type SessionEntry } from "../../config/session
 import { logVerbose } from "../../globals.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-const TITLE_GENERATION_PROMPT =
-  "Generate a concise, descriptive title (max 50 chars) for a conversation based on the user's messages below. " +
-  "Use the same language as the user's messages. Return ONLY the title, nothing else. No quotes, no prefixes.";
+function buildTitlePrompt(maxChars: number): string {
+  return (
+    `Generate a concise, descriptive title (max ${maxChars} chars) for a conversation based on the user's messages below. ` +
+    "Use the same language as the user's messages. Return ONLY the title, nothing else. No quotes, no prefixes."
+  );
+}
 
 /**
  * Fire-and-forget: check if an AI-generated session title is needed and generate it.
@@ -96,7 +99,7 @@ async function generateAndPersistTitle(params: {
 
   const title = await generateConversationLabel({
     userMessage: combinedMessages,
-    prompt: TITLE_GENERATION_PROMPT,
+    prompt: buildTitlePrompt(maxChars),
     cfg,
     agentId,
     agentDir,
