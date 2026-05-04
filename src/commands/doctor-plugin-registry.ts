@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { resolveDefaultPluginNpmDir } from "../plugins/install-paths.js";
 import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import { note } from "../terminal/note.js";
@@ -58,6 +57,14 @@ function readStringMap(value: unknown): Record<string, string> {
   return result;
 }
 
+function deleteObjectKey(record: Record<string, unknown>, key: string): boolean {
+  if (!Object.prototype.hasOwnProperty.call(record, key)) {
+    return false;
+  }
+  delete record[key];
+  return true;
+}
+
 function readPackageVersion(packageDir: string): string | undefined {
   const packageJson = readJsonObject(path.join(packageDir, "package.json"));
   const version = packageJson?.version;
@@ -73,7 +80,6 @@ function readPluginManifestId(packageDir: string): string | undefined {
 function listStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): StaleManagedNpmBundledPlugin[] {
-  const persistedInstallRecords = readPersistedInstalledPluginIndexInstallRecordsSync(params) ?? {};
   const currentBundled = loadInstalledPluginIndex({
     ...params,
     installRecords: {},
@@ -99,10 +105,6 @@ function listStaleManagedNpmBundledPlugins(
     const packageDir = path.join(npmRoot, "node_modules", packageName);
     const pluginId = readPluginManifestId(packageDir);
     if (!pluginId || pluginId !== bundled.pluginId) {
-      continue;
-    }
-    const persistedRecord = persistedInstallRecords[pluginId];
-    if (persistedRecord?.source === "npm") {
       continue;
     }
     stale.push({
@@ -137,6 +139,7 @@ function removeManagedNpmDependency(params: {
           dependencies,
         };
   saveJsonFile(npmPackageJsonPath, nextPackageJson);
+  removeManagedNpmPackageLockDependency(params);
   fs.rmSync(params.packageDir, { recursive: true, force: true });
   const scopeDir = path.dirname(params.packageDir);
   if (path.basename(path.dirname(scopeDir)) === "node_modules") {
@@ -148,7 +151,45 @@ function removeManagedNpmDependency(params: {
   }
 }
 
-function maybeRepairStaleManagedNpmBundledPlugins(
+function removeManagedNpmPackageLockDependency(params: {
+  npmRoot: string;
+  packageName: string;
+}): void {
+  const packageLockPath = path.join(params.npmRoot, "package-lock.json");
+  const packageLock = readJsonObject(packageLockPath);
+  if (!packageLock) {
+    return;
+  }
+
+  let changed = false;
+  const packages = packageLock.packages;
+  if (isRecord(packages)) {
+    const rootPackage = packages[""];
+    if (isRecord(rootPackage)) {
+      const rootDependencies = readStringMap(rootPackage.dependencies);
+      if (deleteObjectKey(rootDependencies, params.packageName)) {
+        changed = true;
+        if (Object.keys(rootDependencies).length === 0) {
+          delete rootPackage.dependencies;
+        } else {
+          rootPackage.dependencies = rootDependencies;
+        }
+      }
+    }
+    changed = deleteObjectKey(packages, `node_modules/${params.packageName}`) || changed;
+  }
+
+  const dependencies = packageLock.dependencies;
+  if (isRecord(dependencies)) {
+    changed = deleteObjectKey(dependencies, params.packageName) || changed;
+  }
+
+  if (changed) {
+    saveJsonFile(packageLockPath, packageLock);
+  }
+}
+
+export function maybeRepairStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): boolean {
   const stale = listStaleManagedNpmBundledPlugins(params);

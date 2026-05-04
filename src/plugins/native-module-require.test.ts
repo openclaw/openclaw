@@ -64,6 +64,19 @@ describe("tryNativeRequireJavaScriptModule", () => {
     );
   });
 
+  it("declines missing dependency errors when source-transform fallback is available", () => {
+    const dir = makeTempDir();
+    const modulePath = path.join(dir, "plugin.cjs");
+    fs.writeFileSync(modulePath, 'require("openclaw/plugin-sdk");\n', "utf8");
+
+    expect(
+      tryNativeRequireJavaScriptModule(modulePath, {
+        allowWindows: true,
+        fallbackOnMissingDependency: true,
+      }),
+    ).toEqual({ ok: false });
+  });
+
   it("propagates real module evaluation errors instead of falling back", () => {
     const dir = makeTempDir();
     const modulePath = path.join(dir, "plugin.cjs");

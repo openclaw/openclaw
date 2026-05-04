@@ -104,6 +104,7 @@ function createManagedNpmPlugin(params: {
   id: string;
   packageName: string;
   version: string;
+  packageLock?: boolean;
 }) {
   const npmRoot = path.join(params.stateDir, "npm");
   const packageDir = path.join(npmRoot, "node_modules", params.packageName);
@@ -117,6 +118,37 @@ function createManagedNpmPlugin(params: {
     }),
     "utf8",
   );
+  if (params.packageLock) {
+    fs.writeFileSync(
+      path.join(npmRoot, "package-lock.json"),
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "": {
+            dependencies: {
+              [params.packageName]: params.version,
+              "other-plugin": "1.0.0",
+            },
+          },
+          [`node_modules/${params.packageName}`]: {
+            version: params.version,
+          },
+          "node_modules/other-plugin": {
+            version: "1.0.0",
+          },
+        },
+        dependencies: {
+          [params.packageName]: {
+            version: params.version,
+          },
+          "other-plugin": {
+            version: "1.0.0",
+          },
+        },
+      }),
+      "utf8",
+    );
+  }
   fs.writeFileSync(
     path.join(packageDir, "package.json"),
     JSON.stringify({
@@ -153,6 +185,28 @@ function createCurrentIndex(): InstalledPluginIndex {
     installRecords: {},
     plugins: [],
     diagnostics: [],
+  };
+}
+
+function createCurrentIndexWithNpmRecord(params: {
+  pluginId: string;
+  packageName: string;
+  packageDir: string;
+  version: string;
+}): InstalledPluginIndex {
+  return {
+    ...createCurrentIndex(),
+    installRecords: {
+      [params.pluginId]: {
+        source: "npm",
+        spec: `${params.packageName}@${params.version}`,
+        installPath: params.packageDir,
+        version: params.version,
+        resolvedName: params.packageName,
+        resolvedVersion: params.version,
+        resolvedSpec: `${params.packageName}@${params.version}`,
+      },
+    },
   };
 }
 
@@ -300,5 +354,111 @@ describe("maybeRepairPluginRegistryState", () => {
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(
       "Removed stale managed npm plugin package",
     );
+  });
+
+  it("removes recovered npm install records when a managed package shadows a bundled plugin", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.3",
+    });
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithNpmRecord({
+        pluginId: "google-meet",
+        packageName: "@openclaw/google-meet",
+        packageDir: managed.packageDir,
+        version: "2026.5.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "google-meet",
+          packageName: "@openclaw/google-meet",
+          version: "2026.5.3",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["google-meet"],
+          entries: {
+            "google-meet": {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    expect(fs.existsSync(managed.packageDir)).toBe(false);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
+      installRecords: {},
+      refreshReason: "migration",
+      plugins: [
+        expect.objectContaining({
+          pluginId: "google-meet",
+          origin: "bundled",
+          rootDir: bundledDir,
+        }),
+      ],
+    });
+  });
+
+  it("removes stale managed npm packages from the package lock during repair", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.2",
+      packageLock: true,
+    });
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "google-meet",
+          packageName: "@openclaw/google-meet",
+          version: "2026.5.3",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["google-meet"],
+          entries: {
+            "google-meet": {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    const packageLock = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "npm", "package-lock.json"), "utf8"),
+    );
+    expect(packageLock.packages[""].dependencies).toEqual({ "other-plugin": "1.0.0" });
+    expect(packageLock.packages).not.toHaveProperty("node_modules/@openclaw/google-meet");
+    expect(packageLock.dependencies).not.toHaveProperty("@openclaw/google-meet");
+    expect(packageLock.dependencies).toHaveProperty("other-plugin");
   });
 });
