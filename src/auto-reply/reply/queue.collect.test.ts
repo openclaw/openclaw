@@ -96,6 +96,53 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("strips delegated auth from collected synthetic runs", async () => {
+    const key = `test-collect-strip-plugin-auth-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const pluginAuth = {
+      getDelegatedAccessToken: async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      }),
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    for (const prompt of ["one", "two"]) {
+      const run = createRun({
+        prompt,
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      });
+      enqueueFollowupRun(
+        key,
+        {
+          ...run,
+          run: {
+            ...run.run,
+            pluginAuth,
+          },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.run.pluginAuth).toBeUndefined();
+  });
+
   it("collects compatible items after one cross-channel drain", async () => {
     const key = `test-collect-after-cross-${Date.now()}`;
     const calls: FollowupRun[] = [];

@@ -278,6 +278,11 @@ async function dropAbortedFollowups(
   return dropped;
 }
 
+function stripSyntheticRunDelegatedAuth(run: FollowupRun["run"]): FollowupRun["run"] {
+  const { pluginAuth: _pluginAuth, ...safeRun } = run;
+  return safeRun;
+}
+
 function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string } {
   const { originatingChannel: channel, originatingTo: to, originatingAccountId: accountId } = item;
   const threadId = item.originatingThreadId;
@@ -349,7 +354,7 @@ export function scheduleFollowupDrain(
               await runWithSummarySourceCleanup(queue, async () => {
                 await effectiveRunFollowup({
                   prompt: summaryOnlyPrompt,
-                  run,
+                  run: stripSyntheticRunDelegatedAuth(run),
                   enqueuedAt: Date.now(),
                   ...collectSummaryRuntimeMetadata([]),
                   ...collectQueuedImages(queue.items),
@@ -375,7 +380,7 @@ export function scheduleFollowupDrain(
             await runWithSummarySourceCleanup(queue, async () => {
               await effectiveRunFollowup({
                 prompt: summary,
-                run,
+                run: stripSyntheticRunDelegatedAuth(run),
                 enqueuedAt: Date.now(),
                 ...collectSummaryRuntimeMetadata([]),
               });
@@ -401,7 +406,7 @@ export function scheduleFollowupDrain(
             const drainGroup = async () => {
               await effectiveRunFollowup({
                 prompt,
-                run,
+                run: stripSyntheticRunDelegatedAuth(run),
                 enqueuedAt: Date.now(),
                 ...routing,
                 ...collectRuntimeMetadata(groupItems),
@@ -433,7 +438,7 @@ export function scheduleFollowupDrain(
               await runWithSummarySourceCleanup(queue, async () => {
                 await effectiveRunFollowup({
                   prompt: summaryPrompt,
-                  run,
+                  run: stripSyntheticRunDelegatedAuth(run),
                   enqueuedAt: Date.now(),
                   originatingChannel: item.originatingChannel,
                   originatingTo: item.originatingTo,

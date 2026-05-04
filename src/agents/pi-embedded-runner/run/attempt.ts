@@ -1384,6 +1384,7 @@ export async function runEmbeddedAttempt(
             },
             sandbox,
             messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+            messageChatType: params.messageChatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
@@ -1398,6 +1399,7 @@ export async function runEmbeddedAttempt(
             senderE164: params.senderE164,
             senderIsOwner: params.senderIsOwner,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            pluginAuth: params.pluginAuth,
             sessionKey: sandboxSessionKey,
             // When sandboxSessionKey differs from the real run session key (e.g. Telegram
             // direct peer key vs agent:main:main), pass the live key so session_status
@@ -3189,9 +3191,8 @@ export async function runEmbeddedAttempt(
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
-        withOwnedSessionTranscriptWrites(
-          ownedTranscriptWriteContext,
-          async () => abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
+        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+          abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
         );
       const onBlockReply = params.onBlockReply
         ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)

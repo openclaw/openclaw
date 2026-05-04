@@ -1,4 +1,6 @@
+import { normalizeChatType, type ChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -9,6 +11,7 @@ import { resolveWorkspaceRoot } from "./workspace-dir.js";
 export type OpenClawPluginToolOptions = {
   agentSessionKey?: string;
   agentChannel?: GatewayMessageChannel;
+  agentChatType?: ChatType | null;
   agentAccountId?: string;
   agentTo?: string;
   agentThreadId?: string | number;
@@ -21,6 +24,7 @@ export type OpenClawPluginToolOptions = {
   requesterSenderId?: string | null;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  pluginAuth?: OpenClawPluginAuthContext;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
@@ -78,10 +82,12 @@ export function resolveOpenClawPluginToolInputs(params: {
         allowHostControl: options?.allowHostBrowserControl,
       },
       messageChannel: options?.agentChannel,
+      messageChatType: normalizeChatType(options?.agentChatType ?? undefined),
       agentAccountId: options?.agentAccountId,
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       sandboxed: options?.sandboxed,
+      auth: options?.pluginAuth,
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   };

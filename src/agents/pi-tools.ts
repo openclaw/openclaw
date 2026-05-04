@@ -2,6 +2,7 @@ import path from "node:path";
 import { createCodingTools, createReadTool } from "@earendil-works/pi-coding-agent";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
@@ -9,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
+import type { OpenClawPluginAuthContext } from "../plugins/tool-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
@@ -346,6 +348,7 @@ export function createOpenClawCodingTools(options?: {
   agentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  messageChatType?: ChatType | null;
   agentAccountId?: string;
   messageTo?: string;
   messageThreadId?: string | number;
@@ -359,6 +362,8 @@ export function createOpenClawCodingTools(options?: {
   runSessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
+  /** Runtime-only delegated auth resolver for trusted plugin tools. */
+  pluginAuth?: OpenClawPluginAuthContext;
   /** Stable run identifier for this agent invocation. */
   runId?: string;
   /** Diagnostic trace context for hook/log correlation during this run. */
@@ -836,6 +841,7 @@ export function createOpenClawCodingTools(options?: {
           options: {
             agentSessionKey: options?.sessionKey,
             agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+            agentChatType: options?.messageChatType,
             agentAccountId: options?.agentAccountId,
             agentTo: options?.messageTo,
             agentThreadId: options?.messageThreadId,
@@ -845,6 +851,7 @@ export function createOpenClawCodingTools(options?: {
             fsPolicy,
             requesterSenderId: options?.senderId,
             sessionId: options?.sessionId,
+            pluginAuth: options?.pluginAuth,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             sandboxed: !!sandbox,
@@ -916,6 +923,7 @@ export function createOpenClawCodingTools(options?: {
           runId: options?.runId,
           runSessionKey: options?.runSessionKey,
           agentChannel: resolveGatewayMessageChannel(options?.messageProvider),
+          agentChatType: options?.messageChatType,
           agentAccountId: options?.agentAccountId,
           agentTo: options?.messageTo,
           agentThreadId: options?.messageThreadId,
@@ -959,6 +967,7 @@ export function createOpenClawCodingTools(options?: {
           sessionId: options?.sessionId,
           inheritedToolAllowlist,
           inheritedToolDenylist,
+          pluginAuth: options?.pluginAuth,
           onYield: options?.onYield,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,

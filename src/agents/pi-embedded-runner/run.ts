@@ -1390,6 +1390,8 @@ export async function runEmbeddedPiAgent(
             memoryFlushWritePath: params.memoryFlushWritePath,
             messageChannel: params.messageChannel,
             messageProvider: params.messageProvider,
+            messageChatType: params.messageChatType,
+            pluginAuth: params.pluginAuth,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,

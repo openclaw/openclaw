@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -54,7 +55,7 @@ describe("resolveReplyToMode", () => {
     const cases: Array<{
       cfg: OpenClawConfig;
       channel?: "telegram" | "discord" | "slack";
-      chatType?: "direct" | "group" | "channel";
+      chatType?: ChatType;
       expected: "off" | "all" | "first";
     }> = [
       { cfg: emptyCfg, channel: "telegram", expected: "all" },

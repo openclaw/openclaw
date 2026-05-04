@@ -1081,6 +1081,7 @@ export async function runPreparedReply(
   );
   const queuedFollowupAbortSignal =
     inboundEventKind === "room_event" ? opts?.abortSignal : undefined;
+  const messageChatType = normalizeChatType(ctx.ChatType);
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,
@@ -1099,7 +1100,7 @@ export async function runPreparedReply(
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId,
-    originatingChatType: ctx.ChatType,
+    originatingChatType: messageChatType,
     run: {
       agentId,
       agentDir,
@@ -1113,6 +1114,7 @@ export async function runPreparedReply(
         // still reflects the active channel that should own tool routing.
         provider: ctx.Provider ?? ctx.Surface ?? sessionCtx.Provider,
       }),
+      messageChatType,
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
       groupChannel:
@@ -1177,6 +1179,7 @@ export async function runPreparedReply(
       allowEmptyAssistantReplyAsSilent,
       suppressNextUserMessagePersistence: isRoomEvent,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
+      pluginAuth: opts?.pluginAuth,
       ...(!useFastReplyRuntime &&
       isReasoningTagProvider(provider, {
         config: cfg,
