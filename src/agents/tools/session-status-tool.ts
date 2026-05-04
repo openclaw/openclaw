@@ -284,6 +284,13 @@ export function createSessionStatusTool(opts?: {
   runSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  /**
+   * Active runtime provider/model override for the current run (e.g. "openai-codex/gpt-5.2").
+   * When present and the caller requests sessionKey:"current", the status card displays this
+   * model instead of the session entry's stored default — so heartbeat runs with a
+   * per-turn model override report their actual executing model.
+   */
+  runtimeModelOverride?: string;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -612,10 +619,14 @@ export function createSessionStatusTool(opts?: {
           : resolved.entry;
       const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
       const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
-      const primaryModelLabel =
+      const storedPrimaryModelLabel =
         providerForCard && defaultModelForCard
           ? `${providerForCard}/${defaultModelForCard}`
           : defaultModelForCard;
+      const primaryModelLabel =
+        isSemanticCurrentRequest && opts?.runtimeModelOverride
+          ? opts.runtimeModelOverride
+          : storedPrimaryModelLabel;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||

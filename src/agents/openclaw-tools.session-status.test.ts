@@ -1838,6 +1838,63 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("uses runtimeModelOverride as the displayed model for sessionKey=current (#77493)", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "heartbeat-run",
+        updatedAt: 10,
+        modelOverride: "openai-codex/gpt-5.3-codex",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "main",
+      config: mockConfig as never,
+      runtimeModelOverride: "openai-codex/gpt-5.4-codex-spark",
+    });
+
+    await tool.execute("call-heartbeat-override", { sessionKey: "current" });
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai-codex/gpt-5.4-codex-spark",
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not apply runtimeModelOverride for explicit non-current session lookups", async () => {
+    resetSessionStore({
+      main: {
+        sessionId: "s-explicit",
+        updatedAt: 10,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "main",
+      config: mockConfig as never,
+      runtimeModelOverride: "openai-codex/gpt-5.4-codex-spark",
+    });
+
+    await tool.execute("call-explicit", { sessionKey: "main" });
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: expect.objectContaining({
+          model: expect.objectContaining({
+            primary: "openai/gpt-5.4",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("resets per-session model override via model=default", async () => {
     resetSessionStore({
       main: {

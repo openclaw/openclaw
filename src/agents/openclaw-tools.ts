@@ -615,6 +615,10 @@ export function createOpenClawTools(
       runSessionKey: options?.runSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
+      runtimeModelOverride:
+        options?.modelProvider && options?.modelId
+          ? `${options.modelProvider}/${options.modelId}`
+          : undefined,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
