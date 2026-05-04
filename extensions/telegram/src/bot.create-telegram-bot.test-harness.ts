@@ -359,10 +359,6 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
       >
     )();
   }) as unknown as TelegramBotRuntimeForTest["sequentialize"],
-  apiThrottler: (() =>
-    (
-      runnerHoisted.throttlerSpy as unknown as () => unknown
-    )()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
@@ -385,7 +381,12 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   >,
 };
 
-vi.doMock("./bot.runtime.js", () => telegramBotRuntimeForTest);
+vi.doMock("./bot.runtime.js", () => ({
+  ...telegramBotRuntimeForTest,
+  // apiThrottler is no longer called from bot-core; account-throttler.ts imports
+  // it directly from this module so tests can spy on singleton creation.
+  apiThrottler: runnerHoisted.throttlerSpy,
+}));
 
 export const getOnHandler = (event: string) => {
   const handler = onSpy.mock.calls.find((call) => call[0] === event)?.[1];

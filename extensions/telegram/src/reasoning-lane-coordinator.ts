@@ -57,7 +57,19 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
 }
 
-type TelegramReasoningSplit = {
+function endsWithPartialReasoningTagPrefix(text: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(text.trimEnd());
+  return REASONING_TAG_PREFIXES.some((prefix) => {
+    for (let len = Math.min(prefix.length, lower.length); len >= 2; len--) {
+      if (lower.endsWith(prefix.slice(0, len))) {
+        return true;
+      }
+    }
+    return false;
+  });
+}
+
+export type TelegramReasoningSplit = {
   reasoningText?: string;
   answerText?: string;
 };
@@ -86,7 +98,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   }
 
   const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
-  const answerText = strippedAnswer || undefined;
+  const answerText =
+    strippedAnswer && strippedAnswer !== text && !endsWithPartialReasoningTagPrefix(text)
+      ? strippedAnswer
+      : undefined;
   return { reasoningText, answerText };
 }
 

@@ -5,6 +5,7 @@ export type DraftStreamLoop = {
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  hasPending: () => boolean;
 };
 
 export function createDraftStreamLoop(params: {
@@ -41,7 +42,12 @@ export function createDraftStreamLoop(params: {
       inFlightPromise = current;
       const sent = await current;
       if (sent === false) {
-        pendingText = text;
+        // Only restore the snapshot if no newer update() arrived while the send
+        // was in flight. If pendingText was updated concurrently, that value is
+        // already newer than the failed snapshot and must not be overwritten.
+        if (!pendingText) {
+          pendingText = text;
+        }
         return;
       }
       lastSentAt = Date.now();
@@ -100,5 +106,6 @@ export function createDraftStreamLoop(params: {
         await inFlightPromise;
       }
     },
+    hasPending: () => !!pendingText.trim(),
   };
 }

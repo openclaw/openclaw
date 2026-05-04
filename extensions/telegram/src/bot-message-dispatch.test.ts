@@ -1135,6 +1135,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(loadSessionStore).toHaveBeenCalledWith("/tmp/sessions.json", { skipCache: true });
   });
 
+  it("doubles draft throttle when both answer and reasoning lanes are streaming", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams();
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    // Both streams should receive 2× base throttle (2000ms) so combined edit rate stays at 1/sec.
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(2);
+    const [answerCallArgs, reasoningCallArgs] = createTelegramDraftStream.mock.calls as [
+      [{ throttleMs?: number }],
+      [{ throttleMs?: number }],
+    ];
+    expect(answerCallArgs[0].throttleMs).toBe(2000);
+    expect(reasoningCallArgs[0].throttleMs).toBe(2000);
+    expect(answerDraftStream).toBeDefined();
+    expect(reasoningDraftStream).toBeDefined();
+  });
+
+  it("uses base draft throttle when only the answer lane is streaming", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
+    expect(createTelegramDraftStream).toHaveBeenCalledWith(
+      expect.objectContaining({ throttleMs: 1000 }),
+    );
+  });
+
   it("does not expose reasoning preview callbacks unless session reasoning is stream", async () => {
     let seenReasoningCallback: unknown;
     const answerDraftStream = createDraftStream(999);

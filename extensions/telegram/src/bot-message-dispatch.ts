@@ -99,6 +99,32 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+/** Base edit throttle per stream; multiplied by concurrent stream count to stay within rate limits. */
+const DRAFT_STREAM_BASE_THROTTLE_MS = 1000;
+/**
+ * Wraps a sendTyping function so it is throttled proportionally to the number of
+ * active draft stream lanes. With N lanes each already generating edits, typing
+ * indicator API calls are spaced by N × the base typing interval to avoid
+ * contributing to per-chat rate limit exhaustion.
+ */
+function throttleTypingForStreamCount(
+  sendTyping: () => Promise<void>,
+  streamCount: number,
+): () => Promise<void> {
+  if (streamCount <= 1) {
+    return sendTyping;
+  }
+  let lastSentMs = 0;
+  const minIntervalMs = streamCount * 5_000;
+  return async () => {
+    const now = Date.now();
+    if (now - lastSentMs < minIntervalMs) {
+      return;
+    }
+    lastSentMs = now;
+    await sendTyping();
+  };
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -354,6 +380,10 @@ export const dispatchTelegramMessage = async ({
     text: renderTelegramHtmlText(text, { tableMode }),
     parseMode: "HTML" as const,
   });
+  const renderReasoningContinuationPreview = (text: string) => ({
+    text: renderTelegramHtmlText(`Reasoning (cont.):\n${text}`, { tableMode }),
+    parseMode: "HTML" as const,
+  });
   const accountBlockStreamingEnabled =
     resolveChannelStreamingBlockEnabled(telegramCfg) ??
     cfg.agents?.defaults?.blockStreamingDefault === "on";
@@ -425,10 +455,19 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
+  // Scale edit throttle by concurrent stream count so the combined edit rate stays within
+  // Telegram's per-chat rate limit (~1 edit/second).
+  const activeDraftStreamCount = (canStreamAnswerDraft ? 1 : 0) + (canStreamReasoningDraft ? 1 : 0);
+  const draftThrottleMs = DRAFT_STREAM_BASE_THROTTLE_MS * Math.max(1, activeDraftStreamCount);
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+  const createDraftLane = (
+    laneName: LaneName,
+    enabled: boolean,
+    renderText: (text: string) => { text: string; parseMode?: "HTML" } = renderDraftPreview,
+    renderContinuationText?: (text: string) => { text: string; parseMode?: "HTML" },
+  ): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
           api: bot.api,
@@ -436,13 +475,21 @@ export const dispatchTelegramMessage = async ({
           maxChars: draftMaxChars,
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
+          throttleMs: draftThrottleMs,
           minInitialChars: draftMinInitialChars,
-          renderText: renderDraftPreview,
+          renderText,
+          renderContinuationText,
           onSupersededPreview:
             laneName === "answer" || laneName === "reasoning"
               ? (preview) => {
                   if (laneName === "reasoning") {
-                    if (!archivedReasoningPreviewIds.includes(preview.messageId)) {
+                    // Overflow-chain splits mark their superseded chunk as
+                    // retain:true — those are completed reasoning pages that
+                    // should stay visible, not be deleted during cleanup.
+                    if (
+                      !preview.retain &&
+                      !archivedReasoningPreviewIds.includes(preview.messageId)
+                    ) {
                       archivedReasoningPreviewIds.push(preview.messageId);
                     }
                     return;
@@ -467,7 +514,12 @@ export const dispatchTelegramMessage = async ({
   };
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: createDraftLane("answer", canStreamAnswerDraft),
-    reasoning: createDraftLane("reasoning", canStreamReasoningDraft),
+    reasoning: createDraftLane(
+      "reasoning",
+      canStreamReasoningDraft,
+      renderDraftPreview,
+      renderReasoningContinuationPreview,
+    ),
   };
   const activePreviewLifecycleByLane: Record<LaneName, LanePreviewLifecycle> = {
     answer: "transient",
@@ -895,7 +947,7 @@ export const dispatchTelegramMessage = async ({
       channel: "telegram",
       accountId: route.accountId,
       typing: {
-        start: sendTyping,
+        start: throttleTypingForStreamCount(sendTyping, activeDraftStreamCount),
         onStartError: (err) => {
           logTypingFailure({
             log: logVerbose,

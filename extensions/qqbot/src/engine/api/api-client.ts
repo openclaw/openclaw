@@ -9,6 +9,7 @@
  * - `redactBodyKeys` replaces the hardcoded `file_data` redaction.
  */
 
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -120,8 +121,14 @@ export class ApiClient {
     }
 
     let res: Response;
+    let ssrfRelease: (() => Promise<void>) | undefined;
     try {
-      res = await fetch(url, fetchInit);
+      const guarded = await fetchWithSsrFGuard({
+        url,
+        init: fetchInit,
+      });
+      ssrfRelease = guarded.release;
+      res = guarded.response;
     } catch (err) {
       clearTimeout(timeoutId);
       if (err instanceof Error && err.name === "AbortError") {
@@ -149,6 +156,8 @@ export class ApiClient {
         res.status,
         path,
       );
+    } finally {
+      await ssrfRelease?.();
     }
     this.logger?.debug?.(`[qqbot:api] <<< Body: ${rawBody}`);
 

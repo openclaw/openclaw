@@ -184,35 +184,52 @@ function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean):
   return false;
 }
 
+function extractTelegramRetryAfter(candidate: object): number | undefined {
+  const raw =
+    "parameters" in candidate && candidate.parameters && typeof candidate.parameters === "object"
+      ? (candidate.parameters as { retry_after?: unknown }).retry_after
+      : "response" in candidate &&
+          candidate.response &&
+          typeof candidate.response === "object" &&
+          "parameters" in candidate.response
+        ? (
+            candidate.response as {
+              parameters?: { retry_after?: unknown };
+            }
+          ).parameters?.retry_after
+        : "error" in candidate &&
+            candidate.error &&
+            typeof candidate.error === "object" &&
+            "parameters" in candidate.error
+          ? (candidate.error as { parameters?: { retry_after?: unknown } }).parameters?.retry_after
+          : undefined;
+  return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined;
+}
+
 function hasTelegramRetryAfter(err: unknown): boolean {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object") {
       continue;
     }
-    const retryAfter =
-      "parameters" in candidate && candidate.parameters && typeof candidate.parameters === "object"
-        ? (candidate.parameters as { retry_after?: unknown }).retry_after
-        : "response" in candidate &&
-            candidate.response &&
-            typeof candidate.response === "object" &&
-            "parameters" in candidate.response
-          ? (
-              candidate.response as {
-                parameters?: { retry_after?: unknown };
-              }
-            ).parameters?.retry_after
-          : "error" in candidate &&
-              candidate.error &&
-              typeof candidate.error === "object" &&
-              "parameters" in candidate.error
-            ? (candidate.error as { parameters?: { retry_after?: unknown } }).parameters
-                ?.retry_after
-            : undefined;
-    if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
+    if (extractTelegramRetryAfter(candidate) !== undefined) {
       return true;
     }
   }
   return false;
+}
+
+/** Returns the Telegram retry_after value in milliseconds, or undefined if not present. */
+export function getTelegramRetryAfterMs(err: unknown): number | undefined {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const retryAfterSeconds = extractTelegramRetryAfter(candidate);
+    if (retryAfterSeconds !== undefined) {
+      return Math.ceil(retryAfterSeconds * 1000);
+    }
+  }
+  return undefined;
 }
 
 /** Returns true for HTTP 5xx server errors (error may have been processed). */

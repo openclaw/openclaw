@@ -1,6 +1,6 @@
 import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelegramDraftStream } from "./draft-stream.js";
+import { __testing, createTelegramDraftStream } from "./draft-stream.js";
 
 type TelegramDraftStreamParams = Parameters<typeof createTelegramDraftStream>[0];
 
@@ -30,6 +30,7 @@ function createDraftStream(
   return createTelegramDraftStream({
     api: api as unknown as Bot["api"],
     chatId: 123,
+    chatSendIntervalMs: 0,
     ...overrides,
   });
 }
@@ -308,6 +309,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       onSupersededPreview,
     });
 
@@ -375,6 +377,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
     });
 
@@ -395,6 +398,7 @@ describe("createTelegramDraftStream", () => {
     const stream = createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       maxChars: 100,
       renderText: () => ({ text: `<b>${"<".repeat(120)}</b>`, parseMode: "HTML" }),
       warn,
@@ -422,6 +426,7 @@ describe("draft stream initial message debounce", () => {
     return createTelegramDraftStream({
       api: api as unknown as Bot["api"],
       chatId: 123,
+      chatSendIntervalMs: 0,
       minInitialChars,
     });
   }
@@ -525,6 +530,7 @@ describe("draft stream initial message debounce", () => {
       const stream = createTelegramDraftStream({
         api: api as unknown as Bot["api"],
         chatId: 123,
+        chatSendIntervalMs: 0,
       });
 
       stream.update("Hi");
@@ -532,5 +538,213 @@ describe("draft stream initial message debounce", () => {
 
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Hi", undefined);
     });
+  });
+});
+
+describe("draft stream overflow chaining", () => {
+  afterEach(() => {
+    __testing.resetTelegramDraftStreamForTests();
+  });
+
+  it("chains overflow to a new message when the remainder fits", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      maxChars: 20,
+    });
+
+    stream.update("Hello world");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello world", undefined);
+
+    // Grows past 20 chars; the remainder "foo bar baz qux" (15 chars) fits in a new message.
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "foo bar baz qux", undefined);
+  });
+
+  it("drains oversized overflow slice across chained messages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 })
+      .mockResolvedValueOnce({ message_id: 55 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      maxChars: 10,
+    });
+
+    stream.update("123456789");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Overflow slice "ABCDEFGHIJK" is 11 chars > maxChars; binary-search splits it into "ABCDEFGHIJ" + "K".
+    stream.update("123456789ABCDEFGHIJK");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(3, 123, "K", undefined);
+  });
+
+  it("drains a single oversized update across multiple chained messages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      maxChars: 10,
+    });
+
+    // Single update with 20 chars (two messages worth) and no prior delivery.
+    stream.update("1234567890ABCDEFGHIJ");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", undefined);
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "ABCDEFGHIJ", undefined);
+  });
+
+  it("uses renderContinuationText for overflow continuation messages", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      maxChars: 10,
+      renderText: (text) => ({ text, parseMode: "HTML" as const }),
+      renderContinuationText: (text) => ({ text: `cont:${text}`, parseMode: "HTML" as const }),
+    });
+
+    // "1234567890AB" is 12 chars > 10; first 10 chars use renderText, remaining "AB" uses renderContinuationText.
+    stream.update("1234567890AB");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenNthCalledWith(1, 123, "1234567890", { parse_mode: "HTML" });
+    expect(api.sendMessage).toHaveBeenNthCalledWith(2, 123, "cont:AB", { parse_mode: "HTML" });
+  });
+
+  it("resets textBaseOffset on public forceNewMessage so next lane starts from zero", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 })
+      .mockResolvedValueOnce({ message_id: 55 });
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      maxChars: 20,
+    });
+
+    // Fill first message and trigger overflow to set textBaseOffset.
+    stream.update("Hello world");
+    await stream.flush();
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(2);
+
+    // Public forceNewMessage (e.g. lane rotation) — offset must reset.
+    stream.forceNewMessage();
+    stream.update("Fresh start");
+    await stream.flush();
+
+    // Third send should be "Fresh start" from offset 0, not a slice.
+    expect(api.sendMessage).toHaveBeenCalledTimes(3);
+    expect(api.sendMessage).toHaveBeenLastCalledWith(123, "Fresh start", undefined);
+  });
+
+  it("calls onSupersededPreview with the old message id on overflow chain", async () => {
+    const api = createMockDraftApi();
+    api.sendMessage
+      .mockResolvedValueOnce({ message_id: 17 })
+      .mockResolvedValueOnce({ message_id: 42 });
+    const onSupersededPreview = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      maxChars: 20,
+      onSupersededPreview,
+    });
+
+    stream.update("Hello world");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Overflow triggers internal chain — old message 17 should be reported.
+    stream.update("Hello world foo bar baz qux");
+    await stream.flush();
+
+    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
+    expect(onSupersededPreview).toHaveBeenCalledWith({
+      messageId: 17,
+      textSnapshot: "Hello world",
+      retain: true,
+    });
+  });
+});
+
+describe("draft stream 429 rate limit backoff", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("retries with newest accumulated text when an update arrives during 429 backoff", async () => {
+    const api = createMockDraftApi();
+    const retryAfterMs = 2000;
+    const err429 = Object.assign(new Error("429: Too Many Requests"), {
+      error_code: 429,
+      parameters: { retry_after: retryAfterMs / 1000 },
+    });
+    api.editMessageText.mockRejectedValueOnce(err429);
+
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      chatSendIntervalMs: 0,
+      throttleMs: 0,
+    });
+
+    // Establish a message ID so subsequent updates go through editMessageText.
+    stream.update("initial");
+    await stream.flush();
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "initial", undefined);
+
+    // Second update triggers editMessageText → 429 (returns false immediately).
+    stream.update("stale");
+    await stream.flush();
+    expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+    // Newer text arrives while the backoff window is active.
+    stream.update("newest");
+
+    // Advance past the backoff window; the deferred wait inside sendOrEditStreamMessage resolves.
+    await vi.advanceTimersByTimeAsync(retryAfterMs + 600);
+    await stream.flush();
+
+    // The retry must use the newest text, not the stale pre-429 snapshot.
+    expect(api.editMessageText).toHaveBeenCalledTimes(2);
+    expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "newest");
   });
 });

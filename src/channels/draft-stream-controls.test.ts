@@ -150,4 +150,40 @@ describe("draft-stream-controls", () => {
     expect(sendOrEditStreamMessage).toHaveBeenCalledWith("stale");
     expect(deleteMessage).not.toHaveBeenCalled();
   });
+
+  it("does not overwrite newer pending text when a send fails mid-flight", async () => {
+    // Regression: when sendOrEditStreamMessage returns false (e.g. 429) after a
+    // newer update() arrived while the send was in flight, the loop must keep
+    // the newer pending value rather than restoring the stale snapshot.
+    let resolveInflight!: (v: false) => void;
+    const inflightPromise = new Promise<false>((res) => {
+      resolveInflight = res;
+    });
+    const sendOrEditStreamMessage = vi
+      .fn((_text: string): Promise<boolean> => Promise.resolve(true))
+      .mockImplementationOnce(() => inflightPromise);
+
+    const state = { stopped: false, final: false };
+    const controls = createFinalizableDraftStreamControlsForState({
+      throttleMs: 0,
+      state,
+      sendOrEditStreamMessage,
+    });
+
+    // Start a flush with "stale" in flight.
+    controls.update("stale");
+    const flushPromise = controls.loop.flush();
+
+    // Newer update arrives before the in-flight send resolves.
+    controls.update("newest");
+
+    // In-flight send returns false (simulates 429).
+    resolveInflight(false);
+    await flushPromise;
+
+    // The retry must send "newest", not restore and re-send "stale".
+    await controls.loop.flush();
+    const calls = sendOrEditStreamMessage.mock.calls.map((c) => c[0]);
+    expect(calls).toEqual(["stale", "newest"]);
+  });
 });

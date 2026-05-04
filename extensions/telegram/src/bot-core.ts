@@ -32,7 +32,8 @@ import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { resolveDefaultAgentId } from "./bot.agent.runtime.js";
-import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
+import { Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
+import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramGroupPeerId, resolveTelegramStreamMode } from "./bot/helpers.js";
 import { resolveTelegramTransport } from "./fetch.js";
@@ -49,14 +50,12 @@ export { getTelegramSequentialKey };
 type TelegramBotRuntime = {
   Bot: typeof Bot;
   sequentialize: typeof sequentialize;
-  apiThrottler: typeof apiThrottler;
 };
 type TelegramBotInstance = InstanceType<TelegramBotRuntime["Bot"]>;
 
 const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   Bot,
   sequentialize,
-  apiThrottler,
 };
 
 let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
@@ -353,7 +352,7 @@ export function createTelegramBotCore(
       ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
       : undefined;
   const bot = new botRuntime.Bot(opts.token, botConfig);
-  bot.api.config.use(botRuntime.apiThrottler());
+  bot.api.config.use(getOrCreateAccountThrottler(opts.token));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));

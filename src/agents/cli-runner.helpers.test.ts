@@ -198,6 +198,50 @@ describe("buildCliArgs", () => {
       "gemini-3.1-pro-preview",
     ]);
   });
+
+  it("passes system prompt on fork-session resume even though useResume is true", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+        },
+        baseArgs: ["--fork-session", "abc123", "-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "My system prompt",
+        useResume: true,
+      }),
+    ).toEqual([
+      "--fork-session",
+      "abc123",
+      "-p",
+      "--append-system-prompt",
+      "My system prompt",
+    ]);
+  });
+
+  it("passes system prompt file config on fork-session resume", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "codex",
+          systemPromptFileConfigArg: "-c",
+          systemPromptFileConfigKey: "model_instructions_file",
+        },
+        baseArgs: ["--fork-session", "exec", "--json"],
+        modelId: "gpt-5.4",
+        systemPrompt: "My system prompt",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: true,
+      }),
+    ).toEqual([
+      "--fork-session",
+      "exec",
+      "--json",
+      "-c",
+      'model_instructions_file="/tmp/openclaw/system-prompt.md"',
+    ]);
+  });
 });
 
 describe("writeCliImages", () => {

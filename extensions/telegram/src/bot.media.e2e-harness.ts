@@ -118,7 +118,6 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     constructor(public token: string) {}
   } as unknown as TelegramBotRuntimeForTest["Bot"],
   sequentialize: (() => vi.fn()) as TelegramBotRuntimeForTest["sequentialize"],
-  apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 
 const mediaHarnessReplySpy = vi.hoisted(() =>
@@ -178,6 +177,7 @@ beforeEach(() => {
 
 vi.doMock("./bot.runtime.js", () => ({
   ...telegramBotRuntimeForTest,
+  apiThrottler: () => throttlerSpy(),
 }));
 
 vi.mock("undici", () => ({
