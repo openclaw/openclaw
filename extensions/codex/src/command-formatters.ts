@@ -37,7 +37,7 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
   lines.push(
     `Rate limits: ${
       probes.limits.ok
-        ? summarizeArrayLike(probes.limits.value)
+        ? summarizeRateLimits(probes.limits.value)
         : formatCodexDisplayText(probes.limits.error)
     }`,
   );
@@ -104,7 +104,7 @@ export function formatAccount(
 ): string {
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
-    `Rate limits: ${limits.ok ? summarizeArrayLike(limits.value) : formatCodexDisplayText(limits.error)}`,
+    `Rate limits: ${limits.ok ? summarizeRateLimits(limits.value) : formatCodexDisplayText(limits.error)}`,
   ].join("\n");
 }
 
@@ -196,6 +196,7 @@ function escapeCodexChatText(value: string): string {
     .replaceAll("(", "\uff08")
     .replaceAll(")", "\uff09")
     .replaceAll("*", "\u2217")
+    .replaceAll("_", "\uff3f")
     .replaceAll("~", "\uff5e")
     .replaceAll("|", "\uff5c");
 }
@@ -273,6 +274,28 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
     return "none returned";
   }
   return `${entries.length}`;
+}
+
+function summarizeRateLimits(value: JsonValue | undefined): string {
+  const entries = extractArray(value);
+  if (entries.length > 0) {
+    return `${entries.length}`;
+  }
+  if (!isJsonObject(value)) {
+    return "none returned";
+  }
+  const keyed = value.rateLimitsByLimitId;
+  if (isJsonObject(keyed)) {
+    const count = Object.values(keyed).filter(isMeaningfulRateLimitSnapshot).length;
+    if (count > 0) {
+      return `${count}`;
+    }
+  }
+  return isMeaningfulRateLimitSnapshot(value.rateLimits) ? "1" : "none returned";
+}
+
+function isMeaningfulRateLimitSnapshot(value: JsonValue | undefined): boolean {
+  return isJsonObject(value) && Object.values(value).some((entry) => entry != null);
 }
 
 function extractArray(value: JsonValue | undefined): JsonValue[] {

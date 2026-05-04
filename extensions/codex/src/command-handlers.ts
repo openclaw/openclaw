@@ -355,15 +355,15 @@ async function bindConversation(
   pluginConfig: unknown,
   args: string[],
 ): Promise<PluginCommandResult> {
-  if (!ctx.sessionFile) {
-    return {
-      text: "Cannot bind Codex because this command did not include an OpenClaw session file.",
-    };
-  }
   const parsed = parseBindArgs(args);
   if (parsed.help) {
     return {
       text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    };
+  }
+  if (!ctx.sessionFile) {
+    return {
+      text: "Cannot bind Codex because this command did not include an OpenClaw session file.",
     };
   }
   const workspaceDir = parsed.cwd ?? deps.resolveCodexDefaultWorkspaceDir(pluginConfig);
@@ -384,7 +384,7 @@ async function bindConversation(
   const data = await deps.startCodexConversationThread(startParams);
   const binding = await deps.readCodexAppServerBinding(ctx.sessionFile);
   const threadId = binding?.threadId ?? parsed.threadId ?? "new thread";
-  const summary = `Codex app-server thread ${threadId} in ${workspaceDir}`;
+  const summary = `Codex app-server thread ${formatCodexDisplayText(threadId)} in ${formatCodexDisplayText(workspaceDir)}`;
   let request: Awaited<ReturnType<PluginCommandContext["requestConversationBinding"]>>;
   try {
     request = await ctx.requestConversationBinding({
@@ -407,7 +407,7 @@ async function bindConversation(
     return request.reply;
   }
   await deps.clearCodexAppServerBinding(ctx.sessionFile);
-  return { text: request.message };
+  return { text: formatCodexDisplayText(request.message) };
 }
 
 async function detachConversation(
@@ -534,18 +534,20 @@ async function setConversationModel(
   pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
+  if (args.length > 1) {
+    return "Usage: /codex model <model>";
+  }
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot set Codex model because this command did not include an OpenClaw session file.";
-  }
-  if (args.length > 1) {
-    return "Usage: /codex model <model>";
   }
   const [model = ""] = args;
   const normalized = model.trim();
   if (!normalized) {
     const binding = await deps.readCodexAppServerBinding(sessionFile);
-    return binding?.model ? `Codex model: ${binding.model}` : "Usage: /codex model <model>";
+    return binding?.model
+      ? `Codex model: ${formatCodexDisplayText(binding.model)}`
+      : "Usage: /codex model <model>";
   }
   return await deps.setCodexConversationModel({
     sessionFile,
@@ -560,12 +562,12 @@ async function setConversationFastMode(
   pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
+  if (args.length > 1) {
+    return "Usage: /codex fast [on|off|status]";
+  }
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot set Codex fast mode because this command did not include an OpenClaw session file.";
-  }
-  if (args.length > 1) {
-    return "Usage: /codex fast [on|off|status]";
   }
   const value = args[0];
   const parsed = parseCodexFastModeArg(value);
@@ -585,12 +587,12 @@ async function setConversationPermissions(
   pluginConfig: unknown,
   args: string[],
 ): Promise<string> {
+  if (args.length > 1) {
+    return "Usage: /codex permissions [default|yolo|status]";
+  }
   const sessionFile = await resolveControlSessionFile(ctx);
   if (!sessionFile) {
     return "Cannot set Codex permissions because this command did not include an OpenClaw session file.";
-  }
-  if (args.length > 1) {
-    return "Usage: /codex permissions [default|yolo|status]";
   }
   const value = args[0];
   const parsed = parseCodexPermissionsModeArg(value);
@@ -1557,7 +1559,7 @@ function parseBindArgs(args: string[]): ParsedBindArgs {
     }
     if (arg === "--cwd") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.cwd !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1567,7 +1569,7 @@ function parseBindArgs(args: string[]): ParsedBindArgs {
     }
     if (arg === "--model") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.model !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1577,7 +1579,7 @@ function parseBindArgs(args: string[]): ParsedBindArgs {
     }
     if (arg === "--provider" || arg === "--model-provider") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.provider !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1622,7 +1624,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     if (arg === "--source" || arg === "--marketplace-source") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.overrides.marketplaceSource !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1632,7 +1634,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     if (arg === "--marketplace-path" || arg === "--path") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.overrides.marketplacePath !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1642,7 +1644,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     if (arg === "--marketplace") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.overrides.marketplaceName !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1652,7 +1654,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     if (arg === "--plugin") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.overrides.pluginName !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1662,7 +1664,7 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
     }
     if (arg === "--server" || arg === "--mcp-server") {
       const value = readRequiredOptionValue(args, index);
-      if (!value) {
+      if (!value || parsed.overrides.mcpServerName !== undefined) {
         parsed.help = true;
         continue;
       }
@@ -1679,7 +1681,8 @@ function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
 
 function readRequiredOptionValue(args: string[], index: number): string | undefined {
   const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
+  const normalized = value?.trim();
+  if (!normalized || normalized.startsWith("-")) {
     return undefined;
   }
   return value;
