@@ -500,12 +500,31 @@ function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
     return false;
   }
   const message = error.message.trim();
-  return (
-    message.startsWith("No callable tools remain after resolving explicit tool allowlist (") &&
-    message.includes(`runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`) &&
-    message.includes("; no registered tools matched.") &&
-    message.endsWith("Fix the allowlist or enable the plugin that registers the requested tool.")
-  );
+  const prefix = "No callable tools remain after resolving explicit tool allowlist (";
+  const suffix =
+    "); no registered tools matched. Fix the allowlist or enable the plugin that registers the requested tool.";
+  if (!message.startsWith(prefix) || !message.endsWith(suffix)) {
+    return false;
+  }
+  const sources = message.slice(prefix.length, -suffix.length);
+  const runtimeSource = `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`;
+  const sourceParts = sources
+    .split(";")
+    .map((source) => source.trim())
+    .filter(Boolean);
+  if (!sourceParts.includes(runtimeSource)) {
+    return false;
+  }
+  return sourceParts.every((source) => {
+    if (source === runtimeSource) {
+      return true;
+    }
+    const entries = source
+      .slice(source.indexOf(":") + 1)
+      .split(",")
+      .map((entry) => entry.trim());
+    return entries.includes("*");
+  });
 }
 
 function resolveRecallRunChannelContext(params: {

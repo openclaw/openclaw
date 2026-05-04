@@ -1712,6 +1712,32 @@ describe("active-memory plugin", () => {
     ]);
   });
 
+  it("keeps memory-tool allowlist errors visible when upstream policy can filter memory tools", async () => {
+    const sessionKey = "agent:main:memory-tools-filtered-by-policy";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-memory-tools-filtered-by-policy",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      "tools.allow: read, exec; runtime toolsAllow: memory_recall, memory_search, memory_get",
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? memory tools filtered by policy", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(hasWarnLine("No callable tools remain")).toBe(true);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+    ]);
+  });
+
   it.each([
     ["disabled tools", "tools are disabled for this run"],
     ["models without tool support", "the selected model does not support tools"],
