@@ -226,6 +226,69 @@ describe("CLI attempt execution", () => {
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
+  it("clears stale CLI session binding but rethrows on non-recoverable FailoverError (#77089)", async () => {
+    const sessionKey = "agent:main:subagent:cli-auth-fail";
+    const homeDir = path.join(tmpDir, "home");
+    process.env.HOME = homeDir;
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-cli-auth-456",
+      updatedAt: Date.now(),
+      cliSessionIds: { "claude-cli": "stale-cli-session-auth" },
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const authError = new FailoverError("auth failure", {
+      reason: "auth",
+      provider: "claude-cli",
+      model: "opus",
+      status: 401,
+    });
+    runCliAgentMock.mockRejectedValueOnce(authError);
+
+    await expect(
+      runAgentAttempt({
+        providerOverride: "claude-cli",
+        originalProvider: "claude-cli",
+        modelOverride: "opus",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "auth fail test",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-cli-auth-fail",
+        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "claude-cli",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+      }),
+    ).rejects.toThrow(authError);
+
+    // Called only once — no retry for non-recoverable error
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    // Binding is still cleared so next turn cannot resume a dead session
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+  });
+
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
     const homeDir = path.join(tmpDir, "home");

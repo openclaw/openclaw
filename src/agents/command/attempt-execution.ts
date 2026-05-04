@@ -510,14 +510,17 @@ export function runAgentAttempt(params: {
       } catch (err) {
         if (
           err instanceof FailoverError &&
-          err.reason === "session_expired" &&
           activeCliSessionBinding?.sessionId &&
           params.sessionKey &&
           params.sessionStore &&
           params.storePath
         ) {
+          // Clear stale binding for any FailoverError so the next turn cannot
+          // resume a dead CLI session (#77089). Retry fresh only for recoverable
+          // reasons; for non-recoverable reasons (auth, billing, rate_limit) clear
+          // and rethrow so the caller can surface the real error.
           log.warn(
-            `CLI session expired, clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
+            `CLI session failed (reason=${err.reason}), clearing from session store: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
           );
 
           params.sessionEntry =
@@ -527,6 +530,14 @@ export function runAgentAttempt(params: {
               sessionStore: params.sessionStore,
               storePath: params.storePath,
             })) ?? params.sessionEntry;
+
+          if (
+            err.reason !== "session_expired" &&
+            err.reason !== "timeout" &&
+            err.reason !== "unknown"
+          ) {
+            throw err;
+          }
 
           return await runCliWithSession(undefined).then(async (result) => {
             if (
