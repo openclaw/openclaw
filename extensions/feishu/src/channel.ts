@@ -712,16 +712,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
-            const card = presentation
+            const runtime = await loadFeishuChannelRuntime();
+            let card = presentation
               ? buildFeishuPresentationCard({ presentation, fallbackText: text })
               : undefined;
+            if (!card && text) {
+              card = runtime.tryParseFeishuCardFromText(text);
+            }
             if (card && mediaUrl) {
               throw new Error(`Feishu ${ctx.action} does not support card with media.`);
             }
             if (!card && !text && !mediaUrl) {
               throw new Error(`Feishu ${ctx.action} requires text/message, media, or card.`);
             }
-            const runtime = await loadFeishuChannelRuntime();
             const maybeSendMedia = runtime.feishuOutbound.sendMedia;
             if (mediaUrl && !maybeSendMedia) {
               throw new Error("Feishu media sending is not available.");

@@ -227,6 +227,28 @@ function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }
   return sanitizeNativeFeishuCard(card);
 }
 
+const FEISHU_CARD_TEXT_MAX_LENGTH = 16_384;
+
+export function tryParseFeishuCardFromText(text: string): Record<string, unknown> | undefined {
+  if (text.length > FEISHU_CARD_TEXT_MAX_LENGTH) {
+    return undefined;
+  }
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{")) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  return sanitizeNativeFeishuCard(parsed);
+}
+
 function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
   if (style === "primary" || style === "success") {
     return "primary";
