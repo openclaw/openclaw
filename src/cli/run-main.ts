@@ -639,13 +639,14 @@ export async function runCli(argv: string[] = process.argv) {
               (command) => command.name() === primary || command.aliases().includes(primary),
             )
           ) {
-            const { resolveManifestCommandAliasOwner } =
+            const { resolveManifestCommandAliasOwner, resolveManifestToolOwner } =
               await import("../plugins/manifest-command-aliases.runtime.js");
             const missingPluginCommandMessage = resolveMissingPluginCommandMessageFromPolicy(
               primary,
               config,
               {
                 resolveCommandAliasOwner: resolveManifestCommandAliasOwner,
+                resolveToolOwner: (toolName) => resolveManifestToolOwner({ toolName, config }),
               },
             );
             if (missingPluginCommandMessage) {

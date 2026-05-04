@@ -367,4 +367,36 @@ describe("resolveMissingPluginCommandMessage", () => {
     expect(message).toContain('"memory-wiki"');
     expect(message).toContain("plugins.allow");
   });
+
+  it("surfaces tool-owner message when allow excludes an agent tool name", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "wecom_mcp",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      {
+        resolveToolOwner: (toolName) => (toolName === "wecom_mcp" ? "wecom" : undefined),
+      },
+    );
+    expect(message).toContain('"wecom_mcp" is an agent tool');
+    expect(message).toContain('"wecom"');
+    expect(message).not.toContain("plugins.allow");
+  });
+
+  it("falls through to plugins.allow message when resolveToolOwner returns undefined", () => {
+    const message = resolveMissingPluginCommandMessage(
+      "unknown_tool",
+      {
+        plugins: {
+          allow: ["quietchat"],
+        },
+      },
+      {
+        resolveToolOwner: (_toolName) => undefined,
+      },
+    );
+    expect(message).toContain('`plugins.allow` excludes "unknown_tool"');
+  });
 });

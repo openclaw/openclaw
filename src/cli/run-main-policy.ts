@@ -102,6 +102,7 @@ export function resolveMissingPluginCommandMessage(
       config?: OpenClawConfig;
       registry?: PluginManifestCommandAliasRegistry;
     }) => PluginManifestCommandAliasRecord | undefined;
+    resolveToolOwner?: (toolName: string) => string | undefined;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);
@@ -171,6 +172,13 @@ export function resolveMissingPluginCommandMessage(
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {
     if (parentPluginId && allow.includes(parentPluginId)) {
       return null;
+    }
+    const toolOwnerPluginId = options?.resolveToolOwner?.(normalizedPluginId);
+    if (toolOwnerPluginId) {
+      return (
+        `"${normalizedPluginId}" is an agent tool registered by the "${toolOwnerPluginId}" plugin, ` +
+        `not a CLI subcommand. Use it from an agent session (model tool-use), not the CLI.`
+      );
     }
     return (
       `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
