@@ -169,6 +169,69 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("allows Bedrock image models to proceed without a static API key in aws-sdk mode", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "amazon-bedrock",
+        id: "anthropic.claude-opus-4-7",
+        input: ["text", "image"],
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+      })),
+    });
+    getApiKeyForModelMock.mockResolvedValueOnce({
+      apiKey: undefined,
+      source: "aws-sdk default chain",
+      mode: "aws-sdk",
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-opus-4-7",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "bedrock ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {
+        models: {
+          providers: {
+            "amazon-bedrock": {
+              auth: "aws-sdk",
+              models: [],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      provider: "amazon-bedrock",
+      model: "anthropic.claude-opus-4-7",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "bedrock ok",
+      model: "anthropic.claude-opus-4-7",
+    });
+    expect(requireApiKeyMock).not.toHaveBeenCalled();
+    expect(setRuntimeApiKeyMock).not.toHaveBeenCalled();
+    expect(completeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "amazon-bedrock",
+        id: "anthropic.claude-opus-4-7",
+      }),
+      expect.objectContaining({
+        apiKey: undefined,
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("uses generic completion for non-canonical minimax-portal image models", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

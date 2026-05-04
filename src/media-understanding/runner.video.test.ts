@@ -5,14 +5,17 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
 
+let seenPrimaryApiKey: string | undefined;
+
 vi.mock("../media/channel-inbound-roots.js", () => ({
   resolveChannelInboundAttachmentRoots: () => undefined,
 }));
 
 vi.mock("../agents/api-key-rotation.js", () => ({
-  collectProviderApiKeysForExecution: ({ primaryApiKey }: { primaryApiKey?: string }) => [
-    primaryApiKey ?? "test-key",
-  ],
+  collectProviderApiKeysForExecution: ({ primaryApiKey }: { primaryApiKey?: string }) => {
+    seenPrimaryApiKey = primaryApiKey;
+    return [primaryApiKey ?? "test-key"];
+  },
   executeWithApiKeyRotation: async <T>({ execute }: { execute: (apiKey: string) => Promise<T> }) =>
     execute("test-key"),
 }));
@@ -23,6 +26,49 @@ vi.mock("../plugins/capability-provider-runtime.js", async () => {
 });
 
 describe("runCapability video provider wiring", () => {
+  it("keeps aws-sdk media auth running without a static API key", async () => {
+    seenPrimaryApiKey = undefined;
+    await withVideoFixture("openclaw-video-aws-sdk", async ({ ctx, media, cache }) => {
+      const result = await runCapability({
+        capability: "video",
+        cfg: {
+          models: {
+            providers: {
+              "amazon-bedrock": {
+                auth: "aws-sdk",
+                models: [],
+              },
+            },
+          },
+          tools: {
+            media: {
+              video: {
+                enabled: true,
+                models: [{ provider: "amazon-bedrock", model: "anthropic.claude-opus-4-7" }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry: new Map([
+          [
+            "amazon-bedrock",
+            {
+              id: "amazon-bedrock",
+              capabilities: ["video"],
+              describeVideo: async () => ({ text: "video ok", model: "anthropic.claude-opus-4-7" }),
+            },
+          ],
+        ]),
+      });
+
+      expect(result.outputs[0]?.text).toBe("video ok");
+      expect(seenPrimaryApiKey).toBeUndefined();
+    });
+  });
+
   it("merges video baseUrl and headers with entry precedence", async () => {
     let seenBaseUrl: string | undefined;
     let seenHeaders: Record<string, string> | undefined;

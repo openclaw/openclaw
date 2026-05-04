@@ -141,7 +141,7 @@ async function resolveImageRuntime(params: {
   profile?: string;
   preferredProfile?: string;
   authStore?: ImageDescriptionRequest["authStore"];
-}): Promise<{ apiKey: string; model: Model<Api> }> {
+}): Promise<{ apiKey?: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
   const authStorage = discoverAuthStorage(params.agentDir);
@@ -209,8 +209,13 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
-  authStorage.setRuntimeApiKey(model.provider, apiKey);
+  const apiKey =
+    apiKeyInfo.mode === "aws-sdk" && !apiKeyInfo.apiKey
+      ? undefined
+      : requireApiKey(apiKeyInfo, model.provider);
+  if (apiKey !== undefined) {
+    authStorage.setRuntimeApiKey(model.provider, apiKey);
+  }
   return { apiKey, model };
 }
 
@@ -358,7 +363,7 @@ async function describeImagesWithModelInternal(
   const prompt = params.prompt ?? "Describe the image.";
   const startedAtMs = Date.now();
   const controller = new AbortController();
-  let apiKey: string;
+  let apiKey: string | undefined;
   let model: Model<Api> | undefined;
 
   try {
@@ -385,6 +390,11 @@ async function describeImagesWithModelInternal(
   }
 
   if (isMinimaxVlmModel(model.provider, model.id)) {
+    if (!apiKey) {
+      throw new Error(
+        `No API key resolved for provider "${model.provider}" (auth mode: aws-sdk).`,
+      );
+    }
     return await describeImagesWithMinimax({
       apiKey,
       modelId: model.id,
