@@ -12,7 +12,6 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
-import { readSessionMessages } from "../../../../src/gateway/session-utils.fs.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 const tempDirs: string[] = [];
@@ -122,7 +121,6 @@ describe("mirrorCodexAppServerTranscript", () => {
 
   it("keeps previous turns on the active transcript branch when consecutive app-server turns mirror with different scopes", async () => {
     const sessionFile = await createTempSessionFile();
-    const storePath = path.join(path.dirname(sessionFile), "sessions.json");
 
     await mirrorCodexAppServerTranscript({
       sessionFile,
@@ -167,7 +165,7 @@ describe("mirrorCodexAppServerTranscript", () => {
             type?: string;
             id?: string;
             parentId?: string | null;
-            message?: { role?: string };
+            message?: { content?: unknown; role?: string };
           },
       )
       .filter((record) => record.type === "message");
@@ -177,15 +175,15 @@ describe("mirrorCodexAppServerTranscript", () => {
       "user",
       "assistant",
     ]);
+    expect(records.map((record) => JSON.stringify(record.message?.content))).toEqual([
+      '[{"type":"text","text":"turn one user"}]',
+      '[{"type":"text","text":"turn one assistant"}]',
+      '[{"type":"text","text":"turn two user"}]',
+      '[{"type":"text","text":"turn two assistant"}]',
+    ]);
     for (let index = 1; index < records.length; index += 1) {
       expect(records[index]?.parentId).toBe(records[index - 1]?.id);
     }
-
-    const visibleHistory = readSessionMessages("session", storePath, sessionFile);
-    expect(JSON.stringify(visibleHistory)).toContain("turn one user");
-    expect(JSON.stringify(visibleHistory)).toContain("turn one assistant");
-    expect(JSON.stringify(visibleHistory)).toContain("turn two user");
-    expect(JSON.stringify(visibleHistory)).toContain("turn two assistant");
   });
 
   it("runs before_message_write before appending mirrored transcript messages", async () => {
