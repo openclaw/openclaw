@@ -89,9 +89,16 @@ describe("web provider public artifact manifest fallback", () => {
   });
 
   it("keeps explicit bundled web-search public artifact candidates inside respect-allow", () => {
-    mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts.mockImplementation(
-      (params: { onlyPluginIds: readonly string[] }) =>
-        params.onlyPluginIds.map((pluginId) => ({ id: pluginId, pluginId })),
+    const resolveExplicitWebSearchProviders =
+      mocks.resolveBundledExplicitWebSearchProvidersFromPublicArtifacts as unknown as {
+        mockImplementation: (
+          implementation: (params: {
+            onlyPluginIds: readonly string[];
+          }) => { id: string; pluginId: string }[],
+        ) => void;
+      };
+    resolveExplicitWebSearchProviders.mockImplementation((params) =>
+      params.onlyPluginIds.map((pluginId) => ({ id: pluginId, pluginId })),
     );
 
     const providers = resolveBundledWebSearchProvidersFromPublicArtifacts({
