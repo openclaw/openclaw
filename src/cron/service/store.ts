@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { coerceFiniteScheduleNumber } from "../schedule.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -43,7 +44,7 @@ function isSupportedSchedule(value: unknown): boolean {
     return typeof schedule.at === "string" && schedule.at.trim().length > 0;
   }
   if (schedule.kind === "every") {
-    return typeof schedule.everyMs === "number" && Number.isFinite(schedule.everyMs);
+    return coerceFiniteScheduleNumber(schedule.everyMs) !== undefined;
   }
   if (schedule.kind === "cron") {
     return typeof schedule.expr === "string" && schedule.expr.trim().length > 0;

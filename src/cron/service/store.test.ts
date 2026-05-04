@@ -152,6 +152,36 @@ describe("cron service store seam coverage", () => {
     expect(raw.jobs[0]?.id).toBeUndefined();
   });
 
+  it("loads legacy every schedules with string interval fields", async () => {
+    const { storePath } = await makeStorePath();
+    const anchorMs = STORE_TEST_NOW - 60_000;
+
+    await writeSingleJobStore(storePath, {
+      id: "legacy-string-every-job",
+      name: "legacy string every job",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 120_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: { kind: "every", everyMs: "30000", anchorMs: `${anchorMs}` },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {},
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state);
+
+    const job = findJobOrThrow(state, "legacy-string-every-job");
+    expect(job.schedule).toEqual({ kind: "every", everyMs: 30_000, anchorMs });
+    expect(job.state.nextRunAtMs).toBe(STORE_TEST_NOW);
+    expect(state.quarantinedPersistedJobs).toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "legacy-string-every-job" }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+  });
+
   it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
     const { storePath } = await makeStorePath();
 

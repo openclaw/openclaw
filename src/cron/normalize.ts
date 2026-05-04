@@ -12,6 +12,7 @@ import {
   parseOptionalField,
 } from "./delivery-field-schemas.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { coerceFiniteScheduleNumber } from "./schedule.js";
 import { inferLegacyName } from "./service/normalize.js";
 import { assertSafeCronSessionTargetId } from "./session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
@@ -92,7 +93,7 @@ function coerceSchedule(schedule: UnknownRecord) {
       typeof schedule.atMs === "string"
     ) {
       next.kind = "at";
-    } else if (typeof schedule.everyMs === "number") {
+    } else if (coerceFiniteScheduleNumber(schedule.everyMs) !== undefined) {
       next.kind = "every";
     } else if (normalizedExpr) {
       next.kind = "cron";
@@ -122,6 +123,19 @@ function coerceSchedule(schedule: UnknownRecord) {
     next.staggerMs = staggerMs;
   } else if ("staggerMs" in next) {
     delete next.staggerMs;
+  }
+
+  const everyMs = coerceFiniteScheduleNumber(schedule.everyMs);
+  if (everyMs !== undefined) {
+    next.everyMs = everyMs;
+  } else if ("everyMs" in next) {
+    delete next.everyMs;
+  }
+  const anchorMs = coerceFiniteScheduleNumber(schedule.anchorMs);
+  if (anchorMs !== undefined) {
+    next.anchorMs = anchorMs;
+  } else if ("anchorMs" in next) {
+    delete next.anchorMs;
   }
 
   if (next.kind === "at") {
