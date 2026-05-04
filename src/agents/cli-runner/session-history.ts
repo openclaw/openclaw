@@ -190,20 +190,43 @@ export async function loadCliSessionReseedMessages(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  /**
+   * Opt-in fallback: when no compaction summary exists yet (or its summary is
+   * empty), return the most recent raw transcript messages so a freshly
+   * resumed CLI session has continuity instead of waking up empty. Default
+   * `false` preserves the long-standing safety property — pre-compaction
+   * transcripts may contain raw context the operator does not want bleeding
+   * into a resumed session. Operators with single-user, single-consumer
+   * setups (where the agent is the only reader of its own transcripts) can
+   * set this to `true` to trade that filter for restart continuity.
+   */
+  allowRawTranscriptReseed?: boolean;
 }): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   const latestCompactionIndex = entries.findLastIndex((entry) => {
     const candidate = entry as HistoryEntry;
     return candidate.type === "compaction" && typeof candidate.summary === "string";
   });
+
+  const fallbackToRawTail = (): unknown[] => {
+    if (!params.allowRawTranscriptReseed) {
+      return [];
+    }
+    const allMessages = entries.flatMap((entry) => {
+      const candidate = entry as HistoryEntry;
+      return candidate.type === "message" ? [candidate.message] : [];
+    });
+    return limitAgentHookHistoryMessages(allMessages, MAX_CLI_SESSION_HISTORY_MESSAGES);
+  };
+
   if (latestCompactionIndex < 0) {
-    return [];
+    return fallbackToRawTail();
   }
 
   const compaction = entries[latestCompactionIndex] as HistoryEntry;
   const summary = typeof compaction.summary === "string" ? compaction.summary.trim() : "";
   if (!summary) {
-    return [];
+    return fallbackToRawTail();
   }
 
   const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {
