@@ -21,37 +21,6 @@ const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
-const tryParseFeishuCardFromTextMock = vi.hoisted(() =>
-  vi.fn((text: string): Record<string, unknown> | undefined => {
-    if (text.length > 16_384) return undefined;
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) return undefined;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      return undefined;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const obj = parsed as { body?: { elements?: unknown[] } };
-    const elements = Array.isArray(obj.body?.elements) ? obj.body!.elements : [];
-    const accepted = elements.filter(
-      (e): e is { tag: string; content?: string } =>
-        e !== null &&
-        typeof e === "object" &&
-        typeof (e as { tag?: unknown }).tag === "string" &&
-        ((e as { tag: string }).tag === "hr" ||
-          (e as { tag: string }).tag === "markdown" ||
-          (e as { tag: string }).tag === "action"),
-    );
-    if (accepted.length === 0) return undefined;
-    return {
-      schema: "2.0",
-      config: { width_mode: "fill" },
-      body: { elements: accepted },
-    };
-  }),
-);
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -61,31 +30,34 @@ vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
 
-vi.mock("./channel.runtime.js", () => ({
-  feishuChannelRuntime: {
-    addReactionFeishu: addReactionFeishuMock,
-    createPinFeishu: createPinFeishuMock,
-    editMessageFeishu: editMessageFeishuMock,
-    getChatInfo: getChatInfoMock,
-    getChatMembers: getChatMembersMock,
-    getFeishuMemberInfo: getFeishuMemberInfoMock,
-    getMessageFeishu: getMessageFeishuMock,
-    listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
-    listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
-    listPinsFeishu: listPinsFeishuMock,
-    listReactionsFeishu: listReactionsFeishuMock,
-    probeFeishu: probeFeishuMock,
-    removePinFeishu: removePinFeishuMock,
-    removeReactionFeishu: removeReactionFeishuMock,
-    sendCardFeishu: sendCardFeishuMock,
-    sendMessageFeishu: sendMessageFeishuMock,
-    tryParseFeishuCardFromText: tryParseFeishuCardFromTextMock,
-    feishuOutbound: {
-      sendText: vi.fn(),
-      sendMedia: feishuOutboundSendMediaMock,
+vi.mock("./channel.runtime.js", async () => {
+  const outbound = await vi.importActual<typeof import("./outbound.js")>("./outbound.js");
+  return {
+    feishuChannelRuntime: {
+      addReactionFeishu: addReactionFeishuMock,
+      createPinFeishu: createPinFeishuMock,
+      editMessageFeishu: editMessageFeishuMock,
+      getChatInfo: getChatInfoMock,
+      getChatMembers: getChatMembersMock,
+      getFeishuMemberInfo: getFeishuMemberInfoMock,
+      getMessageFeishu: getMessageFeishuMock,
+      listFeishuDirectoryGroupsLive: listFeishuDirectoryGroupsLiveMock,
+      listFeishuDirectoryPeersLive: listFeishuDirectoryPeersLiveMock,
+      listPinsFeishu: listPinsFeishuMock,
+      listReactionsFeishu: listReactionsFeishuMock,
+      probeFeishu: probeFeishuMock,
+      removePinFeishu: removePinFeishuMock,
+      removeReactionFeishu: removeReactionFeishuMock,
+      sendCardFeishu: sendCardFeishuMock,
+      sendMessageFeishu: sendMessageFeishuMock,
+      tryParseFeishuCardFromText: outbound.tryParseFeishuCardFromText,
+      feishuOutbound: {
+        sendText: vi.fn(),
+        sendMedia: feishuOutboundSendMediaMock,
+      },
     },
-  },
-}));
+  };
+});
 
 function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
   return [...(feishuPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
@@ -403,6 +375,70 @@ describe("feishuPlugin actions", () => {
           schema: "2.0",
           body: {
             elements: [{ tag: "markdown", content: "hello card" }],
+          },
+        }),
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the legacy top-level `elements` card shape from the linked report (#53486)", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_legacy_card", chatId: "oc_group_1" });
+
+    const cardJson = JSON.stringify({
+      header: { title: { tag: "plain_text", content: "Test Card" }, template: "green" },
+      elements: [{ tag: "markdown", content: "This should render as a card" }],
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", message: cardJson },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: expect.objectContaining({
+          schema: "2.0",
+          body: {
+            elements: [{ tag: "markdown", content: "This should render as a card" }],
+          },
+        }),
+      }),
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("renders the wrapped `{type:interactive, card:{...}}` shape (#53486)", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({
+      messageId: "om_wrapped_card",
+      chatId: "oc_group_1",
+    });
+
+    const cardJson = JSON.stringify({
+      type: "interactive",
+      card: {
+        header: { title: { content: "Wrapped" } },
+        elements: [{ tag: "markdown", content: "wrapped card" }],
+      },
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", message: cardJson },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(sendCardFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        card: expect.objectContaining({
+          schema: "2.0",
+          body: {
+            elements: [{ tag: "markdown", content: "wrapped card" }],
           },
         }),
       }),

@@ -229,6 +229,21 @@ function readNativeFeishuCard(payload: { channelData?: Record<string, unknown> }
 
 const FEISHU_CARD_TEXT_MAX_LENGTH = 16_384;
 
+function normalizeFeishuCardShape(
+  card: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (card.type === "interactive" && isRecord(card.card)) {
+    return normalizeFeishuCardShape(card.card);
+  }
+  if (isRecord(card.body) && Array.isArray(card.body.elements)) {
+    return card;
+  }
+  if (Array.isArray(card.elements)) {
+    return { ...card, body: { elements: card.elements } };
+  }
+  return undefined;
+}
+
 export function tryParseFeishuCardFromText(text: string): Record<string, unknown> | undefined {
   if (text.length > FEISHU_CARD_TEXT_MAX_LENGTH) {
     return undefined;
@@ -246,7 +261,11 @@ export function tryParseFeishuCardFromText(text: string): Record<string, unknown
   if (!isRecord(parsed)) {
     return undefined;
   }
-  return sanitizeNativeFeishuCard(parsed);
+  const normalized = normalizeFeishuCardShape(parsed);
+  if (!normalized) {
+    return undefined;
+  }
+  return sanitizeNativeFeishuCard(normalized);
 }
 
 function mapFeishuButtonType(style: MessagePresentationButton["style"]) {
