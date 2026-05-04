@@ -1,4 +1,5 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type MediaUnderstandingKind = "audio.transcription" | "video.description" | "image.description";
@@ -169,12 +170,27 @@ export type ImagesDescriptionResult = {
   model?: string;
 };
 
+export type MediaUnderstandingProviderSyntheticAuthContext = {
+  config?: OpenClawConfig;
+  provider: string;
+  providerConfig?: ModelProviderConfig;
+};
+
+export type MediaUnderstandingProviderSyntheticAuthResult = {
+  apiKey: string;
+  source: string;
+  mode: "api-key";
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
   defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  resolveSyntheticAuth?: (
+    ctx: MediaUnderstandingProviderSyntheticAuthContext,
+  ) => MediaUnderstandingProviderSyntheticAuthResult | null | undefined;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;
