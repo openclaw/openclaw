@@ -163,6 +163,25 @@ describe("loadWebMedia", () => {
     );
   });
 
+  // Regression for #73148: callers that hit `optimizeImageToJpeg` directly
+  // (e.g. the `image` agent tool) on hosts that skipped the optional `sharp`
+  // native dep used to see a generic "Failed to optimize image" with the raw
+  // module-resolution error tail, with no install hint. The thrown error now
+  // explicitly names the missing dep and the install command.
+  it("surfaces a clear sharp-install hint when the optional optimizer is unavailable (#73148)", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageToJpeg: optimizeImageToJpegWithMissingOptimizer } =
+        await import("./web-media.js");
+      const promise = optimizeImageToJpegWithMissingOptimizer(
+        Buffer.from(TINY_PNG_BASE64, "base64"),
+        8,
+      );
+      await expect(promise).rejects.toThrow(
+        /requires the optional `sharp` native dependency.*pnpm add sharp/i,
+      );
+    });
+  });
+
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
     vi.doMock("./image-ops.js", () => ({
@@ -208,7 +227,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/sharp/i);
     });
   });
 
@@ -219,7 +238,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/sharp/i);
     });
   });
 
