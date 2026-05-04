@@ -130,6 +130,7 @@ export type MemoryDreamingConfig = {
   frequency: string;
   timezone?: string;
   verboseLogging: boolean;
+  staggerMs?: number;
   storage: MemoryDreamingStorageConfig;
   execution: {
     defaults: MemoryDreamingExecutionConfig;
@@ -396,6 +397,19 @@ export function resolveMemoryDreamingConfig(params: {
       dreaming?.verboseLogging,
       DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING,
     ),
+    ...(() => {
+      const rawStagger = dreaming?.staggerMs;
+      const stagger =
+        typeof rawStagger === "number" && Number.isFinite(rawStagger) && rawStagger >= 0
+          ? Math.floor(rawStagger)
+          : typeof rawStagger === "string" && rawStagger.trim() !== ""
+            ? (() => {
+                const num = Number(rawStagger);
+                return Number.isFinite(num) && num >= 0 ? Math.floor(num) : undefined;
+              })()
+            : undefined;
+      return stagger !== undefined ? { staggerMs: stagger } : {};
+    })(),
     storage: {
       mode: normalizeStorageMode(storage?.mode),
       separateReports: normalizeBoolean(
@@ -525,6 +539,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
 }): MemoryDeepDreamingConfig & {
   timezone?: string;
   verboseLogging: boolean;
+  staggerMs?: number;
   storage: MemoryDreamingStorageConfig;
 } {
   const resolved = resolveMemoryDreamingConfig(params);
@@ -533,6 +548,7 @@ export function resolveMemoryDeepDreamingConfig(params: {
     enabled: resolved.enabled && resolved.phases.deep.enabled,
     ...(resolved.timezone ? { timezone: resolved.timezone } : {}),
     verboseLogging: resolved.verboseLogging,
+    ...(resolved.staggerMs !== undefined ? { staggerMs: resolved.staggerMs } : {}),
     storage: resolved.storage,
   };
 }

@@ -25,6 +25,11 @@
       "label": "Dreaming Model",
       "placeholder": "anthropic/claude-sonnet-4-6",
       "help": "Optional provider/model override for Dream Diary narrative subagent runs. Requires plugins.entries.memory-core.subagent.allowModelOverride."
+    },
+    "dreaming.staggerMs": {
+      "label": "Dreaming Stagger (ms)",
+      "placeholder": "300000",
+      "help": "Optional deterministic random stagger window in ms for the dreaming cron schedule. Prevents multiple instances from firing at the exact same time. Unset uses the cron service default (5 min for top-of-hour schedules)."
     }
   },
   "configSchema": {
@@ -49,6 +54,10 @@
           },
           "verboseLogging": {
             "type": "boolean"
+          },
+          "staggerMs": {
+            "type": "integer",
+            "minimum": 0
           },
           "storage": {
             "type": "object",
