@@ -27,6 +27,25 @@ function appendToolResultText(sm: SessionManager, text: string) {
   );
 }
 
+function appendToolResultWithDetails(
+  sm: SessionManager,
+  details: Record<string, unknown>,
+  text = "ok",
+) {
+  sm.appendMessage(toolCallMessage);
+  sm.appendMessage(
+    asAppendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "read",
+      content: [{ type: "text", text }],
+      details,
+      isError: false,
+      timestamp: Date.now(),
+    }),
+  );
+}
+
 function appendAssistantToolCall(
   sm: SessionManager,
   params: { id: string; name: string; withArguments?: boolean },
@@ -398,6 +417,43 @@ describe("installSessionToolResultGuard", () => {
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text.length).toBeLessThan(500_000);
     expect(text).toContain("truncated");
+  });
+
+  it("caps oversized top-level detail text fields during persistence", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: 120,
+    });
+
+    appendToolResultWithDetails(sm, {
+      aggregated: "a".repeat(4_000),
+      stdout: "b".repeat(4_000),
+      stderr: "c".repeat(4_000),
+      output: "d".repeat(4_000),
+      untouched: "small",
+      nested: { stdout: "e".repeat(4_000) },
+    });
+
+    const toolResult = getPersistedMessages(sm).find(
+      (message) => message.role === "toolResult",
+    ) as {
+      details?: {
+        aggregated?: string;
+        stdout?: string;
+        stderr?: string;
+        output?: string;
+        untouched?: string;
+        nested?: { stdout?: string };
+      };
+    };
+
+    expect(toolResult.details?.aggregated?.length).toBeLessThanOrEqual(120);
+    expect(toolResult.details?.stdout?.length).toBeLessThanOrEqual(120);
+    expect(toolResult.details?.stderr?.length).toBeLessThanOrEqual(120);
+    expect(toolResult.details?.output?.length).toBeLessThanOrEqual(120);
+    expect(toolResult.details?.aggregated).toContain("truncated");
+    expect(toolResult.details?.untouched).toBe("small");
+    expect(toolResult.details?.nested?.stdout).toBe("e".repeat(4_000));
   });
 
   it("does not truncate tool results under the limit", () => {
