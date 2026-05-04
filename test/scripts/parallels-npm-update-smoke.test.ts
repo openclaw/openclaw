@@ -22,6 +22,27 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("await this.server?.stop()");
   });
 
+  it("has a one-command beta validation mode with fresh target coverage", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("--beta-validation [target]");
+    expect(script).toContain("resolveOpenClawRegistryVersion");
+    expect(script).toContain("this.options.updateTarget = version");
+    expect(script).toContain("this.options.freshTargetSpec = `openclaw@${version}`");
+    expect(script).toContain("runFreshTargetInstalls");
+    expect(script).toContain("freshTargetStatus");
+  });
+
+  it("prints actionable progress, rerun hints, and markdown summaries", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("stale=");
+    expect(script).toContain("bytes=");
+    expect(script).toContain("rerunCommand");
+    expect(script).toContain("writeSummaryMarkdown");
+    expect(script).toContain("Parallels NPM Update Smoke");
+  });
+
   it("runs Windows updates through a detached done-file runner", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
     const transports = readFileSync(GUEST_TRANSPORTS_PATH, "utf8");
