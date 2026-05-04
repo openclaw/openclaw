@@ -2509,6 +2509,20 @@
   vertical-align: middle;
 }
 
+.data-table-empty-cell {
+  padding: 46px 16px !important;
+  color: var(--muted);
+  text-align: center;
+}
+
+.data-table-empty-state {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .data-table tbody tr {
   transition: background var(--duration-fast) ease;
 }

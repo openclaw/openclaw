@@ -188,6 +188,8 @@ export const th: TranslationMap = {
     verbose: "ละเอียด",
     reasoning: "การให้เหตุผล",
     noSessions: "ไม่พบเซสชัน",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "สืบทอด",
     defaultOption: "ค่าเริ่มต้น ({value})",
     offExplicit: "ปิด (ระบุชัดเจน)",
@@ -919,6 +921,7 @@ export const th: TranslationMap = {
     updating: "กำลังอัปเดต…",
     updateNow: "อัปเดตตอนนี้",
     dismissUpdateBanner: "ปิดแบนเนอร์อัปเดต",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "อังกฤษ",

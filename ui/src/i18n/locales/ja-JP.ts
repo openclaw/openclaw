@@ -193,6 +193,8 @@ export const ja_JP: TranslationMap = {
     verbose: "詳細",
     reasoning: "推論",
     noSessions: "セッションが見つかりません。",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "継承",
     defaultOption: "デフォルト（{value}）",
     offExplicit: "オフ（明示）",
@@ -936,6 +938,7 @@ export const ja_JP: TranslationMap = {
     updating: "更新中…",
     updateNow: "今すぐ更新",
     dismissUpdateBanner: "更新バナーを閉じる",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "英語",

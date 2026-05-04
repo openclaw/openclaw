@@ -820,7 +820,18 @@ describe("switchChatSession", () => {
       sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "main" }),
+          row({ key: "agent:main:test-b", label: "Review Session" }),
+        ],
+      },
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -861,6 +872,10 @@ describe("switchChatSession", () => {
       includeUnknown: true,
       showArchived: false,
     });
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
   it("restores queued messages when switching back to their session", async () => {
@@ -886,6 +901,7 @@ describe("switchChatSession", () => {
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: 1,
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -931,6 +947,7 @@ describe("switchChatSession", () => {
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: null,
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -949,6 +966,10 @@ describe("switchChatSession", () => {
     switchChatSession(state, "main");
     await Promise.resolve();
 
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).not.toHaveBeenCalled();
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: state.client,
       agentId: undefined,

@@ -188,6 +188,8 @@ export const zh_TW: TranslationMap = {
     verbose: "詳細",
     reasoning: "推理",
     noSessions: "找不到工作階段。",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "繼承",
     defaultOption: "預設（{value}）",
     offExplicit: "關閉（明確）",
@@ -919,6 +921,7 @@ export const zh_TW: TranslationMap = {
     updating: "正在更新…",
     updateNow: "立即更新",
     dismissUpdateBanner: "關閉更新橫幅",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "英文",

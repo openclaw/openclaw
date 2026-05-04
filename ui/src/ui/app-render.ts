@@ -1721,6 +1721,23 @@ export function renderApp(state: AppViewState) {
                 onToggleFiltersCollapsed: () => {
                   state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
                 },
+                onClearFilters: () => {
+                  state.sessionsFilterActive = "";
+                  state.sessionsFilterLimit = "";
+                  state.sessionsIncludeGlobal = true;
+                  state.sessionsIncludeUnknown = true;
+                  state.sessionsShowArchived = true;
+                  state.sessionsSearchQuery = "";
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: 0,
+                    limit: 0,
+                    includeGlobal: true,
+                    includeUnknown: true,
+                    showArchived: true,
+                  });
+                },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;
                   state.sessionsPage = 0;

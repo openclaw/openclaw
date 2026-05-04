@@ -190,6 +190,8 @@ export const pt_BR: TranslationMap = {
     verbose: "Detalhado",
     reasoning: "Raciocínio",
     noSessions: "Nenhuma sessão encontrada.",
+    noSessionsMatchFilters: "No sessions match your filters.",
+    showAll: "Show all",
     inherit: "herdar",
     defaultOption: "Padrão ({value})",
     offExplicit: "desativado (explícito)",
@@ -935,6 +937,7 @@ export const pt_BR: TranslationMap = {
     updating: "Atualizando…",
     updateNow: "Atualizar agora",
     dismissUpdateBanner: "Dispensar banner de atualização",
+    switchedSession: "Switched to {session}",
   },
   languages: {
     en: "Inglês",
