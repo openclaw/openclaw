@@ -421,6 +421,9 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("can disable source-tree fallback for dist bundled entry checks", () => {
+    stubPluginModuleLoaderJitiFactory(
+      vi.fn(() => vi.fn(() => ({ sentinel: 42 }))) as unknown as PluginModuleLoaderFactory,
+    );
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-entry-contract-"));
     tempDirs.push(tempRoot);
 
