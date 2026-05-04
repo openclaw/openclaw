@@ -168,6 +168,10 @@ export type {
   PluginFormat,
 } from "./manifest-types.js";
 export type {
+  DelegatedAccessTokenProvider,
+  DelegatedAccessTokenRequest,
+  DelegatedAccessTokenResult,
+  OpenClawPluginAuthContext,
   OpenClawPluginHookOptions,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,

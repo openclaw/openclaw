@@ -1,5 +1,6 @@
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
+import type { ChatType } from "../channels/chat-type.js";
 import type { ChatChannelId } from "../channels/ids.js";
 import { emptyChannelConfigSchema } from "../channels/plugins/config-schema.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
@@ -115,7 +116,14 @@ export type {
   SpeechProviderPlugin,
 } from "./plugin-entry.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export type {
+  DelegatedAccessTokenProvider,
+  DelegatedAccessTokenRequest,
+  DelegatedAccessTokenResult,
+  OpenClawPluginAuthContext,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+} from "../plugins/types.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
@@ -316,8 +324,8 @@ export function buildChannelOutboundSessionRoute(params: {
   agentId: string;
   channel: string;
   accountId?: string | null;
-  peer: { kind: "direct" | "group" | "channel"; id: string };
-  chatType: "direct" | "group" | "channel";
+  peer: { kind: ChatType; id: string };
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;

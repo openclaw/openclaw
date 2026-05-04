@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CHAT_TYPES } from "../channels/chat-type.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
@@ -186,6 +187,21 @@ const SkillEntrySchema = z
 const PluginEntrySchema = z
   .object({
     enabled: z.boolean().optional(),
+    auth: z
+      .object({
+        delegatedAccess: z
+          .object({
+            enabled: z.boolean().optional(),
+            providers: z.array(z.string()).optional(),
+            audiences: z.array(z.string()).optional(),
+            scopes: z.array(z.string()).optional(),
+            chatTypes: z.array(z.enum(CHAT_TYPES)).optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     hooks: z
       .object({
         allowPromptInjection: z.boolean().optional(),

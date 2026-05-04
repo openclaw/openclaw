@@ -14,6 +14,7 @@ import type {
   DurableFinalDeliveryRequirements,
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
+import type { ChatType } from "../chat-type.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
@@ -51,7 +52,7 @@ export type SenderFacts = {
 };
 
 export type ConversationFacts = {
-  kind: "direct" | "group" | "channel";
+  kind: ChatType;
   id: string;
   label?: string;
   spaceId?: string;
@@ -59,7 +60,7 @@ export type ConversationFacts = {
   threadId?: string;
   nativeChannelId?: string;
   routePeer: {
-    kind: "direct" | "group" | "channel";
+    kind: ChatType;
     id: string;
   };
 };
