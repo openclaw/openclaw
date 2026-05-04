@@ -45,6 +45,19 @@ function buildCmdExeCommandLine(resolvedCommand: string, args: string[]): string
   return [escapeForCmdExe(resolvedCommand), ...args.map(escapeForCmdExe)].join(" ");
 }
 
+function resolveTrustedWindowsCmdExe(): string {
+  if (process.platform !== "win32") {
+    return "cmd.exe";
+  }
+  for (const key of ["SystemRoot", "SYSTEMROOT", "windir", "WINDIR"] as const) {
+    const systemRoot = process.env[key]?.trim();
+    if (systemRoot && path.win32.isAbsolute(systemRoot)) {
+      return path.win32.join(systemRoot, "System32", "cmd.exe");
+    }
+  }
+  return "cmd.exe";
+}
+
 /**
  * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
  * without shell, causing EINVAL. Resolve npm/npx to node + cli script so we
@@ -107,7 +120,7 @@ function resolveChildProcessInvocation(params: {
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
 
   return {
-    command: useCmdWrapper ? (process.env.ComSpec ?? "cmd.exe") : resolvedCommand,
+    command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
     args: useCmdWrapper
       ? ["/d", "/s", "/c", buildCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
       : finalArgv.slice(1),
