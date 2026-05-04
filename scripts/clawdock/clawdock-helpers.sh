@@ -170,6 +170,15 @@ _clawdock_read_env_token() {
   _clawdock_trim_quotes "$raw"
 }
 
+_clawdock_read_env_gateway_port() {
+  local raw=""
+  if [[ -f "${CLAWDOCK_DIR}/.env" ]]; then
+    raw=$(sed -n 's/^OPENCLAW_GATEWAY_PORT=//p' "${CLAWDOCK_DIR}/.env" | head -n 1)
+    raw=$(_clawdock_trim_quotes "$raw")
+  fi
+  echo "${raw:-18789}"
+}
+
 # Basic Operations
 clawdock-start() {
   _clawdock_compose up -d openclaw-gateway
@@ -371,15 +380,21 @@ clawdock-dashboard() {
   _clawdock_ensure_dir || return 1
 
   echo "🦞 Getting dashboard URL..."
-  local output exit_status url
+  local output exit_status url host_port container_url
   output=$(_clawdock_compose run --rm openclaw-cli dashboard --no-open 2>&1)
   exit_status=$?
-  url=$(printf "%s\n" "$output" | _clawdock_filter_warnings | grep -o 'http[s]\?://[^[:space:]]*' | head -n 1)
+  container_url=$(printf "%s\n" "$output" | _clawdock_filter_warnings | grep -o 'http[s]\?://[^[:space:]]*' | head -n 1)
   if [[ $exit_status -ne 0 ]]; then
     echo "❌ Failed to get dashboard URL"
     echo -e "   Try restarting: $(_cmd clawdock-restart)"
     return 1
   fi
+
+  # Replace the container-internal port with the host-published OPENCLAW_GATEWAY_PORT so
+  # the URL is reachable from the host rather than from inside the container. (#77344)
+  host_port=$(_clawdock_read_env_gateway_port)
+  url=$(printf "%s\n" "$container_url" | sed "s|://[^:/]*:[0-9]*|://localhost:${host_port}|")
+  [[ -z "$url" ]] && url="http://localhost:${host_port}"
 
   if [[ -n "$url" ]]; then
     echo -e "✅ Opening: ${_CLR_CYAN}${url}${_CLR_RESET}"
