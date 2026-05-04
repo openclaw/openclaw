@@ -89,6 +89,13 @@ OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/cli-cpu pnpm openclaw status
 The source runner adds Node CPU profile flags and writes a `.cpuprofile` for the
 command. Use this before adding temporary instrumentation to command code.
 
+For startup stalls that look like synchronous filesystem or module-loader work,
+add Node's sync I/O trace flag through the source runner:
+
+```bash
+OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
+```
+
 ## Gateway watch mode
 
 For fast iteration, run the gateway under the file watcher:
