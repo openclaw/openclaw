@@ -424,6 +424,33 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBeNull();
   });
 
+  it("routes exec approval requested events with command explanation highlights", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-explain-1",
+        request: {
+          command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+          host: "gateway",
+          commandExplanationLines: [],
+          commandExplanationHighlights: [
+            { startIndex: 20, endIndex: 29, kind: "risk", severity: "danger" },
+          ],
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]?.request.commandExplanationLines).toBeUndefined();
+    expect(host.execApprovalQueue[0]?.request.commandExplanationHighlights).toEqual([
+      { startIndex: 20, endIndex: 29, kind: "risk", severity: "danger" },
+    ]);
+  });
+
   it("preserves pending approval requests across reconnect", () => {
     const host = createHost();
     host.execApprovalQueue = [

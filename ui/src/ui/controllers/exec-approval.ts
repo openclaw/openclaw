@@ -9,6 +9,13 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  commandExplanationLines?: readonly string[];
+  commandExplanationHighlights?: readonly {
+    startIndex: number;
+    endIndex: number;
+    kind: "command" | "risk";
+    severity?: "info" | "warning" | "danger";
+  }[];
 };
 
 export type ExecApprovalRequest = {
@@ -34,6 +41,58 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function parseCommandExplanationHighlights(value: unknown):
+  | {
+      startIndex: number;
+      endIndex: number;
+      kind: "command" | "risk";
+      severity?: "info" | "warning" | "danger";
+    }[]
+  | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const highlights = value.filter(
+    (
+      item,
+    ): item is {
+      startIndex: number;
+      endIndex: number;
+      kind: "command" | "risk";
+      severity?: "info" | "warning" | "danger";
+    } => {
+      if (!isRecord(item)) {
+        return false;
+      }
+      const { startIndex, endIndex, kind, severity } = item;
+      return (
+        Number.isSafeInteger(startIndex) &&
+        Number.isSafeInteger(endIndex) &&
+        typeof startIndex === "number" &&
+        typeof endIndex === "number" &&
+        endIndex > startIndex &&
+        (kind === "command" || kind === "risk") &&
+        (severity === undefined ||
+          severity === "info" ||
+          severity === "warning" ||
+          severity === "danger")
+      );
+    },
+  );
+  return highlights.length > 0 ? highlights : undefined;
+}
+
+function parseCommandExplanationLines(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const lines = value
+    .filter((line): line is string => typeof line === "string")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.length > 0 ? lines : undefined;
+}
+
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
   if (!isRecord(payload)) {
     return null;
@@ -43,7 +102,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
   if (!id || !isRecord(request)) {
     return null;
   }
-  const command = normalizeOptionalString(request.command) ?? "";
+  const command = typeof request.command === "string" ? request.command : "";
   if (!command) {
     return null;
   }
@@ -64,6 +123,10 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
+      commandExplanationLines: parseCommandExplanationLines(request.commandExplanationLines),
+      commandExplanationHighlights: parseCommandExplanationHighlights(
+        request.commandExplanationHighlights,
+      ),
     },
     createdAtMs,
     expiresAtMs,
