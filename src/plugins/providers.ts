@@ -610,7 +610,30 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  providerRefs?: readonly string[];
+  modelRefs?: readonly string[];
 }): string[] {
+  const scopedRefs = Boolean(params.providerRefs?.length || params.modelRefs?.length);
+  if (scopedRefs) {
+    return dedupeSortedPluginIds([
+      ...(params.providerRefs ?? []).flatMap(
+        (provider) =>
+          resolveOwningPluginIdsForProvider({
+            provider,
+            config: params.config,
+            workspaceDir: params.workspaceDir,
+            env: params.env,
+          }) ?? [],
+      ),
+      ...resolveOwningPluginIdsForModelRefs({
+        models: params.modelRefs ?? [],
+        config: params.config,
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }),
+    ]);
+  }
+
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);

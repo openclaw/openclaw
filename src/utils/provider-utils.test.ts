@@ -50,14 +50,26 @@ describe("resolveReasoningOutputMode", () => {
   it("falls back to provider hooks for unknown providers", () => {
     resolveProviderReasoningOutputModeWithPluginMock.mockReturnValue("tagged");
 
+    const runtimeHandle = {
+      provider: "custom-provider",
+      plugin: {
+        id: "custom-provider",
+        label: "Custom",
+        auth: [],
+      },
+    };
+
     expect(
       resolveReasoningOutputMode({
         provider: "custom-provider",
         workspaceDir: process.cwd(),
+        runtimeHandle,
         modelId: "custom/model",
       }),
     ).toBe("tagged");
-    expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(resolveProviderReasoningOutputModeWithPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ runtimeHandle }),
+    );
   });
 
   it("returns native when hooks do not provide an override", () => {

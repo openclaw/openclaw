@@ -17,7 +17,10 @@ const pluginManifestRegistryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/provider-model-normalization.runtime.js", () => {
-  return { normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock };
+  return {
+    getProviderModelNormalizationRuntimeCacheKey: () => "test-runtime",
+    normalizeProviderModelIdWithRuntime: normalizeProviderModelIdWithRuntimeMock,
+  };
 });
 
 vi.mock("../plugins/manifest-registry-installed.js", async (importOriginal) => {

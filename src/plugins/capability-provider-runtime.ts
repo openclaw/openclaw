@@ -1,3 +1,7 @@
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
@@ -316,25 +320,81 @@ function addMediaModelProviders(target: Set<string>, value: unknown): void {
 
 function collectRequestedMediaUnderstandingProviderIds(
   cfg: OpenClawConfig | undefined,
+  providerIds?: readonly string[],
 ): Set<string> {
   const requested = new Set<string>();
+  for (const providerId of providerIds ?? []) {
+    addStringValue(requested, providerId);
+  }
   const media = cfg?.tools?.media;
   addMediaModelProviders(requested, media?.models);
   addMediaModelProviders(requested, media?.image?.models);
   addMediaModelProviders(requested, media?.audio?.models);
   addMediaModelProviders(requested, media?.video?.models);
+  addConfiguredModelRefProviderIds(requested, cfg?.agents?.defaults?.imageModel);
+  addConfiguredModelRefProviderIds(requested, cfg?.agents?.defaults?.pdfModel);
+  return requested;
+}
+
+function addConfiguredModelRefProviderIds(target: Set<string>, value: unknown): void {
+  const addModelRefProvider = (raw: string | undefined) => {
+    if (typeof raw !== "string") {
+      return;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return;
+    }
+    const slashIndex = trimmed.indexOf("/");
+    if (slashIndex <= 0) {
+      return;
+    }
+    const providerId = trimmed.slice(0, slashIndex).trim().toLowerCase();
+    if (providerId) {
+      target.add(providerId);
+    }
+  };
+
+  addModelRefProvider(resolveAgentModelPrimaryValue(value as never));
+  for (const fallback of resolveAgentModelFallbackValues(value as never)) {
+    addModelRefProvider(fallback);
+  }
+}
+
+function collectRequestedImageGenerationProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  addConfiguredModelRefProviderIds(requested, cfg?.agents?.defaults?.imageGenerationModel);
+  return requested;
+}
+
+function collectRequestedVideoGenerationProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  addConfiguredModelRefProviderIds(requested, cfg?.agents?.defaults?.videoGenerationModel);
+  return requested;
+}
+
+function collectRequestedMusicGenerationProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+  addConfiguredModelRefProviderIds(requested, cfg?.agents?.defaults?.musicGenerationModel);
   return requested;
 }
 
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  providerIds?: readonly string[];
 }): Set<string> | undefined {
   switch (params.key) {
     case "speechProviders":
       return collectRequestedSpeechProviderIds(params.cfg);
     case "mediaUnderstandingProviders":
-      return collectRequestedMediaUnderstandingProviderIds(params.cfg);
+      return collectRequestedMediaUnderstandingProviderIds(params.cfg, params.providerIds);
+    case "imageGenerationProviders":
+      return collectRequestedImageGenerationProviderIds(params.cfg);
+    case "videoGenerationProviders":
+      return collectRequestedVideoGenerationProviderIds(params.cfg);
+    case "musicGenerationProviders":
+      return collectRequestedMusicGenerationProviderIds(params.cfg);
     default:
       return undefined;
   }
@@ -386,7 +446,17 @@ function resolveRequestedCapabilityPluginIds(params: {
   cfg?: OpenClawConfig;
   requested?: Set<string>;
 }): CapabilityPluginResolution | undefined {
-  if (params.key !== "speechProviders" || !params.requested || params.requested.size === 0) {
+  if (
+    ![
+      "speechProviders",
+      "mediaUnderstandingProviders",
+      "imageGenerationProviders",
+      "videoGenerationProviders",
+      "musicGenerationProviders",
+    ].includes(params.key) ||
+    !params.requested ||
+    params.requested.size === 0
+  ) {
     return undefined;
   }
   const runtimePluginIds = new Set<string>();
@@ -436,7 +506,15 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
         ? loadedEntries
         : coldEntries;
   const missingRequested =
-    params.key === "speechProviders" && params.requested && params.requested.size > 0
+    [
+      "speechProviders",
+      "mediaUnderstandingProviders",
+      "imageGenerationProviders",
+      "videoGenerationProviders",
+      "musicGenerationProviders",
+    ].includes(params.key) &&
+    params.requested &&
+    params.requested.size > 0
       ? new Set(params.requested)
       : undefined;
   if (missingRequested) {
@@ -531,6 +609,7 @@ function resolveCachedCapabilityProviderEntries<K extends CapabilityProviderRegi
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
+  providerIds?: readonly string[];
 }): CapabilityProviderForKey<K>[] {
   if (shouldSkipCapabilityResolution(params)) {
     return [];
@@ -540,7 +619,11 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const activeProviders = activeRegistry?.[params.key] ?? [];
   const missingRequestedProviders =
     activeProviders.length > 0
-      ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
+      ? collectRequestedCapabilityProviderIds({
+          key: params.key,
+          cfg: params.cfg,
+          providerIds: params.providerIds,
+        })
       : undefined;
   if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
     if (!missingRequestedProviders) {
@@ -551,17 +634,14 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
-  let requestedSpeechProviders: Set<string> | undefined;
-  if (params.key === "speechProviders") {
-    requestedSpeechProviders =
-      missingRequestedProviders ??
-      (activeProviders.length === 0 ? collectRequestedSpeechProviderIds(params.cfg) : undefined);
-  }
+  const requestedProviders =
+    missingRequestedProviders ??
+    (activeProviders.length === 0 ? collectRequestedCapabilityProviderIds(params) : undefined);
   const pluginIds =
     resolveRequestedCapabilityPluginIds({
       key: params.key,
       cfg: params.cfg,
-      requested: requestedSpeechProviders,
+      requested: requestedProviders,
     }) ??
     resolveCapabilityPluginIds({
       key: params.key,
@@ -581,7 +661,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     cfg: params.cfg,
     bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
     loadOptions,
-    requested: requestedSpeechProviders,
+    requested: requestedProviders,
   });
   if (params.key !== "memoryEmbeddingProviders") {
     const mergeLoadedProviders =

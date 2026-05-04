@@ -623,7 +623,7 @@ describe("resolvePluginCapabilityProviders", () => {
 
     expectResolvedCapabilityProviderIds(providers, ["openai", "deepgram"]);
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
-    expectActiveRegistryLookup(["deepgram", "google"]);
+    expectActiveRegistryLookup(["deepgram"]);
   });
 
   it("keeps active speech providers when cfg requests an active provider alias", () => {
@@ -1167,6 +1167,146 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
     );
     expectActiveRegistryLookup(["google"]);
+  });
+
+  it("narrows media capability loading to configured media providers", () => {
+    const cfg = {
+      tools: {
+        media: {
+          image: {
+            models: [{ provider: "google" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const loaded = createEmptyPluginRegistry();
+    loaded.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "google",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image"],
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["google"] },
+        },
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["openai"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["google"]);
+    expectActiveRegistryLookup(["google"]);
+  });
+
+  it("narrows media capability loading to the active model provider", () => {
+    const loaded = createEmptyPluginRegistry();
+    loaded.mediaUnderstandingProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        capabilities: ["image"],
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["google"] },
+        },
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["openai"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      providerIds: ["openai"],
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai"]);
+    expectActiveRegistryLookup(["openai"]);
+  });
+
+  it("narrows image-generation capability loading to configured model providers", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          imageGenerationModel: {
+            primary: "openai/gpt-image-1",
+            fallbacks: ["google/imagen-4"],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const loaded = createEmptyPluginRegistry();
+    loaded.imageGenerationProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["openai"] },
+        },
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["google"] },
+        },
+        {
+          id: "vydra",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["vydra"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "imageGenerationProviders",
+      cfg,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai"]);
+    expectActiveRegistryLookup(["google", "openai"]);
   });
 
   it("loads fallback snapshots without startup dependency repair", () => {

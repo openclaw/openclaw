@@ -387,8 +387,8 @@ async function resolveBundledWebSearchProviders(params: {
     if (bundled && bundled.length > 0) {
       return bundled;
     }
-    const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
-    return resolvePluginWebSearchProviders({
+    const { resolveRuntimeWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolveRuntimeWebSearchProviders({
       config: params.sourceConfig,
       env,
       bundledAllowlistCompat: true,
@@ -407,16 +407,16 @@ async function resolveBundledWebSearchProviders(params: {
     if (bundled && bundled.length > 0) {
       return bundled;
     }
-    const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
-    return resolvePluginWebSearchProviders({
+    const { resolveRuntimeWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolveRuntimeWebSearchProviders({
       config: params.sourceConfig,
       env,
       bundledAllowlistCompat: true,
       origin: "bundled",
     });
   }
-  const { resolvePluginWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
-  return resolvePluginWebSearchProviders({
+  const { resolveRuntimeWebSearchProviders } = await loadRuntimeWebToolsFallbackProviders();
+  return resolveRuntimeWebSearchProviders({
     config: params.sourceConfig,
     env,
     bundledAllowlistCompat: true,
@@ -437,8 +437,8 @@ async function resolveBundledWebFetchProviders(params: {
     if (bundled && bundled.length > 0) {
       return bundled;
     }
-    const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
-    return resolvePluginWebFetchProviders({
+    const { resolveRuntimeWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolveRuntimeWebFetchProviders({
       config: params.sourceConfig,
       env,
       bundledAllowlistCompat: true,
@@ -457,16 +457,16 @@ async function resolveBundledWebFetchProviders(params: {
     if (bundled && bundled.length > 0) {
       return bundled;
     }
-    const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
-    return resolvePluginWebFetchProviders({
+    const { resolveRuntimeWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+    return resolveRuntimeWebFetchProviders({
       config: params.sourceConfig,
       env,
       bundledAllowlistCompat: true,
       origin: "bundled",
     });
   }
-  const { resolvePluginWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
-  return resolvePluginWebFetchProviders({
+  const { resolveRuntimeWebFetchProviders } = await loadRuntimeWebToolsFallbackProviders();
+  return resolveRuntimeWebFetchProviders({
     config: params.sourceConfig,
     env,
     bundledAllowlistCompat: true,

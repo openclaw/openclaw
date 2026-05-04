@@ -3,6 +3,7 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { buildAuthProfileId } from "../agents/auth-profiles/identity.js";
+import { preferAuthProfileFirst } from "../agents/auth-profiles/order.js";
 import { upsertAuthProfile } from "../agents/auth-profiles/profiles.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -173,22 +174,17 @@ export function applyAuthProfileConfig(
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =
     existingProviderOrder && preferProfileFirst
-      ? [
-          params.profileId,
-          ...existingProviderOrder.filter((profileId) => profileId !== params.profileId),
-        ]
+      ? preferAuthProfileFirst(params.profileId, [params.profileId, ...existingProviderOrder])
       : existingProviderOrder;
   const hasMixedConfiguredModes = configuredProviderProfiles.some(
     ({ profileId, mode }) => profileId !== params.profileId && mode !== params.mode,
   );
   const derivedProviderOrder =
     existingProviderOrder === undefined && preferProfileFirst && hasMixedConfiguredModes
-      ? [
+      ? preferAuthProfileFirst(params.profileId, [
           params.profileId,
-          ...configuredProviderProfiles
-            .map(({ profileId }) => profileId)
-            .filter((profileId) => profileId !== params.profileId),
-        ]
+          ...configuredProviderProfiles.map(({ profileId }) => profileId),
+        ])
       : undefined;
   const baseOrder =
     matchingProviderOrderEntries.length > 0

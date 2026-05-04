@@ -5,10 +5,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import {
+  loadCachedEnabledBundleConfig,
   inspectBundleServerRuntimeSupport,
-  loadEnabledBundleConfig,
   readBundleJsonObject,
   resolveBundleJsonOpenFailure,
+  type EnabledBundleConfigResult,
 } from "./bundle-config-shared.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -18,6 +19,7 @@ import {
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import type { ConfigScopedRuntimeCache } from "./plugin-cache-primitives.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
 
@@ -47,6 +49,9 @@ const MANIFEST_PATH_BY_FORMAT: Record<PluginBundleFormat, string> = {
   cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
 const CLAUDE_PLUGIN_ROOT_PLACEHOLDER = "${CLAUDE_PLUGIN_ROOT}";
+const enabledBundleMcpConfigCache: ConfigScopedRuntimeCache<
+  EnabledBundleConfigResult<BundleMcpConfig, BundleMcpDiagnostic>
+> = new WeakMap();
 
 function resolveBundleMcpConfigPaths(params: {
   raw: Record<string, unknown>;
@@ -285,7 +290,14 @@ export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): EnabledBundleMcpConfigResult {
-  return loadEnabledBundleConfig({
+  return loadCachedEnabledBundleConfig({
+    cache: enabledBundleMcpConfigCache,
+    cacheKeyParts: [
+      "enabled-bundle-mcp",
+      params.workspaceDir,
+      params.cfg?.plugins,
+      params.cfg?.mcp,
+    ],
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     createEmptyConfig: () => ({ mcpServers: {} }),

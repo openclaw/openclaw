@@ -12,6 +12,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  trimmedTrailingAssistantMessages?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -135,11 +136,56 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
   };
 }
 
+function isToolCallBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+function isAssistantMessageEntry(entry: unknown): entry is SessionMessageEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as { role?: unknown; content?: unknown };
+  return message.role === "assistant";
+}
+
+function assistantEntryHasToolCall(entry: SessionMessageEntry): boolean {
+  const content = entry.message.content;
+  return Array.isArray(content) && content.some(isToolCallBlock);
+}
+
+function countTrimmableTrailingAssistantEntries(entries: unknown[]): number {
+  let count = 0;
+  for (let index = entries.length - 1; index > 0; index -= 1) {
+    const entry = entries[index];
+    if (!isAssistantMessageEntry(entry)) {
+      break;
+    }
+    if (assistantEntryHasToolCall(entry)) {
+      return 0;
+    }
+    count += 1;
+  }
+  const suffixStartIndex = entries.length - count;
+  if (count === 0 || suffixStartIndex <= 1) {
+    return 0;
+  }
+  return count;
+}
+
 function buildRepairSummaryParts(params: {
   droppedLines: number;
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  trimmedTrailingAssistantMessages: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -154,12 +200,16 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
+  if (params.trimmedTrailingAssistantMessages > 0) {
+    parts.push(`trimmed ${params.trimmedTrailingAssistantMessages} trailing assistant message(s)`);
+  }
   return parts.length > 0 ? parts.join(", ") : "no changes";
 }
 
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
   debug?: (message: string) => void;
+  trimTrailingAssistantMessages?: boolean;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
   const sessionFile = params.sessionFile.trim();
@@ -233,11 +283,24 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
+  // Sessions ending on role=assistant cause Anthropic prefill 400s when
+  // thinking is enabled. The outbound path strips per-request, but leaving
+  // the file corrupted causes repeated reject cycles across restarts.
+  let trimmedTrailingAssistantMessages = 0;
+  if (params.trimTrailingAssistantMessages !== false) {
+    const trimCount = countTrimmableTrailingAssistantEntries(entries);
+    while (trimmedTrailingAssistantMessages < trimCount) {
+      entries.pop();
+      trimmedTrailingAssistantMessages += 1;
+    }
+  }
+
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    trimmedTrailingAssistantMessages === 0
   ) {
     return { repaired: false, droppedLines: 0 };
   }
@@ -272,6 +335,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      trimmedTrailingAssistantMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -282,6 +346,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      trimmedTrailingAssistantMessages,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -290,6 +355,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    trimmedTrailingAssistantMessages,
     backupPath,
   };
 }

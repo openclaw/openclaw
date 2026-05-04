@@ -286,6 +286,17 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
   });
 
+  it("does not refresh models.json during context-window warmup", async () => {
+    mockDiscoveryDeps([{ id: "gpt-5.4", contextWindow: 272_000 }]);
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("gpt-5.4");
+    await flushAsyncWarmup();
+
+    expect(contextTestState.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(lookupContextTokens("gpt-5.4")).toBe(272_000);
+  });
+
   it("skips model normalization during warmup but preserves provider-owned context metadata", async () => {
     mockDiscoveryDeps([
       {

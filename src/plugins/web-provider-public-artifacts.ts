@@ -6,7 +6,9 @@ import type { PluginWebFetchProviderEntry, PluginWebSearchProviderEntry } from "
 import { resolveBundledWebFetchResolutionConfig } from "./web-fetch-providers.shared.js";
 import {
   loadBundledWebFetchProviderEntriesFromDir,
+  loadBundledRuntimeWebSearchProviderEntriesFromDir,
   loadBundledWebSearchProviderEntriesFromDir,
+  resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
 } from "./web-provider-public-artifacts.explicit.js";
@@ -83,12 +85,20 @@ function resolveBundledManifestRecordsByPluginId(params: {
   );
 }
 
-export function resolveBundledWebSearchProvidersFromPublicArtifacts(
-  params: BundledWebProviderPublicArtifactParams,
-): PluginWebSearchProviderEntry[] | null {
+function resolveBundledProvidersFromPublicArtifacts<TProvider>(params: {
+  contract: "webSearchProviders" | "webFetchProviders";
+  configKey: "webSearch" | "webFetch";
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  bundledAllowlistCompat?: boolean;
+  onlyPluginIds?: readonly string[];
+  resolveExplicitProviders: (params: { onlyPluginIds: readonly string[] }) => TProvider[] | null;
+  loadProvidersFromDir: (params: { dirName: string; pluginId: string }) => TProvider[] | null;
+}): TProvider[] | null {
   const pluginIds = resolveBundledCandidatePluginIds({
-    contract: "webSearchProviders",
-    configKey: "webSearch",
+    contract: params.contract,
+    configKey: params.configKey,
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
@@ -98,7 +108,7 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
   if (pluginIds.pluginIds.length === 0) {
     return [];
   }
-  const directProviders = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+  const directProviders = params.resolveExplicitProviders({
     onlyPluginIds: pluginIds.pluginIds,
   });
   if (directProviders) {
@@ -111,13 +121,13 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
     onlyPluginIds: pluginIds.pluginIds,
     manifestRecords: pluginIds.manifestRecords,
   });
-  const providers: PluginWebSearchProviderEntry[] = [];
+  const providers: TProvider[] = [];
   for (const pluginId of pluginIds.pluginIds) {
     const record = recordsByPluginId.get(pluginId);
     if (!record) {
       return null;
     }
-    const loadedProviders = loadBundledWebSearchProviderEntriesFromDir({
+    const loadedProviders = params.loadProvidersFromDir({
       dirName: path.basename(record.rootDir),
       pluginId,
     });
@@ -129,48 +139,38 @@ export function resolveBundledWebSearchProvidersFromPublicArtifacts(
   return providers;
 }
 
+export function resolveBundledWebSearchProvidersFromPublicArtifacts(
+  params: BundledWebProviderPublicArtifactParams,
+): PluginWebSearchProviderEntry[] | null {
+  return resolveBundledProvidersFromPublicArtifacts({
+    contract: "webSearchProviders",
+    configKey: "webSearch",
+    ...params,
+    resolveExplicitProviders: resolveBundledExplicitWebSearchProvidersFromPublicArtifacts,
+    loadProvidersFromDir: loadBundledWebSearchProviderEntriesFromDir,
+  });
+}
+
+export function resolveBundledRuntimeWebSearchProvidersFromPublicArtifacts(
+  params: BundledWebProviderPublicArtifactParams,
+): PluginWebSearchProviderEntry[] | null {
+  return resolveBundledProvidersFromPublicArtifacts({
+    contract: "webSearchProviders",
+    configKey: "webSearch",
+    ...params,
+    resolveExplicitProviders: resolveBundledExplicitRuntimeWebSearchProvidersFromPublicArtifacts,
+    loadProvidersFromDir: loadBundledRuntimeWebSearchProviderEntriesFromDir,
+  });
+}
+
 export function resolveBundledWebFetchProvidersFromPublicArtifacts(
   params: BundledWebProviderPublicArtifactParams,
 ): PluginWebFetchProviderEntry[] | null {
-  const pluginIds = resolveBundledCandidatePluginIds({
+  return resolveBundledProvidersFromPublicArtifacts({
     contract: "webFetchProviders",
     configKey: "webFetch",
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
-    onlyPluginIds: params.onlyPluginIds,
+    ...params,
+    resolveExplicitProviders: resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
+    loadProvidersFromDir: loadBundledWebFetchProviderEntriesFromDir,
   });
-  if (pluginIds.pluginIds.length === 0) {
-    return [];
-  }
-  const directProviders = resolveBundledExplicitWebFetchProvidersFromPublicArtifacts({
-    onlyPluginIds: pluginIds.pluginIds,
-  });
-  if (directProviders) {
-    return directProviders;
-  }
-  const recordsByPluginId = resolveBundledManifestRecordsByPluginId({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    onlyPluginIds: pluginIds.pluginIds,
-    manifestRecords: pluginIds.manifestRecords,
-  });
-  const providers: PluginWebFetchProviderEntry[] = [];
-  for (const pluginId of pluginIds.pluginIds) {
-    const record = recordsByPluginId.get(pluginId);
-    if (!record) {
-      return null;
-    }
-    const loadedProviders = loadBundledWebFetchProviderEntriesFromDir({
-      dirName: path.basename(record.rootDir),
-      pluginId,
-    });
-    if (!loadedProviders) {
-      return null;
-    }
-    providers.push(...loadedProviders);
-  }
-  return providers;
 }

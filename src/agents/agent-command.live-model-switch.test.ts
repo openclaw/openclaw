@@ -887,33 +887,18 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
   });
 
-  it("hydrates stripped persisted skill snapshots before running the CLI path", async () => {
+  it("passes stripped persisted skill snapshots without eager hydration", async () => {
     const persistedSnapshot = {
       prompt: "persisted prompt",
       skills: [{ name: "cli-skill" }],
       skillFilter: ["cli-skill"],
       version: 0,
     };
-    const rebuiltSkills = [
-      {
-        name: "cli-skill",
-        description: "CLI skill",
-        filePath: "/tmp/workspace/skills/cli-skill/SKILL.md",
-        baseDir: "/tmp/workspace/skills/cli-skill",
-        source: "# CLI skill",
-      },
-    ];
     state.sessionEntryMock = {
       sessionId: "session-1",
       updatedAt: Date.now(),
       skillsSnapshot: persistedSnapshot,
     };
-    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
-      prompt: "rebuilt prompt",
-      skills: [{ name: "different-skill" }],
-      resolvedSkills: rebuiltSkills,
-      version: 99,
-    });
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       const result = await params.run(params.provider, params.model);
       return {
@@ -935,9 +920,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       skills: [{ name: "cli-skill" }],
       skillFilter: ["cli-skill"],
       version: 0,
-      resolvedSkills: rebuiltSkills,
     });
-    expect(state.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(attemptParams?.skillsSnapshot).not.toHaveProperty("resolvedSkills");
+    expect(state.buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("classifies empty embedded run results before model fallback accepts them", async () => {

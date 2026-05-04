@@ -392,6 +392,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
   const { loadModelCatalog } = await import("../agents/model-catalog.js");
+  const { resolveModelCatalogScope } = await import("../agents/model-catalog-scope.js");
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await import("../agents/model-selection.js");
   const { note } = await import("../terminal/note.js");
@@ -408,7 +409,14 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadModelCatalog({ config: ctx.cfg });
+  const catalog = await loadModelCatalog({
+    config: ctx.cfg,
+    ...resolveModelCatalogScope({
+      cfg: ctx.cfg,
+      provider: hooksModelRef.provider,
+      model: hooksModelRef.model,
+    }),
+  });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,

@@ -141,6 +141,36 @@ describe("web-provider-runtime-shared", () => {
     );
   });
 
+  it("does not fall back to plugin loading during runtime web provider resolution", () => {
+    const mapRegistryProviders = vi.fn(() => ["mapped"]);
+    mocks.getLoadedRuntimePluginRegistry.mockReturnValue(undefined);
+
+    const providers = resolveRuntimeWebProviders(
+      {
+        config: {},
+        onlyPluginIds: ["alpha"],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["alpha"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(providers).toEqual([]);
+    expect(mocks.getLoadedRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requiredPluginIds: ["alpha"],
+      }),
+    );
+    expect(mapRegistryProviders).not.toHaveBeenCalled();
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
   it("preserves explicit scopes when config is omitted in direct runtime resolution", () => {
     const mapRegistryProviders = vi.fn(() => []);
     mocks.getLoadedRuntimePluginRegistry.mockReturnValue({} as never);
@@ -271,6 +301,34 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
+  it("uses bundled runtime web provider public artifacts before full plugin loads", () => {
+    const bundledRuntimeProviders = ["provider"];
+
+    const providers = resolveRuntimeWebProviders(
+      {
+        config: {},
+        onlyPluginIds: ["brave"],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders: vi.fn(() => {
+          throw new Error(
+            "runtime registry should stay unused when bundled public artifacts resolve",
+          );
+        }),
+        resolveBundledRuntimePublicArtifactProviders: () => bundledRuntimeProviders,
+      },
+    );
+
+    expect(providers).toEqual(bundledRuntimeProviders);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
   it("ignores runtime web provider cache opt-outs after startup loading", () => {
     const loadedRegistry = { source: "loaded" };
     const mapRegistryProviders = vi.fn(() => ["provider"]);
@@ -386,7 +444,7 @@ describe("web-provider-runtime-shared", () => {
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
-  it("falls back when the direct runtime registry has no web providers", () => {
+  it("keeps direct runtime resolution off plugin loading when no runtime web providers exist", () => {
     const activeRegistry = { source: "active" };
     const fallbackRegistry = { source: "fallback" };
     const mapRegistryProviders = vi.fn(({ registry }) =>
@@ -417,8 +475,8 @@ describe("web-provider-runtime-shared", () => {
       },
     );
 
-    expect(result).toEqual(["brave"]);
-    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([]);
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 
   it("does not fall back when direct runtime registry returns empty under an explicit empty scope", () => {

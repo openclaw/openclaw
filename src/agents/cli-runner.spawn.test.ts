@@ -410,6 +410,65 @@ describe("runCliAgent spawn path", () => {
     }
   });
 
+  it("hydrates stripped skill snapshots only when the Claude plugin needs files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-skills-"));
+    const skillDir = path.join(workspaceDir, "skills", "weather");
+    await fs.mkdir(skillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      [
+        "---",
+        "name: weather",
+        "description: Use weather tools for forecasts.",
+        "---",
+        "",
+        "Read forecast data before replying.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    let pluginDir = "";
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { argv?: string[] };
+      const pluginArgIndex = input.argv?.indexOf("--plugin-dir") ?? -1;
+      expect(pluginArgIndex).toBeGreaterThanOrEqual(0);
+      pluginDir = input.argv?.[pluginArgIndex + 1] ?? "";
+      await expect(
+        fs.readFile(path.join(pluginDir, "skills", "weather", "SKILL.md"), "utf-8"),
+      ).resolves.toContain("Read forecast data before replying.");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-skills-plugin-stripped",
+          workspaceDir,
+          skillsSnapshot: {
+            prompt: "persisted skill prompt",
+            skills: [{ name: "weather" }],
+            skillFilter: ["weather"],
+            version: 0,
+          },
+        }),
+      );
+      await expect(fs.access(pluginDir)).rejects.toThrow();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("injects skill env overrides into CLI child env and restores host env", async () => {
     const previousEnvValue = process.env.CLI_SKILL_API_KEY;
     delete process.env.CLI_SKILL_API_KEY;

@@ -3,7 +3,10 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginGatewayRuntimeRegistry,
+} from "../plugins/runtime.js";
 import {
   setGatewayNodesRuntime,
   setGatewaySubagentRuntime,
@@ -73,6 +76,11 @@ function logGatewayPluginDiagnostics(params: {
   }
 }
 
+function pinGatewayStartupRegistries(pluginRegistry: PluginRegistry): void {
+  pinActivePluginChannelRegistry(pluginRegistry);
+  pinActivePluginGatewayRuntimeRegistry(pluginRegistry);
+}
+
 export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
   const autoEnabled = applyPluginAutoEnable({
@@ -125,7 +133,7 @@ export function loadGatewayStartupPlugins(
 ) {
   return prepareGatewayPluginLoad({
     ...params,
-    beforePrimeRegistry: pinActivePluginChannelRegistry,
+    beforePrimeRegistry: pinGatewayStartupRegistries,
   });
 }
 
@@ -137,6 +145,6 @@ export function reloadDeferredGatewayPlugins(
 ) {
   return prepareGatewayPluginLoad({
     ...params,
-    beforePrimeRegistry: pinActivePluginChannelRegistry,
+    beforePrimeRegistry: pinGatewayStartupRegistries,
   });
 }

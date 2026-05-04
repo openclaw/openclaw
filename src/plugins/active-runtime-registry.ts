@@ -1,13 +1,20 @@
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
+  getActivePluginChannelRegistryWorkspaceDir,
   getActivePluginChannelRegistry,
+  getActivePluginGatewayRuntimeRegistry,
+  getActivePluginGatewayRuntimeRegistryWorkspaceDir,
   getActivePluginHttpRouteRegistry,
   getActivePluginRegistry,
   getActivePluginRegistryWorkspaceDir,
 } from "./runtime.js";
 
-export type ActiveRuntimePluginRegistrySurface = "active" | "channel" | "http-route";
+export type ActiveRuntimePluginRegistrySurface =
+  | "active"
+  | "channel"
+  | "gateway-runtime"
+  | "http-route";
 
 export function getActiveRuntimePluginRegistry(): PluginRegistry | null {
   return getActivePluginRegistry();
@@ -62,10 +69,27 @@ function resolveSurfaceRegistry(
       return getActivePluginRegistry();
     case "channel":
       return getActivePluginChannelRegistry();
+    case "gateway-runtime":
+      return getActivePluginGatewayRuntimeRegistry();
     case "http-route":
       return getActivePluginHttpRouteRegistry();
   }
   return null;
+}
+
+function resolveSurfaceWorkspaceDir(
+  surface: ActiveRuntimePluginRegistrySurface,
+): string | undefined {
+  switch (surface) {
+    case "active":
+    case "http-route":
+      return getActivePluginRegistryWorkspaceDir();
+    case "channel":
+      return getActivePluginChannelRegistryWorkspaceDir();
+    case "gateway-runtime":
+      return getActivePluginGatewayRuntimeRegistryWorkspaceDir();
+  }
+  return undefined;
 }
 
 export function getLoadedRuntimePluginRegistry(
@@ -89,7 +113,7 @@ export function getLoadedRuntimePluginRegistry(
     return compatible;
   }
 
-  const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+  const activeWorkspaceDir = resolveSurfaceWorkspaceDir(surface);
   const requestedWorkspaceDir = params.workspaceDir ?? params.loadOptions?.workspaceDir;
   if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
     return undefined;

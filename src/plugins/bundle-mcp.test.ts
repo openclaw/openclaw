@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isRecord } from "../utils.js";
+import { loadEnabledBundleLspConfig } from "./bundle-lsp.js";
 import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import {
   createEnabledPluginEntries,
@@ -215,6 +216,64 @@ describe("loadEnabledBundleMcpConfig", () => {
             normalizePathForAssertion("local-probe.mjs")!,
           ],
         });
+      },
+    );
+  });
+
+  it("returns isolated cached bundle MCP and LSP config results", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-config-cache",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = await writeClaudeBundleManifest({
+          homeDir,
+          pluginId: "cached-bundle",
+          manifest: {
+            name: "cached-bundle",
+          },
+        });
+        await fs.writeFile(
+          path.join(pluginRoot, ".mcp.json"),
+          `${JSON.stringify(
+            {
+              mcpServers: {
+                cachedMcp: {
+                  command: "node",
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+          "utf-8",
+        );
+        await fs.writeFile(
+          path.join(pluginRoot, ".lsp.json"),
+          `${JSON.stringify(
+            {
+              lspServers: {
+                cachedLsp: {
+                  command: "node",
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+          "utf-8",
+        );
+        const cfg = createEnabledBundleConfig(["cached-bundle"]);
+
+        const firstMcp = loadEnabledBundleMcpConfig({ workspaceDir, cfg });
+        const firstLsp = loadEnabledBundleLspConfig({ workspaceDir, cfg });
+        firstMcp.config.mcpServers.cachedMcp = { command: "mutated" };
+        firstLsp.config.lspServers.cachedLsp = { command: "mutated" };
+
+        const secondMcp = loadEnabledBundleMcpConfig({ workspaceDir, cfg });
+        const secondLsp = loadEnabledBundleLspConfig({ workspaceDir, cfg });
+
+        expect(secondMcp.config.mcpServers.cachedMcp?.command).toBe("node");
+        expect(secondLsp.config.lspServers.cachedLsp?.command).toBe("node");
       },
     );
   });

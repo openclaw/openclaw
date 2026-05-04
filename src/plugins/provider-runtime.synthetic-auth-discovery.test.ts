@@ -108,4 +108,20 @@ describe("resolveProviderSyntheticAuthWithPlugin", () => {
       mode: "api-key",
     });
   });
+
+  it("does not fall back to unscoped discovery when no plugin owns the provider", () => {
+    resolvePluginDiscoveryProvidersRuntime.mockClear();
+
+    expect(
+      resolveProviderSyntheticAuthWithPlugin({
+        provider: "unowned-provider",
+        context: {
+          config: undefined,
+          provider: "unowned-provider",
+          providerConfig: undefined,
+        },
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginDiscoveryProvidersRuntime).not.toHaveBeenCalled();
+  });
 });

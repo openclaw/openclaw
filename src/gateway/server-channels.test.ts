@@ -231,6 +231,30 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toBe("channel exited without an error");
   });
 
+  it("keeps channel exit handling robust when a channel logger is missing", async () => {
+    const log = createSubsystemLogger("gateway/server-channels-test");
+    const startAccount = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createChannelManager({
+      getRuntimeConfig: () => ({}),
+      channelLogs: {} as Record<ChannelId, SubsystemLogger>,
+      channelRuntimeEnvs: { discord: runtimeForLogger(log) } as unknown as Record<
+        ChannelId,
+        RuntimeEnv
+      >,
+    });
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(0);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(false);
+    expect(account?.lastError).toBe("boom");
+  });
+
   it("does not record a clean-exit error for manual abort stops", async () => {
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>

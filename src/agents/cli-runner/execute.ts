@@ -17,7 +17,8 @@ import {
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
+import { applySkillEnvOverridesFromSnapshot, buildWorkspaceSkillSnapshot } from "../skills.js";
+import { hydrateResolvedSkills } from "../skills/snapshot-hydration.js";
 import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
@@ -277,6 +278,17 @@ export async function executePreparedCliRun(
   const claudeSkillsPlugin = await prepareClaudeCliSkillsPlugin({
     backendId: context.backendResolved.id,
     skillsSnapshot: params.skillsSnapshot,
+    hydrateSkillsSnapshot: () =>
+      params.skillsSnapshot
+        ? hydrateResolvedSkills(params.skillsSnapshot, () =>
+            buildWorkspaceSkillSnapshot(context.workspaceDir, {
+              config: context.params.config,
+              agentId: context.params.agentId,
+              snapshotVersion: params.skillsSnapshot?.version,
+              skillFilter: params.skillsSnapshot?.skillFilter,
+            }),
+          )
+        : undefined,
   });
   let claudeSkillsPluginCleanupOwned = false;
   const args = buildCliArgs({

@@ -78,12 +78,17 @@ async function linkOrCopySkillDir(params: { sourceDir: string; targetDir: string
 export async function prepareClaudeCliSkillsPlugin(params: {
   backendId: string;
   skillsSnapshot?: SkillSnapshot;
+  hydrateSkillsSnapshot?: () => SkillSnapshot | undefined | Promise<SkillSnapshot | undefined>;
 }): Promise<{ args: string[]; cleanup: () => Promise<void>; pluginDir?: string }> {
   if (normalizeLowercaseStringOrEmpty(params.backendId) !== CLAUDE_CLI_BACKEND_ID) {
     return { args: [], cleanup: async () => {} };
   }
 
-  const skills = await collectClaudePluginSkills(params.skillsSnapshot);
+  const skillsSnapshot =
+    params.skillsSnapshot?.resolvedSkills === undefined && params.hydrateSkillsSnapshot
+      ? ((await params.hydrateSkillsSnapshot()) ?? params.skillsSnapshot)
+      : params.skillsSnapshot;
+  const skills = await collectClaudePluginSkills(skillsSnapshot);
   if (skills.length === 0) {
     return { args: [], cleanup: async () => {} };
   }

@@ -295,18 +295,19 @@ async function prewarmConfiguredPrimaryModel(params: {
   if (runtime !== "auto" && runtime !== "pi") {
     return;
   }
-  // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
-  const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
+  const [{ preparePreparedRuntimeModelAsync, resolvePreparedRuntimeModelAsync }] =
+    await Promise.all([import("../agents/pi-embedded-runner/model.js")]);
   const agentDir = resolveOpenClawAgentDir();
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
-    await ensureOpenClawModelsJson(params.cfg, agentDir, {
+    await preparePreparedRuntimeModelAsync(provider, agentDir, params.cfg, {
       workspaceDir,
       providerDiscoveryProviderIds: [provider],
       providerDiscoveryTimeoutMs: STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS,
       providerDiscoveryEntriesOnly: true,
     });
+    await resolvePreparedRuntimeModelAsync(provider, model, agentDir, params.cfg);
   } catch (err) {
     params.log.warn(`startup model warmup failed for ${provider}/${model}: ${String(err)}`);
   }
@@ -341,7 +342,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   await Promise.race([warmup, timeout]);
 }
 
-function schedulePrimaryModelPrewarm(
+async function prewarmPrimaryModelBeforeChannelStart(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
@@ -349,11 +350,11 @@ function schedulePrimaryModelPrewarm(
     startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
-): void {
+): Promise<void> {
   if (shouldSkipStartupModelPrewarm()) {
     return;
   }
-  void measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
+  await measureStartup(params.startupTrace, "sidecars.model-prewarm", () =>
     prewarmConfiguredPrimaryModelWithTimeout(
       {
         cfg: params.cfg,
@@ -362,8 +363,20 @@ function schedulePrimaryModelPrewarm(
       },
       prewarm,
     ),
-  ).catch((err) => {
-    params.log.warn(`startup model warmup failed: ${String(err)}`);
+  );
+}
+
+async function prewarmTtsRuntimeBeforeChannelStart(params: {
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (msg: string) => void };
+}): Promise<void> {
+  await measureStartup(params.startupTrace, "sidecars.tts-runtime-prewarm", async () => {
+    try {
+      const { prewarmTtsRuntimeFacade } = await import("../tts/tts.js");
+      prewarmTtsRuntimeFacade();
+    } catch (err) {
+      params.log.warn(`startup TTS runtime warmup failed: ${String(err)}`);
+    }
   });
 }
 
@@ -397,7 +410,7 @@ export async function startGatewaySidecars(params: {
     if (params.cfg.hooks?.gmail?.model) {
       const [
         { DEFAULT_MODEL, DEFAULT_PROVIDER },
-        { loadModelCatalog },
+        { resolveModelCatalogScope, loadModelCatalog },
         { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
       ] = await Promise.all([
         import("../agents/defaults.js"),
@@ -415,7 +428,14 @@ export async function startGatewaySidecars(params: {
             defaultProvider: DEFAULT_PROVIDER,
             defaultModel: DEFAULT_MODEL,
           });
-        const catalog = await loadModelCatalog({ config: params.cfg });
+        const catalog = await loadModelCatalog({
+          config: params.cfg,
+          ...resolveModelCatalogScope({
+            cfg: params.cfg,
+            provider: hooksModelRef.provider,
+            model: hooksModelRef.model,
+          }),
+        });
         const status = getModelRefStatus({
           cfg: params.cfg,
           catalog,
@@ -464,7 +484,11 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        schedulePrimaryModelPrewarm(
+        await prewarmTtsRuntimeBeforeChannelStart({
+          log: params.log,
+          startupTrace: params.startupTrace,
+        });
+        await prewarmPrimaryModelBeforeChannelStart(
           {
             cfg: params.cfg,
             workspaceDir: params.defaultWorkspaceDir,
@@ -870,7 +894,8 @@ export const __testing = {
   prewarmConfiguredPrimaryModel,
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,
+  prewarmPrimaryModelBeforeChannelStart,
+  prewarmTtsRuntimeBeforeChannelStart,
   resolveGatewayMemoryStartupPolicy,
-  schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,
 };

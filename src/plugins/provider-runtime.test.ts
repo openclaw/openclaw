@@ -359,6 +359,30 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("uses prepared provider runtime handles for stream hooks without rediscovery", () => {
+    const streamFn = vi.fn();
+    const createStreamFn = vi.fn(() => streamFn);
+
+    expect(
+      resolveProviderStreamFn({
+        provider: DEMO_PROVIDER_ID,
+        runtimeHandle: {
+          provider: DEMO_PROVIDER_ID,
+          plugin: {
+            id: DEMO_PROVIDER_ID,
+            label: "Demo",
+            auth: [],
+            createStreamFn,
+          } as ProviderPlugin,
+        },
+        context: createDemoResolvedModelContext({}),
+      }),
+    ).toBe(streamFn);
+
+    expect(createStreamFn).toHaveBeenCalledWith(createDemoResolvedModelContext({}));
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
   it("matches providers by hook alias for runtime hook lookup", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {
@@ -807,6 +831,47 @@ describe("provider-runtime", () => {
       baseUrl: "https://runtime.example.com/v1",
       expiresAt: 123,
     });
+    expect(prepareRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "raw-token",
+        modelId: MODEL.id,
+        provider: DEMO_PROVIDER_ID,
+      }),
+    );
+  });
+
+  it("uses an existing runtime handle for provider-prepared runtime auth", async () => {
+    const prepareRuntimeAuth = vi.fn(async () => ({
+      apiKey: "runtime-token",
+      baseUrl: "https://runtime.example.com/v1",
+    }));
+    const plugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      prepareRuntimeAuth,
+    } satisfies ProviderPlugin;
+
+    await expect(
+      prepareProviderRuntimeAuth({
+        provider: DEMO_PROVIDER_ID,
+        runtimeHandle: { provider: DEMO_PROVIDER_ID, plugin },
+        context: {
+          config: undefined,
+          workspaceDir: "/tmp/demo-workspace",
+          env: process.env,
+          provider: DEMO_PROVIDER_ID,
+          modelId: MODEL.id,
+          model: MODEL,
+          apiKey: "raw-token",
+          authMode: "token",
+        },
+      }),
+    ).resolves.toEqual({
+      apiKey: "runtime-token",
+      baseUrl: "https://runtime.example.com/v1",
+    });
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
     expect(prepareRuntimeAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         apiKey: "raw-token",
@@ -1266,6 +1331,32 @@ describe("provider-runtime", () => {
       }),
     ).toBeUndefined();
     expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
+  });
+
+  it("reuses provider runtime handles for reasoning output mode", () => {
+    const resolveReasoningOutputMode = vi.fn(() => "tagged" as const);
+
+    expect(
+      resolveProviderReasoningOutputModeWithPlugin({
+        provider: "mock-openai",
+        runtimeHandle: {
+          provider: "mock-openai",
+          plugin: {
+            id: "mock-openai",
+            label: "Mock OpenAI",
+            auth: [],
+            resolveReasoningOutputMode,
+          } satisfies ProviderPlugin,
+        },
+        context: createDemoResolvedModelContext({
+          provider: "mock-openai",
+          modelId: "gpt-5.5",
+        }),
+      }),
+    ).toBe("tagged");
+
+    expect(resolveReasoningOutputMode).toHaveBeenCalledOnce();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("does not run broad provider-hook scans for auth profile selection", () => {
@@ -2170,6 +2261,30 @@ describe("provider-runtime", () => {
     );
     expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves scoped catalog hook refs instead of broad-loading providers", async () => {
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue([]);
+
+    await expect(
+      augmentModelCatalogWithProviderPlugins({
+        env: process.env,
+        providerRefs: ["openai-codex", "openai"],
+        modelRefs: ["openai-codex/gpt-5.5"],
+        context: {
+          env: process.env,
+          entries: [],
+        },
+      }),
+    ).resolves.toEqual([]);
+
+    expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["openai-codex", "openai"],
+        modelRefs: ["openai-codex/gpt-5.5"],
+      }),
+    );
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("does not stack-overflow when provider hook resolution reenters the same plugin load", () => {

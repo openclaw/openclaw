@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 import {
@@ -19,6 +20,7 @@ export function resolveReasoningOutputMode(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
@@ -34,6 +36,7 @@ export function resolveReasoningOutputMode(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
     context: {
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -69,6 +72,7 @@ export function isReasoningTagProvider(
     config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    runtimeHandle?: ProviderRuntimePluginHandle;
     modelId?: string;
     modelApi?: string | null;
     model?: ProviderRuntimeModel;
@@ -80,6 +84,7 @@ export function isReasoningTagProvider(
       config: options?.config,
       workspaceDir: options?.workspaceDir,
       env: options?.env,
+      runtimeHandle: options?.runtimeHandle,
       modelId: options?.modelId,
       modelApi: options?.modelApi,
       model: options?.model,

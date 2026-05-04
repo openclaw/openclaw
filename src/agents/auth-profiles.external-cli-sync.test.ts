@@ -348,6 +348,25 @@ describe("external cli oauth resolution", () => {
     expect(mocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 
+  it("does not read bootstrap-only external CLI credentials when local oauth exists", () => {
+    const profiles = resolveExternalCliAuthProfiles(
+      makeStore(
+        OPENAI_CODEX_DEFAULT_PROFILE_ID,
+        makeOAuthCredential({
+          provider: "openai-codex",
+          access: "local-access",
+          refresh: "local-refresh",
+        }),
+      ),
+      {
+        providerIds: ["openai-codex"],
+      },
+    );
+
+    expect(profiles).toEqual([]);
+    expect(mocks.readCodexCliCredentialsCached).not.toHaveBeenCalled();
+  });
+
   it("does not scan missing external CLI profiles without an explicit scope", () => {
     mocks.readClaudeCliCredentialsCached.mockReturnValue({
       type: "oauth",

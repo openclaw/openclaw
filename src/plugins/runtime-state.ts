@@ -8,6 +8,9 @@ export type RegistrySurfaceState = {
   registry: RuntimeTrackedPluginRegistry | null;
   pinned: boolean;
   version: number;
+  key: string | null;
+  workspaceDir: string | null;
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
 };
 
 export type RegistryState = {
@@ -15,6 +18,7 @@ export type RegistryState = {
   activeVersion: number;
   httpRoute: RegistrySurfaceState;
   channel: RegistrySurfaceState;
+  gatewayRuntime: RegistrySurfaceState;
   key: string | null;
   workspaceDir: string | null;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";

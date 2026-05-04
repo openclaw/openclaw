@@ -105,10 +105,6 @@ export function applyConfiguredContextWindows(params: {
   }
 }
 
-function loadModelsConfigRuntime() {
-  return CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.load();
-}
-
 function isLikelyOpenClawCliProcess(argv: string[] = process.argv): boolean {
   const entryBasename = normalizeLowercaseStringOrEmpty(path.basename(argv[1] ?? ""));
   return (
@@ -231,12 +227,6 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
   }
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
-    try {
-      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
-    } catch {
-      // Continue with best-effort discovery/overrides.
-    }
-
     try {
       const { discoverAuthStorage, discoverModels } =
         await import("./pi-model-discovery-runtime.js");

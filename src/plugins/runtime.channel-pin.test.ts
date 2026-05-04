@@ -4,9 +4,15 @@ import { getChannelPlugin } from "../channels/plugins/registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   getActivePluginChannelRegistryVersion,
+  getActivePluginGatewayRuntimeRegistry,
+  getActivePluginGatewayRuntimeRegistryVersion,
+  getActivePluginGatewayRuntimeRegistryWorkspaceDir,
+  getActivePluginGatewayRuntimeSubagentMode,
   getActivePluginRegistryVersion,
   getActivePluginChannelRegistry,
+  pinActivePluginGatewayRuntimeRegistry,
   pinActivePluginChannelRegistry,
+  releasePinnedPluginGatewayRuntimeRegistry,
   releasePinnedPluginChannelRegistry,
   requireActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
@@ -37,6 +43,12 @@ function createRegistrySet() {
 
 function expectActiveChannelRegistry(registry: ReturnType<typeof createEmptyPluginRegistry>) {
   expect(getActivePluginChannelRegistry()).toBe(registry);
+}
+
+function expectActiveGatewayRuntimeRegistry(
+  registry: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  expect(getActivePluginGatewayRuntimeRegistry()).toBe(registry);
 }
 
 function expectPinnedChannelRegistry(
@@ -195,5 +207,51 @@ describe("channel registry pinning", () => {
     // The outbound loader must still find the telegram adapter from the pinned registry.
     const adapter = await loadChannelOutboundAdapter("telegram");
     expect(adapter).toBe(outboundAdapter);
+  });
+});
+
+describe("gateway runtime registry pinning", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("preserves pinned gateway runtime registry across active registry churn", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+
+    setActivePluginRegistry(replacement, "replacement-key", "default", "/tmp/other");
+
+    expectActiveGatewayRuntimeRegistry(startup);
+    expect(getActivePluginGatewayRuntimeRegistryWorkspaceDir()).toBe("/tmp/workspace");
+    expect(getActivePluginGatewayRuntimeSubagentMode()).toBe("gateway-bindable");
+  });
+
+  it("release restores live-tracking behavior", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+    setActivePluginRegistry(replacement, "replacement-key", "default", "/tmp/other");
+
+    const gatewayVersionBeforeRelease = getActivePluginGatewayRuntimeRegistryVersion();
+    releasePinnedPluginGatewayRuntimeRegistry(startup);
+
+    expect(getActivePluginGatewayRuntimeRegistryVersion()).toBe(gatewayVersionBeforeRelease + 1);
+    expectActiveGatewayRuntimeRegistry(replacement);
+    expect(getActivePluginGatewayRuntimeRegistryWorkspaceDir()).toBe("/tmp/other");
+    expect(getActivePluginGatewayRuntimeSubagentMode()).toBe("default");
+  });
+
+  it("resetPluginRuntimeStateForTest clears gateway runtime pin", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(replacement);
+
+    expectActiveGatewayRuntimeRegistry(replacement);
+    expect(getActivePluginGatewayRuntimeRegistryWorkspaceDir()).toBeUndefined();
+    expect(getActivePluginGatewayRuntimeSubagentMode()).toBe("default");
   });
 });

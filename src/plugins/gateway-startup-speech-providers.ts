@@ -140,9 +140,21 @@ function addConfiguredTtsProviderIds(target: Set<string>, value: unknown): void 
   }
 }
 
+function addModelBackedSpeechProviderIds(target: Set<string>, value: unknown): void {
+  if (!isRecord(value)) {
+    return;
+  }
+  for (const [providerId, providerConfig] of Object.entries(value)) {
+    if (isConfigActivationValueEnabled(providerConfig)) {
+      addProviderIfEnabled(target, value, providerId);
+    }
+  }
+}
+
 export function collectConfiguredSpeechProviderIds(config: OpenClawConfig): ReadonlySet<string> {
   const configured = new Set<string>();
   addConfiguredTtsProviderIds(configured, resolveEffectiveTtsConfig(config));
+  addModelBackedSpeechProviderIds(configured, config.models?.providers);
 
   const agents = config.agents;
   if (isRecord(agents) && Array.isArray(agents.list)) {

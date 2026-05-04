@@ -57,10 +57,12 @@ describe("bundled root-aware plugin lookups", () => {
   it("reads bundled channel ids from the active bundled root without re-importing", async () => {
     const rootA = makeBundledRoot("openclaw-bundled-ids-a-");
     const rootB = makeBundledRoot("openclaw-bundled-ids-b-");
+    const catalogReadsByRoot = new Map<string | undefined, number>();
 
     vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
       listChannelCatalogEntries: (params?: { env?: NodeJS.ProcessEnv }) => {
         const activeRoot = params?.env?.OPENCLAW_BUNDLED_PLUGINS_DIR;
+        catalogReadsByRoot.set(activeRoot, (catalogReadsByRoot.get(activeRoot) ?? 0) + 1);
         if (activeRoot === rootA.pluginsDir) {
           return [{ pluginId: "alpha" }];
         }
@@ -78,9 +80,12 @@ describe("bundled root-aware plugin lookups", () => {
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootA.pluginsDir;
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    expect(bundledIds.listBundledChannelPluginIds()).toEqual(["alpha"]);
+    expect(catalogReadsByRoot.get(rootA.pluginsDir)).toBe(1);
 
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = rootB.pluginsDir;
     expect(bundledIds.listBundledChannelPluginIds()).toEqual(["beta"]);
+    expect(catalogReadsByRoot.get(rootB.pluginsDir)).toBe(1);
   });
 
   it("reads bootstrap plugins from the active bundled root without re-importing", async () => {

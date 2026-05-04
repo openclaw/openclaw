@@ -6,8 +6,9 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import {
   inspectBundleServerRuntimeSupport,
-  loadEnabledBundleConfig,
+  loadCachedEnabledBundleConfig,
   readBundleJsonObject,
+  type EnabledBundleConfigResult,
 } from "./bundle-config-shared.js";
 import {
   CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
@@ -15,11 +16,22 @@ import {
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import type { ConfigScopedRuntimeCache } from "./plugin-cache-primitives.js";
 
 export type BundleLspServerConfig = Record<string, unknown>;
 
 export type BundleLspConfig = {
   lspServers: Record<string, BundleLspServerConfig>;
+};
+
+export type BundleLspDiagnostic = {
+  pluginId: string;
+  message: string;
+};
+
+export type EnabledBundleLspConfigResult = {
+  config: BundleLspConfig;
+  diagnostics: BundleLspDiagnostic[];
 };
 
 export type BundleLspRuntimeSupport = {
@@ -32,6 +44,9 @@ export type BundleLspRuntimeSupport = {
 const MANIFEST_PATH_BY_FORMAT: Partial<Record<PluginBundleFormat, string>> = {
   claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
 };
+const enabledBundleLspConfigCache: ConfigScopedRuntimeCache<
+  EnabledBundleConfigResult<BundleLspConfig, BundleLspDiagnostic>
+> = new WeakMap();
 
 function extractLspServerMap(raw: unknown): Record<string, BundleLspServerConfig> {
   if (!isRecord(raw)) {
@@ -142,8 +157,10 @@ export function inspectBundleLspRuntimeSupport(params: {
 export function loadEnabledBundleLspConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-}): { config: BundleLspConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
-  return loadEnabledBundleConfig({
+}): EnabledBundleLspConfigResult {
+  return loadCachedEnabledBundleConfig({
+    cache: enabledBundleLspConfigCache,
+    cacheKeyParts: ["enabled-bundle-lsp", params.workspaceDir, params.cfg?.plugins],
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     createEmptyConfig: () => ({ lspServers: {} }),
