@@ -330,7 +330,7 @@ export async function runPreparedCliAgent(
         const retryableSessionId = context.reusableCliSession.sessionId ?? params.cliSessionId;
         if (retryableSessionId && params.sessionKey) {
           cliBackendLog.warn(
-            `CLI session failed (reason=${err.reason ?? "unknown"}), clearing stale binding and retrying fresh: ${retryableSessionId}`,
+            `CLI session failed (reason=${err.reason ?? "unknown"}), clearing stale binding and retrying fresh: ...${retryableSessionId.slice(-8)}`,
           );
           try {
             const { output, lastAssistant } = await executeCliAttempt(undefined);
