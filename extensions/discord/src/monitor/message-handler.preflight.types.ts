@@ -91,6 +91,12 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
   discordRestFetch?: typeof fetch;
+  /**
+   * True when the inbound message contained at least one audio attachment.
+   * Set by the preflight audio pass; used by VC-02 to decide whether to
+   * deliver the response as a Discord voice message.
+   */
+  hasAudioAttachment: boolean;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {

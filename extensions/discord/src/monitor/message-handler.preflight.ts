@@ -22,6 +22,7 @@ import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import { logDebug } from "openclaw/plugin-sdk/text-runtime";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
@@ -34,7 +35,6 @@ import {
 } from "./allow-list.js";
 import { resolveDiscordDmCommandAccess } from "./dm-command-auth.js";
 import { handleDiscordDmCommandDecision } from "./dm-command-decision.js";
-import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import {
   formatDiscordUserTag,
   resolveDiscordSystemLocation,
@@ -782,15 +782,18 @@ export async function preflightDiscordMessage(
 
   // Only authorized guild senders should reach the expensive transcription path.
   const { resolveDiscordPreflightAudioMentionContext } = await loadPreflightAudioRuntime();
-  const { hasTypedText, transcript: preflightTranscript } =
-    await resolveDiscordPreflightAudioMentionContext({
-      message,
-      isDirectMessage,
-      shouldRequireMention,
-      mentionRegexes,
-      cfg: params.cfg,
-      abortSignal: params.abortSignal,
-    });
+  const {
+    hasAudioAttachment,
+    hasTypedText,
+    transcript: preflightTranscript,
+  } = await resolveDiscordPreflightAudioMentionContext({
+    message,
+    isDirectMessage,
+    shouldRequireMention,
+    mentionRegexes,
+    cfg: params.cfg,
+    abortSignal: params.abortSignal,
+  });
   if (isPreflightAborted(params.abortSignal)) {
     return null;
   }
@@ -1018,5 +1021,6 @@ export async function preflightDiscordMessage(
     historyEntry,
     threadBindings: params.threadBindings,
     discordRestFetch: params.discordRestFetch,
+    hasAudioAttachment,
   };
 }

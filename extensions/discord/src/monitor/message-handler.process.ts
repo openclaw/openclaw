@@ -67,6 +67,7 @@ import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
 } from "./timeouts.js";
+import { tryDeliverTtsReply, VOICE_REPLY_CHANNEL_IDS } from "./tts-response.js";
 import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
@@ -142,6 +143,7 @@ export async function processDiscordMessage(
     commandAuthorized,
     discordRestFetch,
     abortSignal,
+    hasAudioAttachment,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
@@ -789,6 +791,34 @@ export async function processDiscordMessage(
         if (isFinal) {
           notifyFinalReplyStart();
         }
+
+        // VC-02: TTS voice reply — attempt to send the final text reply as a
+        // Discord voice message when the inbound message was audio and the
+        // channel is in the configured voice-reply list.
+        if (
+          isFinal &&
+          hasAudioAttachment &&
+          !payload.isError &&
+          !payload.isReasoning &&
+          payload.text &&
+          !resolveSendableOutboundReplyParts(payload).hasMedia &&
+          VOICE_REPLY_CHANNEL_IDS.has(messageChannelId)
+        ) {
+          const ttsResult = await tryDeliverTtsReply({
+            text: payload.text,
+            channelId: messageChannelId,
+            replyToMessageId: replyToId,
+            rest: client.rest as RequestClient,
+            token,
+          });
+          if (ttsResult.sentAsVoice) {
+            replyReference.markSent();
+            observer?.onFinalReplyDelivered?.();
+            return;
+          }
+          // TTS failed or fell back — fall through to standard text delivery below.
+        }
+
         await deliverDiscordReply({
           cfg,
           replies: [payload],
