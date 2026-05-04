@@ -108,6 +108,6 @@ describe("hooks cli formatting", () => {
       __testing.shouldForceExitAfterHooksInspection({
         NODE_ENV: "test",
       } as NodeJS.ProcessEnv),
-    ).toBe(false);
+    ).toBe(true);
   });
 });
