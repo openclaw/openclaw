@@ -285,6 +285,66 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the active agent post-compaction guard window over the global default", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
+      for (let i = 0; i < 3; i += 1) {
+        await executeWrappedToolOutcome(
+          "gateway",
+          { action: "lookup", path: "x" },
+          "identical-result",
+          onToolOutcome,
+        );
+      }
+      return makeAttemptResult({
+        promptError: null,
+        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+      });
+    });
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      agentId: "agent-a",
+      config: {
+        tools: {
+          loopDetection: {
+            postCompactionGuard: { enabled: true, windowSize: 2 },
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "agent-a",
+              tools: {
+                loopDetection: {
+                  postCompactionGuard: { windowSize: 4 },
+                },
+              },
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
   it("aborts post-compaction loop from the live tool path even when toolCallHistory is at its trim cap", async () => {
     // Long-running sessions accumulate up to historySize (default 30) records
     // in toolCallHistory. The live observer must still see the new outcome

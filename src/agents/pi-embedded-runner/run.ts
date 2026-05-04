@@ -82,6 +82,7 @@ import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -790,8 +791,12 @@ export async function runEmbeddedPiAgent(
       // Post-compaction loop guard for #77474. Armed at each compaction-success
       // site below; observed from the live tool-outcome path so it can abort
       // while the post-compaction prompt is still running.
+      const resolvedLoopDetectionConfig = resolveToolLoopDetectionConfig({
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
       const postCompactionGuard = createPostCompactionLoopGuard(
-        params.config?.tools?.loopDetection?.postCompactionGuard,
+        resolvedLoopDetectionConfig?.postCompactionGuard,
       );
       const observePostCompactionToolOutcome = (
         observation: PostCompactionGuardObservation,
