@@ -719,8 +719,10 @@ export type MutableSession = {
     state: {
       messages: unknown[];
       systemPrompt?: string;
+      tools: { name: string }[];
     };
   };
+  getActiveToolNames: () => string[];
   prompt: (prompt: string, options?: { images?: unknown[] }) => Promise<void>;
   sendCustomMessage: (
     message: {
@@ -876,8 +878,10 @@ export function createDefaultEmbeddedSession(params?: {
         set messages(messages: unknown[]) {
           session.messages = [...messages];
         },
+        tools: [],
       },
     },
+    getActiveToolNames: () => session.agent.state.tools.map((t) => t.name),
     setActiveToolsByName: () => {},
     prompt: async (prompt, options) => {
       if (params?.prompt) {

@@ -233,6 +233,7 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
+import { ensureActiveToolsBeforePrompt } from "./attempt.ensure-active-tools.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -1664,6 +1665,19 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      // Diagnostic for issue #74377: Pi silently drops allowlist entries that
+      // are not in `_toolRegistry`. Surface that mismatch at the source so the
+      // next repro (Telegram → Anthropic with empty `context.tools`) shows
+      // whether tools were lost here or later in the session lifecycle.
+      if (sessionToolAllowlist.length > 0) {
+        const activeAfterSet = activeSession.getActiveToolNames();
+        if (activeAfterSet.length < sessionToolAllowlist.length) {
+          const dropped = sessionToolAllowlist.filter((name) => !activeAfterSet.includes(name));
+          log.warn(
+            `[OPENCLAW_TOOLS_DIAG] setActiveToolsByName dropped ${dropped.length}/${sessionToolAllowlist.length} entries (active=${activeAfterSet.length}); first dropped=${dropped.slice(0, 5).join(",")}`,
+          );
+        }
+      }
       prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
@@ -3035,6 +3049,17 @@ export async function runEmbeddedAttempt(
               transcriptLeafId,
               messages: btwSnapshotMessages,
               inFlightPrompt: promptForModel,
+            });
+            // Fix for issue #74377: Pi's active tool set can be silently
+            // emptied between session creation and prompt-time when an
+            // extension or session reload triggers `_refreshToolRegistry`.
+            // Re-apply the allowlist at the boundary we own — see helper.
+            ensureActiveToolsBeforePrompt({
+              session: activeSession,
+              isRawModelRun,
+              sessionToolAllowlist,
+              effectiveToolCount: effectiveTools.length,
+              warn: (message) => log.warn(message),
             });
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptForModel));
