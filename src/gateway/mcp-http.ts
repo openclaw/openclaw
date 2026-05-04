@@ -4,6 +4,8 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { subagentRuns } from "../agents/subagent-registry-memory.js";
+import { markSubagentRunPausedAfterYield } from "../agents/subagent-registry-run-manager.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -110,6 +112,24 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
         const scopedTools = toolCache.resolve({
           cfg,
           sessionKey: requestContext.sessionKey,
+          sessionId: requestContext.sessionKey,
+          onYield: (message) => {
+            // MCP-path yield: mark parent runs as paused in the subagent registry.
+            // Unlike the embedded runner, we do not abort — claude-cli owns the model
+            // loop and ends its turn naturally when the tool result arrives.
+            for (const [, entry] of subagentRuns) {
+              if (
+                entry.requesterSessionKey === requestContext.sessionKey &&
+                !entry.pauseReason &&
+                !entry.endedReason
+              ) {
+                markSubagentRunPausedAfterYield({ entry, now: Date.now() });
+              }
+            }
+            logDebug(
+              `mcp loopback: sessions_yield processed for session=${requestContext.sessionKey} message=${message}`,
+            );
+          },
           messageProvider: requestContext.messageProvider,
           accountId: requestContext.accountId,
           senderIsOwner: requestContext.senderIsOwner,
