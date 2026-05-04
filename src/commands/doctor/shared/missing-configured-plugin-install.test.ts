@@ -743,6 +743,52 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
+  it("removes stale bundled install records even when the plugin is not configured", async () => {
+    const records = {
+      "google-meet": {
+        source: "npm",
+        spec: "@openclaw/google-meet",
+        resolvedName: "@openclaw/google-meet",
+        installPath: "/missing/google-meet",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    mocks.loadInstalledPluginIndex.mockReturnValue({
+      plugins: [
+        {
+          pluginId: "google-meet",
+          origin: "bundled",
+          packageName: "@openclaw/google-meet",
+        },
+      ],
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {},
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      {},
+      {
+        env: {},
+      },
+    );
+    expect(result).toEqual({
+      changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
+      warnings: [],
+    });
+  });
+
   it.each([
     [
       "npm",

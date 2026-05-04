@@ -646,11 +646,7 @@ async function repairMissingPluginInstalls(params: {
 
   for (const [pluginId, record] of Object.entries(records)) {
     const bundled = bundledPluginsById.get(pluginId);
-    if (
-      !bundled ||
-      !params.pluginIds.has(pluginId) ||
-      !recordMatchesBundledPackage(record, bundled)
-    ) {
+    if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
       continue;
     }
     if (nextRecords === records) {
