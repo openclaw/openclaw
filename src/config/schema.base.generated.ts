@@ -20717,7 +20717,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             maximum: 9007199254740991,
             title: "Session Typing TTL (seconds)",
             description:
-              "Controls the maximum time repeated typing indicators stay active for a single run. Increase for long-running private chats or decrease in noisy channels. Default: 300 seconds.",
+              "Controls the stale-refresh cleanup window for repeated typing indicators. Each successful keepalive refreshes this timeout; cleanup runs after keepalives stop for this duration. Default: 300 seconds.",
           },
           typingMode: {
             anyOf: [
@@ -27948,7 +27948,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "session.typingTtlSeconds": {
       label: "Session Typing TTL (seconds)",
-      help: "Controls the maximum time repeated typing indicators stay active for a single run. Increase for long-running private chats or decrease in noisy channels. Default: 300 seconds.",
+      help: "Controls the stale-refresh cleanup window for repeated typing indicators. Each successful keepalive refreshes this timeout; cleanup runs after keepalives stop for this duration. Default: 300 seconds.",
       tags: ["storage"],
     },
     "session.typingMode": {

@@ -1427,7 +1427,7 @@ export const FIELD_HELP: Record<string, string> = {
   "session.typingIntervalSeconds":
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingTtlSeconds":
-    "Controls the maximum time repeated typing indicators stay active for a single run. Increase for long-running private chats or decrease in noisy channels. Default: 300 seconds.",
+    "Controls the stale-refresh cleanup window for repeated typing indicators. Each successful keepalive refreshes this timeout; cleanup runs after keepalives stop for this duration. Default: 300 seconds.",
   "session.typingMode":
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
   "session.mainKey":
