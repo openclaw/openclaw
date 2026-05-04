@@ -215,6 +215,7 @@ describe("package dist inventory", () => {
         "bundled-chat",
         "package.json",
       );
+      const rootPackageJson = path.join(packageRoot, "package.json");
 
       await fs.mkdir(path.dirname(externalizedRuntime), { recursive: true });
       await fs.mkdir(path.dirname(bundledRuntime), { recursive: true });
@@ -222,6 +223,13 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(bundledPackageJson), { recursive: true });
       await fs.writeFile(externalizedRuntime, "export {};\n", "utf8");
       await fs.writeFile(bundledRuntime, "export {};\n", "utf8");
+      await fs.writeFile(
+        rootPackageJson,
+        JSON.stringify({
+          files: ["dist/", "!dist/extensions/external-chat/**"],
+        }),
+        "utf8",
+      );
       await fs.writeFile(
         externalizedPackageJson,
         JSON.stringify({
@@ -263,9 +271,6 @@ describe("package dist inventory", () => {
         JSON.stringify({
           name: "@openclaw/core-chat",
           openclaw: {
-            bundle: {
-              includeInCore: true,
-            },
             release: {
               publishToClawHub: true,
               publishToNpm: true,

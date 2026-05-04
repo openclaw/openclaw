@@ -37,6 +37,12 @@ const state = vi.hoisted(() => ({
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
   loadManifestModelCatalogMock: vi.fn(() => []),
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    version: 0,
+  })),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
@@ -415,7 +421,8 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./skills.js", () => ({
-  buildWorkspaceSkillSnapshot: () => ({}),
+  buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
+    state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
 }));
 
 vi.mock("./skills/filter.js", () => ({
@@ -565,6 +572,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      resolvedSkills: [],
+      version: 0,
+    });
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
@@ -752,6 +765,36 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.trajectoryFlushMock).toHaveBeenCalled();
   });
 
+  it("suppresses duplicate user persistence only after the current turn has flushed", async () => {
+    type AttemptCall = {
+      onUserMessagePersisted?: () => void;
+      suppressPromptPersistenceOnRetry?: boolean;
+    };
+    const attemptCalls: AttemptCall[] = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const first = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [first],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptCalls.push(attemptParams);
+      attemptParams.onUserMessagePersisted?.();
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    expect(attemptCalls).toHaveLength(2);
+    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).not.toBe(true);
+    expect(typeof attemptCalls[0]?.onUserMessagePersisted).toBe("function");
+    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
+  });
+
   it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider down"));
 
@@ -842,6 +885,59 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     expect(capturedAuthProfileProvider).toBe("codex-cli");
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+  });
+
+  it("hydrates stripped persisted skill snapshots before running the CLI path", async () => {
+    const persistedSnapshot = {
+      prompt: "persisted prompt",
+      skills: [{ name: "cli-skill" }],
+      skillFilter: ["cli-skill"],
+      version: 0,
+    };
+    const rebuiltSkills = [
+      {
+        name: "cli-skill",
+        description: "CLI skill",
+        filePath: "/tmp/workspace/skills/cli-skill/SKILL.md",
+        baseDir: "/tmp/workspace/skills/cli-skill",
+        source: "# CLI skill",
+      },
+    ];
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: persistedSnapshot,
+    };
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "rebuilt prompt",
+      skills: [{ name: "different-skill" }],
+      resolvedSkills: rebuiltSkills,
+      version: 99,
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    const attemptParams = state.runAgentAttemptMock.mock.calls[0]?.[0] as
+      | { skillsSnapshot?: Record<string, unknown> }
+      | undefined;
+    expect(attemptParams?.skillsSnapshot).toMatchObject({
+      prompt: "persisted prompt",
+      skills: [{ name: "cli-skill" }],
+      skillFilter: ["cli-skill"],
+      version: 0,
+      resolvedSkills: rebuiltSkills,
+    });
+    expect(state.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("classifies empty embedded run results before model fallback accepts them", async () => {

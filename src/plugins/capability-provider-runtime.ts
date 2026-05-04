@@ -1,14 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import {
-  resolveConfigScopedRuntimeCacheValue,
-  type ConfigScopedRuntimeCache,
-} from "./plugin-cache-primitives.js";
 import {
   resolvePluginRegistryLoadCacheKey,
   resolveRuntimePluginRegistry,
@@ -20,6 +17,10 @@ import {
   loadManifestContractSnapshot,
   listAvailableManifestContractValues,
 } from "./manifest-contract-eligibility.js";
+import {
+  resolveConfigScopedRuntimeCacheValue,
+  type ConfigScopedRuntimeCache,
+} from "./plugin-cache-primitives.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "./registry-types.js";
 
@@ -417,8 +418,23 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
   loadOptions: PluginLoadOptions;
   requested?: Set<string>;
 }): PluginRegistry[K] {
-  const registry = resolveRuntimePluginRegistry(params.loadOptions);
-  const entries = registry?.[params.key] ?? [];
+  const loadedRegistry = getLoadedRuntimePluginRegistry({
+    env: params.loadOptions.env,
+    loadOptions: params.loadOptions,
+    workspaceDir: params.loadOptions.workspaceDir,
+    requiredPluginIds: params.loadOptions.onlyPluginIds,
+  });
+  const loadedEntries = loadedRegistry?.[params.key] ?? [];
+  const coldRegistry = loadedRegistry
+    ? undefined
+    : resolveRuntimePluginRegistry(params.loadOptions);
+  const coldEntries = coldRegistry?.[params.key] ?? [];
+  const entries =
+    loadedEntries.length > 0 && coldEntries.length > 0
+      ? mergeCapabilityProviderEntries(loadedEntries, coldEntries)
+      : loadedEntries.length > 0
+        ? loadedEntries
+        : coldEntries;
   const missingRequested =
     params.key === "speechProviders" && params.requested && params.requested.size > 0
       ? new Set(params.requested)
@@ -449,7 +465,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
     return undefined;
   }
 
-  const activeRegistry = resolveRuntimePluginRegistry();
+  const activeRegistry = getLoadedRuntimePluginRegistry();
   const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
   if (activeProvider) {
     return activeProvider;
@@ -520,7 +536,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     return [];
   }
 
-  const activeRegistry = resolveRuntimePluginRegistry();
+  const activeRegistry = getLoadedRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
   const missingRequestedProviders =
     activeProviders.length > 0

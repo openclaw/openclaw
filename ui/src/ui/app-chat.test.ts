@@ -715,6 +715,33 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("/btw what changed?");
   });
 
+  it("sends /side through the detached BTW path", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/side what changed?",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/side what changed?",
+        deliver: false,
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+  });
+
   it("sends /btw without adopting a main chat run when idle", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
@@ -1022,6 +1049,24 @@ describe("handleAbortChat", () => {
     expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
     expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
+  });
+
+  it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: null,
+      chatMessage: "draft",
+      sessionKey: "agent:main",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true }),
+        row("agent:other", { hasActiveRun: true }),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("");
   });
 
   it("keeps the draft when disconnected without an active run", async () => {

@@ -41,9 +41,8 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    If npm reports the OpenClaw-owned package as deprecated, that package version
-    is from an older external package train; use a current packaged OpenClaw
-    build or the local folder path until a newer npm package is published.
+    Use the bare package to follow the current official release tag. Pin an
+    exact version only when you need a reproducible install.
 
     Restart the Gateway afterwards so the plugin loads.
 
@@ -251,6 +250,9 @@ Current runtime behaviour:
     Defaults: API key from `realtime.providers.google.apiKey`,
     `GEMINI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`; model
     `gemini-2.5-flash-native-audio-preview-12-2025`; voice `Kore`.
+    `sessionResumption` and `contextWindowCompression` default on for longer,
+    reconnectable calls. Use `silenceDurationMs`, `startSensitivity`, and
+    `endSensitivity` to tune faster turn-taking on telephony audio.
 
     ```json5
     {
@@ -271,6 +273,8 @@ Current runtime behaviour:
                     apiKey: "${GEMINI_API_KEY}",
                     model: "gemini-2.5-flash-native-audio-preview-12-2025",
                     voice: "Kore",
+                    silenceDurationMs: 500,
+                    startSensitivity: "high",
                   },
                 },
               },

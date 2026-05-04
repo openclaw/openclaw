@@ -36,6 +36,7 @@ function lane(name, command, options = {}) {
     live: options.live === true,
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
+    needsLiveImage: options.needsLiveImage,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
     resources: options.resources ?? [],
@@ -79,6 +80,7 @@ function liveLane(name, command, options = {}) {
   return lane(name, command, {
     ...options,
     live: true,
+    needsLiveImage: options.needsLiveImage ?? true,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
     retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
     retries: options.retries ?? DEFAULT_LIVE_RETRIES,
@@ -157,7 +159,11 @@ export const mainLanes = [
       weight: 3,
     },
   ),
-  serviceLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+  liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    e2eImageKind: "functional",
+    needsLiveImage: false,
+    provider: "openai",
+    resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
     weight: 5,
   }),
@@ -168,6 +174,11 @@ export const mainLanes = [
   npmLane(
     "npm-onboard-channel-agent",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
+  npmLane(
+    "npm-onboard-discord-channel-agent",
+    "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
@@ -250,6 +261,14 @@ export const mainLanes = [
   npmLane("plugin-update", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-update", {
     stateScenario: "empty",
   }),
+  npmLane(
+    "plugin-lifecycle-matrix",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugin-lifecycle-matrix",
+    {
+      stateScenario: "empty",
+      timeoutMs: 12 * 60 * 1000,
+    },
+  ),
   serviceLane("config-reload", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:config-reload", {
     stateScenario: "empty",
   }),
@@ -299,10 +318,23 @@ export const tailLanes = [
     },
   ),
   liveLane(
+    "live-codex-npm-plugin",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
+    {
+      cacheKey: "codex-npm-plugin",
+      e2eImageKind: "bare",
+      provider: "openai",
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  liveLane(
     "live-cli-backend-codex",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",
-      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5",
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4",
     ),
     {
       cacheKey: "cli-backend-codex",
@@ -462,6 +494,11 @@ const releasePathPackageUpdateCoreLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
+  npmLane(
+    "npm-onboard-discord-channel-agent",
+    "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
     stateScenario: "empty",
     weight: 3,
@@ -549,7 +586,11 @@ const legacyReleasePathChunks = {
 };
 
 function openWebUILane() {
-  return serviceLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+  return liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    e2eImageKind: "functional",
+    needsLiveImage: false,
+    provider: "openai",
+    resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
     weight: 5,
   });

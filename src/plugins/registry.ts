@@ -92,10 +92,10 @@ import {
 import {
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
+  registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
+  registerMemoryPromptSectionForPlugin,
+  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -224,7 +224,28 @@ export type {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
   allowConversationAccess?: boolean;
+  timeoutMs?: number;
+  timeouts?: Record<string, number>;
 };
+
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveTypedHookTimeoutMs(params: {
+  hookName: PluginHookName;
+  opts?: { timeoutMs?: number };
+  policy?: PluginTypedHookPolicy;
+}): number | undefined {
+  return (
+    normalizeHookTimeoutMs(params.policy?.timeouts?.[params.hookName]) ??
+    normalizeHookTimeoutMs(params.policy?.timeoutMs) ??
+    normalizeHookTimeoutMs(params.opts?.timeoutMs)
+  );
+}
 
 const constrainLegacyPromptInjectionHook = (
   handler: PluginHookHandlerMap["before_agent_start"],
@@ -248,6 +269,31 @@ export function resolvePluginPath(input: string, rootDir: string | undefined): s
     return resolveUserPath(input);
   }
   return rootDir ? path.resolve(rootDir, trimmed) : resolveUserPath(input);
+}
+
+function isOfficialCodexPluginRecord(
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
+) {
+  if (record.id !== "codex") {
+    return false;
+  }
+  if (record.origin !== "global") {
+    return false;
+  }
+  if (record.packageName === "@openclaw/codex") {
+    return true;
+  }
+  const sourcePath = path
+    .normalize(record.rootDir ?? record.source)
+    .split(path.sep)
+    .join("/");
+  return sourcePath.includes("/node_modules/@openclaw/codex");
+}
+
+function canClaimReservedCommandOwnership(
+  record: Pick<PluginRecord, "id" | "origin" | "packageName" | "rootDir" | "source">,
+) {
+  return record.origin === "bundled" || isOfficialCodexPluginRecord(record);
 }
 
 const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
@@ -1428,7 +1474,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       return;
     }
     const allowReservedCommandNames = command.ownership === "reserved";
-    if (allowReservedCommandNames && record.origin !== "bundled") {
+    if (allowReservedCommandNames && !canClaimReservedCommandOwnership(record)) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
@@ -2030,13 +2076,14 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
       hookName,
       handler: effectiveHandler,
       priority: opts?.priority,
-      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };
@@ -2380,7 +2427,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryPromptSection(builder);
+                registerMemoryPromptSectionForPlugin(record.id, builder);
               },
               registerMemoryPromptSupplement: (builder) => {
                 if (typeof builder !== "function") {
@@ -2415,7 +2462,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryFlushPlanResolver(resolver);
+                registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2435,7 +2482,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryRuntime(runtime);
+                registerMemoryRuntimeForPlugin(record.id, runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
                 if (hasKind(record.kind, "memory")) {

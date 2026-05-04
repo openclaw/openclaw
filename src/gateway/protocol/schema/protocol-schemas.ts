@@ -201,8 +201,10 @@ import {
   SessionsCompactionRestoreParamsSchema,
   SessionsCompactionRestoreResultSchema,
   SessionCompactionCheckpointSchema,
+  SessionsCleanupParamsSchema,
   SessionsCreateParamsSchema,
   SessionsDeleteParamsSchema,
+  SessionsDescribeParamsSchema,
   SessionsListParamsSchema,
   SessionsMessagesSubscribeParamsSchema,
   SessionsMessagesUnsubscribeParamsSchema,
@@ -275,7 +277,9 @@ export const ProtocolSchemas = {
   SecretsResolveAssignment: SecretsResolveAssignmentSchema,
   SecretsResolveResult: SecretsResolveResultSchema,
   SessionsListParams: SessionsListParamsSchema,
+  SessionsCleanupParams: SessionsCleanupParamsSchema,
   SessionsPreviewParams: SessionsPreviewParamsSchema,
+  SessionsDescribeParams: SessionsDescribeParamsSchema,
   SessionsResolveParams: SessionsResolveParamsSchema,
   SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
   SessionsCompactionListParams: SessionsCompactionListParamsSchema,
@@ -426,4 +430,4 @@ export const ProtocolSchemas = {
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
 
-export const PROTOCOL_VERSION = 3 as const;
+export { PROTOCOL_VERSION } from "../version.js";

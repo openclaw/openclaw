@@ -301,8 +301,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-settings.js", () => ({
+    applyPiAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
     applyPiCompactionSettingsFromConfig: vi.fn(),
     ensurePiCompactionReserveTokens: vi.fn(),
+    isSilentOverflowProneModel: vi.fn(() => false),
     resolveCompactionReserveTokensFloor: vi.fn(() => 0),
   }));
 
@@ -329,6 +331,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../session-write-lock.js", () => ({
     acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
+    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -485,7 +488,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./history.js", () => ({
-    getDmHistoryLimitFromSessionKey: vi.fn(() => undefined),
+    getHistoryLimitFromSessionKey: vi.fn(() => undefined),
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
