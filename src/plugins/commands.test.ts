@@ -599,6 +599,31 @@ describe("registerPluginCommand", () => {
     expect(observedOwnerStatus).toBe(true);
   });
 
+  it("rejects command owners when explicit gateway scopes miss the required scope", async () => {
+    const handler = vi.fn(async () => ({ text: "ok" }));
+    registerPluginCommand("demo-plugin", {
+      name: "pairlike",
+      description: "Scoped command",
+      requiredScopes: ["operator.pairing"],
+      handler,
+    });
+    const match = matchPluginCommand("/pairlike");
+    expect(match).toBeTruthy();
+
+    const result = await executePluginCommand({
+      command: match!.command,
+      channel: "webchat",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+      commandBody: "/pairlike",
+      gatewayClientScopes: ["operator.write"],
+      config: {},
+    });
+
+    expect(result).toEqual({ text: "⚠️ This command requires gateway scope: operator.pairing." });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("rejects non-owner scoped plugin commands without gateway scopes", async () => {
     const handler = vi.fn(async () => ({ text: "ok" }));
     registerPluginCommand("demo-plugin", {
@@ -952,6 +977,27 @@ describe("registerPluginCommand", () => {
       sessionKey: "agent:main:whatsapp:direct:123",
       sessionId: "session-123",
     });
+  });
+
+  it("normalizes undefined plugin command handler results to an empty reply payload", async () => {
+    const handler = async () => undefined as never;
+
+    const result = await executePluginCommand({
+      command: {
+        name: "silentcheck",
+        description: "Demo command",
+        acceptsArgs: false,
+        handler,
+        pluginId: "demo-plugin",
+      },
+      channel: "telegram",
+      senderId: "U123",
+      isAuthorizedSender: true,
+      commandBody: "/silentcheck",
+      config: {} as never,
+    });
+
+    expect(result).toEqual({});
   });
 
   it("passes the effective default account to plugin command handlers when accountId is omitted", async () => {

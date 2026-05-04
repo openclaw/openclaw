@@ -221,11 +221,12 @@ export async function executePluginCommand(params: {
     const scopes = Array.isArray(params.gatewayClientScopes)
       ? new Set(params.gatewayClientScopes)
       : undefined;
+    const hasGatewayScopeContext = scopes !== undefined;
     const hasAdmin = scopes?.has(ADMIN_SCOPE) === true;
     const missingScope = scopes
       ? requiredScopes.find((scope) => !hasAdmin && !scopes.has(scope))
       : requiredScopes[0];
-    if (missingScope && !senderIsOwner) {
+    if (missingScope && (hasGatewayScopeContext || !senderIsOwner)) {
       logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);
       return { text: `⚠️ This command requires gateway scope: ${missingScope}.` };
     }
@@ -345,6 +346,10 @@ export async function executePluginCommand(params: {
     logVerbose(
       `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
     );
+    if (!result || typeof result !== "object") {
+      logVerbose(`Plugin command /${command.name} returned no reply payload`);
+      return {};
+    }
     return result;
   } catch (err) {
     const error = err as Error;
