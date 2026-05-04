@@ -343,6 +343,9 @@ function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistratio
     return;
   }
   stopActiveManagedProxyRegistration(registration);
+  if (getActiveManagedProxyUrl()) {
+    return;
+  }
 
   const restoreSnapshot = baseProxyEnvSnapshot ?? captureProxyEnv();
   baseProxyEnvSnapshot = null;
@@ -390,11 +393,21 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  if (getActiveManagedProxyUrl()) {
-    throw new Error(
-      "proxy: cannot activate a managed proxy while another proxy is active; " +
-        "stop the current proxy before changing proxy.proxyUrl.",
-    );
+  const activeProxyUrl = getActiveManagedProxyUrl();
+  if (activeProxyUrl) {
+    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl));
+    const handle: ProxyHandle = {
+      proxyUrl,
+      injectedProxyUrl: proxyUrl,
+      envSnapshot: baseProxyEnvSnapshot ?? captureProxyEnv(),
+      stop: async () => {
+        stopActiveProxyRegistration(registration);
+      },
+      kill: () => {
+        stopActiveProxyRegistration(registration);
+      },
+    };
+    return handle;
   }
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;

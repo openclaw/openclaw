@@ -291,7 +291,7 @@ describe("startProxy", () => {
     expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toBeUndefined();
   });
 
-  it("rejects overlapping handles with the same managed proxy URL", async () => {
+  it("keeps same-url overlapping handles active until the final stop", async () => {
     const patchedHttpRequest = vi.fn() as unknown as typeof http.request;
     const patchedHttpGet = vi.fn() as unknown as typeof http.get;
     const patchedHttpsRequest = vi.fn() as unknown as typeof https.request;
@@ -311,13 +311,19 @@ describe("startProxy", () => {
       enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
     });
+    const secondHandle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
 
-    await expect(
-      startProxy({
-        enabled: true,
-        proxyUrl: "http://127.0.0.1:3128",
-      }),
-    ).rejects.toThrow("cannot activate a managed proxy");
+    expect(mockForceResetGlobalDispatcher).toHaveBeenCalledOnce();
+    expect(mockBootstrapGlobalAgent).toHaveBeenCalledOnce();
+    expect(http.request).toBe(patchedHttpRequest);
+    expect(https.request).toBe(patchedHttpsRequest);
+    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
+    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
+
+    await stopProxy(secondHandle);
 
     expect(http.request).toBe(patchedHttpRequest);
     expect(https.request).toBe(patchedHttpsRequest);
