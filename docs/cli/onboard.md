@@ -47,6 +47,11 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
 
+On a fresh install where the active config file is missing or contains only an
+empty config object, bare `openclaw` also starts the classic onboarding flow.
+Once a config file has authored settings, bare `openclaw` opens Crestodian
+instead.
+
 For plaintext private-network `ws://` targets (trusted networks only), set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 There is no `openclaw.json` equivalent for this client-side transport
