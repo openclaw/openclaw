@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/session status: keep semantic `session_status({ sessionKey: "current" })` on the live run session even before that run has a persisted session-store entry, instead of falling back to the sandbox policy key. Thanks @vincentkoc.
+- QA/Slack: resolve bundled official plugin public-surface package aliases during source-mode QA runs, so release Slack live validation can load `@openclaw/slack/api.js` without workspace symlinks. Thanks @vincentkoc.
 - Codex: pass the live run session key into app-server dynamic tools when sandbox policy uses a separate session key, so `session_status({ sessionKey: "current" })` reports the active run instead of the sandbox policy key. Thanks @vincentkoc.
 - Plugins/tools: mark manifest-optional sibling tools as optional even when they come from a shared non-optional factory, so cached/status/MCP metadata keeps opt-in tool policy accurate. Thanks @vincentkoc.
 - Matrix: keep `streaming.progress.toolProgress` scoped to progress draft mode, so partial and quiet Matrix previews do not lose tool progress unless `streaming.preview.toolProgress` is disabled. Thanks @vincentkoc.
