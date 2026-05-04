@@ -13,14 +13,19 @@ import type {
 import type { ErrorObject, ValidateFunction } from "ajv";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { ownerCallerContextTrustedServers } from "./bundle-mcp-config.js";
+import { isRecord } from "./cli-runner/bundle-mcp-adapter-shared.js";
+import { applyBundleMcpCallerContext } from "./cli-runner/bundle-mcp-caller-context.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 import { sanitizeServerName } from "./pi-bundle-mcp-names.js";
 import type {
+  EmbeddedMcpCallerContext,
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
@@ -178,17 +183,69 @@ function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
   return DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS;
 }
 
+/**
+ * Replaces `${OPENCLAW_MCP_*}` placeholder strings in MCP server headers with
+ * the actual caller context values for the current Pi embedded agent session.
+ * Only headers whose values are plain strings are processed; non-string values
+ * (e.g. numbers, booleans) pass through unchanged.
+ */
+function expandEmbeddedMcpCallerContextInConfig(
+  config: BundleMcpConfig,
+  callerContext: EmbeddedMcpCallerContext & { sessionKey?: string },
+): BundleMcpConfig {
+  const env: Record<string, string> = {
+    OPENCLAW_MCP_AGENT_ID: callerContext.agentId ?? "",
+    OPENCLAW_MCP_ACCOUNT_ID: callerContext.accountId ?? "",
+    OPENCLAW_MCP_MESSAGE_CHANNEL: callerContext.messageChannel ?? "",
+    OPENCLAW_MCP_SESSION_KEY: callerContext.sessionKey ?? "",
+  };
+  const mcpServers: BundleMcpConfig["mcpServers"] = {};
+  for (const [name, server] of Object.entries(config.mcpServers)) {
+    if (!isRecord(server) || !isRecord((server as Record<string, unknown>).headers)) {
+      mcpServers[name] = server as BundleMcpServerConfig;
+      continue;
+    }
+    const rawHeaders = (server as Record<string, unknown>).headers as Record<string, unknown>;
+    const headers: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(rawHeaders)) {
+      headers[k] =
+        typeof v === "string"
+          ? v.replace(/\$\{([^}]+)\}/g, (_, key: string) => env[key] ?? "")
+          : v;
+    }
+    mcpServers[name] = { ...(server as BundleMcpServerConfig), headers } as BundleMcpServerConfig;
+  }
+  return { mcpServers };
+}
+
 export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  callerContext?: EmbeddedMcpCallerContext;
 }): SessionMcpRuntime {
   const { loaded, fingerprint: configFingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
     logDiagnostics: true,
   });
+
+  // Apply injectCallerContext header injection for owner-trusted servers.
+  // The configFingerprint is intentionally computed from the raw loaded.mcpServers
+  // (before expansion) so that cache invalidation tracks config file changes, not
+  // per-call identity differences.
+  const trustedServers = ownerCallerContextTrustedServers(params.cfg);
+  const effectiveMcpServers =
+    trustedServers.size > 0 && params.callerContext
+      ? expandEmbeddedMcpCallerContextInConfig(
+          applyBundleMcpCallerContext(
+            { mcpServers: loaded.mcpServers as BundleMcpConfig["mcpServers"] },
+            trustedServers,
+          ),
+          { ...params.callerContext, sessionKey: params.sessionKey },
+        ).mcpServers
+      : (loaded.mcpServers as BundleMcpConfig["mcpServers"]);
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let activeLeases = 0;
@@ -211,7 +268,7 @@ export function createSessionMcpRuntime(params: {
       return catalogInFlight;
     }
     catalogInFlight = (async () => {
-      if (Object.keys(loaded.mcpServers).length === 0) {
+      if (Object.keys(effectiveMcpServers).length === 0) {
         return {
           version: 1,
           generatedAt: Date.now(),
@@ -225,7 +282,7 @@ export function createSessionMcpRuntime(params: {
       const usedServerNames = new Set<string>();
 
       try {
-        for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
+        for (const [serverName, rawServer] of Object.entries(effectiveMcpServers)) {
           failIfDisposed();
           const resolved = resolveMcpTransport(serverName, rawServer);
           if (!resolved) {
@@ -510,6 +567,7 @@ function createSessionMcpRuntimeManager(
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
+          callerContext: params.callerContext,
           configFingerprint: nextFingerprint,
         }),
       ).then((runtime) => {
@@ -635,6 +693,7 @@ export async function disposeAllSessionMcpRuntimes(): Promise<void> {
 
 export const __testing = {
   createSessionMcpRuntimeManager,
+  expandEmbeddedMcpCallerContextInConfig,
   async resetSessionMcpRuntimeManager() {
     await disposeAllSessionMcpRuntimes();
   },
