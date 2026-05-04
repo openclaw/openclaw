@@ -81,13 +81,17 @@ export {
 };
 export { isCliProvider } from "./model-selection-cli.js";
 
+function normalizePersistedDefaultProvider(value: unknown): string {
+  return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
+}
+
 export function resolvePersistedOverrideModelRef(params: {
-  defaultProvider: string;
+  defaultProvider?: unknown;
   overrideProvider?: unknown;
   overrideModel?: unknown;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
-  const defaultProvider = params.defaultProvider.trim();
+  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
   const overrideProvider = normalizeOptionalString(params.overrideProvider);
   const overrideModel = normalizeOptionalString(params.overrideModel);
   if (!overrideModel) {
@@ -109,14 +113,14 @@ export function resolvePersistedOverrideModelRef(params: {
  * Use this when callers intentionally want the last executed model identity.
  */
 export function resolvePersistedModelRef(params: {
-  defaultProvider: string;
+  defaultProvider?: unknown;
   runtimeProvider?: unknown;
   runtimeModel?: unknown;
   overrideProvider?: unknown;
   overrideModel?: unknown;
   allowPluginNormalization?: boolean;
 }): ModelRef | null {
-  const defaultProvider = params.defaultProvider.trim();
+  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
   const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
   const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
@@ -146,7 +150,7 @@ export function resolvePersistedModelRef(params: {
  * overrides before falling back to runtime identity.
  */
 export function resolvePersistedSelectedModelRef(params: {
-  defaultProvider: string;
+  defaultProvider?: unknown;
   runtimeProvider?: unknown;
   runtimeModel?: unknown;
   overrideProvider?: unknown;
@@ -171,11 +175,11 @@ export function resolvePersistedSelectedModelRef(params: {
 }
 
 export function normalizeStoredOverrideModel(params: {
-  providerOverride?: string | null;
-  modelOverride?: string | null;
+  providerOverride?: unknown;
+  modelOverride?: unknown;
 }): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = params.providerOverride?.trim();
-  const modelOverride = params.modelOverride?.trim();
+  const providerOverride = normalizeOptionalString(params.providerOverride);
+  const modelOverride = normalizeOptionalString(params.modelOverride);
   if (!providerOverride || !modelOverride) {
     return {
       providerOverride,

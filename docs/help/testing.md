@@ -144,6 +144,14 @@ inside every shard.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+- `pnpm test:plugins:kitchen-sink-live`
+  - Runs the live OpenAI Kitchen Sink plugin gauntlet through QA Lab. It
+    installs the external Kitchen Sink package, verifies the plugin SDK surface
+    inventory, probes `/healthz` and `/readyz`, records gateway CPU/RSS
+    evidence, runs a live OpenAI turn, and checks adversarial diagnostics.
+    Requires live OpenAI auth such as `OPENAI_API_KEY`. In hydrated Testbox
+    sessions it automatically sources the Testbox live-auth profile when the
+    `openclaw-testbox-env` helper is present.
 - `pnpm test:gateway:cpu-scenarios`
   - Runs the gateway startup bench plus a small mock QA Lab scenario pack
     (`channel-chat-baseline`, `memory-failure-fallback`,
@@ -195,6 +203,9 @@ inside every shard.
     `OPENCLAW_QA_CONVEX_SITE_URL` and the role secret. If
     `OPENCLAW_QA_CONVEX_SITE_URL` and a Convex role secret are present in CI,
     the Docker wrapper selects Convex automatically.
+  - The wrapper validates Telegram or Convex credential env on the host before
+    Docker build/install work. Set `OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT=1`
+    only when deliberately debugging pre-credential setup.
   - `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE=ci|maintainer` overrides the shared
     `OPENCLAW_QA_CREDENTIAL_ROLE` for this lane only.
   - GitHub Actions exposes this lane as the manual maintainer workflow

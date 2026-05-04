@@ -72,7 +72,7 @@ pnpm openclaw qa mantis discord-smoke \
   --output-dir .artifacts/qa-e2e/mantis/discord-smoke
 ```
 
-The later before and after runner should accept this shape:
+The local before and after runner accepts this shape:
 
 ```bash
 pnpm openclaw qa mantis run \
@@ -82,6 +82,79 @@ pnpm openclaw qa mantis run \
   --candidate HEAD \
   --output-dir .artifacts/qa-e2e/mantis/local-discord-status-reactions
 ```
+
+The runner creates detached baseline and candidate worktrees under the output
+directory, installs dependencies, builds each ref, runs the scenario with
+`--allow-failures`, then writes `baseline/`, `candidate/`, `comparison.json`,
+and `mantis-report.md`. For the first Discord scenario, a successful verification
+means baseline status is `fail` and candidate status is `pass`.
+
+The first VM/browser primitive is the desktop smoke:
+
+```bash
+pnpm openclaw qa mantis desktop-browser-smoke \
+  --output-dir .artifacts/qa-e2e/mantis/desktop-browser
+```
+
+It leases or reuses a Crabbox desktop machine, starts a visible browser inside the
+VNC session, captures the desktop, pulls artifacts back to the local output
+directory, and writes the reconnect command into the report. The command defaults
+to the Hetzner provider because it is the first provider with working desktop/VNC
+coverage in the Mantis lane. Override it with `--provider`, `--crabbox-bin`, or
+`OPENCLAW_MANTIS_CRABBOX_PROVIDER` when running against another Crabbox fleet.
+
+Useful desktop smoke flags:
+
+- `--lease-id <cbx_...>` or `OPENCLAW_MANTIS_CRABBOX_LEASE_ID` reuses a warmed desktop.
+- `--browser-url <url>` changes the page opened in the visible browser.
+- `--html-file <path>` renders a repo-local HTML artifact in the visible browser. Mantis uses this to capture the generated Discord status-reaction timeline through a real Crabbox desktop.
+- `--keep-lease` or `OPENCLAW_MANTIS_KEEP_VM=1` keeps a newly created passing lease open for VNC inspection. Failed runs keep the lease by default when one was created so an operator can reconnect.
+- `--class`, `--idle-timeout`, and `--ttl` tune machine size and lease lifetime.
+
+The first full desktop transport primitive is the Slack desktop smoke:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --output-dir .artifacts/qa-e2e/mantis/slack-desktop \
+  --gateway-setup \
+  --scenario slack-canary \
+  --keep-lease
+```
+
+It leases or reuses a Crabbox desktop machine, syncs the current checkout into
+the VM, runs `pnpm openclaw qa slack` inside that VM, opens Slack Web in the VNC
+browser, captures the visible desktop, and copies both the Slack QA artifacts and
+the VNC screenshot back to the local output directory. This is the first Mantis
+shape where the SUT OpenClaw gateway and the browser both live inside the same
+Linux desktop VM.
+
+With `--gateway-setup`, the command prepares a persistent disposable OpenClaw
+home at `$HOME/.openclaw-mantis/slack-openclaw`, patches Slack Socket Mode
+configuration for the selected channel, starts `openclaw gateway run` on port
+`38973`, and keeps Chrome running in the VNC session. This is the "leave me a
+Linux desktop with Slack and a claw running" mode; the bot-to-bot Slack QA lane
+remains the default when `--gateway-setup` is omitted.
+
+Required inputs for `--credential-source env`:
+
+- `OPENCLAW_QA_SLACK_CHANNEL_ID`
+- `OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN`
+- `OPENCLAW_QA_SLACK_SUT_BOT_TOKEN`
+- `OPENCLAW_QA_SLACK_SUT_APP_TOKEN`
+- `OPENCLAW_LIVE_OPENAI_KEY` for the remote model lane. If only
+  `OPENAI_API_KEY` is set locally, Mantis maps it to `OPENCLAW_LIVE_OPENAI_KEY`
+  before invoking Crabbox so Crabbox's `OPENCLAW_*` env forwarding can carry it
+  into the VM.
+
+Useful Slack desktop flags:
+
+- `--lease-id <cbx_...>` reruns against a machine where an operator already logged in to Slack Web through VNC.
+- `--gateway-setup` starts a persistent OpenClaw Slack gateway in the VM instead of only running the bot-to-bot QA lane.
+- `--slack-url <url>` opens a specific Slack Web URL. Without it, Mantis derives `https://app.slack.com/client/<team>/<channel>` from Slack `auth.test` when the SUT bot token is available.
+- `--slack-channel-id <id>` controls the Slack channel allowlist used by gateway setup.
+- `OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR` controls the persistent Chrome profile inside the VM. The default is `$HOME/.config/openclaw-mantis/slack-chrome-profile`, so a manual Slack Web login survives reruns on the same lease.
+- `--credential-source convex --credential-role ci` uses the shared credential pool instead of direct Slack env tokens.
+- `--provider-mode`, `--model`, `--alt-model`, and `--fast` pass through to the Slack live lane.
 
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
@@ -93,7 +166,27 @@ accepts:
 It checks out the workflow harness ref, builds separate baseline and candidate
 worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
 uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
-Actions artifacts.
+Actions artifacts. It also renders each lane's timeline HTML in a Crabbox
+desktop browser and publishes those VNC screenshots beside the deterministic
+timeline PNGs in the PR comment. The workflow builds the Crabbox CLI from
+`openclaw/crabbox` main so it can use the current desktop/browser lease flags
+before the next Crabbox binary release is cut.
+
+You can also trigger the status-reactions run directly from a PR comment:
+
+```text
+@Mantis discord status reactions
+```
+
+The comment trigger is intentionally narrow. It only runs on pull request
+comments from users with write, maintain, or admin access, and it only recognizes
+Discord status-reaction requests. By default it uses the known bad baseline ref
+and the current PR head SHA as the candidate. Maintainers can override either
+ref:
+
+```text
+@Mantis discord status reactions baseline=origin/main candidate=HEAD
+```
 
 ClawSweeper command examples:
 
@@ -110,18 +203,19 @@ ClawSweeper review findings.
 
 1. Acquire credentials.
 2. Allocate or reuse a VM.
-3. Prepare a clean checkout for the baseline ref.
-4. Install dependencies and build only what the scenario needs.
-5. Start a child OpenClaw Gateway with an isolated state directory.
-6. Configure the live transport, provider, model, and browser profile.
-7. Run the scenario and capture baseline evidence.
-8. Stop the gateway and preserve logs.
-9. Prepare the candidate ref in the same VM.
-10. Run the same scenario and capture candidate evidence.
-11. Compare the oracle results and visual evidence.
-12. Write Markdown, JSON, logs, screenshots, and optional trace artifacts.
-13. Upload GitHub Actions artifacts.
-14. Post a concise PR or Discord status message.
+3. Prepare the desktop/browser profile when the scenario needs UI evidence.
+4. Prepare a clean checkout for the baseline ref.
+5. Install dependencies and build only what the scenario needs.
+6. Start a child OpenClaw Gateway with an isolated state directory.
+7. Configure the live transport, provider, model, and browser profile.
+8. Run the scenario and capture baseline evidence.
+9. Stop the gateway and preserve logs.
+10. Prepare the candidate ref in the same VM.
+11. Run the same scenario and capture candidate evidence.
+12. Compare the oracle results and visual evidence.
+13. Write Markdown, JSON, logs, screenshots, and optional trace artifacts.
+14. Upload GitHub Actions artifacts.
+15. Post a concise PR or Discord status message.
 
 The scenario should be able to fail in two different ways:
 
@@ -323,9 +417,15 @@ Recommended secret names:
 - `OPENCLAW_QA_REDACT_PUBLIC_METADATA=1` for public GitHub artifact uploads
 - `OPENCLAW_QA_CONVEX_SITE_URL`
 - `OPENCLAW_QA_CONVEX_SECRET_CI`
+- `OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR`
+- `OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN`
 
 Long term, the Convex credential pool should remain the normal source for live
 transport credentials. GitHub secrets bootstrap the broker and fallback lanes.
+The Discord status-reactions workflow maps the Mantis Crabbox secrets back to
+the `CRABBOX_COORDINATOR` and `CRABBOX_COORDINATOR_TOKEN` environment variables
+that the Crabbox CLI expects. The plain `CRABBOX_*` GitHub secret names remain
+accepted as a compatibility fallback.
 
 The Mantis runner must never print:
 
@@ -355,11 +455,9 @@ messages, and other bulky evidence stay in the Actions artifact.
 Production workflows should post those comments with the Mantis GitHub App, not
 with `github-actions[bot]`. Store the app id and private key as
 `MANTIS_GITHUB_APP_ID` and `MANTIS_GITHUB_APP_PRIVATE_KEY` GitHub Actions
-secrets. If the app is renamed, set `MANTIS_GITHUB_APP_BOT_LOGIN` as a GitHub
-Actions variable to the new bot login, for example `openclaw-mantis[bot]`. The
-workflow should update an existing Mantis-owned comment when one exists; if only
-an older `github-actions[bot]` comment exists, it should create a new
-Mantis-owned comment instead of rewriting the legacy bot comment.
+secrets. The workflow uses a hidden marker as the upsert key, updates that
+comment when the token can edit it, and creates a new Mantis-owned comment when
+an older bot-owned marker cannot be edited.
 
 The PR comment should be short and visual:
 
