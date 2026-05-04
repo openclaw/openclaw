@@ -47,7 +47,7 @@ describe("web_search late-bound runtime fallback", () => {
       runtimeWebSearch: {
         selectedProvider: "brave",
         providerConfigured: "brave",
-        providerSource: "plugin",
+        providerSource: "configured",
         diagnostics: [],
       },
     });
@@ -100,7 +100,7 @@ describe("web_search late-bound runtime fallback", () => {
     );
   });
 
-  it("does not prefer runtime providers when no provider id is selected anywhere", async () => {
+  it("keeps runtime provider discovery enabled when no provider id is selected anywhere", async () => {
     const { createWebSearchTool } = await import("./web-search.js");
     const tool = createWebSearchTool({
       config: {},
@@ -111,7 +111,7 @@ describe("web_search late-bound runtime fallback", () => {
 
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
     expect(mocks.runWebSearch).toHaveBeenCalledWith(
-      expect.objectContaining({ preferRuntimeProviders: false }),
+      expect.objectContaining({ preferRuntimeProviders: true }),
     );
   });
 
@@ -138,7 +138,7 @@ describe("web_search late-bound runtime fallback", () => {
       search: {
         selectedProvider: "perplexity",
         providerConfigured: "perplexity",
-        providerSource: "plugin",
+        providerSource: "configured",
         diagnostics: [],
       },
     });
@@ -149,7 +149,7 @@ describe("web_search late-bound runtime fallback", () => {
       runtimeWebSearch: {
         selectedProvider: "brave",
         providerConfigured: "brave",
-        providerSource: "plugin",
+        providerSource: "configured",
         diagnostics: [],
       },
     });
