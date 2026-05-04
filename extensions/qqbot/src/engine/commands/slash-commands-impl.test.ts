@@ -1,31 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import type { CommandsPort } from "../adapter/commands.port.js";
 import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
-import { getFrameworkCommands, initCommands, matchSlashCommand } from "./slash-commands-impl.js";
+import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
+import { getFrameworkCommands, matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext } from "./slash-commands.js";
-
-type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGetter"]>>["config"];
-type ReplaceConfigFile = RuntimeConfigApi["replaceConfigFile"];
-type ReplaceConfigFileResult = Awaited<ReturnType<ReplaceConfigFile>>;
-
-function installCommandRuntime(currentConfig: OpenClawConfig, writes: OpenClawConfig[]): void {
-  const replaceConfigFile: ReplaceConfigFile = async (params) => {
-    writes.push(params.nextConfig);
-    return undefined as unknown as ReplaceConfigFileResult;
-  };
-
-  initCommands({
-    resolveVersion: () => "test",
-    pluginVersion: "0.0.0-test",
-    approveRuntimeGetter: () => ({
-      config: {
-        current: () => currentConfig,
-        replaceConfigFile,
-      },
-    }),
-  });
-}
 
 function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
   return {
@@ -48,20 +26,6 @@ function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): S
     },
     ...overrides,
   };
-}
-
-function getWrittenQQBotConfig(write: OpenClawConfig | undefined):
-  | {
-      streaming?: unknown;
-      accounts?: { default?: { streaming?: unknown } };
-    }
-  | undefined {
-  return write?.channels?.qqbot as
-    | {
-        streaming?: unknown;
-        accounts?: { default?: { streaming?: unknown } };
-      }
-    | undefined;
 }
 
 describe("QQBot framework slash commands", () => {

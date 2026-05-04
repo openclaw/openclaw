@@ -5,14 +5,12 @@ import type {
   PluginCommandContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
-import type { CommandsPort } from "../../engine/adapter/commands.port.js";
-import { initCommands } from "../../engine/commands/slash-commands-impl.js";
+import {
+  getWrittenQQBotConfig,
+  installCommandRuntime,
+} from "../../engine/commands/slash-command-test-support.js";
 import { ensurePlatformAdapter } from "../bootstrap.js";
 import { registerQQBotFrameworkCommands } from "./framework-registration.js";
-
-type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGetter"]>>["config"];
-type ReplaceConfigFile = RuntimeConfigApi["replaceConfigFile"];
-type ReplaceConfigFileResult = Awaited<ReturnType<ReplaceConfigFile>>;
 
 function createConfig(): OpenClawConfig {
   return {
@@ -30,24 +28,6 @@ function createConfig(): OpenClawConfig {
       },
     },
   };
-}
-
-function installCommandRuntime(currentConfig: OpenClawConfig, writes: OpenClawConfig[]): void {
-  const replaceConfigFile: ReplaceConfigFile = async (params) => {
-    writes.push(params.nextConfig);
-    return undefined as unknown as ReplaceConfigFileResult;
-  };
-
-  initCommands({
-    resolveVersion: () => "test",
-    pluginVersion: "0.0.0-test",
-    approveRuntimeGetter: () => ({
-      config: {
-        current: () => currentConfig,
-        replaceConfigFile,
-      },
-    }),
-  });
 }
 
 function registerCommands(): OpenClawPluginCommandDefinition[] {
@@ -91,21 +71,13 @@ function createCommandContext(
   } as unknown as PluginCommandContext;
 }
 
-function getWrittenQQBotConfig(write: OpenClawConfig | undefined):
-  | {
-      streaming?: unknown;
-      accounts?: { default?: { streaming?: unknown } };
-    }
-  | undefined {
-  return write?.channels?.qqbot as
-    | {
-        streaming?: unknown;
-        accounts?: { default?: { streaming?: unknown } };
-      }
-    | undefined;
-}
-
 describe("registerQQBotFrameworkCommands", () => {
+  it("registers bot-streaming as an auth-gated framework command", () => {
+    const command = findCommand(registerCommands(), "bot-streaming");
+
+    expect(command.requireAuth).toBe(true);
+  });
+
   it("preserves the private-chat guard for bot-streaming on generic framework calls", async () => {
     const config = createConfig();
     const writes: OpenClawConfig[] = [];

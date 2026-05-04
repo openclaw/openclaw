@@ -1,11 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CommandsPort } from "../adapter/commands.port.js";
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount } from "../gateway/types.js";
 import { sendText } from "../messaging/sender.js";
 import { trySlashCommand } from "./slash-command-handler.js";
-import { initCommands } from "./slash-commands-impl.js";
+import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-test-support.js";
 
 vi.mock("../messaging/outbound.js", () => ({
   sendDocument: vi.fn(async () => undefined),
@@ -16,28 +15,6 @@ vi.mock("../messaging/sender.js", () => ({
   buildDeliveryTarget: vi.fn(() => ({ targetType: "c2c", targetId: "TRUSTED_OPENID" })),
   sendText: vi.fn(async () => undefined),
 }));
-
-type RuntimeConfigApi = ReturnType<NonNullable<CommandsPort["approveRuntimeGetter"]>>["config"];
-type ReplaceConfigFile = RuntimeConfigApi["replaceConfigFile"];
-type ReplaceConfigFileResult = Awaited<ReturnType<ReplaceConfigFile>>;
-
-function installCommandRuntime(currentConfig: OpenClawConfig, writes: OpenClawConfig[]): void {
-  const replaceConfigFile: ReplaceConfigFile = async (params) => {
-    writes.push(params.nextConfig);
-    return undefined as unknown as ReplaceConfigFileResult;
-  };
-
-  initCommands({
-    resolveVersion: () => "test",
-    pluginVersion: "0.0.0-test",
-    approveRuntimeGetter: () => ({
-      config: {
-        current: () => currentConfig,
-        replaceConfigFile,
-      },
-    }),
-  });
-}
 
 function createStreamingMessage(): QueuedMessage {
   return {
@@ -60,18 +37,6 @@ function createAccount(): GatewayAccount {
       streaming: false,
     },
   };
-}
-
-function getWrittenQQBotConfig(write: OpenClawConfig | undefined):
-  | {
-      streaming?: unknown;
-    }
-  | undefined {
-  return write?.channels?.qqbot as
-    | {
-        streaming?: unknown;
-      }
-    | undefined;
 }
 
 describe("trySlashCommand", () => {
