@@ -1,9 +1,10 @@
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   diagnosticSessionStates as DiagnosticSessionStatesType,
   getDiagnosticSessionState as GetDiagnosticSessionStateType,
   SessionState,
 } from "../../logging/diagnostic-session-state.js";
+import type { wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType } from "../pi-tools.before-tool-call.js";
 import type {
   recordToolCall as RecordToolCallType,
   recordToolCallOutcome as RecordToolCallOutcomeType,
@@ -35,6 +36,7 @@ let diagnosticSessionStates: typeof DiagnosticSessionStatesType;
 let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
 let recordToolCall: typeof RecordToolCallType;
 let recordToolCallOutcome: typeof RecordToolCallOutcomeType;
+let wrapToolWithBeforeToolCallHook: typeof WrapToolWithBeforeToolCallHookType;
 let PostCompactionLoopPersistedError: typeof PostCompactionLoopPersistedErrorType;
 
 // Mirror the production trim cap (resolveLoopDetectionConfig default
@@ -49,7 +51,7 @@ function recordToolOutcome(
   result: unknown,
   runId?: string,
 ): void {
-  const toolCallId = `${toolName}-${state.toolOutcomeSeq ?? 0}`;
+  const toolCallId = `${toolName}-${state.toolCallHistory?.length ?? 0}`;
   const scope = runId ? { runId } : undefined;
   recordToolCall(state, toolName, toolParams, toolCallId, undefined, scope);
   const outcome: Parameters<typeof recordToolCallOutcome>[1] = {
@@ -64,6 +66,30 @@ function recordToolOutcome(
   recordToolCallOutcome(state, outcome);
 }
 
+let liveToolCallSeq = 0;
+
+async function executeWrappedToolOutcome(
+  toolName: string,
+  toolParams: unknown,
+  result: unknown,
+  runId = baseParams.runId,
+): Promise<unknown> {
+  const tool = wrapToolWithBeforeToolCallHook(
+    {
+      name: toolName,
+      execute: vi.fn(async () => result),
+    } as never,
+    {
+      agentId: "main",
+      sessionKey: baseParams.sessionKey,
+      sessionId: baseParams.sessionId,
+      runId,
+    },
+  );
+  liveToolCallSeq += 1;
+  return tool.execute(`${toolName}-${liveToolCallSeq}`, toolParams, undefined, undefined);
+}
+
 describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
   beforeAll(async () => {
     ({ runEmbeddedPiAgent } = await loadRunOverflowCompactionHarness());
@@ -72,10 +98,12 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     ({ diagnosticSessionStates, getDiagnosticSessionState } =
       await import("../../logging/diagnostic-session-state.js"));
     ({ recordToolCall, recordToolCallOutcome } = await import("../tool-loop-detection.js"));
+    ({ wrapToolWithBeforeToolCallHook } = await import("../pi-tools.before-tool-call.js"));
     ({ PostCompactionLoopPersistedError } = await import("./post-compaction-loop-guard.js"));
   });
 
   beforeEach(() => {
+    liveToolCallSeq = 0;
     diagnosticSessionStates.clear();
     mockedRunEmbeddedAttempt.mockReset();
     mockedCompactDirect.mockReset();
@@ -122,29 +150,24 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
 
   it("aborts the run with PostCompactionLoopPersistedError when identical (tool, args, result) repeats windowSize times after compaction", async () => {
     const overflowError = makeOverflowError();
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: baseParams.sessionKey,
-      sessionId: baseParams.sessionId,
-    });
+    let attemptReturned = false;
 
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
-    // Attempt 2: post-compaction. The wrapped tool layer would have
-    // recorded `windowSize` identical (tool, args, result) outcomes during
-    // this single attempt. The runner's after-attempt guard observation
-    // sees all three at once, accumulates matches, and aborts on the third.
+    // Attempt 2: post-compaction. The live wrapped-tool path records each
+    // outcome while the prompt is still running; the third identical result
+    // aborts before the attempt can return.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
       for (let i = 0; i < 3; i += 1) {
-        recordToolOutcome(
-          sessionState,
+        await executeWrappedToolOutcome(
           "gateway",
           { action: "lookup", path: "x" },
           "identical-result",
-          baseParams.runId,
         );
       }
+      attemptReturned = true;
       return makeAttemptResult({
         promptError: null,
         toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
@@ -165,35 +188,25 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(attemptReturned).toBe(false);
   });
 
   it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
     const overflowError = makeOverflowError();
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: baseParams.sessionKey,
-      sessionId: baseParams.sessionId,
-    });
-
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
     // Attempt 2 (post-compaction): identical args, but DIFFERENT result hash
-    // each time. Only one further attempt is needed since the runner exits
-    // on a successful prompt with no further retry trigger.
-    let callCounter = 0;
+    // each time. This fills the window without triggering the persisted-loop
+    // abort because the tool is making progress.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
-      callCounter += 1;
-      recordToolOutcome(
-        sessionState,
-        "gateway",
-        { action: "lookup", path: "x" },
-        `result-${callCounter}`,
-        baseParams.runId,
-      );
+      for (let i = 0; i < 3; i += 1) {
+        await executeWrappedToolOutcome("gateway", { action: "lookup", path: "x" }, `result-${i}`);
+      }
       return makeAttemptResult({
         promptError: null,
-        toolMetas: [{ toolName: "gateway" }],
+        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
       });
     });
 
@@ -214,10 +227,6 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
   it("disarms after windowSize observations regardless of match, so later identical calls do not abort", async () => {
     // Use windowSize: 2 so the guard disarms after 2 observations.
     const overflowError = makeOverflowError();
-    const sessionState = getDiagnosticSessionState({
-      sessionKey: baseParams.sessionKey,
-      sessionId: baseParams.sessionId,
-    });
 
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
@@ -227,8 +236,8 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     // guard disarms with no abort. We then append more identical records
     // afterwards in this test to confirm they are not observed by the guard.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
-      recordToolOutcome(sessionState, "read", { path: "/a" }, "ra", baseParams.runId);
-      recordToolOutcome(sessionState, "write", { path: "/b" }, "rb", baseParams.runId);
+      await executeWrappedToolOutcome("read", { path: "/a" }, "ra");
+      await executeWrappedToolOutcome("write", { path: "/b" }, "rb");
       return makeAttemptResult({
         promptError: null,
         toolMetas: [{ toolName: "read" }, { toolName: "write" }],
@@ -259,12 +268,10 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });
 
-  it("aborts post-compaction loop even when toolCallHistory is at its trim cap (regression: index-cursor blind spot in long-running sessions)", async () => {
+  it("aborts post-compaction loop from the live tool path even when toolCallHistory is at its trim cap", async () => {
     // Long-running sessions accumulate up to historySize (default 30) records
-    // in toolCallHistory. Pushing more entries triggers trim, which would
-    // shift records out from under an absolute index cursor and let the
-    // guard silently miss every loop. The seq-based observation must still
-    // see the new records via the tail-slice path.
+    // in toolCallHistory. The live observer must still see the new outcome
+    // before trimming can make any after-attempt cursor ambiguous.
     const overflowError = makeOverflowError();
     const sessionState = getDiagnosticSessionState({
       sessionKey: baseParams.sessionKey,
@@ -283,20 +290,15 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
-    // Attempt 2 (post-compaction): three identical records appended while
-    // history is already at the cap. These pushes trigger trim, shifting
-    // older entries out. With the old index-cursor scheme, length never
-    // grew so the observation loop never ran. With the seq-based scheme,
-    // the tail of length-30 history contains the three new records and
-    // the guard aborts on the third match.
+    // Attempt 2 (post-compaction): three identical live tool outcomes while
+    // history is already at the cap. The guard aborts on the third result
+    // before the mocked attempt can return.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
       for (let i = 0; i < 3; i += 1) {
-        recordToolOutcome(
-          sessionState,
+        await executeWrappedToolOutcome(
           "gateway",
           { action: "lookup", path: "x" },
           "identical-result",
-          baseParams.runId,
         );
       }
       // History is still capped at HISTORY_TRIM_CAP after the trim.

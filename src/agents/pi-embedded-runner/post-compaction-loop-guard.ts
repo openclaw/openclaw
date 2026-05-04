@@ -29,12 +29,20 @@ export type PostCompactionLoopGuard = {
   snapshot: () => { armed: boolean; remainingAttempts: number };
 };
 
+export type PostCompactionGuardScope = {
+  sessionKey?: string;
+  sessionId?: string;
+  runId?: string;
+};
+
 type GuardState = {
   enabled: boolean;
   windowSize: number;
   remainingAttempts: number;
   history: PostCompactionGuardObservation[];
 };
+
+const activeGuards = new Map<string, PostCompactionLoopGuard>();
 
 function asPositiveInt(value: number | undefined, fallback: number): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
@@ -103,6 +111,56 @@ export function createPostCompactionLoopGuard(
   });
 
   return { armPostCompaction, observe, snapshot };
+}
+
+function normalizeScopePart(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function scopeKeys(scope: PostCompactionGuardScope): string[] {
+  const runId = normalizeScopePart(scope.runId);
+  const keys: string[] = [];
+  for (const [kind, id] of [
+    ["sessionKey", normalizeScopePart(scope.sessionKey)],
+    ["sessionId", normalizeScopePart(scope.sessionId)],
+  ] as const) {
+    if (!id) {
+      continue;
+    }
+    keys.push(runId ? `${kind}:${id}:run:${runId}` : `${kind}:${id}`);
+  }
+  return keys;
+}
+
+export function registerPostCompactionLoopGuard(
+  scope: PostCompactionGuardScope,
+  guard: PostCompactionLoopGuard,
+): () => void {
+  const keys = scopeKeys(scope);
+  for (const key of keys) {
+    activeGuards.set(key, guard);
+  }
+  return () => {
+    for (const key of keys) {
+      if (activeGuards.get(key) === guard) {
+        activeGuards.delete(key);
+      }
+    }
+  };
+}
+
+export function observePostCompactionLoopGuard(
+  scope: PostCompactionGuardScope,
+  call: PostCompactionGuardObservation,
+): PostCompactionGuardVerdict | undefined {
+  for (const key of scopeKeys(scope)) {
+    const guard = activeGuards.get(key);
+    if (guard) {
+      return guard.observe(call);
+    }
+  }
+  return undefined;
 }
 
 export class PostCompactionLoopPersistedError extends Error {

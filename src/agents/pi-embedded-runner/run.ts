@@ -9,7 +9,6 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getDiagnosticSessionState } from "../../logging/diagnostic-session-state.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -95,7 +94,7 @@ import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
+  registerPostCompactionLoopGuard,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
@@ -788,28 +787,19 @@ export async function runEmbeddedPiAgent(
       // feeds it the outcome of each attempt.
       const idleTimeoutBreakerState = createIdleTimeoutBreakerState();
       // Post-compaction loop guard for #77474. Armed at each compaction-success
-      // site below; observes tool-call outcomes from the diagnostic session
-      // state's toolCallHistory after each attempt. Aborts the run when the
-      // same (tool, args, result) triple repeats windowSize times within the
-      // post-compaction window.
+      // site below; observed from the live tool-outcome path so it can abort
+      // while the post-compaction prompt is still running.
       const postCompactionGuard = createPostCompactionLoopGuard(
         params.config?.tools?.loopDetection?.postCompactionGuard,
       );
-      // Monotonic outcome seq (incremented by recordToolCallOutcome on each
-      // observable push). We use a delta on this counter instead of an
-      // absolute index into state.toolCallHistory, which is trimmed at
-      // historySize and would silently shift records out from under an
-      // index cursor in long-running sessions.
-      let lastObservedToolOutcomeSeq = (() => {
-        if (!params.sessionKey && !params.sessionId) {
-          return 0;
-        }
-        const state = getDiagnosticSessionState({
-          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-          ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        });
-        return state.toolOutcomeSeq ?? 0;
-      })();
+      const unregisterPostCompactionGuard = registerPostCompactionLoopGuard(
+        {
+          sessionKey: params.sessionKey,
+          sessionId: params.sessionId,
+          runId: params.runId,
+        },
+        postCompactionGuard,
+      );
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
@@ -1220,68 +1210,6 @@ export async function runEmbeddedPiAgent(
             onUserMessagePersisted,
           });
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
-
-          // Post-compaction loop guard observation. Reads any new tool-call
-          // records that completed during this attempt (populated by the
-          // before-tool-call hook's recordToolCallOutcome) and feeds them
-          // into the guard. Disarms automatically once the window expires.
-          //
-          // Cursor scheme: rather than index into state.toolCallHistory
-          // (which trims at historySize and silently drops records on busy
-          // sessions), we read state.toolOutcomeSeq, a monotonic counter
-          // that recordToolCallOutcome increments on every observable push.
-          // The delta currentSeq - lastObservedSeq tells us how many new
-          // records have appeared globally; we then scan that many entries
-          // from the tail of toolCallHistory. The tail-slice is trim-safe:
-          // even if the buffer was full, the most recent N records are the
-          // ones that survive.
-          if (postCompactionGuard.snapshot().armed) {
-            const guardSessionState =
-              params.sessionKey || params.sessionId
-                ? getDiagnosticSessionState({
-                    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-                  })
-                : undefined;
-            const history = guardSessionState?.toolCallHistory ?? [];
-            const currentSeq = guardSessionState?.toolOutcomeSeq ?? 0;
-            const newRecordCount = Math.max(0, currentSeq - lastObservedToolOutcomeSeq);
-            if (newRecordCount > 0) {
-              const startIndex = Math.max(0, history.length - newRecordCount);
-              for (let i = startIndex; i < history.length; i += 1) {
-                const record = history[i];
-                if (!record || typeof record.resultHash !== "string") {
-                  continue;
-                }
-                if (params.runId && record.runId && record.runId !== params.runId) {
-                  continue;
-                }
-                const verdict = postCompactionGuard.observe({
-                  toolName: record.toolName,
-                  argsHash: record.argsHash,
-                  resultHash: record.resultHash,
-                });
-                if (verdict.shouldAbort) {
-                  throw PostCompactionLoopPersistedError.fromVerdict(verdict);
-                }
-                if (!postCompactionGuard.snapshot().armed) {
-                  break;
-                }
-              }
-            }
-            lastObservedToolOutcomeSeq = currentSeq;
-          } else {
-            // Keep cursor aligned with the current global outcome seq so a
-            // freshly-armed window only sees records pushed AFTER arming.
-            const guardSessionState =
-              params.sessionKey || params.sessionId
-                ? getDiagnosticSessionState({
-                    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-                    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-                  })
-                : undefined;
-            lastObservedToolOutcomeSeq = guardSessionState?.toolOutcomeSeq ?? 0;
-          }
 
           const {
             aborted,
@@ -2858,6 +2786,7 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
+        unregisterPostCompactionGuard();
         forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
         await runAgentCleanupStep({

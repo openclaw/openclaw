@@ -26,6 +26,10 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import {
+  observePostCompactionLoopGuard,
+  PostCompactionLoopPersistedError,
+} from "./pi-embedded-runner/post-compaction-loop-guard.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -379,9 +383,9 @@ async function recordLoopOutcome(args: {
     const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx?.agentId,
+      sessionId: args.ctx.sessionId,
     });
-    recordToolCallOutcome(sessionState, {
+    const record = recordToolCallOutcome(sessionState, {
       toolName: args.toolName,
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
@@ -390,7 +394,27 @@ async function recordLoopOutcome(args: {
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
+    if (record?.resultHash) {
+      const verdict = observePostCompactionLoopGuard(
+        {
+          sessionKey: args.ctx.sessionKey,
+          sessionId: args.ctx.sessionId,
+          runId: args.ctx.runId,
+        },
+        {
+          toolName: record.toolName,
+          argsHash: record.argsHash,
+          resultHash: record.resultHash,
+        },
+      );
+      if (verdict?.shouldAbort) {
+        throw PostCompactionLoopPersistedError.fromVerdict(verdict);
+      }
+    }
   } catch (err) {
+    if (err instanceof PostCompactionLoopPersistedError) {
+      throw err;
+    }
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
   }
 }
@@ -411,7 +435,7 @@ export async function runBeforeToolCallHook(args: {
       await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
-      sessionId: args.ctx?.agentId,
+      sessionId: args.ctx.sessionId,
     });
 
     const loopScope = args.ctx.runId ? { runId: args.ctx.runId } : undefined;
@@ -428,7 +452,7 @@ export async function runBeforeToolCallHook(args: {
         log.error(`Blocking ${toolName} due to critical loop: ${loopResult.message}`);
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
+          sessionId: args.ctx.sessionId,
           toolName,
           level: "critical",
           action: "block",
@@ -451,7 +475,7 @@ export async function runBeforeToolCallHook(args: {
         log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx?.agentId,
+          sessionId: args.ctx.sessionId,
           toolName,
           level: "warning",
           action: "warn",
