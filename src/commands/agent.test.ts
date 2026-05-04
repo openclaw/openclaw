@@ -588,6 +588,52 @@ describe("agentCommand", () => {
     });
   });
 
+  it("does not duplicate globally emitted Codex app-server events from embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      const codexEvents: Array<{ runId: string; phase?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "codex_app_server.lifecycle") {
+          return;
+        }
+        codexEvents.push({
+          runId: evt.runId,
+          phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
+        });
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
+        const runId = (params as { runId?: string } | undefined)?.runId ?? "run";
+        const event = {
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "startup" },
+        };
+        const globalEventSetKey = Symbol.for("openclaw.codexAppServerGlobalAgentEvents");
+        const globalState = globalThis as Record<symbol, WeakSet<object> | undefined>;
+        globalState[globalEventSetKey] ??= new WeakSet<object>();
+        globalState[globalEventSetKey]?.add(event);
+        emitAgentEvent({ runId, stream: event.stream, data: event.data });
+        (
+          params as {
+            onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+          }
+        ).onAgentEvent?.(event);
+        return {
+          payloads: [{ text: "hello" }],
+          meta: { agentMeta: { provider: "p", model: "m" } },
+        } as never;
+      });
+
+      await agentCommand({ message: "hi", to: "+1555", thinking: "low" }, runtime);
+      stop();
+
+      const matching = codexEvents.filter((evt) => evt.phase === "startup");
+      expect(matching).toHaveLength(1);
+    });
+  });
+
   it("uses default fallback list for auto session model overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
