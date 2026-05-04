@@ -387,7 +387,7 @@ export type ChannelOutboundSessionRoute = {
     kind: ChatType;
     id: string;
   };
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;
@@ -489,7 +489,7 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => ChatType | undefined;
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;

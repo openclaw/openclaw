@@ -1,3 +1,4 @@
+import type { ChatType } from "../channels/chat-type.js";
 import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -5,7 +6,7 @@ import {
   normalizeOptionalThreadValue,
 } from "../shared/string-coerce.js";
 
-export type ChannelRouteChatType = "direct" | "group" | "channel";
+export type ChannelRouteChatType = ChatType;
 
 export type ChannelRouteThreadKind = "topic" | "thread" | "reply";
 
