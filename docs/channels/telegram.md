@@ -388,7 +388,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Thinking events are delivered in order (`thinking_start` → one or more `thinking_stream` → `thinking_end`), followed by reply events (`reply_start` → one or more `reply_stream` → `reply_end`). Each POST body is a JSON object with an `event` field:
 
-    ```json
+    ```jsonl
     { "event": "thinking_start",  "runId": "abc123", "sessionKey": "agent:main:main", "timestamp": 1700000000000 }
     { "event": "thinking_stream", "runId": "abc123", "delta": "Let me think about...", "timestamp": 1700000000010 }
     { "event": "thinking_end",    "runId": "abc123", "timestamp": 1700000000500 }

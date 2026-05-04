@@ -211,6 +211,8 @@ export function startAgentEventSink(params: {
       case "lifecycle":
         handleLifecycle(evt);
         break;
+      default:
+        break;
     }
   });
 
