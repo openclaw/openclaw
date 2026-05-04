@@ -24,7 +24,6 @@
     "CHANGELOG.md",
     "LICENSE",
     "openclaw.mjs",
-    "openclaw-respawn.mjs",
     "README.md",
     "dist/",
     "!dist/.buildstamp",

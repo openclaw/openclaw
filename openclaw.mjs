@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runRespawnedChild } from "./openclaw-respawn.mjs";
 
 const MIN_NODE_MAJOR = 22;
 const MIN_NODE_MINOR = 12;
@@ -84,6 +84,102 @@ const resolvePackagedCompileCacheDirectory = () => {
   );
 };
 
+const respawnSignals =
+  process.platform === "win32"
+    ? ["SIGTERM", "SIGINT", "SIGBREAK"]
+    : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
+const respawnSignalExitGraceMs = 1_000;
+const respawnSignalForceKillGraceMs = 1_000;
+
+const runRespawnedChild = (command, args, env) => {
+  const child = spawn(command, args, {
+    stdio: "inherit",
+    env,
+  });
+  const listeners = new Map();
+  // This intentionally overlaps with src/entry.compile-cache.ts; keep the
+  // respawn supervision behavior in sync until the launcher can share TS code.
+  // Give the child a moment to honor forwarded signals, then exit the wrapper so
+  // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
+  let signalExitTimer = null;
+  let signalForceKillTimer = null;
+  const detach = () => {
+    for (const [signal, listener] of listeners) {
+      process.off(signal, listener);
+    }
+    listeners.clear();
+    if (signalExitTimer) {
+      clearTimeout(signalExitTimer);
+      signalExitTimer = null;
+    }
+    if (signalForceKillTimer) {
+      clearTimeout(signalForceKillTimer);
+      signalForceKillTimer = null;
+    }
+  };
+  const forceKillChild = () => {
+    try {
+      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+  };
+  const requestChildTermination = () => {
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Best-effort shutdown fallback.
+    }
+    signalForceKillTimer = setTimeout(() => {
+      forceKillChild();
+      process.exit(1);
+    }, respawnSignalForceKillGraceMs);
+    signalForceKillTimer.unref?.();
+  };
+  const scheduleParentExit = () => {
+    if (signalExitTimer) {
+      return;
+    }
+    signalExitTimer = setTimeout(() => {
+      requestChildTermination();
+    }, respawnSignalExitGraceMs);
+    signalExitTimer.unref?.();
+  };
+  for (const signal of respawnSignals) {
+    const listener = () => {
+      try {
+        child.kill(signal);
+      } catch {
+        // Best-effort signal forwarding.
+      }
+      scheduleParentExit();
+    };
+    try {
+      process.on(signal, listener);
+      listeners.set(signal, listener);
+    } catch {
+      // Unsupported signal on this platform.
+    }
+  }
+  child.once("exit", (code, signal) => {
+    detach();
+    if (signal) {
+      process.exit(1);
+    }
+    process.exit(code ?? 1);
+  });
+  child.once("error", (error) => {
+    detach();
+    process.stderr.write(
+      `[openclaw] Failed to respawn launcher: ${
+        error instanceof Error ? (error.stack ?? error.message) : String(error)
+      }\n`,
+    );
+    process.exit(1);
+  });
+  return true;
+};
+
 const respawnWithoutCompileCacheIfNeeded = () => {
   if (!isSourceCheckoutLauncher()) {
     return false;
@@ -100,12 +196,11 @@ const respawnWithoutCompileCacheIfNeeded = () => {
     OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
   };
   delete env.NODE_COMPILE_CACHE;
-  runRespawnedChild({
-    command: process.execPath,
-    args: [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
     env,
-  });
-  return true;
+  );
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
@@ -128,12 +223,11 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
     NODE_COMPILE_CACHE: desiredDirectory,
     OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
   };
-  runRespawnedChild({
-    command: process.execPath,
-    args: [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
+  return runRespawnedChild(
+    process.execPath,
+    [...process.execArgv, fileURLToPath(import.meta.url), ...process.argv.slice(2)],
     env,
-  });
-  return true;
+  );
 };
 
 const waitingForCompileCacheRespawn =
