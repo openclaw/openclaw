@@ -153,6 +153,30 @@ describe("implicit provider plugin allowlist compatibility", () => {
     });
   });
 
+  it("re-enables globally disabled plugins when allowlist mode accepts a plugin alias", () => {
+    const config = withBundledPluginEnablementCompat({
+      config: {
+        plugins: {
+          enabled: false,
+          allow: [" Google-Gemini-Cli "],
+          bundledDiscovery: "allowlist",
+        },
+      },
+      pluginIds: ["google"],
+    });
+
+    expect(config).toEqual({
+      plugins: {
+        enabled: true,
+        allow: [" Google-Gemini-Cli "],
+        bundledDiscovery: "allowlist",
+        entries: {
+          google: { enabled: true },
+        },
+      },
+    });
+  });
+
   it("still honors explicit plugin denies over compat allowlist injection", () => {
     const config = withBundledPluginEnablementCompat({
       config: withBundledPluginAllowlistCompat({

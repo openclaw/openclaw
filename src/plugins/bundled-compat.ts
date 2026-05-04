@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { hasExplicitPluginConfig } from "./config-policy.js";
+import { normalizePluginId } from "./config-state.js";
 
 export function withBundledPluginAllowlistCompat(params: {
   config: OpenClawConfig | undefined;
@@ -45,7 +46,9 @@ export function withBundledPluginEnablementCompat(params: {
   const useCompatDiscovery = params.config?.plugins?.bundledDiscovery === "compat";
   const allow = params.config?.plugins?.allow;
   const allowSet =
-    !useCompatDiscovery && Array.isArray(allow) && allow.length > 0 ? new Set(allow) : undefined;
+    !useCompatDiscovery && Array.isArray(allow) && allow.length > 0
+      ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
+      : undefined;
   let hasEligiblePlugin = false;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
