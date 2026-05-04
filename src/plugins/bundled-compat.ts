@@ -6,7 +6,7 @@ export function withBundledPluginAllowlistCompat(params: {
   config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
 }): OpenClawConfig | undefined {
-  if (params.config?.plugins?.bundledDiscovery === "allowlist") {
+  if (params.config?.plugins?.bundledDiscovery !== "compat") {
     return params.config;
   }
   const allow = params.config?.plugins?.allow;
@@ -42,8 +42,10 @@ export function withBundledPluginEnablementCompat(params: {
 }): OpenClawConfig | undefined {
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
-  const useAllowlistDiscovery = params.config?.plugins?.bundledDiscovery === "allowlist";
-  const allowSet = useAllowlistDiscovery ? new Set(params.config?.plugins?.allow ?? []) : undefined;
+  const useCompatDiscovery = params.config?.plugins?.bundledDiscovery === "compat";
+  const allow = params.config?.plugins?.allow;
+  const allowSet =
+    !useCompatDiscovery && Array.isArray(allow) && allow.length > 0 ? new Set(allow) : undefined;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
 

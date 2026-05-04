@@ -1213,7 +1213,7 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.slots.contextEngine":
     "Selects the active context engine plugin by id so one plugin provides context orchestration behavior.",
   "plugins.bundledDiscovery":
-    'Controls bundled plugin runtime discovery when plugins.allow is configured. "compat" (default) preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn. "allowlist" gates bundled provider plugins by plugins.allow like third-party plugins.',
+    'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
   "plugins.entries":
     "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
   "plugins.entries.*.enabled":

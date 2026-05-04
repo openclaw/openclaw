@@ -264,7 +264,7 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | ------------------ | --------------------------------------------------------- |
 | `enabled`          | Master toggle (default: `true`)                           |
 | `allow`            | Plugin allowlist (optional)                               |
-| `bundledDiscovery` | Bundled plugin discovery mode (`compat` by default)       |
+| `bundledDiscovery` | Bundled plugin discovery mode (`allowlist` by default)    |
 | `deny`             | Plugin denylist (optional; deny wins)                     |
 | `load.paths`       | Extra plugin files/directories                            |
 | `slots`            | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
@@ -276,11 +276,12 @@ tool name. If a tool allowlist references plugin tools, add the owning plugin id
 to `plugins.allow` or remove `plugins.allow`; `openclaw doctor` warns about this
 shape.
 
-`plugins.bundledDiscovery` defaults to `"compat"` so older configs keep legacy
-bundled provider behavior. Set it to `"allowlist"` when a restrictive
-`plugins.allow` inventory should also block omitted bundled provider plugins,
-including runtime web-search provider discovery. An empty `plugins.allow` is
-still treated as unset/open.
+`plugins.bundledDiscovery` defaults to `"allowlist"` for new configs, so a
+restrictive `plugins.allow` inventory also blocks omitted bundled provider
+plugins, including runtime web-search provider discovery. Doctor stamps older
+restrictive allowlist configs with `"compat"` during migration so upgrades keep
+legacy bundled provider behavior until the operator opts into the stricter mode.
+An empty `plugins.allow` is still treated as unset/open.
 
 Config changes made through `/plugins enable` or `/plugins disable` trigger an
 in-process Gateway plugin reload. New agent turns rebuild their tool list from

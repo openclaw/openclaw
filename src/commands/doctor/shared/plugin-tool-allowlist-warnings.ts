@@ -204,7 +204,7 @@ export function collectBundledProviderAllowlistPolicyWarnings(params: {
   if (!Array.isArray(allow) || allow.length === 0) {
     return [];
   }
-  if (params.cfg.plugins?.bundledDiscovery === "allowlist") {
+  if (params.cfg.plugins?.bundledDiscovery !== "compat") {
     return [];
   }
   return [

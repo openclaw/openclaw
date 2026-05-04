@@ -61,7 +61,31 @@ const providerManifestRegistry: PluginManifestRegistry = {
 };
 
 describe("implicit provider plugin allowlist compatibility", () => {
-  it("keeps bundled implicit providers discoverable when plugins.allow is set", () => {
+  it("keeps bundled implicit providers discoverable in explicit compat mode", () => {
+    const config = withBundledPluginEnablementCompat({
+      config: withBundledPluginAllowlistCompat({
+        config: {
+          plugins: {
+            allow: ["openrouter"],
+            bundledDiscovery: "compat",
+          },
+        },
+        pluginIds: ["kilocode", "moonshot"],
+      }),
+      pluginIds: ["kilocode", "moonshot"],
+    });
+
+    expect(
+      resolveEnabledProviderPluginIds({
+        config,
+        registry: providerRegistry,
+        manifestRegistry: providerManifestRegistry,
+        onlyPluginIds: PROVIDER_PLUGIN_IDS,
+      }),
+    ).toEqual(["kilocode", "moonshot", "openrouter"]);
+  });
+
+  it("respects allowlist for bundled plugins by default", () => {
     const config = withBundledPluginEnablementCompat({
       config: withBundledPluginAllowlistCompat({
         config: {
@@ -81,7 +105,7 @@ describe("implicit provider plugin allowlist compatibility", () => {
         manifestRegistry: providerManifestRegistry,
         onlyPluginIds: PROVIDER_PLUGIN_IDS,
       }),
-    ).toEqual(["kilocode", "moonshot", "openrouter"]);
+    ).toEqual(["openrouter"]);
   });
 
   it("respects allowlist for bundled plugins when bundledDiscovery is allowlist", () => {
@@ -114,6 +138,7 @@ describe("implicit provider plugin allowlist compatibility", () => {
         config: {
           plugins: {
             allow: ["openrouter"],
+            bundledDiscovery: "compat",
             deny: ["kilocode"],
           },
         },
