@@ -63,9 +63,7 @@ function normalizeConfiguredSecret(value: unknown, path: string): string | undef
 
 export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
   const search = resolveTavilySearchConfig(cfg);
-  const fetch = resolveTavilyFetchConfig(cfg);
   return (
-    normalizeConfiguredSecret(fetch?.apiKey, "plugins.entries.tavily.config.webFetch.apiKey") ||
     normalizeConfiguredSecret(search?.apiKey, "plugins.entries.tavily.config.webSearch.apiKey") ||
     normalizeSecretInput(process.env.TAVILY_API_KEY) ||
     undefined
@@ -74,13 +72,25 @@ export function resolveTavilyApiKey(cfg?: OpenClawConfig): string | undefined {
 
 export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
   const search = resolveTavilySearchConfig(cfg);
-  const fetch = resolveTavilyFetchConfig(cfg);
   const configured =
-    (normalizeOptionalString(fetch?.baseUrl) ?? "") ||
     (normalizeOptionalString(search?.baseUrl) ?? "") ||
     normalizeSecretInput(process.env.TAVILY_BASE_URL) ||
     "";
   return configured || DEFAULT_TAVILY_BASE_URL;
+}
+
+export function resolveTavilyFetchApiKey(cfg?: OpenClawConfig): string | undefined {
+  const fetch = resolveTavilyFetchConfig(cfg);
+  return (
+    normalizeConfiguredSecret(fetch?.apiKey, "plugins.entries.tavily.config.webFetch.apiKey") ||
+    resolveTavilyApiKey(cfg)
+  );
+}
+
+export function resolveTavilyFetchBaseUrl(cfg?: OpenClawConfig): string {
+  const fetch = resolveTavilyFetchConfig(cfg);
+  const override = normalizeOptionalString(fetch?.baseUrl) ?? "";
+  return override || resolveTavilyBaseUrl(cfg);
 }
 
 export function resolveTavilySearchTimeoutSeconds(override?: number): number {

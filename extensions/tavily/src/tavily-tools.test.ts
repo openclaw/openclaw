@@ -8,6 +8,8 @@ import {
   resolveTavilyApiKey,
   resolveTavilyBaseUrl,
   resolveTavilyExtractTimeoutSeconds,
+  resolveTavilyFetchApiKey,
+  resolveTavilyFetchBaseUrl,
   resolveTavilySearchConfig,
   resolveTavilySearchTimeoutSeconds,
 } from "./config.js";
@@ -283,6 +285,8 @@ describe("tavily tools", () => {
   });
 
   it("maps generic web_fetch args into Tavily extract params and translates extractMode to format", async () => {
+    vi.stubEnv("TAVILY_API_KEY", "");
+    vi.stubEnv("TAVILY_BASE_URL", "");
     const provider = createTavilyWebFetchProvider();
     const markdownTool = provider.createTool({
       config: { test: true } as unknown as OpenClawConfig,
@@ -300,6 +304,7 @@ describe("tavily tools", () => {
       urls: ["https://example.com"],
       format: "markdown",
       extractDepth: "advanced",
+      baseUrl: DEFAULT_TAVILY_BASE_URL,
     });
 
     await textTool.execute({
@@ -313,17 +318,47 @@ describe("tavily tools", () => {
       urls: ["https://example.com"],
       format: "text",
       extractDepth: "advanced",
+      baseUrl: DEFAULT_TAVILY_BASE_URL,
     });
   });
 
-  it("post-truncates rawContent and content when maxChars is supplied", async () => {
+  it("returns a flat top-level shape that the core fallback normalizer can consume", async () => {
     runTavilyExtract.mockImplementationOnce(async (params: unknown) => ({
+      provider: "tavily",
+      tookMs: 42,
+      results: [
+        {
+          url: "https://example.com/canonical",
+          rawContent: "ABCDEFGHIJ",
+          content: "short",
+        },
+      ],
+      _params: params,
+    }));
+    const tool = createTavilyWebFetchProvider().createTool({
+      config: {} as OpenClawConfig,
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = (await tool.execute({ url: "https://example.com" })) as Record<string, unknown>;
+
+    expect(result.text).toBe("ABCDEFGHIJ");
+    expect(result.url).toBe("https://example.com");
+    expect(result.finalUrl).toBe("https://example.com/canonical");
+    expect(result.extractor).toBe("tavily");
+    expect(result.tookMs).toBe(42);
+  });
+
+  it("falls back to result.content when rawContent is empty", async () => {
+    runTavilyExtract.mockImplementationOnce(async () => ({
       provider: "tavily",
       results: [
         {
-          url: (params as { urls?: unknown[] }).urls?.[0] ?? "",
-          rawContent: "ABCDEFGHIJ",
-          content: "ABCDEFGHIJ",
+          url: "https://example.com",
+          rawContent: "",
+          content: "short snippet",
         },
       ],
     }));
@@ -334,33 +369,33 @@ describe("tavily tools", () => {
       throw new Error("Expected tool definition");
     }
 
-    const result = (await tool.execute({
-      url: "https://example.com",
-      maxChars: 4,
-    })) as { results: Array<{ rawContent?: string; content?: string }> };
+    const result = (await tool.execute({ url: "https://example.com" })) as Record<string, unknown>;
 
-    expect(result.results[0]?.rawContent).toBe("ABCD");
-    expect(result.results[0]?.content).toBe("ABCD");
+    expect(result.text).toBe("short snippet");
   });
 
-  it("prefers webFetch.apiKey over webSearch.apiKey when resolving the credential", () => {
+  it("scopes webFetch.apiKey overrides to the fetch provider only", () => {
     const cfg = {
       plugins: {
         entries: {
           tavily: {
             config: {
-              webSearch: { apiKey: "search-key" },
-              webFetch: { apiKey: "fetch-override" },
+              webSearch: { apiKey: "search-key", baseUrl: "https://search.example" },
+              webFetch: { apiKey: "fetch-override", baseUrl: "https://fetch.example" },
             },
           },
         },
       },
     } as OpenClawConfig;
 
+    expect(resolveTavilyApiKey(cfg)).toBe("search-key");
+    expect(resolveTavilyBaseUrl(cfg)).toBe("https://search.example");
+    expect(resolveTavilyFetchApiKey(cfg)).toBe("fetch-override");
+    expect(resolveTavilyFetchBaseUrl(cfg)).toBe("https://fetch.example");
+
     expect(TAVILY_WEB_FETCH_PROVIDER_SHARED.getConfiguredCredentialValue?.(cfg)).toBe(
       "fetch-override",
     );
-    expect(resolveTavilyApiKey(cfg)).toBe("fetch-override");
 
     const target = {} as OpenClawConfig;
     TAVILY_WEB_FETCH_PROVIDER_SHARED.setConfiguredCredentialValue?.(target, "tvly-new");
@@ -368,5 +403,49 @@ describe("tavily tools", () => {
       (target.plugins?.entries?.tavily?.config as { webSearch?: { apiKey?: unknown } } | undefined)
         ?.webSearch?.apiKey,
     ).toBe("tvly-new");
+  });
+
+  it("falls back to webSearch credentials when no webFetch override is configured", () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: { webSearch: { apiKey: "search-key", baseUrl: "https://search.example" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveTavilyFetchApiKey(cfg)).toBe("search-key");
+    expect(resolveTavilyFetchBaseUrl(cfg)).toBe("https://search.example");
+  });
+
+  it("forwards the fetch-scoped apiKey/baseUrl override into runTavilyExtract", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: { apiKey: "search-key" },
+              webFetch: { apiKey: "fetch-override", baseUrl: "https://fetch.example" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const tool = createTavilyWebFetchProvider().createTool({ config: cfg });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ url: "https://example.com" });
+    expect(runTavilyExtract).toHaveBeenLastCalledWith({
+      cfg,
+      urls: ["https://example.com"],
+      format: "markdown",
+      extractDepth: "advanced",
+      apiKey: "fetch-override",
+      baseUrl: "https://fetch.example",
+    });
   });
 });

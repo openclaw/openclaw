@@ -81,8 +81,9 @@ Tavily can also serve as the bundled `web_fetch` provider via the
 
 Tavily uses one account for both `/search` and `/extract`, so the same
 `plugins.entries.tavily.config.webSearch.apiKey` (or `TAVILY_API_KEY`) is used
-for `web_fetch`. If you need a separate key, set
-`plugins.entries.tavily.config.webFetch.apiKey` -- it takes precedence.
+for `web_fetch` by default. If you need a separate key or base URL for the
+fetch path only, set `plugins.entries.tavily.config.webFetch.apiKey` and/or
+`webFetch.baseUrl` -- they take precedence for `web_fetch`.
 
 Tavily-only knobs (`query`, `chunks_per_source`, `include_images`,
 `include_favicon`, `timeout`, `include_usage`) stay accessible via the
