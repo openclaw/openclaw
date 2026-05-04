@@ -1,3 +1,4 @@
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,7 +34,7 @@ function resolveTargetNormalizer(channelId: ChannelId): TargetNormalizer {
   if (cached && cached.version === version) {
     return cached.normalizer;
   }
-  const plugin = getLoadedChannelPluginForRead(channelId);
+  const plugin = getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
   const normalizer = plugin?.messaging?.normalizeTarget;
   targetNormalizerCacheByChannelId.set(channelId, {
     version,
@@ -85,8 +86,9 @@ export function looksLikeTargetId(params: {
 }): boolean {
   const normalizedInput =
     params.normalized ?? normalizeTargetForProvider(params.channel, params.raw);
-  const lookup = getLoadedChannelPluginForRead(params.channel)?.messaging?.targetResolver
-    ?.looksLikeId;
+  const channelPlugin =
+    getLoadedChannelPluginForRead(params.channel) ?? getChannelPlugin(params.channel);
+  const lookup = channelPlugin?.messaging?.targetResolver?.looksLikeId;
   if (lookup) {
     return lookup(params.raw, normalizedInput ?? params.raw);
   }
@@ -117,7 +119,9 @@ export async function maybeResolvePluginMessagingTarget(params: {
   if (!normalizedInput) {
     return undefined;
   }
-  const resolver = getLoadedChannelPluginForRead(params.channel)?.messaging?.targetResolver;
+  const channelPlugin =
+    getLoadedChannelPluginForRead(params.channel) ?? getChannelPlugin(params.channel);
+  const resolver = channelPlugin?.messaging?.targetResolver;
   if (!resolver?.resolveTarget) {
     return undefined;
   }

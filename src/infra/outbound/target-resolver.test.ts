@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   listGroupsLive: vi.fn(),
   resolveTarget: vi.fn(),
   getChannelPlugin: vi.fn(),
+  getLoadedChannelPluginForRead: vi.fn(),
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
 }));
 
@@ -24,7 +25,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
-  getLoadedChannelPluginForRead: (...args: unknown[]) => mocks.getChannelPlugin(...args),
+  getLoadedChannelPluginForRead: (...args: unknown[]) =>
+    mocks.getLoadedChannelPluginForRead(...args),
 }));
 
 vi.mock("../../plugins/runtime.js", () => ({
@@ -45,8 +47,13 @@ beforeEach(() => {
   mocks.listGroupsLive.mockReset();
   mocks.resolveTarget.mockReset();
   mocks.getChannelPlugin.mockReset();
+  mocks.getLoadedChannelPluginForRead.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReset();
   mocks.getActivePluginChannelRegistryVersion.mockReturnValue(1);
+  // Default: getLoadedChannelPluginForRead mirrors getChannelPlugin for backward compat.
+  mocks.getLoadedChannelPluginForRead.mockImplementation((...args: unknown[]) =>
+    mocks.getChannelPlugin(...args),
+  );
   resetDirectoryCache();
 });
 
@@ -228,5 +235,80 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     });
 
     expect(formatTargetDisplay({ channel: "forum", target: "forum:12345" })).toBe("12345");
+  });
+
+  it("resolves plugin id-like targets when only the bundled registry has the plugin", async () => {
+    // Simulate the scenario where getLoadedChannelPluginForRead finds nothing
+    // but getChannelPlugin (with bundled fallback) still returns the plugin.
+    mocks.getLoadedChannelPluginForRead.mockReturnValue(undefined);
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        targetResolver: {
+          looksLikeId: (raw: string) => /^-?\d+$/.test(raw),
+          hint: "<chatId>",
+        },
+      },
+    });
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "telegram",
+      input: "-1003577364307",
+    });
+    expect(result.target.source).toBe("normalized");
+    expect(result.target.to).toBe("-1003577364307");
+  });
+
+  it("resolves plugin-normalized targets when only the bundled registry normalizer is available", async () => {
+    mocks.getLoadedChannelPluginForRead.mockReturnValue(undefined);
+    mocks.getChannelPlugin.mockReturnValue({
+      messaging: {
+        normalizeTarget: (raw: string) =>
+          raw.startsWith("tg:") ? `tg:${raw.slice(3)}` : `mychat:${raw}`,
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+    });
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "mychat",
+      input: "12345",
+    });
+    expect(result.target.source).toBe("normalized");
+    expect(result.target.to).toBe("mychat:12345");
+  });
+
+  it("falls back to getChannelPlugin directory when plugins are only in bundled registry", async () => {
+    mocks.getLoadedChannelPluginForRead.mockReturnValue(undefined);
+    const entry: ChannelDirectoryEntry = { kind: "group", id: "group:general", name: "general" };
+    mocks.getChannelPlugin.mockReturnValue({
+      directory: {
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => false,
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValue([entry]);
+    mocks.listGroupsLive.mockResolvedValue([entry]);
+    mocks.resolveTarget.mockResolvedValue({
+      to: "group:general",
+      kind: "group",
+      source: "directory",
+    });
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "mychat",
+      input: "general",
+    });
+    expect(result.target.source).toBe("directory");
+    expect(result.target.to).toBe("mychat:group:general");
   });
 });

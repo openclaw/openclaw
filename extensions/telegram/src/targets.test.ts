@@ -271,6 +271,44 @@ describe("telegram target normalization", () => {
     expect(looksLikeTelegramTargetId("tg:group:-100123")).toBe(true);
     expect(looksLikeTelegramTargetId("hello world")).toBe(false);
   });
+
+  it("recognizes numeric group topic targets with topic marker", () => {
+    expect(looksLikeTelegramTargetId("-1003577364307:topic:1189")).toBe(true);
+    expect(normalizeTelegramMessagingTarget("-1003577364307:topic:1189")).toBe(
+      "telegram:-1003577364307:topic:1189",
+    );
+  });
+
+  it("recognizes numeric group targets with colon-separated thread id", () => {
+    expect(looksLikeTelegramTargetId("-1003577364307:1189")).toBe(true);
+    expect(normalizeTelegramMessagingTarget("-1003577364307:1189")).toBe(
+      "telegram:-1003577364307:1189",
+    );
+  });
+
+  it("recognizes plain numeric group chat ids without prefix", () => {
+    expect(looksLikeTelegramTargetId("-1003577364307")).toBe(true);
+    expect(normalizeTelegramMessagingTarget("-1003577364307")).toBe("telegram:-1003577364307");
+  });
+
+  it("recognizes telegram-prefixed numeric group ids", () => {
+    expect(looksLikeTelegramTargetId("telegram:-1003577364307")).toBe(true);
+    expect(normalizeTelegramMessagingTarget("telegram:-1003577364307")).toBe(
+      "telegram:-1003577364307",
+    );
+  });
+
+  it("recognizes telegram-prefixed numeric group ids with topic marker", () => {
+    expect(looksLikeTelegramTargetId("telegram:-1003577364307:topic:1189")).toBe(true);
+    expect(normalizeTelegramMessagingTarget("telegram:-1003577364307:topic:1189")).toBe(
+      "telegram:-1003577364307:topic:1189",
+    );
+  });
+
+  it("recognizes numeric direct chat ids", () => {
+    expect(looksLikeTelegramTargetId("123456789")).toBe(true);
+    expect(normalizeTelegramMessagingTarget("123456789")).toBe("telegram:123456789");
+  });
 });
 
 installMaybePersistResolvedTelegramTargetTests({ includeGatewayScopeCases: true });

@@ -413,6 +413,7 @@ Docs: https://docs.openclaw.ai
 - Agents/reply context: label replied-to messages as the current user message target in model-visible metadata, so short replies are grounded to their explicit reply target instead of nearby chat history. (#76817) Thanks @obviyus.
 - Doctor/plugins: install configured missing official plugins such as Discord and Brave during doctor/update repair, auto-enable repaired provider plugins, preserve config when a download fails, and stop auto-enable from inventing plugin entries when no manifest declares a configured channel. Fixes #76872. Thanks @jack-stormentswe.
 - TUI: replace the stale-response watchdog notice with plain user-facing copy so stalled replies no longer surface backend or streaming internals. (#77120) Thanks @davemorin.
+- Channels/message-tool: fall back to the bundled plugin registry for target normalization, id-like detection, and plugin target resolution when the loaded runtime registry has no entry for the channel, so the agent `message` tool accepts Telegram numeric group and forum-topic targets (e.g. `-1003577364307:topic:1189`) that the CLI already normalizes without errors. Fixes #77137.
 
 ## 2026.5.2
 
