@@ -102,7 +102,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");
     const rsyncArgs = commands
       .filter((entry) => entry.command === "rsync")
-      .flatMap((entry) => [...entry.args]);
+      .flatMap((entry) => entry.args);
     expect(rsyncArgs).not.toContain("--delete");
     expect(rsyncArgs).toEqual(
       expect.arrayContaining([
