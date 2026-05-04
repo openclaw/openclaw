@@ -382,6 +382,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
     ]);
@@ -400,12 +401,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
+      "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",
       "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
     ]);

@@ -189,6 +189,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.groupChat.requireMention` → `channels.whatsapp/telegram/imessage.groups."*".requireMention`
     - `routing.groupChat.historyLimit` → `messages.groupChat.historyLimit`
     - `routing.groupChat.mentionPatterns` → `messages.groupChat.mentionPatterns`
+    - `channels.telegram.requireMention` → `channels.telegram.groups."*".requireMention`
     - configured-channel configs missing visible reply policy → `messages.groupChat.visibleReplies: "message_tool"`
     - `routing.queue` → `messages.queue`
     - `routing.bindings` → top-level `bindings`

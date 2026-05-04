@@ -253,6 +253,11 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
     );
+    expect(publishedUpgradeSurvivor.indexOf("phase seed-source-only-plugin-shadow")).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf("phase assert-baseline"),
+    );
+    expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
+    expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
     expect(publishedUpgradeSurvivor).toContain(
       "Legacy plugin dependency debris was already removed before doctor",
     );
@@ -573,6 +578,18 @@ describe("package artifact reuse", () => {
     expect(qaWorkflow).toContain(
       'pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"',
     );
+  });
+
+  it("keeps Slack live QA disabled in CI until credentials are provisioned", () => {
+    const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+
+    expect(releaseWorkflow).toContain("qa_live_slack_enabled=false");
+    expect(releaseWorkflow).toContain(
+      "RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED || 'false' }}",
+    );
+    expect(releaseWorkflow).toContain("vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
+    expect(qaWorkflow).toContain("if: vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
   });
 
   it("names package acceptance Telegram as artifact-backed package validation", () => {
