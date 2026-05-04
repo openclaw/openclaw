@@ -393,10 +393,9 @@ function resolveCodexAppServerModelProvider(params: {
     isCodexAppServerNativeAuthProfile(params) &&
     (normalizedLower === "openai" || normalizedLower === "openai-codex")
   ) {
-    // When OpenClaw is forwarding ChatGPT/Codex OAuth, forcing the public
-    // OpenAI model provider makes app-server call api.openai.com without the
-    // ChatGPT bearer and fails with "Missing bearer or basic authentication".
-    // Omit the provider so app-server keeps its native account-backed route.
+    // When OpenClaw is forwarding ChatGPT/Codex OAuth, `openai` is Codex's
+    // native provider id, not a public OpenAI API-key choice. Omit the override
+    // so app-server keeps its configured provider/auth pair for this session.
     return undefined;
   }
   return normalizedLower === "openai-codex" ? "openai" : normalized;
