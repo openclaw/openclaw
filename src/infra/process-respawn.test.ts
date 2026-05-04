@@ -254,6 +254,60 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(result.mode).toBe("failed");
     expect(result.detail).toContain("spawn failed");
   });
+
+  it("returns failed when running inside gateway process tree with supervisor detected (#75691)", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("failed");
+    expect(result.detail).toContain("openclaw update detected it is running inside the gateway process tree");
+    expect(result.detail).toContain("Run `openclaw update` from an external shell");
+    expect(result.detail).toContain("--no-restart");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("allows supervised restart when service markers are not set", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    // No service markers set
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("allows supervised restart when service marker is wrong value", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    process.env.OPENCLAW_SERVICE_MARKER = "wrong-value";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("allows supervised restart when service kind is wrong value", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "wrong-kind";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("respawnGatewayProcessForUpdate", () => {
@@ -292,5 +346,21 @@ describe("respawnGatewayProcessForUpdate", () => {
         stdio: "inherit",
       }),
     );
+  });
+
+  it("returns failed when running inside gateway process tree with supervisor detected (#75691)", () => {
+    clearSupervisorHints();
+    setPlatform("linux");
+    process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("failed");
+    expect(result.detail).toContain("openclaw update detected it is running inside the gateway process tree");
+    expect(result.detail).toContain("Run `openclaw update` from an external shell");
+    expect(result.detail).toContain("--no-restart");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });

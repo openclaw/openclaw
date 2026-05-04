@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../daemon/constants.js";
 import { isContainerEnvironment } from "./container-environment.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
@@ -34,6 +35,37 @@ function spawnDetachedGatewayProcess(): { child: ChildProcess; pid?: number } {
 }
 
 /**
+ * Check if the current process appears to be running inside the gateway process tree.
+ * When running under a supervisor (systemd/launchd), child process exit doesn't trigger
+ * supervisor restart of the parent gateway. This detection helps avoid silent failures.
+ * 
+ * This is a conservative check: if we detect service environment markers, we assume
+ * we might be inside the gateway process tree. The main gateway process would also
+ * have these markers, but it's less common for the main process to invoke `openclaw update`
+ * on itself. Users can use `--no-restart` flag if they need to update from within.
+ */
+function isRunningInsideGatewayProcessTree(env: NodeJS.ProcessEnv = process.env): boolean {
+  // Check if we're running as a service (has service marker)
+  const serviceMarker = env.OPENCLAW_SERVICE_MARKER?.trim();
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  if (serviceMarker !== GATEWAY_SERVICE_MARKER) {
+    return false;
+  }
+  if (serviceKind && serviceKind !== GATEWAY_SERVICE_KIND) {
+    return false;
+  }
+  
+  // We have service environment markers. This could mean:
+  // 1. We're the main gateway process (should be able to restart)
+  // 2. We're a child process (agent exec) - restart would fail silently
+  // 
+  // Since we can't easily distinguish between these cases without PPID ancestry
+  // checking, we take the conservative approach: error and let user use --no-restart
+  // or run from external shell.
+  return true;
+}
+
+/**
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd/schtasks): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
@@ -45,6 +77,16 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
+    // Check if we're running inside the gateway process tree (#75691)
+    // When invoked from a child process of the gateway (e.g., agent exec),
+    // exiting the child doesn't trigger supervisor restart of the parent.
+    if (isRunningInsideGatewayProcessTree(process.env)) {
+      return {
+        mode: "failed",
+        detail: "openclaw update detected it is running inside the gateway process tree. The supervised-mode restart cannot fire from this context. Run `openclaw update` from an external shell (SSH, cron, or other detached session). To install without restart from this context, pass --no-restart and manually invoke `sudo systemctl restart <unit>` from outside.",
+      };
+    }
+    
     // On macOS launchd, exit cleanly and let KeepAlive relaunch the service.
     // Avoid detached kickstart/start handoffs here so restart timing stays tied
     // to launchd's native supervision rather than a second helper process.
@@ -97,6 +139,16 @@ export function respawnGatewayProcessForUpdate(): GatewayUpdateRespawnResult {
   }
   const supervisor = detectRespawnSupervisor(process.env);
   if (supervisor) {
+    // Check if we're running inside the gateway process tree (#75691)
+    // When invoked from a child process of the gateway (e.g., agent exec),
+    // exiting the child doesn't trigger supervisor restart of the parent.
+    if (isRunningInsideGatewayProcessTree(process.env)) {
+      return {
+        mode: "failed",
+        detail: "openclaw update detected it is running inside the gateway process tree. The supervised-mode restart cannot fire from this context. Run `openclaw update` from an external shell (SSH, cron, or other detached session). To install without restart from this context, pass --no-restart and manually invoke `sudo systemctl restart <unit>` from outside.",
+      };
+    }
+    
     if (supervisor === "schtasks") {
       const restart = triggerOpenClawRestart();
       if (!restart.ok) {
