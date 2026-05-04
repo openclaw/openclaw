@@ -53,6 +53,7 @@ vi.mock("./gateway.ts", () => ({
 }));
 
 const { handleGatewayEvent } = await import("./app-gateway.ts");
+const { applySessionsChangedEvent } = await import("./controllers/sessions.ts");
 const { addExecApproval } = await vi.importActual<typeof import("./controllers/exec-approval.ts")>(
   "./controllers/exec-approval.ts",
 );
@@ -112,18 +113,40 @@ function createHost() {
 }
 
 describe("handleGatewayEvent sessions.changed", () => {
-  it("reloads sessions when the gateway pushes a sessions.changed event", () => {
+  it("applies reliable session change snapshots without refetching the list", () => {
     loadSessionsMock.mockReset();
+    vi.mocked(applySessionsChangedEvent).mockReturnValueOnce(true);
+    const host = createHost();
+    const payload = {
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+      kind: "direct",
+      reason: "patch",
+    };
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload,
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEvent).toHaveBeenCalledWith(host, payload);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads sessions when a change event cannot be applied locally", () => {
+    loadSessionsMock.mockReset();
+    vi.mocked(applySessionsChangedEvent).mockReturnValueOnce(false);
     const host = createHost();
 
     handleGatewayEvent(host, {
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: "agent:main:main", reason: "patch" },
+      payload: { sessionKey: "agent:main:main", reason: "cleanup" },
       seq: 1,
     });
 
-    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
   });
 });

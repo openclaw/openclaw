@@ -594,6 +594,29 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions).toEqual([]);
   });
 
+  it("does not treat partial existing-row events as a complete source of truth", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 1 }],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:main",
+      reason: "message",
+      ts: 2,
+    });
+
+    expect(applied).toBe(false);
+    expect(state.sessionsResult?.sessions).toEqual([
+      { key: "agent:main:main", kind: "direct", updatedAt: 1 },
+    ]);
+  });
+
   it("drops rows that become explicitly archived while archived sessions are hidden", () => {
     const state = createState(async () => undefined, {
       sessionsResult: {
@@ -666,6 +689,7 @@ describe("applySessionsChangedEvent", () => {
 
     const applied = applySessionsChangedEvent(state, {
       sessionKey: "agent:main:main",
+      sessionId: "sess-main",
       ts: 2,
       totalTokens: 190_000,
       totalTokensFresh: true,
@@ -706,6 +730,7 @@ describe("applySessionsChangedEvent", () => {
 
     applySessionsChangedEvent(state, {
       sessionKey: "agent:main:main",
+      sessionId: "sess-main",
       totalTokensFresh: false,
       contextTokens: 200_000,
     });

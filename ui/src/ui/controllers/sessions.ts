@@ -287,7 +287,7 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
   }
   const existing = existingIndex >= 0 ? previousRows[existingIndex] : undefined;
   const hasReliableSource = eventSession !== null || typeof source.sessionId === "string";
-  if (!existing && !hasReliableSource) {
+  if (!hasReliableSource) {
     return false;
   }
   const previousCheckpointSignature = checkpointSummarySignature(existing);

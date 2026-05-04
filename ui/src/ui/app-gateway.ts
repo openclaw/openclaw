@@ -740,8 +740,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    void loadSessions(host as unknown as SessionsState);
+    const applied = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (!applied) {
+      void loadSessions(host as unknown as SessionsState);
+    }
     return;
   }
 
