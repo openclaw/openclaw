@@ -250,6 +250,29 @@ describe("codex command", () => {
     expect(deps.readCodexStatusProbes).toHaveBeenCalledWith(undefined, config);
   });
 
+  it("escapes Codex status probe errors before chat display", async () => {
+    const unsafe = "<@U123> [trusted](https://evil) @here";
+    const offline = { ok: false as const, error: unsafe };
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: offline,
+        account: offline,
+        limits: offline,
+        mcps: offline,
+        skills: offline,
+      })),
+    });
+
+    const result = await handleCodexCommand(createContext("status"), { deps });
+
+    expect(result.text).toContain(
+      "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+    expect(result.text).not.toContain("@here");
+  });
+
   it("rejects extra operands for read-only Codex commands", async () => {
     const readCodexStatusProbes = vi.fn();
     const listCodexAppServerModels = vi.fn();
@@ -318,6 +341,25 @@ describe("codex command", () => {
     expect(safeCodexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.account, {
       refreshToken: false,
     });
+  });
+
+  it("escapes Codex account probe errors before chat display", async () => {
+    const unsafe = "<@U123> [trusted](https://evil) @here";
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, error: unsafe })
+      .mockResolvedValueOnce({ ok: false as const, error: unsafe });
+
+    const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+    expect(result.text).not.toContain("@here");
   });
 
   it("formats generated Amazon Bedrock account responses", async () => {

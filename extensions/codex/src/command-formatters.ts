@@ -25,19 +25,35 @@ export function formatCodexStatus(probes: CodexStatusProbes): string {
       }`,
     );
   } else {
-    lines.push(`Models: ${probes.models.error}`);
+    lines.push(`Models: ${formatCodexDisplayText(probes.models.error)}`);
   }
   lines.push(
-    `Account: ${probes.account.ok ? summarizeAccount(probes.account.value) : probes.account.error}`,
+    `Account: ${
+      probes.account.ok
+        ? summarizeAccount(probes.account.value)
+        : formatCodexDisplayText(probes.account.error)
+    }`,
   );
   lines.push(
-    `Rate limits: ${probes.limits.ok ? summarizeArrayLike(probes.limits.value) : probes.limits.error}`,
+    `Rate limits: ${
+      probes.limits.ok
+        ? summarizeArrayLike(probes.limits.value)
+        : formatCodexDisplayText(probes.limits.error)
+    }`,
   );
   lines.push(
-    `MCP servers: ${probes.mcps.ok ? summarizeArrayLike(probes.mcps.value) : probes.mcps.error}`,
+    `MCP servers: ${
+      probes.mcps.ok
+        ? summarizeArrayLike(probes.mcps.value)
+        : formatCodexDisplayText(probes.mcps.error)
+    }`,
   );
   lines.push(
-    `Skills: ${probes.skills.ok ? summarizeArrayLike(probes.skills.value) : probes.skills.error}`,
+    `Skills: ${
+      probes.skills.ok
+        ? summarizeArrayLike(probes.skills.value)
+        : formatCodexDisplayText(probes.skills.error)
+    }`,
   );
   return lines.join("\n");
 }
@@ -87,8 +103,8 @@ export function formatAccount(
   limits: SafeValue<JsonValue | undefined>,
 ): string {
   return [
-    `Account: ${account.ok ? summarizeAccount(account.value) : account.error}`,
-    `Rate limits: ${limits.ok ? summarizeArrayLike(limits.value) : limits.error}`,
+    `Account: ${account.ok ? summarizeAccount(account.value) : formatCodexDisplayText(account.error)}`,
+    `Rate limits: ${limits.ok ? summarizeArrayLike(limits.value) : formatCodexDisplayText(limits.error)}`,
   ].join("\n");
 }
 
