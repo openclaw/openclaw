@@ -57,6 +57,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/claude-cli: append `--fork-session` to the default Claude CLI resume args so each `claude --resume {sessionId}` starts a fresh session id rather than reusing the original, preventing concurrent transcript-write collisions when multiple call sites (auto-reply, queued steers, subagent spawns) resume the same session in close succession; the new session id is captured from the stream-json `init` event and written back through `cliSessionBindings` on each turn. Thanks @dae-sun.
 - Web fetch: late-bind `web_fetch` config and provider fallback metadata from the active runtime snapshot, matching `web_search` so long-lived tools do not use stale fetch provider settings. Thanks @vincentkoc.
 - Discord: clear stale startup probe bot/application status when the async bot probe throws, not just when it returns a degraded probe result. Thanks @vincentkoc.
 - Web search: scope explicit bundled `web_search` provider runtime loading through manifest ownership, so selecting DuckDuckGo/Gemini/etc. does not import unrelated bundled providers or log their optional dependency failures. Thanks @vincentkoc.
