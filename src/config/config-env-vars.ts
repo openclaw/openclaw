@@ -44,6 +44,7 @@ function resolveFileEnvRef(
     const code = (err as NodeJS.ErrnoException).code;
     throw new Error(
       `Config env file ref "${value}" not found at ${resolved}${code ? ` (${code})` : ""}`,
+      { cause: err },
     );
   }
 }
