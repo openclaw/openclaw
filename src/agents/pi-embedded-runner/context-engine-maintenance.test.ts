@@ -94,7 +94,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
   });
 
   it("adds a transcript rewrite helper that targets the current session file", async () => {
-    const runtimeContext = await buildContextEngineMaintenanceRuntimeContext({
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
@@ -132,7 +132,7 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
       typeof buildContextEngineMaintenanceRuntimeContext
     >[0]["sessionManager"];
-    const runtimeContext = await buildContextEngineMaintenanceRuntimeContext({
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionFile: "/tmp/session.jsonl",
