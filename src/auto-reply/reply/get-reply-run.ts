@@ -1350,4 +1350,23 @@ export async function runPreparedReply(
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   });
+
+  // Trigger async AI title generation after a successful reply.
+  const titleSessionEntry = preparedSessionState.sessionEntry;
+  if (!isHeartbeat && reply && titleSessionEntry && storePath) {
+    import("./session-title-generator.js")
+      .then(({ maybeGenerateSessionTitle }) =>
+        maybeGenerateSessionTitle({
+          cfg,
+          sessionKey,
+          sessionEntry: titleSessionEntry,
+          storePath,
+          agentId,
+          agentDir,
+        }),
+      )
+      .catch(() => undefined);
+  }
+
+  return reply;
 }
