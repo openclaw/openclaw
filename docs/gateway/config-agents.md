@@ -94,6 +94,31 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+### `agents.defaults.runtimeContextPlacement`
+
+Controls where OpenClaw places runtime-owned per-turn context after it is split
+from the visible transcript prompt. Default: `"system"`.
+
+- `"system"`: append extracted runtime context to the current turn's system
+  prompt. This is the default behavior and keeps runtime context out of the
+  submitted user prompt.
+- `"prompt"`: keep extracted runtime context in the submitted user prompt. Use
+  this for local providers with prefix/KV caches, such as Ollama, when volatile
+  runtime metadata in the system prompt would prevent reuse of the stable
+  conversation-history prefix.
+
+The `"prompt"` mode preserves the legacy-style request layout: stable system
+prompt, stable prior messages, then the current user prompt with untrusted
+runtime metadata. It may expose runtime-owned metadata in the submitted prompt,
+so prefer the default unless local prefix-cache behavior matters for that
+agent.
+
+```json5
+{
+  agents: { defaults: { runtimeContextPlacement: "prompt" } }, // system | prompt
+}
+```
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `12000`.
