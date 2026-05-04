@@ -953,7 +953,35 @@ async function formatGeneratedTypeScript(filePath: string, source: string): Prom
       rejectOnFailure: true,
     },
   );
-  return result.stdout;
+  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
+}
+
+function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {
+  if (!formatted.includes("\uFFFD") || source.includes("\uFFFD")) {
+    return formatted;
+  }
+
+  const stringLiteralPattern = /"(?:\\.|[^"\\])*"/gu;
+  const sourceLiterals = [...source.matchAll(stringLiteralPattern)];
+  const formattedLiterals = [...formatted.matchAll(stringLiteralPattern)];
+  if (sourceLiterals.length !== formattedLiterals.length) {
+    return formatted;
+  }
+
+  let output = "";
+  let cursor = 0;
+  for (const [index, formattedLiteral] of formattedLiterals.entries()) {
+    const replacement = sourceLiterals[index]?.[0];
+    const literal = formattedLiteral[0];
+    const start = formattedLiteral.index;
+    if (replacement === undefined || start === undefined) {
+      return formatted;
+    }
+    output += formatted.slice(cursor, start);
+    output += literal.includes("\uFFFD") && !replacement.includes("\uFFFD") ? replacement : literal;
+    cursor = start + literal.length;
+  }
+  return `${output}${formatted.slice(cursor)}`;
 }
 
 type PendingPrompt = {
