@@ -282,7 +282,7 @@ export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   target: "host" | "sandbox";
   mode: "child" | "pty";
-  outcome: "completed" | "failed";
+  outcome: "completed" | "failed" | "killed";
   durationMs: number;
   commandLength: number;
   exitCode?: number;
