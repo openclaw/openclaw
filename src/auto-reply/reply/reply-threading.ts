@@ -1,3 +1,4 @@
+import { isChatType, type ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -11,18 +12,15 @@ import { isSingleUseReplyToMode } from "./reply-reference.js";
 
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
-  replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
+  replyToModeByChatType?: Partial<Record<ChatType, ReplyToMode>>;
   dm?: {
     replyToMode?: ReplyToMode;
   };
 };
 
-function normalizeReplyToModeChatType(
-  chatType?: string | null,
-): "direct" | "group" | "channel" | undefined {
-  return chatType === "direct" || chatType === "group" || chatType === "channel"
-    ? chatType
-    : undefined;
+function normalizeReplyToModeChatType(chatType?: string | null): ChatType | undefined {
+  const value = chatType ?? undefined;
+  return isChatType(value) ? value : undefined;
 }
 
 export function resolveConfiguredReplyToMode(

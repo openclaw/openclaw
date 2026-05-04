@@ -95,6 +95,53 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("strips delegated auth from collected synthetic runs", async () => {
+    const key = `test-collect-strip-plugin-auth-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const pluginAuth = {
+      getDelegatedAccessToken: async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      }),
+    };
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    for (const prompt of ["one", "two"]) {
+      const run = createRun({
+        prompt,
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      });
+      enqueueFollowupRun(
+        key,
+        {
+          ...run,
+          run: {
+            ...run.run,
+            pluginAuth,
+          },
+        },
+        settings,
+      );
+    }
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.run.pluginAuth).toBeUndefined();
+  });
+
   it("carries image payloads across collected batches", async () => {
     const key = `test-collect-images-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -484,6 +531,12 @@ describe("followup queue collect routing", () => {
       cap: 2,
       dropPolicy: "summarize",
     };
+    const pluginAuth = {
+      getDelegatedAccessToken: async () => ({
+        ok: false as const,
+        reason: "not_configured" as const,
+      }),
+    };
 
     enqueueFollowupRun(
       key,
@@ -503,13 +556,20 @@ describe("followup queue collect routing", () => {
       }),
       settings,
     );
+    const third = createRun({
+      prompt: "third",
+      originatingChannel: "slack",
+      originatingTo: "channel:C",
+    });
     enqueueFollowupRun(
       key,
-      createRun({
-        prompt: "third",
-        originatingChannel: "slack",
-        originatingTo: "channel:C",
-      }),
+      {
+        ...third,
+        run: {
+          ...third.run,
+          pluginAuth,
+        },
+      },
       settings,
     );
 
@@ -521,6 +581,7 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("third");
     expect(calls[2]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[2]?.prompt).toContain("- first");
+    expect(calls[2]?.run.pluginAuth).toBeUndefined();
   });
 
   it("preserves collect order when authorization changes more than once", async () => {

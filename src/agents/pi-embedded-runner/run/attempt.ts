@@ -848,6 +848,7 @@ export async function runEmbeddedAttempt(
             },
             sandbox,
             messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+            messageChatType: params.messageChatType,
             agentAccountId: params.agentAccountId,
             messageTo: params.messageTo,
             messageThreadId: params.messageThreadId,
@@ -863,6 +864,7 @@ export async function runEmbeddedAttempt(
             senderIsOwner: params.senderIsOwner,
             ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            pluginAuth: params.pluginAuth,
             sessionKey: sandboxSessionKey,
             // When sandboxSessionKey differs from the real run session key (e.g. Telegram
             // direct peer key vs agent:main:main), pass the live key so session_status
