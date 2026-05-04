@@ -65,7 +65,7 @@ jobs:
           fi
           runner_ssh_port="${BLACKSMITH_SSH_PORT:-22}"
 
-          response="$(curl -s -f -X POST "${api_url}/api/testbox/phone-home" \
+          response="$(curl -s -f -L -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
             -d "{
@@ -155,7 +155,7 @@ jobs:
           }
           JSON
 
-          http_code="$(curl -sS -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
+          http_code="$(curl -sS -L -o "$RUNNER_TEMP/testbox-ready.response" -w '%{http_code}' \
             -X POST "${api_url}/api/testbox/phone-home" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer ${auth_token}" \
@@ -179,7 +179,7 @@ jobs:
             sleep 30
             now="$(date +%s)"
 
-            if netstat -na 2>/dev/null | grep -q ":${runner_ssh_port}"; then
+            if netstat -na 2>/dev/null | grep ":${runner_ssh_port}" | grep -q ESTABLISHED; then
               last_activity="$now"
             elif [ -f ~/.testbox-last-activity ]; then
               file_mtime="$(stat -c %Y ~/.testbox-last-activity 2>/dev/null || stat -f %m ~/.testbox-last-activity)"
