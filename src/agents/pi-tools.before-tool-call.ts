@@ -26,13 +26,17 @@ import {
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
-import {
-  observePostCompactionLoopGuard,
-  PostCompactionLoopPersistedError,
-} from "./pi-embedded-runner/post-compaction-loop-guard.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
+
+export type ToolOutcomeObservation = {
+  toolName: string;
+  argsHash: string;
+  resultHash: string;
+};
+
+export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
 export type HookContext = {
   agentId?: string;
@@ -43,6 +47,7 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   loopDetection?: ToolLoopDetectionConfig;
+  onToolOutcome?: ToolOutcomeObserver;
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -376,9 +381,10 @@ async function recordLoopOutcome(args: {
   result?: unknown;
   error?: unknown;
 }): Promise<void> {
-  if (!args.ctx?.sessionKey) {
+  if (!args.ctx?.sessionKey && !args.ctx?.sessionId) {
     return;
   }
+  let recordedOutcome: ToolOutcomeObservation | undefined;
   try {
     const { getDiagnosticSessionState, recordToolCallOutcome } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
@@ -394,28 +400,18 @@ async function recordLoopOutcome(args: {
       config: args.ctx.loopDetection,
       ...(args.ctx.runId && { runId: args.ctx.runId }),
     });
-    if (record?.resultHash) {
-      const verdict = observePostCompactionLoopGuard(
-        {
-          sessionKey: args.ctx.sessionKey,
-          sessionId: args.ctx.sessionId,
-          runId: args.ctx.runId,
-        },
-        {
-          toolName: record.toolName,
-          argsHash: record.argsHash,
-          resultHash: record.resultHash,
-        },
-      );
-      if (verdict?.shouldAbort) {
-        throw PostCompactionLoopPersistedError.fromVerdict(verdict);
-      }
+    if (record?.resultHash && args.ctx.onToolOutcome) {
+      recordedOutcome = {
+        toolName: record.toolName,
+        argsHash: record.argsHash,
+        resultHash: record.resultHash,
+      };
     }
   } catch (err) {
-    if (err instanceof PostCompactionLoopPersistedError) {
-      throw err;
-    }
     log.warn(`tool loop outcome tracking failed: tool=${args.toolName} error=${String(err)}`);
+  }
+  if (recordedOutcome) {
+    args.ctx.onToolOutcome?.(recordedOutcome);
   }
 }
 

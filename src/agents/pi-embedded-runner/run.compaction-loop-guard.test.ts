@@ -4,7 +4,10 @@ import type {
   getDiagnosticSessionState as GetDiagnosticSessionStateType,
   SessionState,
 } from "../../logging/diagnostic-session-state.js";
-import type { wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType } from "../pi-tools.before-tool-call.js";
+import type {
+  ToolOutcomeObserver,
+  wrapToolWithBeforeToolCallHook as WrapToolWithBeforeToolCallHookType,
+} from "../pi-tools.before-tool-call.js";
 import type {
   recordToolCall as RecordToolCallType,
   recordToolCallOutcome as RecordToolCallOutcomeType,
@@ -72,6 +75,7 @@ async function executeWrappedToolOutcome(
   toolName: string,
   toolParams: unknown,
   result: unknown,
+  onToolOutcome?: ToolOutcomeObserver,
   runId = baseParams.runId,
 ): Promise<unknown> {
   const tool = wrapToolWithBeforeToolCallHook(
@@ -84,6 +88,7 @@ async function executeWrappedToolOutcome(
       sessionKey: baseParams.sessionKey,
       sessionId: baseParams.sessionId,
       runId,
+      onToolOutcome,
     },
   );
   liveToolCallSeq += 1;
@@ -159,12 +164,15 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     // Attempt 2: post-compaction. The live wrapped-tool path records each
     // outcome while the prompt is still running; the third identical result
     // aborts before the attempt can return.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
       for (let i = 0; i < 3; i += 1) {
         await executeWrappedToolOutcome(
           "gateway",
           { action: "lookup", path: "x" },
           "identical-result",
+          onToolOutcome,
         );
       }
       attemptReturned = true;
@@ -200,9 +208,16 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     // Attempt 2 (post-compaction): identical args, but DIFFERENT result hash
     // each time. This fills the window without triggering the persisted-loop
     // abort because the tool is making progress.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
       for (let i = 0; i < 3; i += 1) {
-        await executeWrappedToolOutcome("gateway", { action: "lookup", path: "x" }, `result-${i}`);
+        await executeWrappedToolOutcome(
+          "gateway",
+          { action: "lookup", path: "x" },
+          `result-${i}`,
+          onToolOutcome,
+        );
       }
       return makeAttemptResult({
         promptError: null,
@@ -235,9 +250,11 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     // Attempt 2 (post-compaction): two distinct records → window full,
     // guard disarms with no abort. We then append more identical records
     // afterwards in this test to confirm they are not observed by the guard.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
-      await executeWrappedToolOutcome("read", { path: "/a" }, "ra");
-      await executeWrappedToolOutcome("write", { path: "/b" }, "rb");
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
+      await executeWrappedToolOutcome("read", { path: "/a" }, "ra", onToolOutcome);
+      await executeWrappedToolOutcome("write", { path: "/b" }, "rb", onToolOutcome);
       return makeAttemptResult({
         promptError: null,
         toolMetas: [{ toolName: "read" }, { toolName: "write" }],
@@ -293,12 +310,15 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     // Attempt 2 (post-compaction): three identical live tool outcomes while
     // history is already at the cap. The guard aborts on the third result
     // before the mocked attempt can return.
-    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
       for (let i = 0; i < 3; i += 1) {
         await executeWrappedToolOutcome(
           "gateway",
           { action: "lookup", path: "x" },
           "identical-result",
+          onToolOutcome,
         );
       }
       // History is still capped at HISTORY_TRIM_CAP after the trim.

@@ -928,6 +928,7 @@ export async function runEmbeddedAttempt(
               forceHeartbeatTool: params.forceHeartbeatTool,
               authProfileStore: params.authProfileStore,
               recordToolPrepStage: (name) => corePluginToolStages.mark(name),
+              onToolOutcome: params.onToolOutcome,
               onYield: (message) => {
                 yieldDetected = true;
                 yieldMessage = message;
@@ -1650,6 +1651,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
+              onToolOutcome: params.onToolOutcome,
             },
           )
         : [];

@@ -94,7 +94,8 @@ import { log } from "./logger.js";
 import { resolveModelAsync } from "./model.js";
 import {
   createPostCompactionLoopGuard,
-  registerPostCompactionLoopGuard,
+  PostCompactionLoopPersistedError,
+  type PostCompactionGuardObservation,
 } from "./post-compaction-loop-guard.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "./replay-state.js";
 import { handleAssistantFailover } from "./run/assistant-failover.js";
@@ -792,14 +793,14 @@ export async function runEmbeddedPiAgent(
       const postCompactionGuard = createPostCompactionLoopGuard(
         params.config?.tools?.loopDetection?.postCompactionGuard,
       );
-      const unregisterPostCompactionGuard = registerPostCompactionLoopGuard(
-        {
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-        },
-        postCompactionGuard,
-      );
+      const observePostCompactionToolOutcome = (
+        observation: PostCompactionGuardObservation,
+      ): void => {
+        const verdict = postCompactionGuard.observe(observation);
+        if (verdict.shouldAbort) {
+          throw PostCompactionLoopPersistedError.fromVerdict(verdict);
+        }
+      };
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
@@ -1160,6 +1161,7 @@ export async function runEmbeddedPiAgent(
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
             thinkLevel,
+            onToolOutcome: observePostCompactionToolOutcome,
             fastMode: params.fastMode,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -2786,7 +2788,6 @@ export async function runEmbeddedPiAgent(
           };
         }
       } finally {
-        unregisterPostCompactionGuard();
         forgetPromptBuildDrainCacheForRun(params.runId);
         stopRuntimeAuthRefreshTimer();
         await runAgentCleanupStep({
