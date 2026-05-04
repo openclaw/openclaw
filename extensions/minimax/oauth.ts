@@ -1,6 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MiniMaxRegion = "cn" | "global";
 
@@ -189,53 +193,62 @@ export async function refreshMiniMaxPortalOAuthToken(params: {
 }): Promise<MiniMaxOAuthToken> {
   ensureGlobalUndiciEnvProxyDispatcher();
   const endpoints = getOAuthEndpoints(params.region);
-  const response = await fetch(endpoints.tokenEndpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: endpoints.tokenEndpoint,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body: toFormUrlEncoded({
+        grant_type: "refresh_token",
+        client_id: endpoints.clientId,
+        refresh_token: params.refreshToken,
+      }),
     },
-    body: toFormUrlEncoded({
-      grant_type: "refresh_token",
-      client_id: endpoints.clientId,
-      refresh_token: params.refreshToken,
-    }),
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(endpoints.baseUrl),
+    auditContext: "minimax.oauth.refresh",
   });
 
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `MiniMax OAuth refresh failed (${response.status}): ${text || response.statusText}`,
-    );
+  try {
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(
+        `MiniMax OAuth refresh failed (${response.status}): ${text || response.statusText}`,
+      );
+    }
+
+    const payload = (await response.json()) as {
+      status?: string;
+      access_token?: string | null;
+      refresh_token?: string | null;
+      expired_in?: number | null;
+      resource_url?: string;
+      notification_message?: string;
+      base_resp?: { status_code?: number; status_msg?: string };
+    };
+
+    if (
+      payload.status !== "success" ||
+      !payload.access_token ||
+      !payload.refresh_token ||
+      !payload.expired_in
+    ) {
+      const msg = payload.base_resp?.status_msg ?? payload.status ?? "unknown error";
+      throw new Error(`MiniMax OAuth refresh returned unexpected response: ${msg}`);
+    }
+
+    return {
+      access: payload.access_token,
+      refresh: payload.refresh_token,
+      expires: payload.expired_in,
+      resourceUrl: payload.resource_url,
+      notification_message: payload.notification_message,
+    };
+  } finally {
+    release();
   }
-
-  const payload = (await response.json()) as {
-    status?: string;
-    access_token?: string | null;
-    refresh_token?: string | null;
-    expired_in?: number | null;
-    resource_url?: string;
-    notification_message?: string;
-    base_resp?: { status_code?: number; status_msg?: string };
-  };
-
-  if (
-    payload.status !== "success" ||
-    !payload.access_token ||
-    !payload.refresh_token ||
-    !payload.expired_in
-  ) {
-    const msg = payload.base_resp?.status_msg ?? payload.status ?? "unknown error";
-    throw new Error(`MiniMax OAuth refresh returned unexpected response: ${msg}`);
-  }
-
-  return {
-    access: payload.access_token,
-    refresh: payload.refresh_token,
-    expires: payload.expired_in,
-    resourceUrl: payload.resource_url,
-    notification_message: payload.notification_message,
-  };
 }
 
 export async function loginMiniMaxPortalOAuth(params: {
