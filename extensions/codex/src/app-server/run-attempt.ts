@@ -88,8 +88,10 @@ import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./s
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
+  areCodexDynamicToolFingerprintsCompatible,
   buildDeveloperInstructions,
   buildTurnStartParams,
+  codexDynamicToolsFingerprint,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
 import {
@@ -425,6 +427,7 @@ export async function runCodexAppServerAttempt(
     signal: runAbortController.signal,
     hookContext: {
       agentId: sessionAgentId,
+      config: params.config,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
@@ -499,6 +502,20 @@ export async function runCodexAppServerAttempt(
         error: formatErrorMessage(assembleErr),
       });
     }
+  } else if (
+    shouldProjectMirroredHistoryForCodexStart({
+      startupBinding,
+      dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+      historyMessages,
+    })
+  ) {
+    const projection = projectContextEngineAssemblyForCodex({
+      assembledMessages: historyMessages,
+      originalHistoryMessages: historyMessages,
+      prompt: params.prompt,
+    });
+    promptText = projection.promptText;
+    prePromptMessageCount = projection.prePromptMessageCount;
   }
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
     prompt: promptText,
@@ -535,6 +552,7 @@ export async function runCodexAppServerAttempt(
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
+      config: params.config,
       runId: params.runId,
       signal: runAbortController.signal,
     });
@@ -1376,6 +1394,7 @@ function createCodexNativeHookRelay(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
+  config: EmbeddedRunAttemptParams["config"];
   runId: string;
   signal: AbortSignal;
 }): NativeHookRelayRegistrationHandle | undefined {
@@ -1392,6 +1411,7 @@ function createCodexNativeHookRelay(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
     ttlMs: params.options?.ttlMs,
@@ -1539,6 +1559,23 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelId: params.modelId,
     modelApi: params.model.api,
     model: params.model,
+  });
+}
+
+function shouldProjectMirroredHistoryForCodexStart(params: {
+  startupBinding: CodexAppServerThreadBinding | undefined;
+  dynamicToolsFingerprint: string;
+  historyMessages: AgentMessage[];
+}): boolean {
+  if (!params.historyMessages.some((message) => message.role === "user")) {
+    return false;
+  }
+  if (!params.startupBinding?.threadId) {
+    return true;
+  }
+  return !areCodexDynamicToolFingerprintsCompatible({
+    previous: params.startupBinding.dynamicToolsFingerprint,
+    next: params.dynamicToolsFingerprint,
   });
 }
 
@@ -1785,7 +1822,14 @@ async function mirrorTranscriptBestEffort(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
-      idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
+      // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
+      // with a per-turn `attachCodexMirrorIdentity` value carrying its own
+      // turnId, so distinct turns produce distinct dedupe keys via the
+      // identity (not via the scope). Dropping `turnId` from the scope
+      // here is what lets a re-emitted prior-turn entry — which still
+      // carries its original `${turnId}:${kind}` identity — collide with
+      // its existing on-disk key and be a true no-op.
+      idempotencyScope: `codex-app-server:${params.threadId}`,
       config: params.params.config,
     });
   } catch (error) {

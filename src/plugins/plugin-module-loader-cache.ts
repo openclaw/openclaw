@@ -282,7 +282,9 @@ function createPluginModuleLoader(params: {
         ...rest,
       );
     }
-    const native = tryNativeRequireJavaScriptModule(target, { allowWindows: true });
+    const native = tryNativeRequireJavaScriptModule(target, {
+      allowWindows: true,
+    });
     if (native.ok) {
       pluginModuleLoaderStats.nativeHits += 1;
       return native.moduleExport;

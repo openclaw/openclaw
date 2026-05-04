@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -26,6 +27,24 @@ type BundledCandidateResolution = {
   manifestRecords?: readonly PluginManifestRecord[];
 };
 
+function filterAllowlistedBundledPluginIds(
+  config: PluginLoadOptions["config"] | undefined,
+  pluginIds: readonly string[],
+) {
+  const allow = config?.plugins?.allow;
+  if (
+    config?.plugins?.bundledDiscovery === "compat" ||
+    !Array.isArray(allow) ||
+    allow.length === 0
+  ) {
+    return [...pluginIds];
+  }
+  const allowedPluginIds = new Set(
+    allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean),
+  );
+  return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
+}
+
 function resolveBundledCandidatePluginIds(params: {
   contract: "webSearchProviders" | "webFetchProviders";
   configKey: "webSearch" | "webFetch";
@@ -35,17 +54,17 @@ function resolveBundledCandidatePluginIds(params: {
   bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
 }): BundledCandidateResolution {
-  if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
-    return {
-      pluginIds: [...new Set(params.onlyPluginIds)].toSorted((left, right) =>
-        left.localeCompare(right),
-      ),
-    };
-  }
   const resolvedConfig =
     params.contract === "webSearchProviders"
       ? resolveBundledWebSearchResolutionConfig(params).config
       : resolveBundledWebFetchResolutionConfig(params).config;
+  if (params.onlyPluginIds && params.onlyPluginIds.length > 0) {
+    return {
+      pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, [
+        ...new Set(params.onlyPluginIds),
+      ]).toSorted((left, right) => left.localeCompare(right)),
+    };
+  }
   const candidates = resolveManifestDeclaredWebProviderCandidates({
     contract: params.contract,
     configKey: params.configKey,
@@ -56,7 +75,7 @@ function resolveBundledCandidatePluginIds(params: {
     origin: "bundled",
   });
   return {
-    pluginIds: candidates.pluginIds ?? [],
+    pluginIds: filterAllowlistedBundledPluginIds(resolvedConfig, candidates.pluginIds ?? []),
     ...(candidates.manifestRecords ? { manifestRecords: candidates.manifestRecords } : {}),
   };
 }
