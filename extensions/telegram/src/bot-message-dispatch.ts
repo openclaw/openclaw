@@ -563,12 +563,14 @@ export const dispatchTelegramMessage = async ({
     if (!verboseReasoningActions || !reasoningLane.stream) {
       return;
     }
-    const current = reasoningLane.lastPartialText ?? "";
-    const separator = current && !current.endsWith("\n") ? "\n" : "";
-    const updated = `${current}${separator}${line}\n`;
-    reasoningLane.lastPartialText = updated;
-    reasoningLane.hasStreamedMessage = true;
-    reasoningLane.stream.update(updated);
+    void enqueueDraftLaneEvent(async () => {
+      const current = reasoningLane.lastPartialText ?? "";
+      const separator = current && !current.endsWith("\n") ? "\n" : "";
+      const updated = `${current}${separator}${line}\n`;
+      reasoningLane.lastPartialText = updated;
+      reasoningLane.hasStreamedMessage = true;
+      reasoningLane.stream?.update(updated);
+    });
   };
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
@@ -1207,8 +1209,7 @@ export const dispatchTelegramMessage = async ({
                       { toolName },
                     );
                     if (toolName) {
-                      const id = payload.phase ?? toolName;
-                      activeVerboseActions.set(id, { name: toolName, startedAt: Date.now() });
+                      activeVerboseActions.set(toolName, { name: toolName, startedAt: Date.now() });
                       pushVerboseReasoningAction(`⏳ ${toolName}…`);
                     }
                   },
