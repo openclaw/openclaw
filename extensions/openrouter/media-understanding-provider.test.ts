@@ -146,6 +146,30 @@ describe("openrouter media understanding provider", () => {
     );
   });
 
+  it("maps mp4 filename extension to m4a when mime is missing", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
+      release,
+    });
+
+    await transcribeOpenRouterAudio({
+      buffer: Buffer.from("audio"),
+      fileName: "voice.mp4",
+      apiKey: "sk-openrouter",
+      timeoutMs: 5_000,
+      fetchFn: fetch,
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          input_audio: expect.objectContaining({ format: "m4a" }),
+        }),
+      }),
+    );
+  });
+
   it("normalizes parameterized mime for extensionless filenames", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({
