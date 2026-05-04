@@ -114,8 +114,9 @@
           }
         },
         "install": {
-          "npmSpec": "@tencent-weixin/openclaw-weixin",
+          "npmSpec": "@tencent-weixin/openclaw-weixin@2.4.1",
           "defaultChoice": "npm",
+          "expectedIntegrity": "sha512-FZnUVMQRpKGTKezeplr/DYal+5RSif2tXE51pljIFrO8rn7bVnnvpbj81/i9UMrYbuGiom1sl8OeSDzWRDKGhQ==",
           "minHostVersion": ">=2026.3.22"
         }
       }
