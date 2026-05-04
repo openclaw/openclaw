@@ -74,6 +74,27 @@ describe("lmstudio-models", () => {
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
+  const expectLoadTtl = async (ttlSeconds: unknown, expectedTtl: number | undefined) => {
+    const fetchMock = createModelLoadFetchMock({ maxContextLength: 32768 });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+        ttlSeconds: ttlSeconds as number | undefined,
+      }),
+    ).resolves.toBeUndefined();
+
+    const loadCall = findModelLoadCall(fetchMock);
+    expect(loadCall).toBeDefined();
+    const loadBody = parseJsonRequestBody(loadCall?.[1] as RequestInit) as { ttl?: number };
+    if (expectedTtl === undefined) {
+      expect(loadBody).not.toHaveProperty("ttl");
+    } else {
+      expect(loadBody.ttl).toBe(expectedTtl);
+    }
+  };
 
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
@@ -372,6 +393,22 @@ describe("lmstudio-models", () => {
     const loadInit = loadCall![1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+  });
+
+  it("includes configured idle TTL in model load body", async () => {
+    await expectLoadTtl(120, 120);
+  });
+
+  it("omits idle TTL from model load body when ttlSeconds is invalid or unset", async () => {
+    await expectLoadTtl(0, undefined);
+    await expectLoadTtl(Number.NaN, undefined);
+    await expectLoadTtl(-1, undefined);
+    await expectLoadTtl("300", undefined);
+    await expectLoadTtl(undefined, undefined);
+  });
+
+  it("includes very large positive integer idle TTL in model load body", async () => {
+    await expectLoadTtl(999999999, 999999999);
   });
 
   it("uses requested context length when provided for model load", async () => {
