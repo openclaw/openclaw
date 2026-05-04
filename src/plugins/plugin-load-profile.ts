@@ -1,3 +1,7 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const logger = createSubsystemLogger("plugins/load-profile");
+
 /**
  * Shared probe primitives for plugin-load profiling.
  *
@@ -106,7 +110,7 @@ export function withProfile<T>(
     return run();
   } finally {
     const elapsedMs = performance.now() - startMs;
-    console.error(
+    logger.raw(
       formatPluginLoadProfileLine({
         phase,
         pluginId: scope.pluginId,

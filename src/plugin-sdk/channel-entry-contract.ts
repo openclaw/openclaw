@@ -21,6 +21,7 @@ import {
   formatPluginLoadProfileLine,
   shouldProfilePluginLoader,
 } from "../plugins/plugin-load-profile.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
@@ -134,6 +135,8 @@ const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 const loadedModuleExports = new Map<string, unknown>();
 const disableBundledEntrySourceFallbackEnv = "OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK";
+
+const logger = createSubsystemLogger("plugins/load-profile");
 
 function isTruthyEnvFlag(value: string | undefined): boolean {
   return value !== undefined && !/^(?:0|false)$/iu.test(value.trim());
@@ -382,31 +385,31 @@ function loadBundledEntryModuleSync(
     getJitiEndMs = profile ? performance.now() : 0;
     loaded = jiti(toSafeImportPath(modulePath));
   }
-  if (profile) {
-    const endMs = performance.now();
-    // Use shared formatter — but split timing fields ourselves so we can
-    // attribute time spent in `getJiti(...)` factory creation vs the actual
-    // graph-walking `__j(modulePath)` call. Both are emitted as extras
-    // alongside the canonical `elapsedMs=<total>` field.
-    console.error(
-      formatPluginLoadProfileLine({
-        phase: "bundled-entry-module-load",
-        pluginId: "(bundled-entry)",
-        source: modulePath,
-        elapsedMs: endMs - loadStartMs,
-        // When the built-artifact fast-path resolves the module via `nodeRequire`,
-        // `getJitiEndMs` stays `0` because the `catch` block (the only place
-        // it gets stamped) never runs. Reporting `getJitiMs` /
-        // `jitiCallMs` as `0` for that path keeps the breakdown honest:
-        // `elapsedMs=` already captures the nodeRequire time, and we don't
-        // want to mis-attribute it to jiti sub-steps.
-        extras: [
-          ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
-          ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
-        ],
-      }),
-    );
-  }
+    if (profile) {
+      const endMs = performance.now();
+      // Use shared formatter — but split timing fields ourselves so we can
+      // attribute time spent in `getJiti(...)` factory creation vs the actual
+      // graph-walking `__j(modulePath)` call. Both are emitted as extras
+      // alongside the canonical `elapsedMs=<total>` field.
+      logger.raw(
+        formatPluginLoadProfileLine({
+          phase: "bundled-entry-module-load",
+          pluginId: "(bundled-entry)",
+          source: modulePath,
+          elapsedMs: endMs - loadStartMs,
+          // When the built-artifact fast-path resolves the module via `nodeRequire`,
+          // `getJitiEndMs` stays `0` because the `catch` block (the only place
+          // it gets stamped) never runs. Reporting `getJitiMs` /
+          // `jitiCallMs` as `0` for that path keeps the breakdown honest:
+          // `elapsedMs=` already captures the nodeRequire time, and we don't
+          // want to mis-attribute it to jiti sub-steps.
+          extras: [
+            ["getJitiMs", getJitiEndMs ? getJitiEndMs - loadStartMs : 0],
+            ["jitiCallMs", getJitiEndMs ? endMs - getJitiEndMs : 0],
+          ],
+        }),
+      );
+    }
   loadedModuleExports.set(modulePath, loaded);
   return loaded;
 }

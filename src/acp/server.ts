@@ -13,6 +13,9 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { normalizeAcpProvenanceMode, type AcpServerOptions } from "./types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("acp/server");
 
 export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   routeLogsToStderr();
@@ -246,18 +249,18 @@ Options:
 if (isMainModule({ currentFile: fileURLToPath(import.meta.url) })) {
   const argv = process.argv.slice(2);
   if (argv.includes("--token") || argv.includes("--gateway-token")) {
-    console.error(
+    log.warn(
       "Warning: --token can be exposed via process listings. Prefer --token-file or OPENCLAW_GATEWAY_TOKEN.",
     );
   }
   if (argv.includes("--password") || argv.includes("--gateway-password")) {
-    console.error(
+    log.warn(
       "Warning: --password can be exposed via process listings. Prefer --password-file or OPENCLAW_GATEWAY_PASSWORD.",
     );
   }
   const opts = parseArgs(argv);
   serveAcpGateway(opts).catch((err) => {
-    console.error(String(err));
+    log.error(String(err));
     process.exit(1);
   });
 }

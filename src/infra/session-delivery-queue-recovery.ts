@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "./errors.js";
+import { extractErrorCode, formatErrorMessage } from "./errors.js";
 import {
   ackSessionDelivery,
   failSessionDelivery,
@@ -34,11 +34,6 @@ const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
-}
 
 function createEmptyRecoverySummary(): SessionDeliveryRecoverySummary {
   return {
@@ -111,7 +106,7 @@ async function drainQueuedEntry(opts: {
       await failSessionDelivery(entry.id, errMsg, opts.stateDir);
       return "failed";
     } catch (failErr) {
-      if (getErrnoCode(failErr) === "ENOENT") {
+      if (extractErrorCode(failErr) === "ENOENT") {
         return "already-gone";
       }
       return "failed";
@@ -157,7 +152,7 @@ export async function drainPendingSessionDeliveries(opts: {
           try {
             await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
           } catch (err) {
-            if (getErrnoCode(err) !== "ENOENT") {
+            if (extractErrorCode(err) !== "ENOENT") {
               throw err;
             }
           }
@@ -234,7 +229,7 @@ export async function recoverPendingSessionDeliveries(opts: {
         try {
           await moveSessionDeliveryToFailed(currentEntry.id, opts.stateDir);
         } catch (err) {
-          if (getErrnoCode(err) !== "ENOENT") {
+          if (extractErrorCode(err) !== "ENOENT") {
             throw err;
           }
         }

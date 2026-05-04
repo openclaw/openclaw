@@ -88,6 +88,6 @@ export function logDebug(message: string) {
   // Always emit to file logger (level-filtered); console only when verbose.
   getLogger().debug(message);
   if (isVerbose()) {
-    console.log(theme.muted(message));
+    createSubsystemLogger("debug").raw(theme.muted(message));
   }
 }

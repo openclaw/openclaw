@@ -33,6 +33,9 @@ import {
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
 import { normalizeWindowsArgv } from "./windows-argv.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("cli/main");
 
 export {
   rewriteUpdateFlagArgv,
@@ -398,7 +401,7 @@ export async function runCli(argv: string[] = process.argv) {
 
     if (shouldRunBareRootCrestodian) {
       if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        console.error(
+        log.error(
           'Crestodian needs an interactive TTY. Use `openclaw crestodian --message "status"` for one command.',
         );
         process.exitCode = 1;
@@ -513,15 +516,14 @@ export async function runCli(argv: string[] = process.argv) {
           return;
         }
         if (isBenignUncaughtExceptionError(error)) {
-          console.warn(
-            "[openclaw] Non-fatal uncaught exception (continuing):",
-            formatUncaughtError(error),
-          );
+          log.warn("Non-fatal uncaught exception (continuing)", {
+            error: formatUncaughtError(error),
+          });
           return;
         }
-        console.error("[openclaw] Uncaught exception:", formatUncaughtError(error));
+        log.error("Uncaught exception", { error: formatUncaughtError(error) });
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
-          console.error("[openclaw]", message);
+          log.error(message);
         }
         restoreTerminalState("uncaught exception", { resumeStdinIfPaused: false });
         process.exit(1);

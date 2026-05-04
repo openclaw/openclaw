@@ -127,11 +127,12 @@ if (
       process.exit(code ?? 1);
     });
 
-    child.once("error", (error) => {
-      console.error(
-        "[openclaw] Failed to respawn CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
+    child.once("error", async (error) => {
+      const { createSubsystemLogger } = await import("./logging/subsystem.js");
+      const log = createSubsystemLogger("entry");
+      log.error("Failed to respawn CLI", {
+        error: error instanceof Error ? (error.stack ?? error.message) : error,
+      });
       process.exit(1);
     });
 
@@ -144,20 +145,22 @@ if (
   if (!ensureCliRespawnReady()) {
     const parsedContainer = parseCliContainerArgs(process.argv);
     if (!parsedContainer.ok) {
-      console.error(`[openclaw] ${parsedContainer.error}`);
+      const { createSubsystemLogger } = await import("./logging/subsystem.js");
+      createSubsystemLogger("entry").error(parsedContainer.error);
       process.exit(2);
     }
 
     const parsed = parseCliProfileArgs(parsedContainer.argv);
     if (!parsed.ok) {
-      // Keep it simple; Commander will handle rich help/errors after we strip flags.
-      console.error(`[openclaw] ${parsed.error}`);
+      const { createSubsystemLogger } = await import("./logging/subsystem.js");
+      createSubsystemLogger("entry").error(parsed.error);
       process.exit(2);
     }
 
     const containerTargetName = resolveCliContainerTarget(process.argv);
     if (containerTargetName && parsed.profile) {
-      console.error("[openclaw] --container cannot be combined with --profile/--dev");
+      const { createSubsystemLogger } = await import("./logging/subsystem.js");
+      createSubsystemLogger("entry").error("--container cannot be combined with --profile/--dev");
       process.exit(2);
     }
 
@@ -191,11 +194,11 @@ export async function tryHandleRootHelpFastPath(
   }
   const handleError =
     deps.onError ??
-    ((error: unknown) => {
-      console.error(
-        "[openclaw] Failed to display help:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
-      );
+    (async (error: unknown) => {
+      const { createSubsystemLogger } = await import("./logging/subsystem.js");
+      createSubsystemLogger("entry").error("Failed to display help", {
+        error: error instanceof Error ? (error.stack ?? error.message) : error,
+      });
       process.exitCode = 1;
     });
   try {
@@ -228,10 +231,10 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
     );
     await runCli(argv);
   } catch (error) {
-    console.error(
-      "[openclaw] Failed to start CLI:",
-      error instanceof Error ? (error.stack ?? error.message) : error,
-    );
+    const { createSubsystemLogger } = await import("./logging/subsystem.js");
+    createSubsystemLogger("entry").error("Failed to start CLI", {
+      error: error instanceof Error ? (error.stack ?? error.message) : error,
+    });
     process.exitCode = 1;
   }
 }

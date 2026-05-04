@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
-import { formatErrorMessage } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
 import { tryListenOnPort } from "../infra/ports-probe.js";
 import { sleep } from "../utils.js";
@@ -42,26 +42,9 @@ function withErrnoCode(message: string, code: string, cause: unknown): Error {
   return out;
 }
 
-function getErrnoCode(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const direct = (err as { code?: unknown }).code;
-  if (typeof direct === "string" && direct.length > 0) {
-    return direct;
-  }
-  const cause = (err as { cause?: unknown }).cause;
-  if (cause && typeof cause === "object") {
-    const nested = (cause as { code?: unknown }).code;
-    if (typeof nested === "string" && nested.length > 0) {
-      return nested;
-    }
-  }
-  return undefined;
-}
 
 function isRecoverableLsofError(err: unknown): boolean {
-  const code = getErrnoCode(err);
+  const code = extractErrorCode(err);
   if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
     return true;
   }
@@ -131,7 +114,7 @@ async function isPortBusy(port: number): Promise<boolean> {
     await tryListenOnPort({ port, exclusive: true });
     return false;
   } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
+    const code = extractErrorCode(err);
     if (code === "EADDRINUSE") {
       return true;
     }

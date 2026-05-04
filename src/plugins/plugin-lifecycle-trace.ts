@@ -1,3 +1,7 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const logger = createSubsystemLogger("plugins/lifecycle");
+
 type TraceDetails = Record<string, boolean | number | string | undefined>;
 
 function isPluginLifecycleTraceEnabled(): boolean {
@@ -24,7 +28,7 @@ function emitPluginLifecycleTrace(params: {
     .map(([key, value]) => `${key}=${formatTraceValue(value)}`)
     .join(" ");
   const suffix = detailText ? ` ${detailText}` : "";
-  console.error(
+  logger.raw(
     `[plugins:lifecycle] phase=${JSON.stringify(params.phase)} ms=${elapsedMs.toFixed(2)} status=${params.status}${suffix}`,
   );
 }

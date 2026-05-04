@@ -4,12 +4,22 @@ export function extractErrorCode(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  const code = (err as { code?: unknown }).code;
-  if (typeof code === "string") {
-    return code;
+  const direct = (err as { code?: unknown }).code;
+  if (typeof direct === "string" && direct.length > 0) {
+    return direct;
   }
-  if (typeof code === "number") {
-    return String(code);
+  if (typeof direct === "number") {
+    return String(direct);
+  }
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    const nested = (cause as { code?: unknown }).code;
+    if (typeof nested === "string" && nested.length > 0) {
+      return nested;
+    }
+    if (typeof nested === "number") {
+      return String(nested);
+    }
   }
   return undefined;
 }

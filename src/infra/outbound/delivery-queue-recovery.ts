@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../errors.js";
+import { extractErrorCode, formatErrorMessage } from "../errors.js";
 import {
   ackDelivery,
   failDelivery,
@@ -67,11 +67,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
 const drainInProgress = new Map<string, boolean>();
 const entriesInProgress = new Set<string>();
 
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
-}
 
 function createEmptyRecoverySummary(): RecoverySummary {
   return {
@@ -214,7 +209,7 @@ async function drainQueuedEntry(opts: {
         await moveToFailed(entry.id, opts.stateDir);
         return "moved-to-failed";
       } catch (moveErr) {
-        if (getErrnoCode(moveErr) === "ENOENT") {
+        if (extractErrorCode(moveErr) === "ENOENT") {
           return "already-gone";
         }
       }
@@ -223,7 +218,7 @@ async function drainQueuedEntry(opts: {
         await failDelivery(entry.id, errMsg, opts.stateDir);
         return "failed";
       } catch (failErr) {
-        if (getErrnoCode(failErr) === "ENOENT") {
+        if (extractErrorCode(failErr) === "ENOENT") {
           return "already-gone";
         }
       }
@@ -288,7 +283,7 @@ export async function drainPendingDeliveries(opts: {
           try {
             await moveToFailed(currentEntry.id, opts.stateDir);
           } catch (err) {
-            if (getErrnoCode(err) === "ENOENT") {
+            if (extractErrorCode(err) === "ENOENT") {
               opts.log.info(`${opts.logLabel}: entry ${currentEntry.id} already gone, skipping`);
               continue;
             }

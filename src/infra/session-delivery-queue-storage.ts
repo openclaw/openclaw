@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ChatType } from "../channels/chat-type.js";
 import { resolveStateDir } from "../config/paths.js";
 import { generateSecureUuid } from "./secure-random.js";
+import { extractErrorCode } from "./errors.js";
 
 const QUEUE_DIRNAME = "session-delivery-queue";
 const FAILED_DIRNAME = "failed";
@@ -51,11 +52,6 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   lastError?: string;
 };
 
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
-}
 
 function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
@@ -79,7 +75,7 @@ async function unlinkStaleTmpBestEffort(filePath: string, now: number): Promise<
     }
     await unlinkBestEffort(filePath);
   } catch (err) {
-    if (getErrnoCode(err) !== "ENOENT") {
+    if (extractErrorCode(err) !== "ENOENT") {
       throw err;
     }
   }
@@ -143,7 +139,7 @@ export async function enqueueSessionDelivery(
         return id;
       }
     } catch (err) {
-      if (getErrnoCode(err) !== "ENOENT") {
+      if (extractErrorCode(err) !== "ENOENT") {
         throw err;
       }
     }
@@ -163,7 +159,7 @@ export async function ackSessionDelivery(id: string, stateDir?: string): Promise
   try {
     await fs.promises.rename(jsonPath, deliveredPath);
   } catch (err) {
-    const code = getErrnoCode(err);
+    const code = extractErrorCode(err);
     if (code === "ENOENT") {
       await unlinkBestEffort(deliveredPath);
       return;
@@ -198,7 +194,7 @@ export async function loadPendingSessionDelivery(
     }
     return await readQueueEntry(jsonPath);
   } catch (err) {
-    if (getErrnoCode(err) === "ENOENT") {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;
@@ -213,7 +209,7 @@ export async function loadPendingSessionDeliveries(
   try {
     files = await fs.promises.readdir(queueDir);
   } catch (err) {
-    if (getErrnoCode(err) === "ENOENT") {
+    if (extractErrorCode(err) === "ENOENT") {
       return [];
     }
     throw err;

@@ -8,6 +8,7 @@ import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
+import { extractErrorCode } from "../errors.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
@@ -68,11 +69,6 @@ function resolveQueueEntryPaths(
   };
 }
 
-function getErrnoCode(err: unknown): string | null {
-  return err && typeof err === "object" && "code" in err
-    ? String((err as { code?: unknown }).code)
-    : null;
-}
 
 async function unlinkBestEffort(filePath: string): Promise<void> {
   try {
@@ -175,7 +171,7 @@ export async function ackDelivery(id: string, stateDir?: string): Promise<void> 
     // Phase 1: atomic rename marks the delivery as complete.
     await fs.promises.rename(jsonPath, deliveredPath);
   } catch (err) {
-    const code = getErrnoCode(err);
+    const code = extractErrorCode(err);
     if (code === "ENOENT") {
       // .json already gone — may have been renamed by a previous ack attempt.
       // Try to clean up a leftover .delivered marker if present.
@@ -215,7 +211,7 @@ export async function loadPendingDelivery(
     }
     return entry;
   } catch (err) {
-    if (getErrnoCode(err) === "ENOENT") {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;
@@ -229,7 +225,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
   try {
     files = await fs.promises.readdir(queueDir);
   } catch (err) {
-    const code = getErrnoCode(err);
+    const code = extractErrorCode(err);
     if (code === "ENOENT") {
       return [];
     }
