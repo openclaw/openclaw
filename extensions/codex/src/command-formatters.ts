@@ -90,7 +90,7 @@ export function formatThreads(response: JsonValue | undefined): string {
         readString(record, "model"),
         readString(record, "cwd"),
         readString(record, "updatedAt") ?? readString(record, "lastUpdatedAt"),
-      ].filter(Boolean);
+      ].filter((value): value is string => Boolean(value));
       return `- ${formatCodexDisplayText(id)}${title ? ` - ${formatCodexDisplayText(title)}` : ""}${
         details.length > 0 ? ` (${details.map(formatCodexDisplayText).join(", ")})` : ""
       }\n  Resume: ${formatCodexResumeHint(id)}`;
