@@ -65,7 +65,7 @@ describe("runCapability video provider wiring", () => {
       });
 
       expect(result.outputs[0]?.text).toBe("video ok");
-      expect(seenPrimaryApiKey).toBeUndefined();
+      expect(seenPrimaryApiKey).toBe("__openclaw_aws_sdk_default_chain__");
     });
   });
 

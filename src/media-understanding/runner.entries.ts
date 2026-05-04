@@ -47,6 +47,8 @@ export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
 
+const AWS_SDK_CREDENTIALLESS_API_KEY = "__openclaw_aws_sdk_default_chain__";
+
 let cachedModelAuth: {
   resolveApiKeyForProvider: ResolveApiKeyForProvider;
   requireApiKey: RequireApiKey;
@@ -434,7 +436,9 @@ async function resolveProviderExecutionAuth(params: {
     agentDir: params.agentDir,
   });
   const primaryApiKey =
-    auth.mode === "aws-sdk" && !auth.apiKey ? undefined : requireApiKey(auth, params.providerId);
+    auth.mode === "aws-sdk" && !auth.apiKey
+      ? AWS_SDK_CREDENTIALLESS_API_KEY
+      : requireApiKey(auth, params.providerId);
   return {
     apiKeys: collectProviderApiKeysForExecution({
       provider: params.providerId,
