@@ -1509,14 +1509,6 @@ export async function runAgentTurnWithFallback(params: {
                 onReasoningEnd: params.opts?.onReasoningEnd,
                 onAgentEvent: async (evt) => {
                   lifecycleBackstop.note(evt);
-                  if (evt.stream.startsWith("codex_app_server.")) {
-                    emitAgentEvent({
-                      runId,
-                      stream: evt.stream,
-                      data: evt.data,
-                      ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
-                    });
-                  }
                   // Signal run start only after the embedded agent emits real activity.
                   const hasLifecyclePhase =
                     evt.stream === "lifecycle" && typeof evt.data.phase === "string";

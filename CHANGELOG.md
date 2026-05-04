@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - QA/Mantis: pass the runtime env through desktop-browser Crabbox and artifact-copy child commands, so embedded Mantis callers can provide Crabbox credentials without mutating the parent process. Thanks @vincentkoc.
 - QA/Mantis: return the copied Slack desktop screenshot path even when remote Slack QA fails, so the CLI still prints the failure screenshot artifact. Thanks @vincentkoc.
 - QA/Mantis: accept Blacksmith Testbox `tbx_...` lease ids from desktop smoke warmup, so provider overrides do not fail before inspect/run. Thanks @vincentkoc.
+- QA/Codex harness: add targeted live Docker/Testbox diagnostics, auth preflight checks, cache mount fixes, and app-server protocol checkout discovery so maintainer harness failures are easier to reproduce. Thanks @vincentkoc.
 - Plugins/update: treat official externalized bundled npm migrations and ClawHub-to-npm fallbacks as trusted source-linked installs, so prerelease-only official plugin packages can migrate from bundled builds without being rejected as unsafe prerelease resolutions. Thanks @vincentkoc.
 - Plugins/update: move ClawHub-preferred externalized plugin installs back to ClawHub after an earlier npm fallback once the ClawHub package becomes available. Thanks @vincentkoc.
 - Plugins/update: clean stale bundled load paths for already-externalized pinned npm and ClawHub plugin installs, so release-channel sync does not leave removed bundled paths ahead of the installed external package. Thanks @vincentkoc.
@@ -121,28 +122,9 @@ Docs: https://docs.openclaw.ai
 - Web search: scope explicit bundled `web_search` provider runtime loading through manifest ownership, so selecting DuckDuckGo/Gemini/etc. does not import unrelated bundled providers or log their optional dependency failures. Thanks @vincentkoc.
 - Plugins/discovery: demote the source-only TypeScript runtime check on already-installed `origin: "global"` plugin packages from a config-blocking error to a warning and let the runtime fall through to the TypeScript source via jiti, so a single broken installed package no longer blocks `plugins install` for unrelated plugins; install-time rejection of newly-installed source-only packages is unchanged. Thanks @romneyda.
 - Providers/OpenAI Codex: stop the OAuth progress spinner before showing the manual redirect paste prompt, so callback timeouts do not spam `Browser callback did not finish` across terminals.
-- Providers/OpenAI Codex: reject malformed `/codex compact` and `/codex review` commands with extra operands before starting thread actions. Thanks @vincentkoc.
-- Providers/OpenAI Codex: reject malformed `/codex detach` and `/codex stop` commands with extra operands before clearing bindings or interrupting active turns. Thanks @vincentkoc.
-- Providers/OpenAI Codex: reject malformed `/codex model` commands with extra operands before persisting an invalid bound-thread model override. Thanks @vincentkoc.
-- Providers/OpenAI Codex: reject malformed `/codex resume` commands with extra operands before attaching a Codex thread. Thanks @vincentkoc.
-- Providers/OpenAI Codex: reject malformed diagnostics confirm/cancel commands instead of treating `confirm <token> extra` as consent to upload feedback. Thanks @vincentkoc.
-- Providers/OpenAI Codex: reject ambiguous `/codex computer-use` action lists before a mistyped status command can turn into an install. Thanks @vincentkoc.
-- Providers/OpenAI Codex: reject extra operands for read-only `/codex status`, `models`, `account`, `mcp`, `skills`, and `binding` commands before querying or exposing app-server state. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape app-server thread, model, MCP, skill, and Computer Use readouts before posting them back into chat. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape app-server status and account probe errors before posting them back into chat. Thanks @vincentkoc.
-- Providers/OpenAI Codex: return sanitized failure replies for `/codex` control commands when the app-server rejects or times out, instead of leaking raw transport errors into chat. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape app-server status model ids and fallback account summaries while keeping normal account emails readable. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape bound-thread ids, workspace paths, and model names in bind, resume, binding, thread-action, and model-control replies. Thanks @vincentkoc.
-- Providers/OpenAI Codex: harden command readouts and parsing for markdown underscores, bound model status, bind errors, generated rate-limit summaries, blank option values, and duplicate command flags. Thanks @vincentkoc.
-- Providers/OpenAI Codex: keep protocol-relative bound-image URLs remote and ignore malformed `file://` image paths instead of crashing turn input construction. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape `request_user_input` question and option text before prompting users in chat. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape unknown command names and bound app-server turn failures before posting them back into chat. Thanks @vincentkoc.
-- Providers/OpenAI Codex: escape app-server approval and MCP elicitation prompt text before forwarding approval requests. Thanks @vincentkoc.
-- Providers/OpenAI Codex: resolve malformed empty `request_user_input` prompts without posting a blank chat prompt or waiting for a user reply. Thanks @vincentkoc.
-- Providers/OpenAI Codex: keep option-only `request_user_input` prompts from accepting arbitrary free-form replies unless the prompt explicitly allows Other. Thanks @vincentkoc.
-- Providers/OpenAI Codex: keep bound conversation turns from resolving with stale same-thread notifications that arrive before the new turn id is known. Thanks @vincentkoc.
-- Providers/OpenAI Codex: show current-protocol network, filesystem, and command policy permission details in app-server approval prompts before granting them. Thanks @vincentkoc.
-- Providers/OpenAI Codex: return unsuccessful app-server tool-call results when OpenClaw tool output carries failing status or exit-code metadata. Thanks @vincentkoc.
+- Providers/OpenAI Codex: fail closed on malformed `/codex` control commands and diagnostics confirmations before changing bindings, permissions, model overrides, active turns, or feedback uploads. Thanks @vincentkoc.
+- Providers/OpenAI Codex: sanitize Codex app-server command readouts, failure replies, approval prompts, elicitation prompts, and `request_user_input` text before posting them back into chat. Thanks @vincentkoc.
+- Providers/OpenAI Codex: preserve local bound-turn image paths, reject stale same-thread turn notifications, enforce option-only user input prompts, and return failed dynamic tool results to Codex as unsuccessful tool calls. Thanks @vincentkoc.
 - Providers/DeepSeek: expose DeepSeek V4 `xhigh` and `max` thinking levels through the lightweight provider-policy surface, so Control UI `/think` pickers keep showing the max reasoning options when the runtime plugin registry is not active. Fixes #77139. Thanks @bittoby.
 - Release/beta smoke: resolve the dispatched Telegram beta E2E run from `gh run list` when `gh workflow run` returns no run URL, so the maintainer helper does not fail immediately after dispatch. Thanks @vincentkoc.
 - Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.
@@ -235,6 +217,7 @@ Docs: https://docs.openclaw.ai
 - OpenAI/Google Meet: fail realtime voice connection attempts when the socket closes before `session.updated`, avoiding stuck Meet joins waiting on a bridge that never became ready. Thanks @vincentkoc.
 - Google Meet: avoid treating repeated participant words as multiple assistant-overlap matches when suppressing realtime echo transcripts. Thanks @vincentkoc.
 - Google Meet: make `mode: "agent"` the default Chrome talk-back path, using realtime transcription for input and regular OpenClaw TTS for speech output, while keeping direct realtime voice answers available as `mode: "bidi"` and accepting `mode: "realtime"` as an agent-mode compatibility alias.
+- Codex harness: keep `codex_app_server.*` telemetry publication owned by the harness instead of republishing the same callback event from core runners. Thanks @vincentkoc.
 - Slack/Discord: suppress standalone tool-progress chatter when partial preview streaming has `streaming.preview.toolProgress: false`, matching the documented quiet-preview behavior. Thanks @vincentkoc.
 - Matrix: bind native approval reaction targets before publishing option reactions, so fast approver reactions on threaded prompts are not dropped while the approval handler finishes setup. Thanks @vincentkoc.
 - Google Meet: make realtime talk-back agent-driven by default with `realtime.strategy: "agent"`, keep the previous direct bidirectional model behavior available as `realtime.strategy: "bidi"`, route the Meet tab speaker output to `BlackHole 2ch` automatically for local Chrome realtime joins, coalesce nearby speech transcript fragments before consulting the agent, and avoid cutting off agent speech from server VAD or stale playback pipe errors.

@@ -588,7 +588,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("does not duplicate globally emitted Codex app-server events from embedded runs", async () => {
+  it("does not publish Codex app-server events from the core command callback", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
       mockConfig(home, store);
@@ -605,21 +605,14 @@ describe("agentCommand", () => {
       });
 
       vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
-        const runId = (params as { runId?: string } | undefined)?.runId ?? "run";
-        const event = {
-          stream: "codex_app_server.lifecycle",
-          data: { phase: "startup" },
-        };
-        const globalEventSetKey = Symbol.for("openclaw.codexAppServerGlobalAgentEvents");
-        const globalState = globalThis as Record<symbol, WeakSet<object> | undefined>;
-        globalState[globalEventSetKey] ??= new WeakSet<object>();
-        globalState[globalEventSetKey]?.add(event);
-        emitAgentEvent({ runId, stream: event.stream, data: event.data });
         (
           params as {
             onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
           }
-        ).onAgentEvent?.(event);
+        ).onAgentEvent?.({
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "startup" },
+        });
         return {
           payloads: [{ text: "hello" }],
           meta: { agentMeta: { provider: "p", model: "m" } },
@@ -629,8 +622,7 @@ describe("agentCommand", () => {
       await agentCommand({ message: "hi", to: "+1555", thinking: "low" }, runtime);
       stop();
 
-      const matching = codexEvents.filter((evt) => evt.phase === "startup");
-      expect(matching).toHaveLength(1);
+      expect(codexEvents).toHaveLength(0);
     });
   });
 

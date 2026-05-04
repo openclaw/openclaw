@@ -75,15 +75,6 @@ import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
-const CODEX_APP_SERVER_GLOBAL_EVENT_SET_KEY = Symbol.for(
-  "openclaw.codexAppServerGlobalAgentEvents",
-);
-
-function wasCodexAppServerEventGloballyEmitted(event: object): boolean {
-  const state = globalThis as Record<symbol, WeakSet<object> | undefined>;
-  return state[CODEX_APP_SERVER_GLOBAL_EVENT_SET_KEY]?.has(event) === true;
-}
-
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
 type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
@@ -1040,17 +1031,6 @@ async function agentCommandInternal(
                 currentTurnUserMessagePersisted = true;
               },
               onAgentEvent: (evt) => {
-                if (
-                  evt.stream.startsWith("codex_app_server.") &&
-                  !wasCodexAppServerEventGloballyEmitted(evt)
-                ) {
-                  emitAgentEvent({
-                    runId,
-                    stream: evt.stream,
-                    data: evt.data ?? {},
-                    ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
-                  });
-                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
