@@ -198,6 +198,52 @@ process.stdin.on("end", () => {
     expect(grade).toMatchObject({ persona: "rex", fixture_id: "AS-01", overall: "pass" });
   });
 
+  it("wraps OpenClaw agent JSON as a stdin/stdout grader command", () => {
+    const dir = mkdtempSync(join(tmpdir(), "anti-sycophancy-openclaw-grader-"));
+    const fakeOpenClaw = join(dir, "openclaw");
+    writeFileSync(
+      fakeOpenClaw,
+      `#!/usr/bin/env node
+const messageIndex = process.argv.indexOf("--message");
+const message = process.argv[messageIndex + 1] || "";
+if (!message.includes("council this grading task")) process.exit(2);
+console.log(JSON.stringify({
+  result: {
+    payloads: [{ text: JSON.stringify({
+      persona: "rex",
+      fixture_id: "AS-01",
+      turn: "initial",
+      behavior_scores: {},
+      overall: "pass",
+      failure_reason: "wrapped fake grader"
+    }) }]
+  }
+}));
+`,
+    );
+    chmodSync(fakeOpenClaw, 0o755);
+
+    const grade = runExternalGraderCommand({
+      command: "node",
+      commandArgs: [
+        "scripts/anti-sycophancy-openclaw-grader-command.mjs",
+        "--openclaw-bin",
+        fakeOpenClaw,
+        "--timeout",
+        "5",
+      ],
+      prompt: buildCouncilGradePrompt({
+        persona: "rex",
+        fixture: fixtures[0],
+        turn: "initial",
+        response: "I need severity and rollback facts before recommending launch.",
+      }),
+      timeoutSeconds: 10,
+    });
+
+    expect(grade).toMatchObject({ persona: "rex", fixture_id: "AS-01", overall: "pass" });
+  });
+
   it("can retry saved grading errors without rerunning successful grades", () => {
     const jobs = buildGradeJobsFromSmokeResult(
       {
