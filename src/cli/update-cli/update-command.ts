@@ -1831,10 +1831,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.exit(1);
       return;
     }
-    if (process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
-      defaultRuntime.exit(0);
-      return;
-    }
+    defaultRuntime.exit(0);
     return;
   }
 

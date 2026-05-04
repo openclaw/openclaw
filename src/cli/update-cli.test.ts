@@ -777,6 +777,7 @@ describe("update-cli", () => {
       ["npm", "i", "-g", expect.any(String)],
       expect.anything(),
     );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
     expect(spawn).not.toHaveBeenCalled();
