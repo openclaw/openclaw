@@ -135,7 +135,10 @@ describe("windows command wrapper behavior", () => {
   });
 
   beforeEach(() => {
-    _resetWindowsInstallRootsForTests();
+    // Stub the registry probe so install-root resolution is fully driven by
+    // process.env in tests; on real Windows runners the registry returns the
+    // canonical SystemRoot and would shadow the test's env setup.
+    _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
     spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
@@ -232,7 +235,7 @@ describe("windows command wrapper behavior", () => {
         "\\Windows",
         "relative\\path",
       ]) {
-        _resetWindowsInstallRootsForTests();
+        _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
         process.env.SystemRoot = unsafeRoot;
         delete process.env.windir;
         spawnMock.mockClear();
