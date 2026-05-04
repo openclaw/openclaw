@@ -311,6 +311,20 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       }
 
       const hasInputImages = (req.inputImages?.length ?? 0) > 0;
+      const isEditModel =
+        model.startsWith("openai/gpt-image-") || model.startsWith("fal-ai/nano-banana-");
+
+      // Flux models: enforce 1-image limit and no aspect ratio
+      if (hasInputImages && !isEditModel) {
+        if ((req.inputImages?.length ?? 0) > 1) {
+          throw new Error(
+            "fal flux image generation currently supports at most one reference image",
+          );
+        }
+        if (req.aspectRatio) {
+          throw new Error("fal flux image edit endpoint does not support aspectRatio overrides");
+        }
+      }
       const imageSize = resolveFalImageSize({
         size: req.size,
         resolution: req.resolution,
@@ -347,7 +361,15 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
         if (!input) {
           throw new Error("fal image edit request missing reference image");
         }
-        requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
+        // GPT Image 2 and NB2 use image_urls (array); Flux uses image_url (singular)
+        if (
+          model.startsWith("openai/gpt-image-") ||
+          model.startsWith("fal-ai/nano-banana-")
+        ) {
+          requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
+        } else {
+          requestBody.image_url = toImageDataUrl(input);
+        }
       }
       const { response, release } = await falFetchGuard({
         url: `${baseUrl}/${model}`,
