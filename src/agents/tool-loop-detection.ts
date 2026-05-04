@@ -726,6 +726,12 @@ export function recordToolCallOutcome(
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     });
+    // Bump the monotonic outcome counter only when an observable record (one
+    // with resultHash already populated) is appended. Matched updates set
+    // resultHash on a record that the post-compaction guard's cursor has
+    // already passed, so they were never observable under the prior index
+    // scheme either. See logging/diagnostic-session-state.ts for the field.
+    state.toolOutcomeSeq = (state.toolOutcomeSeq ?? 0) + 1;
   }
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {

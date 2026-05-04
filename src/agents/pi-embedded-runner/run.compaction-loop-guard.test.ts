@@ -33,6 +33,11 @@ let getDiagnosticSessionState: typeof GetDiagnosticSessionStateType;
 let hashToolCall: typeof HashToolCallType;
 let PostCompactionLoopPersistedError: typeof PostCompactionLoopPersistedErrorType;
 
+// Mirror the production trim cap (resolveLoopDetectionConfig default
+// historySize = 30). The trim is what makes the seq-based observation
+// non-trivially better than an absolute index cursor.
+const HISTORY_TRIM_CAP = 30;
+
 function recordToolOutcome(
   state: SessionState,
   toolName: string,
@@ -50,6 +55,13 @@ function recordToolOutcome(
     timestamp: Date.now(),
     ...(runId ? { runId } : {}),
   });
+  if (state.toolCallHistory.length > HISTORY_TRIM_CAP) {
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - HISTORY_TRIM_CAP);
+  }
+  // Mirror recordToolCallOutcome's unmatched-push branch: bump the monotonic
+  // outcome seq the runner uses to detect new records without an absolute
+  // index into the (trim-prone) toolCallHistory array.
+  state.toolOutcomeSeq = (state.toolOutcomeSeq ?? 0) + 1;
 }
 
 describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
@@ -243,6 +255,70 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     });
 
     expect(result.meta.error).toBeUndefined();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts post-compaction loop even when toolCallHistory is at its trim cap (regression: index-cursor blind spot in long-running sessions)", async () => {
+    // Long-running sessions accumulate up to historySize (default 30) records
+    // in toolCallHistory. Pushing more entries triggers trim, which would
+    // shift records out from under an absolute index cursor and let the
+    // guard silently miss every loop. The seq-based observation must still
+    // see the new records via the tail-slice path.
+    const overflowError = makeOverflowError();
+    const sessionState = getDiagnosticSessionState({
+      sessionKey: baseParams.sessionKey,
+      sessionId: baseParams.sessionId,
+    });
+
+    // Pre-fill history to the default trim cap with distinct entries that
+    // pre-date the run. This puts the guard's cursor right at the trim
+    // boundary before the post-compaction window opens.
+    for (let i = 0; i < HISTORY_TRIM_CAP; i += 1) {
+      recordToolOutcome(sessionState, "seed", { iter: i }, `seed-result-${i}`, baseParams.runId);
+    }
+    expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
+
+    // Attempt 1: overflow -> triggers compaction.
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    // Attempt 2 (post-compaction): three identical records appended while
+    // history is already at the cap. These pushes trigger trim, shifting
+    // older entries out. With the old index-cursor scheme, length never
+    // grew so the observation loop never ran. With the seq-based scheme,
+    // the tail of length-30 history contains the three new records and
+    // the guard aborts on the third match.
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      for (let i = 0; i < 3; i += 1) {
+        recordToolOutcome(
+          sessionState,
+          "gateway",
+          { action: "lookup", path: "x" },
+          "identical-result",
+          baseParams.runId,
+        );
+      }
+      // History is still capped at HISTORY_TRIM_CAP after the trim.
+      expect(sessionState.toolCallHistory?.length).toBe(HISTORY_TRIM_CAP);
+      return makeAttemptResult({
+        promptError: null,
+        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+      });
+    });
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    await expect(runEmbeddedPiAgent(baseParams)).rejects.toBeInstanceOf(
+      PostCompactionLoopPersistedError,
+    );
+
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
   });

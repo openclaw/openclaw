@@ -9,6 +9,14 @@ export type SessionState = {
   state: SessionStateValue;
   queueDepth: number;
   toolCallHistory?: ToolCallRecord[];
+  /**
+   * Monotonic counter of observable tool-outcome records ever pushed to
+   * toolCallHistory (i.e. unmatched-push branch of recordToolCallOutcome).
+   * Never decremented by trims. Lets observers detect new records via a
+   * delta on the seq instead of an absolute index that breaks once the
+   * history is trimmed at historySize.
+   */
+  toolOutcomeSeq?: number;
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
 };
