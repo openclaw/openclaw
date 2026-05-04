@@ -1,15 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.switchedSession",
-    "sessionsView.noSessionsMatchFilters",
-    "sessionsView.showAll"
-  ],
-  "generatedAt": "2026-05-04T08:21:47.535Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-05-04T12:01:51.851Z",
   "locale": "ko",
   "model": "gpt-5.5",
   "provider": "openai",
   "sourceHash": "926c835b1e931594ec63598a966c91906ca98425cc6bd89fe9787668bd442c01",
   "totalKeys": 1004,
-  "translatedKeys": 1001,
+  "translatedKeys": 1004,
   "workflow": 1
 }
