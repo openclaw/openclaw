@@ -4,6 +4,8 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 
+const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
+
 const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
 
 const resolveProviderSyntheticAuthWithPlugin = vi.hoisted(() =>
@@ -30,6 +32,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./auth-profiles/store.js", async () => {
+  const actual = await vi.importActual<typeof import("./auth-profiles/store.js")>(
+    "./auth-profiles/store.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: ensureAuthProfileStoreMock,
+  };
+});
+
 let discoverAuthStorage: typeof import("./pi-model-discovery.js").discoverAuthStorage;
 
 async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<void> {
@@ -49,6 +61,12 @@ describe("pi model discovery synthetic auth", () => {
   beforeEach(() => {
     resolveRuntimeSyntheticAuthProviderRefs.mockClear();
     resolveProviderSyntheticAuthWithPlugin.mockClear();
+    ensureAuthProfileStoreMock.mockReset();
+    ensureAuthProfileStoreMock.mockImplementation((agentDir?: string) => ({
+      version: 1,
+      profiles: {},
+      __agentDir: agentDir,
+    }));
   });
 
   afterEach(() => {
@@ -67,9 +85,17 @@ describe("pi model discovery synthetic auth", () => {
 
       const authStorage = discoverAuthStorage(agentDir);
 
+      expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(agentDir, {
+        allowKeychainPrompt: false,
+        commandName: undefined,
+        effectiveToolPolicy: undefined,
+      });
+
       expect(resolveRuntimeSyntheticAuthProviderRefs).toHaveBeenCalled();
       expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
         provider: "claude-cli",
+        commandName: undefined,
+        effectiveToolPolicy: undefined,
         context: {
           config: undefined,
           provider: "claude-cli",
@@ -78,6 +104,31 @@ describe("pi model discovery synthetic auth", () => {
       });
       expect(authStorage.hasAuth("claude-cli")).toBe(true);
       await expect(authStorage.getApiKey("claude-cli")).resolves.toBe("claude-cli-access-token");
+    });
+  });
+
+  it("threads commandName/effectiveToolPolicy through discoverAuthStorage into ensureAuthProfileStore and synthetic auth resolution", async () => {
+    await withAgentDir(async (agentDir) => {
+      discoverAuthStorage(agentDir, {
+        commandName: "agent-exec",
+        effectiveToolPolicy: "coordination_only",
+      });
+
+      expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(agentDir, {
+        allowKeychainPrompt: false,
+        commandName: "agent-exec",
+        effectiveToolPolicy: "coordination_only",
+      });
+      expect(resolveProviderSyntheticAuthWithPlugin).toHaveBeenCalledWith({
+        provider: "claude-cli",
+        commandName: "agent-exec",
+        effectiveToolPolicy: "coordination_only",
+        context: {
+          config: undefined,
+          provider: "claude-cli",
+          providerConfig: undefined,
+        },
+      });
     });
   });
 });
