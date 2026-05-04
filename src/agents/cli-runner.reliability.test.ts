@@ -344,6 +344,76 @@ describe("runCliAgent reliability", () => {
     }
   });
 
+  it("clears stale session binding and retries fresh on FailoverError reason timeout (#77089)", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 180_000,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "fresh session succeeded",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({ sessionKey: "agent:main:main", cliSessionId: "stale-session-123" }),
+    );
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(result.meta.finalAssistantRawText).toBe("fresh session succeeded");
+  });
+
+  it("clears stale session binding and retries fresh on FailoverError reason unknown (#77089)", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 500,
+        stdout: "",
+        stderr: "unexpected internal error",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "fresh session succeeded",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({ sessionKey: "agent:main:main", cliSessionId: "stale-session-123" }),
+    );
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+    expect(result.meta.finalAssistantRawText).toBe("fresh session succeeded");
+  });
+
   it("returns the assembled CLI prompt in meta for raw trace consumers", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({

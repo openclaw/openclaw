@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/CLI backend: clear the stale CLI session binding and retry fresh for any `FailoverError` from a resumed session (not only `session_expired`), preventing `timeout` and `unknown` failure reasons from silently pinning a dead session and cascading to API fallbacks for the remainder of the gateway's uptime. Fixes #77089. (#77140) Thanks @hclsys.
 - Control UI: point the Appearance tweakcn browse action and docs at the live tweakcn editor route instead of the removed `/themes` page. Fixes #77048.
 - Control UI: render Dream Diary prose through the sanitized markdown pipeline, so diary bold/italic/header markdown no longer appears as literal source text. Fixes #62413.
 - Control UI: render tool results whose output arrives as text-block arrays and give expanded tool output a scrollable block, so read/exec output remains visible in WebChat. Fixes #77054.

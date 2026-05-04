@@ -3,6 +3,7 @@ import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { cliBackendLog } from "./cli-runner/log.js";
 import { loadCliSessionHistoryMessages } from "./cli-runner/session-history.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { FailoverError, isFailoverError, resolveFailoverStatus } from "./failover-error.js";
@@ -327,13 +328,10 @@ export async function runPreparedCliAgent(
     } catch (err) {
       if (isFailoverError(err)) {
         const retryableSessionId = context.reusableCliSession.sessionId ?? params.cliSessionId;
-        // Check if this is a session expired error and we have a session to clear
-        if (err.reason === "session_expired" && retryableSessionId && params.sessionKey) {
-          // Clear the expired session ID from the session entry
-          // This requires access to the session store, which we don't have here
-          // We'll need to modify the caller to handle this case
-
-          // For now, retry without the session ID to create a new session
+        if (retryableSessionId && params.sessionKey) {
+          cliBackendLog.warn(
+            `CLI session failed (reason=${err.reason ?? "unknown"}), clearing stale binding and retrying fresh: ${retryableSessionId}`,
+          );
           try {
             const { output, lastAssistant } = await executeCliAttempt(undefined);
             const effectiveCliSessionId = output.sessionId;
