@@ -110,6 +110,7 @@ Docs: https://docs.openclaw.ai
 - Web search: keep first-class assistant `web_search` auto-detect and configured runtime providers visible when active runtime metadata or the active plugin registry is incomplete. Fixes #77073. Thanks @joeykrug.
 - Plugins/tools: mark manifest-optional sibling tools as optional even when they come from a shared non-optional factory, so cached/status/MCP metadata keeps opt-in tool policy accurate. Thanks @vincentkoc.
 - Matrix: keep `streaming.progress.toolProgress` scoped to progress draft mode, so partial and quiet Matrix previews do not lose tool progress unless `streaming.preview.toolProgress` is disabled. Thanks @vincentkoc.
+- Gateway/validation: isolate gateway server validation files, ignore unrelated startup logs in request-trace coverage, and fail fast on stuck shared-auth sockets, reducing false main-branch CI failures for contributors. Thanks @amknight.
 - Channels/streaming: keep `streaming.progress.toolProgress` scoped to progress draft mode, so disabling compact progress lines does not silence partial/block preview tool updates. Thanks @vincentkoc.
 - Plugins/update: treat OpenClaw stable correction versions like `2026.5.3-1` as stable releases for npm installs, plugin updates, and bundled-version comparisons, so `latest` can advance official plugins without prerelease opt-in. Thanks @vincentkoc.
 - Control UI: point the Appearance tweakcn browse action and docs at the live tweakcn editor route instead of the removed `/themes` page. Fixes #77048.
