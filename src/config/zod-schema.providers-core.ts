@@ -276,6 +276,15 @@ export const TelegramAccountSchemaBase = z
       .object({
         autoSelectFamily: z.boolean().optional(),
         dnsResultOrder: z.enum(["ipv4first", "verbatim"]).optional(),
+        httpTimeoutMs: z
+          .number()
+          .int()
+          .positive()
+          .max(60_000)
+          .optional()
+          .describe(
+            "HTTP request timeout in milliseconds for Telegram API calls (including health probes). Lower values (e.g., 5000) cause probes to fail fast when Telegram is unreachable, preventing gateway event loop blocking. Default: 15000.",
+          ),
         dangerouslyAllowPrivateNetwork: z
           .boolean()
           .optional()

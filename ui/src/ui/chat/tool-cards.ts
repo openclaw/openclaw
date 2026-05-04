@@ -48,6 +48,24 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.content === "string") {
     return item.content;
   }
+  // Handle array content blocks (modern tool result format)
+  // e.g., [{ type: "text", text: "..." }] or [{ type: "text", text: "..." }, { type: "image", ... }]
+  if (Array.isArray(item.content)) {
+    const parts: string[] = [];
+    for (const block of item.content) {
+      if (
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string"
+      ) {
+        parts.push((block as { text: string }).text);
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
+  }
   return undefined;
 }
 

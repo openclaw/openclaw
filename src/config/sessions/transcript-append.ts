@@ -117,7 +117,30 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
   leafId?: string;
 }> {
   const raw = await fs.readFile(transcriptPath, "utf-8");
-  const existingIds = new Set<string>();
+  // First pass: collect all existing IDs already in the file so we preserve them.
+  // This ensures idempotency - running migration multiple times produces the same result.
+  const seenIds = new Set<string>();
+  for (const line of raw.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>;
+        if (record.type !== "session") {
+          const id = normalizeEntryId(record.id);
+          if (id !== undefined) {
+            seenIds.add(id);
+          }
+        }
+      }
+    } catch {
+      // Skip malformed lines
+    }
+  }
+
+  const existingIds = new Set<string>(seenIds);
   const output: string[] = [];
   let previousId: string | null = null;
   let leafId: string | undefined;
@@ -141,9 +164,13 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
       output.push(JSON.stringify({ ...record, version: CURRENT_SESSION_VERSION }));
       continue;
     }
+    // Preserve existing valid IDs that are already in the file.
+    // Only generate new IDs for entries without valid existing IDs.
     const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
     existingIds.add(id);
-    record.id = id;
+    if (!Object.hasOwn(record, "id") || normalizeEntryId(record.id) === undefined) {
+      record.id = id;
+    }
     if (!Object.hasOwn(record, "parentId")) {
       record.parentId = previousId;
     }

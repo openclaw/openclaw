@@ -51,6 +51,14 @@ export type TelegramNetworkConfig = {
    */
   dnsResultOrder?: "ipv4first" | "verbatim";
   /**
+   * HTTP request timeout in milliseconds for Telegram API calls (including health probes).
+   * Lower values (e.g., 5000) cause probes to fail fast when Telegram is unreachable,
+   * preventing gateway event loop blocking. Higher values allow more time for slow
+   * responses but increase blocking duration on network issues.
+   * Default: 15000 (15 seconds).
+   */
+  httpTimeoutMs?: number;
+  /**
    * Dangerous opt-in for Telegram media downloads in trusted fake-IP or
    * transparent-proxy environments that resolve api.telegram.org to
    * private/internal/special-use addresses.

@@ -307,4 +307,76 @@ describe("probeTelegram retry logic", () => {
 
     expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
   });
+
+  it("uses httpTimeoutMs from network config for per-request timeout", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new Error("Request aborted"));
+          return;
+        }
+        // This never resolves - the timeout should abort it
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchMock as unknown as typeof fetch);
+    resolveTelegramFetch.mockImplementation((proxyFetch?: typeof fetch) => proxyFetch ?? fetch);
+    makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
+    vi.useFakeTimers();
+    try {
+      // Set httpTimeoutMs to 2000ms but total budget to 10000ms
+      const probePromise = probeTelegram(`${token}-httptimeout`, 10_000, {
+        network: {
+          httpTimeoutMs: 2_000,
+        },
+      });
+
+      // Fast-forward past the httpTimeoutMs of 2000ms
+      await vi.advanceTimersByTimeAsync(2_100);
+
+      const result = await probePromise;
+
+      // Should fail due to httpTimeoutMs timeout, not the full budget
+      expect(result.ok).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("respects total budget even when httpTimeoutMs is larger", async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new Error("Request aborted"));
+          return;
+        }
+        // This never resolves - the timeout should abort it
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchMock as unknown as typeof fetch);
+    resolveTelegramFetch.mockImplementation((proxyFetch?: typeof fetch) => proxyFetch ?? fetch);
+    makeProxyFetch.mockImplementation(() => fetchMock as unknown as typeof fetch);
+    vi.useFakeTimers();
+    try {
+      // Set httpTimeoutMs to 20000ms but total budget to only 500ms
+      const probePromise = probeTelegram(`${token}-smallbudget`, 500, {
+        network: {
+          httpTimeoutMs: 20_000,
+        },
+      });
+
+      // Fast-forward past the total budget of 500ms
+      await vi.advanceTimersByTimeAsync(600);
+
+      const result = await probePromise;
+
+      // Should fail due to total budget being exhausted, not httpTimeoutMs
+      expect(result.ok).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

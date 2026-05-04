@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderToolCard } from "./tool-cards.ts";
+import { extractToolCards, renderToolCard } from "./tool-cards.ts";
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -184,5 +184,46 @@ describe("tool-cards", () => {
         entryUrl: "/__openclaw__/canvas/documents/cv_sidebar/index.html",
       }),
     );
+  });
+
+  describe("extractToolCards", () => {
+    it("extracts output from inline tool_result with array content blocks", () => {
+      const message = {
+        role: "assistant",
+        content: [
+          {
+            type: "tool_call",
+            id: "call_1",
+            name: "read",
+            input: '{"path": "/test/file.txt"}',
+          },
+          {
+            type: "tool_result",
+            tool_call_id: "call_1",
+            content: [
+              { type: "text", text: "Line 1 of file" },
+              { type: "text", text: "Line 2 of file" },
+            ],
+          },
+        ],
+      };
+
+      const cards = extractToolCards(message, "msg_1");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].outputText).toBe("Line 1 of file\nLine 2 of file");
+    });
+
+    it("extracts output from standalone tool message with array content blocks", () => {
+      const message = {
+        role: "tool",
+        toolName: "read",
+        content: [{ type: "text", text: "File content here" }],
+      };
+
+      const cards = extractToolCards(message, "msg_2");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].name).toBe("read");
+      expect(cards[0].outputText).toBe("File content here");
+    });
   });
 });
