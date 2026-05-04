@@ -126,6 +126,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: reject malformed `/codex model` commands with extra operands before persisting an invalid bound-thread model override. Thanks @vincentkoc.
 - Providers/OpenAI Codex: reject malformed `/codex resume` commands with extra operands before attaching a Codex thread. Thanks @vincentkoc.
 - Providers/OpenAI Codex: reject malformed diagnostics confirm/cancel commands instead of treating `confirm <token> extra` as consent to upload feedback. Thanks @vincentkoc.
+- Providers/OpenAI Codex: resolve malformed empty `request_user_input` prompts without posting a blank chat prompt or waiting for a user reply. Thanks @vincentkoc.
 - Providers/DeepSeek: expose DeepSeek V4 `xhigh` and `max` thinking levels through the lightweight provider-policy surface, so Control UI `/think` pickers keep showing the max reasoning options when the runtime plugin registry is not active. Fixes #77139. Thanks @bittoby.
 - Release/beta smoke: resolve the dispatched Telegram beta E2E run from `gh run list` when `gh workflow run` returns no run URL, so the maintainer helper does not fail immediately after dispatch. Thanks @vincentkoc.
 - Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.

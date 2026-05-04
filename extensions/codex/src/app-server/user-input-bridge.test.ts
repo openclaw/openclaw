@@ -134,4 +134,27 @@ describe("Codex app-server user input bridge", () => {
     await expect(response).resolves.toEqual({ answers: {} });
     expect(bridge.handleQueuedMessage("too late")).toBe(false);
   });
+
+  it("resolves malformed empty question prompts without waiting for chat input", async () => {
+    const params = createParams();
+    const bridge = createCodexUserInputBridge({
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    await expect(
+      bridge.handleRequest({
+        id: "input-empty",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "tool-1",
+          questions: [],
+        },
+      }),
+    ).resolves.toEqual({ answers: {} });
+    expect(params.onBlockReply).not.toHaveBeenCalled();
+    expect(bridge.handleQueuedMessage("late answer")).toBe(false);
+  });
 });

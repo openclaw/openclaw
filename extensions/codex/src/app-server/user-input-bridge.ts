@@ -70,6 +70,9 @@ export function createCodexUserInputBridge(params: {
       if (requestParams.threadId !== params.threadId || requestParams.turnId !== params.turnId) {
         return undefined;
       }
+      if (requestParams.questions.length === 0) {
+        return emptyUserInputResponse();
+      }
 
       resolvePending(emptyUserInputResponse());
 
