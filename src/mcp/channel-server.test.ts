@@ -176,6 +176,55 @@ describe("openclaw channel mcp server", () => {
         );
       });
 
+      test("serializes conversation and message payloads into MCP primary content", async () => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string) => {
+            if (method === "sessions.list") {
+              return {
+                sessions: [
+                  {
+                    key: "agent:main:telegram:direct:123",
+                    channel: "telegram",
+                    deliveryContext: { to: "123" },
+                    lastMessagePreview: "hello",
+                  },
+                ],
+              };
+            }
+            if (method === "sessions.get") {
+              return {
+                messages: [
+                  {
+                    id: "msg-1",
+                    role: "assistant",
+                    content: [{ type: "text", text: "full transcript text" }],
+                  },
+                ],
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
+
+          const conversations = (await mcp.client.callTool({
+            name: "conversations_list",
+            arguments: {},
+          })) as { content?: Array<{ type: string; text?: string }> };
+          expect(conversations.content?.[0]?.text).toContain('"sessionKey"');
+          expect(conversations.content?.[0]?.text).toContain('"lastMessagePreview": "hello"');
+
+          const messages = (await mcp.client.callTool({
+            name: "messages_read",
+            arguments: { session_key: "agent:main:telegram:direct:123" },
+          })) as { content?: Array<{ type: string; text?: string }> };
+          expect(messages.content?.[0]?.text).toContain('"id": "msg-1"');
+          expect(messages.content?.[0]?.text).toContain("full transcript text");
+        } finally {
+          await mcp.close();
+        }
+      });
+
       test("emits Claude channel and permission notifications", async () => {
         const sessionKey = "agent:main:main";
         let mcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | null = null;
