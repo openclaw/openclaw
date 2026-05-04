@@ -128,6 +128,7 @@ export function isChannelProgressDraftWorkToolName(name: string | null | undefin
 
 type ChannelProgressLineOptions = {
   markdown?: boolean;
+  detailMode?: "explain" | "raw";
 };
 
 const EMOJI_PREFIX_RE = /^\p{Extended_Pictographic}/u;
@@ -188,11 +189,15 @@ function compactStrings(values: readonly (string | undefined | null)[]): string[
   return values.map((value) => value?.replace(/\s+/g, " ").trim()).filter(Boolean) as string[];
 }
 
-function inferToolMeta(name: string | undefined, args: Record<string, unknown> | undefined) {
+function inferToolMeta(
+  name: string | undefined,
+  args: Record<string, unknown> | undefined,
+  detailMode: "explain" | "raw" = "explain",
+) {
   if (!name || !args) {
     return undefined;
   }
-  return formatToolDetail(resolveToolDisplay({ name, args }));
+  return formatToolDetail(resolveToolDisplay({ name, args, detailMode }));
 }
 
 function formatNamedProgressLine(
@@ -240,7 +245,7 @@ export function formatChannelProgressDraftLine(
       return formatNamedProgressLine(
         input.name,
         [
-          inferToolMeta(input.name, input.args),
+          inferToolMeta(input.name, input.args, options?.detailMode),
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,

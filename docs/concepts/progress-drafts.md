@@ -18,9 +18,9 @@ into the final answer when the channel can do that safely.
 
 ```text
 Shelling...
-- reading recent channel context
-- checking matching issues
-- preparing reply
+📖 Read: from docs/concepts/progress-drafts.md
+🔎 Web Search: for "discord edit message"
+🛠️ Exec: run tests
 ```
 
 Use progress drafts when you want one tidy status message during tool-heavy work
@@ -60,6 +60,9 @@ The label appears after the agent starts meaningful work and either remains busy
 for five seconds or emits a second work event. Plain text-only replies do not
 show a progress draft. Progress lines are added only when the agent emits useful
 work updates, for example `🛠️ Exec`, `🔎 Web Search`, or `✍️ Write: to /tmp/file`.
+By default they use the same compact explain mode as `/verbose`; set
+`agents.defaults.toolProgressDetail: "raw"` when debugging and you also want raw
+commands/details appended.
 The final answer replaces the draft when possible; otherwise
 OpenClaw sends the final answer normally and cleans up or stops updating the
 draft according to the channel's transport.
@@ -172,6 +175,30 @@ Hide the label and show only progress lines:
 Progress lines are enabled by default in progress mode. They come from real run
 events: tool starts, item updates, task plans, approvals, command output, patch
 summaries, and similar agent activity.
+
+OpenClaw uses the same formatter for progress drafts and `/verbose`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      toolProgressDetail: "explain", // explain | raw
+    },
+  },
+}
+```
+
+`"explain"` is the default and keeps drafts stable with concise labels like
+`🛠️ Exec: check JS syntax for /tmp/app.js`. `"raw"` appends the underlying
+command/detail when available, which is useful while debugging but noisier in
+chat.
+
+For example, the same command appears differently depending on the detail mode:
+
+| Mode      | Progress line                                                        |
+| --------- | -------------------------------------------------------------------- |
+| `explain` | `🛠️ Exec: check JS syntax for /tmp/app.js`                           |
+| `raw`     | `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js` |
 
 Limit how many lines stay visible:
 

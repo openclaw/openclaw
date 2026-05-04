@@ -1128,6 +1128,7 @@ export async function runEmbeddedPiAgent(
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
             toolResultFormat: resolvedToolResultFormat,
+            toolProgressDetail: params.toolProgressDetail,
             execOverrides: params.execOverrides,
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,

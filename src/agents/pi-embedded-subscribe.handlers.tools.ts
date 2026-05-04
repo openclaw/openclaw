@@ -617,7 +617,13 @@ export function handleToolExecutionStart(
       }
     }
 
-    const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
+    const meta = extendExecMeta(
+      toolName,
+      args,
+      inferToolMetaFromArgs(toolName, args, {
+        detailMode: ctx.params.toolProgressDetail ?? "explain",
+      }),
+    );
     ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
     ctx.log.debug(
       `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
