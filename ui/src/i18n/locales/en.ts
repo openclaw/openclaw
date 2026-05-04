@@ -165,7 +165,7 @@ export const en: TranslationMap = {
     global: "Global",
     unknown: "Unknown",
     showArchived: "Show archived",
-    activeTooltip: "Updated in the last N minutes.",
+    activeTooltip: "Updated in the last {count} minutes.",
     limitTooltip: "Max sessions to load.",
     globalTooltip: "Include global sessions.",
     unknownTooltip: "Include unknown sessions.",

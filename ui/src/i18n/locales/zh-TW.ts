@@ -165,7 +165,7 @@ export const zh_TW: TranslationMap = {
     global: "全域",
     unknown: "未知",
     showArchived: "顯示已封存項目",
-    activeTooltip: "在過去 N 分鐘內更新。",
+    activeTooltip: "在過去 {count} 分鐘內更新。",
     limitTooltip: "要載入的工作階段上限。",
     globalTooltip: "包含全域工作階段。",
     unknownTooltip: "包含未知工作階段。",

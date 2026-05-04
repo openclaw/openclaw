@@ -68,6 +68,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/plugins: remove orphaned managed npm copies of bundled `@openclaw/*` plugins during `doctor --fix`, so stale package manifests cannot shadow the current bundled plugin config schema.
 - Control UI/performance: cap long-task and long-animation-frame diagnostics in the shared event log, so slow-render telemetry does not evict gateway/plugin events from the Debug and Overview views. Thanks @vincentkoc.
 - Gateway/startup: log the canvas host mount only after the HTTP server has bound, so startup logs no longer report the canvas host as mounted before it can serve requests.
+- Control UI/i18n: render the Sessions active filter tooltip with the configured minute count in every locale and make the i18n check reject placeholder drift. Thanks @BunsDev.
 - Web fetch: late-bind `web_fetch` config and provider fallback metadata from the active runtime snapshot, matching `web_search` so long-lived tools do not use stale fetch provider settings. Thanks @vincentkoc.
 - Discord: clear stale startup probe bot/application status when the async bot probe throws, not just when it returns a degraded probe result. Thanks @vincentkoc.
 - Web search: scope explicit bundled `web_search` provider runtime loading through manifest ownership, so selecting DuckDuckGo/Gemini/etc. does not import unrelated bundled providers or log their optional dependency failures. Thanks @vincentkoc.

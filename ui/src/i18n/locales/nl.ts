@@ -169,7 +169,7 @@ export const nl: TranslationMap = {
     global: "Globaal",
     unknown: "Onbekend",
     showArchived: "Gearchiveerde tonen",
-    activeTooltip: "Bijgewerkt in de afgelopen N minuten.",
+    activeTooltip: "Bijgewerkt in de afgelopen {count} minuten.",
     limitTooltip: "Maximaal aantal te laden sessies.",
     globalTooltip: "Globale sessies opnemen.",
     unknownTooltip: "Onbekende sessies opnemen.",
