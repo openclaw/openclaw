@@ -13,6 +13,7 @@ import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
 } from "./command-path-policy.js";
+import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
 
@@ -140,6 +141,17 @@ export function resolveMissingPluginCommandMessage(
         "the bundled plugin command surface."
       );
     }
+    if (
+      commandAlias.kind !== "runtime-slash" &&
+      commandAlias.enabledByDefault !== true &&
+      config?.plugins?.entries?.[parentPluginId]?.enabled !== true
+    ) {
+      return (
+        `The \`openclaw ${normalizedPluginId}\` command is provided by the ` +
+        `"${parentPluginId}" plugin, but that bundled plugin is disabled by default. Run ` +
+        `\`openclaw plugins enable ${parentPluginId}\` to enable that CLI surface.`
+      );
+    }
     if (commandAlias.kind === "runtime-slash") {
       const cliHint = commandAlias.cliCommand
         ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `
@@ -150,6 +162,10 @@ export function resolveMissingPluginCommandMessage(
         `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
       );
     }
+  }
+
+  if (isReservedNonPluginCommandRoot(normalizedPluginId)) {
+    return null;
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {

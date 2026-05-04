@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult } from "./common.js";
-import { SEARCH_CACHE } from "./web-search-provider-common.js";
+import { MAX_SEARCH_COUNT, SEARCH_CACHE } from "./web-search-provider-common.js";
+import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const WebSearchSchema = {
   type: "object",
@@ -14,7 +14,7 @@ const WebSearchSchema = {
       type: "number",
       description: "Number of results to return.",
       minimum: 1,
-      maximum: 20,
+      maximum: MAX_SEARCH_COUNT,
     },
     country: {
       type: "string",
@@ -72,20 +72,11 @@ export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  lateBindRuntimeConfig?: boolean;
 }): AnyAgentTool | null {
   if (isWebSearchDisabled(options?.config)) {
     return null;
   }
-  const runtimeProviderId =
-    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
-  const preferRuntimeProviders =
-    Boolean(runtimeProviderId) &&
-    !resolveManifestContractOwnerPluginId({
-      contract: "webSearchProviders",
-      value: runtimeProviderId,
-      origin: "bundled",
-      config: options?.config,
-    });
 
   return {
     label: "Web Search",
@@ -93,13 +84,23 @@ export function createWebSearchTool(options?: {
     description:
       "Search the web. Returns provider-normalized results for current information lookup.",
     parameters: WebSearchSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
+      const { config, preferRuntimeProviders, runtimeWebSearch } =
+        resolveWebSearchToolRuntimeContext({
+          config: options?.config,
+          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+          runtimeWebSearch: options?.runtimeWebSearch,
+        });
+      if (isWebSearchDisabled(config)) {
+        throw new Error("web_search is disabled.");
+      }
       const result = await runWebSearch({
-        config: options?.config,
+        config,
         sandboxed: options?.sandboxed,
-        runtimeWebSearch: options?.runtimeWebSearch,
+        runtimeWebSearch,
         preferRuntimeProviders,
         args: asToolParamsRecord(args),
+        signal,
       });
       return jsonResult({
         ...result.result,

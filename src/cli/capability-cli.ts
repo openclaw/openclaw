@@ -30,6 +30,7 @@ import type {
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
+import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
   describeImageFile,
   describeImageFileWithModel,
@@ -653,6 +654,11 @@ async function runModelRun(params: {
     if ("error" in prepared) {
       throw new Error(prepared.error);
     }
+    if (prepared.selection.provider === "codex") {
+      throw new Error(
+        'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
+      );
+    }
     const result = await completeWithPreparedSimpleCompletionModel({
       model: prepared.model,
       auth: prepared.auth,
@@ -710,7 +716,13 @@ async function runModelRun(params: {
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: { agentMeta?: { provider?: string; model?: string } };
+      meta?: {
+        agentMeta?: {
+          provider?: string;
+          model?: string;
+          fallbackAttempts?: Array<Record<string, unknown>>;
+        };
+      };
     };
   } = await callGateway({
     method: "agent",
@@ -745,7 +757,7 @@ async function runModelRun(params: {
     transport: "gateway" as const,
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
-    attempts: [],
+    attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,
@@ -964,6 +976,11 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
+        if (isMissingMediaUnderstandingProvider(result)) {
+          throw new Error(
+            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
+          );
+        }
         throw new Error(`No description returned for image: ${resolvedPath}`);
       }
       return {
@@ -986,6 +1003,15 @@ async function runImageDescribe(params: {
   } satisfies CapabilityEnvelope;
 }
 
+function isMissingMediaUnderstandingProvider(result: RunMediaUnderstandingFileResult): boolean {
+  const decision = result.decision;
+  return (
+    decision?.outcome === "skipped" &&
+    decision.attachments.length > 0 &&
+    decision.attachments.every((attachment) => attachment.attempts.length === 0)
+  );
+}
+
 async function runAudioTranscribe(params: {
   file: string;
   language?: string;
@@ -1002,6 +1028,11 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
+    if (isMissingMediaUnderstandingProvider(result)) {
+      throw new Error(
+        "No audio transcription provider is configured or ready. Configure tools.media.audio.models, or pass --model <provider/model> after configuring that provider's auth/API key.",
+      );
+    }
     throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
   }
   return {

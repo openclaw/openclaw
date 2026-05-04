@@ -47,6 +47,7 @@ type TelegramQaScenarioId =
   | "telegram-tools-compact-command"
   | "telegram-whoami-command"
   | "telegram-context-command"
+  | "telegram-current-session-status-tool"
   | "telegram-mentioned-message-reply"
   | "telegram-mention-gating";
 
@@ -117,7 +118,7 @@ type TelegramQaScenarioResult = {
 
 type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
 
-export type TelegramQaRunResult = {
+type TelegramQaRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -208,6 +209,7 @@ type TelegramMessage = {
 
 type TelegramUpdate = {
   update_id: number;
+  edited_message?: TelegramMessage;
   message?: TelegramMessage;
 };
 
@@ -271,6 +273,17 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
     }),
   },
   {
+    id: "telegram-current-session-status-tool",
+    title: "Telegram current session_status tool call",
+    defaultEnabled: false,
+    timeoutMs: 60_000,
+    buildRun: (sutUsername) => ({
+      expectReply: true,
+      input: `@${sutUsername} Telegram current session_status QA check. Call session_status with sessionKey set to current, then reply with the exact QA marker and resolved session key.`,
+      expectedTextIncludes: ["QA-TELEGRAM-CURRENT-SESSION-OK", ":telegram:group:"],
+    }),
+  },
+  {
     id: "telegram-mentioned-message-reply",
     title: "Telegram mentioned message gets a reply",
     defaultEnabled: false,
@@ -298,7 +311,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   },
 ];
 
-export const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   alwaysOnStandardScenarioIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
@@ -376,6 +389,13 @@ function resolveTelegramQaCanaryTimeoutMs(env: NodeJS.ProcessEnv = process.env) 
   );
 }
 
+function resolveTelegramQaScenarioTimeoutMs(
+  fallbackMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return parsePositiveTelegramQaEnvMs(env, "OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", fallbackMs);
+}
+
 function formatTelegramQaTimeoutSeconds(timeoutMs: number) {
   return `${Math.round(timeoutMs / 1_000)}s`;
 }
@@ -409,9 +429,7 @@ function formatTelegramQaProgressDetails(details: string): string {
   return `${sanitized.slice(0, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
 }
 
-export function resolveTelegramQaRuntimeEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): TelegramQaRuntimeEnv {
+function resolveTelegramQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): TelegramQaRuntimeEnv {
   const groupId = resolveEnvValue(env, "OPENCLAW_QA_TELEGRAM_GROUP_ID");
   if (!/^-?\d+$/u.test(groupId)) {
     throw new Error("OPENCLAW_QA_TELEGRAM_GROUP_ID must be a numeric Telegram chat id.");
@@ -465,10 +483,8 @@ function detectMediaKinds(message: TelegramMessage) {
   return kinds;
 }
 
-export function normalizeTelegramObservedMessage(
-  update: TelegramUpdate,
-): TelegramObservedMessage | null {
-  const message = update.message;
+function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
+  const message = update.message ?? update.edited_message;
   if (!message?.from?.id) {
     return null;
   }
@@ -605,7 +621,7 @@ async function flushTelegramUpdates(token: string) {
       {
         offset,
         timeout: 0,
-        allowed_updates: ["message"],
+        allowed_updates: ["message", "edited_message"],
       },
       15_000,
     );
@@ -650,10 +666,12 @@ async function waitForObservedMessage(params: {
   observedMessages: TelegramObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
+  expectedTextIncludes?: string[];
 }) {
   const startedAt = Date.now();
   let offset = params.initialOffset;
   let lastPollingError: unknown;
+  let lastExpectedMismatch: Error | undefined;
   while (Date.now() - startedAt < params.timeoutMs) {
     const remainingMs = Math.max(
       1_000,
@@ -668,7 +686,7 @@ async function waitForObservedMessage(params: {
         {
           offset,
           timeout: timeoutSeconds,
-          allowed_updates: ["message"],
+          allowed_updates: ["message", "edited_message"],
         },
         timeoutSeconds * 1000 + 5_000,
       );
@@ -700,9 +718,22 @@ async function waitForObservedMessage(params: {
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
+        try {
+          assertTelegramScenarioReply({
+            expectedTextIncludes: params.expectedTextIncludes,
+            message: observedMessage,
+          });
+        } catch (error) {
+          lastExpectedMismatch =
+            error instanceof Error ? error : new Error(formatErrorMessage(error));
+          continue;
+        }
         return { message: observedMessage, nextOffset: offset, observedAtMs: batchObservedAtMs };
       }
     }
+  }
+  if (lastExpectedMismatch) {
+    throw lastExpectedMismatch;
   }
   const timeoutMessage = `timed out after ${params.timeoutMs}ms waiting for Telegram message`;
   if (lastPollingError) {
@@ -1308,6 +1339,9 @@ export async function runTelegramQaLive(params: {
           );
           assertLeaseHealthy();
           const scenarioRun = scenario.buildRun(sutUsername);
+          const scenarioTimeoutMs = scenarioRun.expectReply
+            ? resolveTelegramQaScenarioTimeoutMs(scenario.timeoutMs)
+            : scenario.timeoutMs;
           try {
             const requestStartedAtMs = Date.now();
             const sent = await sendGroupMessage(
@@ -1322,10 +1356,13 @@ export async function runTelegramQaLive(params: {
             const matched = await waitForObservedMessage({
               token: runtimeEnv.driverToken,
               initialOffset: driverOffset,
-              timeoutMs: scenario.timeoutMs,
+              timeoutMs: scenarioTimeoutMs,
               observedMessages,
               observationScenarioId: scenario.id,
               observationScenarioTitle: scenario.title,
+              expectedTextIncludes: scenarioRun.expectReply
+                ? scenarioRun.expectedTextIncludes
+                : undefined,
               predicate: (message) =>
                 matchesTelegramScenarioReply({
                   allowAnySutReply: scenarioRun.allowAnySutReply,
@@ -1368,7 +1405,7 @@ export async function runTelegramQaLive(params: {
             if (!scenarioRun.expectReply) {
               const details = formatErrorMessage(error);
               if (
-                details === `timed out after ${scenario.timeoutMs}ms waiting for Telegram message`
+                details === `timed out after ${scenarioTimeoutMs}ms waiting for Telegram message`
               ) {
                 const result = {
                   id: scenario.id,
@@ -1537,6 +1574,7 @@ export const __testing = {
   parseTelegramQaProgressBooleanEnv,
   parseTelegramQaCredentialPayload,
   resolveTelegramQaCanaryTimeoutMs,
+  resolveTelegramQaScenarioTimeoutMs,
   resolveTelegramQaRuntimeEnv,
   sanitizeTelegramQaProgressValue,
   shouldLogTelegramQaLiveProgress,

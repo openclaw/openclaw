@@ -1,13 +1,14 @@
-import { formatDurationSeconds, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, overwriteApplicationCommands, type RequestClient } from "../internal/discord.js";
 import {
+  attachDiscordDeployRestContext,
   attachDiscordDeployRequestBody,
   formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
   formatDiscordDeployRateLimitDetails,
   formatDiscordDeployRateLimitWarning,
   isDiscordDeployDailyCreateLimit,
-  resolveDiscordDeployRateLimitDetails,
 } from "./provider.deploy-errors.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
 
@@ -27,6 +28,7 @@ function wrapDeployRestMethod(params: {
   runtime: RuntimeEnv;
   accountId: string;
   startupStartedAt: number;
+  timeoutMs?: number;
   shouldLogVerbose: () => boolean;
 }) {
   return async (path: string, data?: never, query?: never) => {
@@ -51,20 +53,27 @@ function wrapDeployRestMethod(params: {
       }
       return result;
     } catch (err) {
+      const requestMs = Date.now() - startedAt;
       attachDiscordDeployRequestBody(err, body);
+      attachDiscordDeployRestContext(err, {
+        method: params.method,
+        path,
+        requestMs,
+        timeoutMs: params.timeoutMs,
+      });
       const rateLimitDetails = formatDiscordDeployRateLimitDetails(err);
       if (rateLimitDetails) {
         if (params.shouldLogVerbose()) {
           params.runtime.log?.(
             warn(
-              `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:rate-limited ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}${rateLimitDetails}`,
+              `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:rate-limited ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs}${rateLimitDetails}`,
             ),
           );
         }
       } else {
         const details = formatDiscordDeployErrorDetails(err);
         params.runtime.error?.(
-          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
+          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs} error=${formatDiscordDeployErrorMessage(err)}${details}`,
         );
       }
       throw err;
@@ -87,12 +96,14 @@ function installDeployRestLogging(params: {
     delete: params.rest.delete.bind(params.rest),
   };
   for (const method of Object.keys(original) as RestMethodName[]) {
+    const timeout = (params.rest as { options?: { timeout?: unknown } }).options?.timeout;
     params.rest[method] = wrapDeployRestMethod({
       method,
       original,
       runtime: params.runtime,
       accountId: params.accountId,
       startupStartedAt: params.startupStartedAt,
+      timeoutMs: typeof timeout === "number" ? timeout : undefined,
       shouldLogVerbose: params.shouldLogVerbose,
     }) as RequestClient[typeof method];
   }
@@ -105,7 +116,7 @@ function installDeployRestLogging(params: {
   };
 }
 
-export async function deployDiscordCommands(params: {
+async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
   enabled: boolean;
@@ -118,9 +129,6 @@ export async function deployDiscordCommands(params: {
   }
   const startupStartedAt = params.startupStartedAt ?? Date.now();
   const accountId = params.accountId ?? "default";
-  const maxAttempts = 3;
-  const maxRetryDelayMs = 15_000;
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
   const restoreDeployRestLogging = installDeployRestLogging({
     rest: params.client.rest,
     runtime: params.runtime,
@@ -129,46 +137,29 @@ export async function deployDiscordCommands(params: {
     shouldLogVerbose: params.shouldLogVerbose,
   });
   try {
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      try {
-        await params.client.deployCommands({ mode: "reconcile" });
+    try {
+      await params.client.deployCommands({ mode: "reconcile" });
+      return;
+    } catch (err) {
+      if (isDiscordDeployDailyCreateLimit(err)) {
+        params.runtime.log?.(
+          warn(
+            `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
+          ),
+        );
         return;
-      } catch (err) {
-        if (isDiscordDeployDailyCreateLimit(err)) {
-          params.runtime.log?.(
-            warn(
-              `discord: native slash command deploy skipped for ${accountId}; daily application command create limit reached. Existing slash commands stay active until Discord resets the quota. Message send/receive is unaffected.`,
-            ),
-          );
-          return;
-        }
-        const rateLimitDetails = resolveDiscordDeployRateLimitDetails(err);
-        if (!rateLimitDetails || attempt >= maxAttempts) {
-          throw err;
-        }
-        const retryAfterMs = Math.max(0, Math.ceil(rateLimitDetails.retryAfterMs ?? 0));
-        if (retryAfterMs > maxRetryDelayMs) {
-          params.runtime.log?.(
-            warn(
-              `discord: native slash command deploy skipped for ${accountId}; retry after ${formatDurationSeconds(retryAfterMs, { decimals: 1 })} exceeds startup budget. Existing slash commands stay active. Message send/receive is unaffected.`,
-            ),
-          );
-          return;
-        }
-        if (params.shouldLogVerbose()) {
-          params.runtime.log?.(
-            `discord startup [${accountId}] deploy-retry ${Math.max(0, Date.now() - startupStartedAt)}ms attempt=${attempt}/${maxAttempts - 1} retryAfterMs=${retryAfterMs} scope=${rateLimitDetails.scope ?? "unknown"} code=${rateLimitDetails.discordCode ?? "unknown"}`,
-          );
-        }
-        await sleep(retryAfterMs);
       }
+      const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
+      if (rateLimitWarning) {
+        params.runtime.log?.(warn(rateLimitWarning));
+        return;
+      }
+      throw err;
     }
   } catch (err) {
-    const rateLimitWarning = formatDiscordDeployRateLimitWarning(err, accountId);
     params.runtime.log?.(
       warn(
-        rateLimitWarning ??
-          `discord: native slash command deploy warning (not message send): ${formatErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
+        `discord: native slash command deploy warning (not message send): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
       ),
     );
   } finally {

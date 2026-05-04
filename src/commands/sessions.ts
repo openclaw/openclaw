@@ -5,6 +5,8 @@ import { loadSessionStore, resolveSessionTotalTokens } from "../config/sessions.
 import { info } from "../globals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { resolveSessionStoreTargetsOrExit } from "./session-store-targets.js";
 import {
@@ -26,14 +28,14 @@ import {
 
 type SessionRow = SessionDisplayRow & {
   agentId: string;
-  kind: "direct" | "group" | "global" | "unknown";
+  kind: "cron" | "direct" | "group" | "global" | "unknown";
   agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
 };
 
 const AGENT_PAD = 10;
 const KIND_PAD = 6;
 const TOKENS_PAD = 20;
-let contextLookupRuntimePromise: Promise<typeof import("../agents/context.js")> | null = null;
+const contextLookupRuntimeLoader = createLazyImportLoader(() => import("../agents/context.js"));
 
 const formatKTokens = (value: number) => `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
@@ -72,8 +74,7 @@ const formatTokensCell = (
 };
 
 async function lookupContextTokensForDisplay(model: string): Promise<number | undefined> {
-  contextLookupRuntimePromise ??= import("../agents/context.js");
-  const { lookupContextTokens } = await contextLookupRuntimePromise;
+  const { lookupContextTokens } = await contextLookupRuntimeLoader.load();
   return lookupContextTokens(model, { allowAsyncLoad: false });
 }
 
@@ -83,6 +84,9 @@ function classifySessionKey(key: string, entry?: { chatType?: string | null }): 
   }
   if (key === "unknown") {
     return "unknown";
+  }
+  if (isCronSessionKey(key)) {
+    return "cron";
   }
   if (entry?.chatType === "group" || entry?.chatType === "channel") {
     return "group";

@@ -95,7 +95,9 @@ async function postJson<T>(
     );
 
     const onAbort = () => {
-      request.destroy(abortError());
+      const error = abortError();
+      request.destroy(error);
+      reject(error);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     request.on("error", (error) => {
@@ -118,7 +120,7 @@ export function normalizeQaTarget(raw: string): string | undefined {
 }
 
 export function parseQaTarget(raw: string): {
-  chatType: "direct" | "channel";
+  chatType: "direct" | "channel" | "group";
   conversationId: string;
   threadId?: string;
 } {
@@ -144,6 +146,12 @@ export function parseQaTarget(raw: string): {
       conversationId: normalized.slice("channel:".length),
     };
   }
+  if (normalized.startsWith("group:")) {
+    return {
+      chatType: "group",
+      conversationId: normalized.slice("group:".length),
+    };
+  }
   if (normalized.startsWith("dm:")) {
     return {
       chatType: "direct",
@@ -157,14 +165,14 @@ export function parseQaTarget(raw: string): {
 }
 
 export function buildQaTarget(params: {
-  chatType: "direct" | "channel";
+  chatType: "direct" | "channel" | "group";
   conversationId: string;
   threadId?: string | null;
 }) {
   if (params.threadId) {
     return `thread:${params.conversationId}/${params.threadId}`;
   }
-  return `${params.chatType === "direct" ? "dm" : "channel"}:${params.conversationId}`;
+  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
 }
 
 export async function pollQaBus(params: {

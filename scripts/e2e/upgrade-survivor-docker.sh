@@ -12,7 +12,10 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-upgrade-survivor-e2e" OPENCLAW_
 SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-900s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
-ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor}"
+SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
+LANE_ARTIFACT_SUFFIX="${OPENCLAW_DOCKER_ALL_LANE_NAME:-default}"
+LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
+ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
 
 normalize_npm_candidate() {
   local raw="$1"
@@ -40,6 +43,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   mkdir -p "$ARTIFACT_DIR"
+  chmod -R a+rwX "$ARTIFACT_DIR" || true
 
   DOCKER_E2E_PACKAGE_ARGS=()
   CANDIDATE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE:-current}"
@@ -81,6 +85,8 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_BASELINE="$BASELINE_SPEC" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND="$CANDIDATE_KIND" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC="$CANDIDATE_SPEC" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK="${OPENCLAW_UPGRADE_SURVIVOR_LEGACY_RUNTIME_DEPS_SYMLINK:-}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON=/tmp/openclaw-upgrade-survivor-artifacts/summary.json \
     -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}" \
@@ -95,6 +101,7 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRE
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 upgrade-survivor upgrade-survivor)"
 mkdir -p "$ARTIFACT_DIR"
+chmod -R a+rwX "$ARTIFACT_DIR" || true
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
@@ -103,6 +110,7 @@ docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_TEST_STATE_SCRIPT_B64="$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+  -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
   -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}" \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
@@ -134,12 +142,104 @@ export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
+export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
 gateway_pid=""
+plugin_registry_pid=""
 cleanup() {
+  if [ -n "${plugin_registry_pid:-}" ]; then
+    kill "$plugin_registry_pid" >/dev/null 2>&1 || true
+  fi
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
 }
 trap cleanup EXIT
+
+configure_configured_plugin_install_fixture_registry() {
+  [ "${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}" = "configured-plugin-installs" ] || return 0
+
+  local fixture_root="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/configured-plugin-installs-npm-fixture"
+  local package_dir="$fixture_root/package"
+  local tarball="$fixture_root/openclaw-brave-plugin-2026.5.2.tgz"
+  local port_file="$fixture_root/npm-registry-port"
+  local log_file="$fixture_root/npm-registry.log"
+  mkdir -p "$package_dir"
+  FIXTURE_PACKAGE_DIR="$package_dir" node <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+const path = require("node:path");
+const root = process.env.FIXTURE_PACKAGE_DIR;
+fs.mkdirSync(root, { recursive: true });
+fs.writeFileSync(
+  path.join(root, "package.json"),
+  `${JSON.stringify(
+    {
+      name: "@openclaw/brave-plugin",
+      version: "2026.5.2",
+      openclaw: { extensions: ["./index.js"] },
+    },
+    null,
+    2,
+  )}\n`,
+);
+fs.writeFileSync(
+  path.join(root, "openclaw.plugin.json"),
+  `${JSON.stringify(
+    {
+      id: "brave",
+      activation: { onStartup: false },
+      providerAuthEnvVars: { brave: ["BRAVE_API_KEY"] },
+      contracts: { webSearchProviders: ["brave"] },
+      configSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          webSearch: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              apiKey: { type: ["string", "object"] },
+              mode: { type: "string", enum: ["web", "llm-context"] },
+              baseUrl: { type: ["string", "object"] },
+            },
+          },
+        },
+      },
+    },
+    null,
+    2,
+  )}\n`,
+);
+fs.writeFileSync(
+  path.join(root, "index.js"),
+  `module.exports = { id: "brave", name: "Brave Fixture", register() {} };\n`,
+);
+NODE
+  tar -czf "$tarball" -C "$fixture_root" package
+  node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+    "$port_file" \
+    "@openclaw/brave-plugin" \
+    "2026.5.2" \
+    "$tarball" \
+    >"$log_file" 2>&1 &
+  plugin_registry_pid="$!"
+
+  for _ in $(seq 1 100); do
+    if [ -s "$port_file" ]; then
+      export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$port_file")"
+      export npm_config_registry="$NPM_CONFIG_REGISTRY"
+      return 0
+    fi
+    if ! kill -0 "$plugin_registry_pid" 2>/dev/null; then
+      cat "$log_file" >&2 || true
+      return 1
+    fi
+    sleep 0.1
+  done
+
+  cat "$log_file" >&2 || true
+  echo "Timed out waiting for configured plugin install npm fixture registry." >&2
+  return 1
+}
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
@@ -153,8 +253,8 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 echo "Checking dirty-state config before update..."
-node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
-node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
+OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
 echo "Running package update against the mounted tarball..."
 set +e
@@ -169,8 +269,14 @@ if [ "$update_status" -ne 0 ]; then
 fi
 
 echo "Running non-interactive doctor repair..."
+configure_configured_plugin_install_fixture_registry
 if ! openclaw doctor --fix --non-interactive >/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
   echo "openclaw doctor failed" >&2
+  cat /tmp/openclaw-upgrade-survivor-doctor.log >&2 || true
+  exit 1
+fi
+if ! openclaw config validate >>/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
+  echo "post-doctor config validation failed" >&2
   cat /tmp/openclaw-upgrade-survivor-doctor.log >&2 || true
   exit 1
 fi
@@ -196,6 +302,19 @@ if [ "$start_seconds" -gt "$START_BUDGET" ]; then
   exit 1
 fi
 
+echo "Checking gateway HTTP probes..."
+node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
+  --base-url "http://127.0.0.1:$PORT" \
+  --path /healthz \
+  --expect live \
+  --out /tmp/openclaw-upgrade-survivor-healthz.json
+node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
+  --base-url "http://127.0.0.1:$PORT" \
+  --path /readyz \
+  --expect ready \
+  --allow-failing discord,telegram,whatsapp,feishu,matrix \
+  --out /tmp/openclaw-upgrade-survivor-readyz.json
+
 echo "Checking gateway RPC status..."
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
 if ! openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
@@ -213,5 +332,5 @@ if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
-echo "Upgrade survivor Docker E2E passed in startup=${start_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} startup=${start_seconds}s status=${status_seconds}s."
 '

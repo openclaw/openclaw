@@ -1,7 +1,7 @@
 import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
-import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
+import type { CanvasHostHandler } from "../canvas-host/server.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginRegistry } from "../plugins/registry.js";
@@ -120,6 +120,7 @@ export async function createGatewayRuntimeState(params: {
     let canvasHost: CanvasHostHandler | null = null;
     if (params.canvasHostEnabled) {
       try {
+        const { createCanvasHostHandler } = await import("../canvas-host/server.js");
         const handler = await createCanvasHostHandler({
           runtime: params.canvasRuntime,
           rootDir: params.cfg.canvasHost?.root,
@@ -129,9 +130,6 @@ export async function createGatewayRuntimeState(params: {
         });
         if (handler.rootDir) {
           canvasHost = handler;
-          params.logCanvas.info(
-            `canvas host mounted at http://${params.bindHost}:${params.port}${CANVAS_HOST_PATH}/ (root ${handler.rootDir})`,
-          );
         }
       } catch (err) {
         params.logCanvas.warn(`canvas host failed to start: ${String(err)}`);
@@ -311,7 +309,10 @@ export async function createGatewayRuntimeState(params: {
       canvasHost,
       releasePluginRouteRegistry: () => {
         // Releases both pinned HTTP-route and channel registries set at startup.
-        releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+        // Release unconditionally: plugin startup/reload can re-pin these
+        // surfaces to a registry that differs from the original runtime-state
+        // bootstrap registry.
+        releasePinnedPluginHttpRouteRegistry();
         // Release unconditionally (no registry arg): the channel pin may have
         // been re-pinned to a deferred-reload registry that differs from the
         // original params.pluginRegistry, so an identity-guarded release would
@@ -339,7 +340,7 @@ export async function createGatewayRuntimeState(params: {
       toolEventRecipients,
     };
   } catch (err) {
-    releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+    releasePinnedPluginHttpRouteRegistry();
     releasePinnedPluginChannelRegistry();
     throw err;
   }

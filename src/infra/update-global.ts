@@ -21,7 +21,7 @@ export type CommandRunner = (
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<{ stdout: string; stderr: string; code: number | null }>;
 
-export type ResolvedGlobalInstallCommand = {
+type ResolvedGlobalInstallCommand = {
   manager: GlobalInstallManager;
   command: string;
 };
@@ -274,13 +274,11 @@ export function canResolveRegistryVersionForPackageTarget(value: string): boolea
   return !isMainPackageTarget(trimmed) && !isExplicitPackageInstallSpec(trimmed);
 }
 
-async function resolvePortableGitPathPrepend(
-  env: NodeJS.ProcessEnv | undefined,
-): Promise<string[]> {
+async function resolvePortableGitPathPrepend(): Promise<string[]> {
   if (process.platform !== "win32") {
     return [];
   }
-  const localAppData = env?.LOCALAPPDATA?.trim() || process.env.LOCALAPPDATA?.trim();
+  const localAppData = process.env.LOCALAPPDATA?.trim();
   if (!localAppData) {
     return [];
   }
@@ -341,7 +339,7 @@ export function resolveGlobalInstallSpec(params: {
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {
-  const pathPrepend = await resolvePortableGitPathPrepend(env);
+  const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
   const hasCorepackDownloadPromptSetting = Boolean(
     sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),

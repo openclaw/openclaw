@@ -72,6 +72,7 @@ Truncate output to this many characters.
         timeoutSeconds: 30,
         cacheTtlMinutes: 15,
         maxRedirects: 3,
+        useTrustedEnvProxy: false, // let a trusted HTTP(S) env proxy resolve DNS
         readability: true, // use Readability extraction
         userAgent: "Mozilla/5.0 ...", // override User-Agent
         ssrfPolicy: {
@@ -126,17 +127,37 @@ Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor
 </Note>
 
 <Note>
-  Firecrawl `baseUrl` overrides are locked down: they must use `https://` and
-  the official Firecrawl host (`api.firecrawl.dev`).
+  Firecrawl `baseUrl` overrides are locked down: hosted traffic uses
+  `https://api.firecrawl.dev`; self-hosted overrides must target private or
+  internal endpoints, and `http://` is accepted only for those private targets.
 </Note>
 
 Current runtime behavior:
 
 - `tools.web.fetch.provider` selects the fetch fallback provider explicitly.
 - If `provider` is omitted, OpenClaw auto-detects the first ready web-fetch
-  provider from available credentials. Today the bundled provider is Firecrawl.
+  provider from available credentials. Non-sandboxed `web_fetch` can use
+  installed plugins that declare `contracts.webFetchProviders` and register a
+  matching provider at runtime. Today the bundled provider is Firecrawl.
+- Sandboxed `web_fetch` calls stay limited to bundled providers.
 - If Readability is disabled, `web_fetch` skips straight to the selected
   provider fallback. If no provider is available, it fails closed.
+
+## Trusted Env Proxy
+
+If your deployment requires `web_fetch` to go through a trusted outbound
+HTTP(S) proxy, set `tools.web.fetch.useTrustedEnvProxy: true`.
+
+In this mode, OpenClaw still applies hostname-based SSRF checks before sending
+the request, but it lets the proxy resolve DNS instead of doing local DNS
+pinning. Enable this only when the proxy is operator-controlled and enforces
+outbound policy after DNS resolution.
+
+<Note>
+  If no HTTP(S) proxy env var is configured, or the target host is excluded by
+  `NO_PROXY`, `web_fetch` falls back to the normal strict path with local DNS
+  pinning.
+</Note>
 
 ## Limits and safety
 
@@ -149,6 +170,9 @@ Current runtime behavior:
   for trusted fake-IP proxy stacks; leave them unset unless your proxy owns
   those synthetic ranges and enforces its own destination policy
 - Redirects are checked and limited by `maxRedirects`
+- `useTrustedEnvProxy` is an explicit opt-in and should only be enabled for
+  operator-controlled proxies that still enforce outbound policy after DNS
+  resolution
 - `web_fetch` is best-effort -- some sites need the [Web Browser](/tools/browser)
 
 ## Tool profiles

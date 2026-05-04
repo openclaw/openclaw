@@ -280,6 +280,62 @@ describe("message tool secret scoping", () => {
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
     );
   });
+
+  it("resolves scoped channel SecretRefs even when constructed with a config snapshot", async () => {
+    mockSendResult({ channel: "discord", to: "channel:123" });
+    const rawConfig = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          accounts: {
+            ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
+          },
+        },
+      },
+    };
+    const resolvedConfig = {
+      channels: {
+        discord: {
+          token: "resolved-discord-token",
+          accounts: {
+            ops: { token: "resolved-discord-ops-token" },
+          },
+        },
+      },
+    };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig,
+      diagnostics: [],
+    });
+
+    const tool = createMessageTool({
+      config: rawConfig as never,
+      currentChannelProvider: "discord",
+      currentChannelId: "channel:123",
+      agentAccountId: "ops",
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      message: "hi",
+    });
+
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
+      config?: unknown;
+      targetIds?: Set<string>;
+      allowedPaths?: Set<string>;
+    };
+    expect(secretResolveCall.config).toBe(rawConfig);
+    expect(secretResolveCall.targetIds).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
+    expect(secretResolveCall.allowedPaths).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
+    expect(mocks.runMessageAction.mock.calls[0]?.[0]?.cfg).toBe(resolvedConfig);
+  });
 });
 
 describe("message tool agent routing", () => {
@@ -368,6 +424,34 @@ describe("message tool path passthrough", () => {
 
     expect(call?.params?.[field]).toBe(value);
     expect(call?.params?.media).toBeUndefined();
+  });
+});
+
+describe("message tool Telegram topic targets", () => {
+  it("passes numeric forum topic targets and thread ids to outbound resolution", async () => {
+    mockSendResult({ to: "telegram:-1001234567890:topic:42" });
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001234567890:topic:42",
+      },
+      action: {
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        message: "topic hello",
+      },
+    });
+
+    expect(call?.params).toEqual(
+      expect.objectContaining({
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        message: "topic hello",
+      }),
+    );
   });
 });
 
@@ -722,6 +806,32 @@ describe("message tool schema scoping", () => {
     expect(getActionEnum(properties)).toContain("download-file");
     expect(properties.fileId).toMatchObject({ type: "string" });
   });
+
+  it("advertises messageId for read actions", () => {
+    const slackReadPlugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "Slack test plugin.",
+      actions: ["read"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackReadPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "slack",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toContain("read");
+    expect(properties.messageId).toMatchObject({
+      type: "string",
+      description: expect.stringContaining("read"),
+    });
+  });
 });
 
 describe("message tool description", () => {
@@ -1025,6 +1135,20 @@ describe("message tool reasoning tag sanitization", () => {
       target: "signal:+15551234567",
       channel: "signal",
     },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n\nVisible answer",
+      expected: "Visible answer",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n_more internal notes_",
+      expected: "",
+      target: "telegram:123",
+      channel: "telegram",
+    },
   ])(
     "sanitizes reasoning tags in $field before sending",
     async ({ channel, target, field, input, expected }) => {
@@ -1039,6 +1163,57 @@ describe("message tool reasoning tag sanitization", () => {
       expect(call?.params?.[field]).toBe(expected);
     },
   );
+
+  it("sanitizes visible presentation text before sending", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: "<think>internal title</think>Deploy ready",
+          blocks: [
+            { type: "text", text: "<think>internal note</think>Ship it" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "<think>button rationale</think>Approve",
+                  value: "approve",
+                },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "<think>selection rationale</think>Pick a lane",
+              options: [
+                {
+                  label: "<think>option rationale</think>Main",
+                  value: "main",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Deploy ready",
+      blocks: [
+        { type: "text", text: "Ship it" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+        {
+          type: "select",
+          placeholder: "Pick a lane",
+          options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool sandbox passthrough", () => {

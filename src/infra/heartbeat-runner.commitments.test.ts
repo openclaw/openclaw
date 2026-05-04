@@ -12,7 +12,7 @@ import {
 } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
-import { requestHeartbeatNow, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
+import { requestHeartbeat, resetHeartbeatWakeStateForTests } from "./heartbeat-wake.js";
 
 installHeartbeatRunnerTestRuntime();
 
@@ -67,6 +67,7 @@ describe("runHeartbeatOnce commitments", () => {
     sourceUserText?: string;
     sourceAssistantText?: string;
     legacyRawSourceText?: boolean;
+    visibleReplies?: "automatic" | "message_tool";
   }) {
     return await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
@@ -81,6 +82,7 @@ describe("runHeartbeatOnce commitments", () => {
             },
           },
         },
+        ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
         commitments: { enabled: true },
@@ -125,6 +127,8 @@ describe("runHeartbeatOnce commitments", () => {
           expect(ctx.Body).not.toContain(
             params?.sourceAssistantText ?? "Good luck, I hope it goes well.",
           );
+          expect(ctx.Body).toContain(HEARTBEAT_TOKEN);
+          expect(ctx.Body).not.toContain("heartbeat_respond");
           expect(ctx.OriginatingChannel).toBe("telegram");
           expect(ctx.OriginatingTo).toBe("155462274");
           expect(opts?.disableTools).toBe(true);
@@ -152,6 +156,93 @@ describe("runHeartbeatOnce commitments", () => {
       };
     });
   }
+
+  it("keeps due heartbeat tasks tool-capable when commitments are also due", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:telegram:user-155462274";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "last",
+              },
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+          commitments: { enabled: true },
+        };
+        await fs.writeFile(
+          path.join(tmpDir, "HEARTBEAT.md"),
+          `tasks:
+  - name: deployment-status
+    interval: 5m
+    prompt: Check deployment status with the normal tools
+`,
+          "utf-8",
+        );
+        await seedSessionStore(storePath, sessionKey, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "stale-target",
+        });
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+        });
+
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "stale-target",
+        });
+        replySpy.mockImplementation(
+          async (
+            ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
+            opts?: { disableTools?: boolean; skillFilter?: string[] },
+          ) => {
+            expect(ctx.Body).toContain("Run the following periodic tasks");
+            expect(ctx.Body).toContain("- deployment-status: Check deployment status");
+            expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
+            expect(ctx.OriginatingChannel).toBe("telegram");
+            expect(ctx.OriginatingTo).toBe("stale-target");
+            expect(opts?.disableTools).toBeUndefined();
+            expect(opts?.skillFilter).toBeUndefined();
+            return { text: "Deployment status checked" };
+          },
+        );
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+        return {
+          result,
+          sendTelegram,
+          store: await loadCommitmentStore(),
+        };
+      },
+    );
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expect(store.commitments[0]).toMatchObject({
+      id: "cm_interview",
+      status: "pending",
+      attempts: 0,
+    });
+  });
 
   it("does not deliver due commitments when heartbeat target is none", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
@@ -261,7 +352,7 @@ describe("runHeartbeatOnce commitments", () => {
         stableSchedulerSeed: "commitment-target-none",
       });
 
-      requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+      requestHeartbeat({ source: "manual", intent: "manual", reason: "manual", coalesceMs: 0 });
       await vi.advanceTimersByTimeAsync(1);
       runner.stop();
 
@@ -291,6 +382,22 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("dismisses a due commitment when the heartbeat model declines to send a check-in", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase({
+      replyText: HEARTBEAT_TOKEN,
+    });
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(store.commitments[0]).toMatchObject({
+      id: "cm_interview",
+      status: "dismissed",
+      attempts: 1,
+      dismissedAtMs: nowMs,
+    });
+  });
+
+  it("keeps due commitment heartbeats on the text ack while tools are disabled", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      visibleReplies: "message_tool",
       replyText: HEARTBEAT_TOKEN,
     });
 
