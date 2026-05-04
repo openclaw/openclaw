@@ -12,6 +12,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { resolveOpenClawGatewayFailureMetadata } from "../../gateway-failure-metadata.js";
 import {
   clearSlackThreadParticipationCache,
   recordSlackThreadParticipation,
@@ -578,6 +579,40 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+    expect(members).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops tagged OpenClaw gateway failure bot messages before bot-room authorization (#51832)", async () => {
+    const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
+    const text =
+      "\u26a0\ufe0f Agent failed before reply: OAuth token refresh failed. Please try again.";
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage({
+        text,
+        metadata: resolveOpenClawGatewayFailureMetadata(text),
+      }),
+    );
+
+    expect(prepared).toBeNull();
+    expect(members).not.toHaveBeenCalled();
+  });
+
+  it("does not drop untagged gateway-looking bot messages before bot-room authorization (#51832)", async () => {
+    const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage({
+        text: "\u26a0\ufe0f Agent failed before reply: OAuth token refresh failed. Please try again.",
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Agent failed before reply");
     expect(members).toHaveBeenCalledTimes(1);
   });
 

@@ -22,6 +22,7 @@ import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { markdownToSlackMrkdwnChunks } from "./format.js";
+import { resolveOpenClawGatewayFailureMetadata } from "./gateway-failure-metadata.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { parseSlackTarget } from "./targets.js";
@@ -234,12 +235,14 @@ async function postSlackMessageBestEffort(params: {
   threadTs?: string;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  metadata?: ReturnType<typeof resolveOpenClawGatewayFailureMetadata>;
 }) {
   const basePayload = {
     channel: params.channelId,
     text: params.text,
     thread_ts: params.threadTs,
     ...(params.blocks?.length ? { blocks: params.blocks } : {}),
+    ...(params.metadata ? { metadata: params.metadata } : {}),
   };
   const postChatMessage = params.client.chat.postMessage.bind(params.client.chat);
   try {
@@ -575,6 +578,7 @@ async function sendMessageSlackQueuedInner(params: {
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
   const client = opts.client ?? getSlackWriteClient(token);
+  const gatewayFailureMetadata = resolveOpenClawGatewayFailureMetadata(trimmedMessage);
   const directUserPostChannelId = resolveDirectUserPostChannelId({
     recipient,
     hasMedia: Boolean(opts.mediaUrl),
@@ -601,6 +605,7 @@ async function sendMessageSlackQueuedInner(params: {
       threadTs: opts.threadTs,
       identity: opts.identity,
       blocks,
+      metadata: gatewayFailureMetadata ?? resolveOpenClawGatewayFailureMetadata(fallbackText),
     });
     return {
       messageId: response.ts ?? "unknown",
@@ -653,6 +658,7 @@ async function sendMessageSlackQueuedInner(params: {
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
+        metadata: gatewayFailureMetadata,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }
@@ -664,6 +670,7 @@ async function sendMessageSlackQueuedInner(params: {
         text: chunk,
         threadTs: opts.threadTs,
         identity: opts.identity,
+        metadata: gatewayFailureMetadata,
       });
       lastMessageId = response.ts ?? lastMessageId;
     }

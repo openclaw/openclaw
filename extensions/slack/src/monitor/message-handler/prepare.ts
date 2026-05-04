@@ -33,6 +33,7 @@ import {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
 import { formatSlackFileReference } from "../../file-reference.js";
+import { isOpenClawGatewayFailureMetadata } from "../../gateway-failure-metadata.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
 import {
@@ -276,6 +277,10 @@ export async function prepareSlackMessage(params: {
     allowBots,
     isBotMessage,
   } = conversation;
+  if (isBotMessage && isRoomish && isOpenClawGatewayFailureMetadata(message.metadata)) {
+    logVerbose("slack: drop OpenClaw gateway failure bot message");
+    return null;
+  }
   const authorization = await authorizeSlackInboundMessage({
     ctx,
     account,
