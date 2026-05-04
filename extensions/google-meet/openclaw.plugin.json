@@ -5,8 +5,12 @@
   "enabledByDefault": false,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {
+    "onStartup": true,
     "onCommands": ["googlemeet"],
     "onCapabilities": ["tool"]
+  },
+  "contracts": {
+    "tools": ["google_meet"]
   },
   "uiHints": {
     "defaults.meeting": {
@@ -24,7 +28,7 @@
     },
     "defaultMode": {
       "label": "Default Mode",
-      "help": "Realtime voice is the default."
+      "help": "Agent uses realtime transcription plus regular OpenClaw TTS. Bidi uses the realtime voice model directly. Transcribe observes only."
     },
     "chrome.audioBackend": {
       "label": "Chrome Audio Backend",
@@ -56,12 +60,37 @@
     },
     "chrome.audioInputCommand": {
       "label": "Audio Input Command",
-      "help": "Command that writes 8 kHz G.711 mu-law meeting audio to stdout.",
+      "help": "Command that writes meeting audio to stdout in chrome.audioFormat.",
       "advanced": true
     },
     "chrome.audioOutputCommand": {
       "label": "Audio Output Command",
-      "help": "Command that reads 8 kHz G.711 mu-law assistant audio from stdin.",
+      "help": "Command that reads assistant audio from stdin in chrome.audioFormat.",
+      "advanced": true
+    },
+    "chrome.bargeInInputCommand": {
+      "label": "Barge-In Input Command",
+      "help": "Optional Gateway-hosted microphone command that writes signed 16-bit little-endian mono PCM for human interruption detection while assistant playback is active.",
+      "advanced": true
+    },
+    "chrome.bargeInRmsThreshold": {
+      "label": "Barge-In RMS Threshold",
+      "help": "RMS level on chrome.bargeInInputCommand that counts as a human interruption.",
+      "advanced": true
+    },
+    "chrome.bargeInPeakThreshold": {
+      "label": "Barge-In Peak Threshold",
+      "help": "Peak level on chrome.bargeInInputCommand that counts as a human interruption.",
+      "advanced": true
+    },
+    "chrome.bargeInCooldownMs": {
+      "label": "Barge-In Cooldown (ms)",
+      "help": "Minimum delay between repeated barge-in clears.",
+      "advanced": true
+    },
+    "chrome.audioFormat": {
+      "label": "Audio Format",
+      "help": "Command-pair audio format. PCM16 24 kHz is the default Chrome/Meet path; G.711 mu-law 8 kHz remains available for legacy command pairs.",
       "advanced": true
     },
     "chrome.audioBridgeCommand": {
@@ -106,12 +135,17 @@
       "advanced": true
     },
     "voiceCall.dtmfDelayMs": {
-      "label": "DTMF Delay (ms)",
+      "label": "Legacy DTMF Delay (ms)",
+      "help": "Compatibility setting from the old post-connect DTMF flow. Twilio Meet joins now play DTMF before realtime connect.",
       "advanced": true
     },
     "voiceCall.introMessage": {
       "label": "Voice Call Intro Message",
       "advanced": true
+    },
+    "realtime.strategy": {
+      "label": "Realtime Strategy",
+      "help": "Legacy realtime alias setting. Use mode=agent or mode=bidi for new Meet joins."
     },
     "realtime.provider": {
       "label": "Realtime Provider",
@@ -128,6 +162,11 @@
     "realtime.introMessage": {
       "label": "Realtime Intro Message",
       "help": "Spoken once when the realtime bridge is ready. Set to an empty string to join silently."
+    },
+    "realtime.agentId": {
+      "label": "Realtime Consult Agent",
+      "help": "OpenClaw agent id used by openclaw_agent_consult. Defaults to \"main\".",
+      "advanced": true
     },
     "realtime.toolPolicy": {
       "label": "Realtime Tool Policy",
@@ -188,8 +227,8 @@
       },
       "defaultMode": {
         "type": "string",
-        "enum": ["realtime", "transcribe"],
-        "default": "realtime"
+        "enum": ["agent", "bidi", "realtime", "transcribe"],
+        "default": "agent"
       },
       "chrome": {
         "type": "object",
@@ -227,21 +266,30 @@
             "type": "number",
             "default": 20000
           },
+          "audioFormat": {
+            "type": "string",
+            "enum": ["pcm16-24khz", "g711-ulaw-8khz"],
+            "default": "pcm16-24khz"
+          },
           "audioInputCommand": {
             "type": "array",
             "default": [
-              "rec",
+              "sox",
               "-q",
+              "-t",
+              "coreaudio",
+              "BlackHole 2ch",
               "-t",
               "raw",
               "-r",
-              "8000",
+              "24000",
               "-c",
               "1",
               "-e",
-              "mu-law",
+              "signed-integer",
               "-b",
-              "8",
+              "16",
+              "-L",
               "-"
             ],
             "items": {
@@ -251,23 +299,45 @@
           "audioOutputCommand": {
             "type": "array",
             "default": [
-              "play",
+              "sox",
               "-q",
               "-t",
               "raw",
               "-r",
-              "8000",
+              "24000",
               "-c",
               "1",
               "-e",
-              "mu-law",
+              "signed-integer",
               "-b",
-              "8",
-              "-"
+              "16",
+              "-L",
+              "-",
+              "-t",
+              "coreaudio",
+              "BlackHole 2ch"
             ],
             "items": {
               "type": "string"
             }
+          },
+          "bargeInInputCommand": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bargeInRmsThreshold": {
+            "type": "number",
+            "default": 650
+          },
+          "bargeInPeakThreshold": {
+            "type": "number",
+            "default": 2500
+          },
+          "bargeInCooldownMs": {
+            "type": "number",
+            "default": 900
           },
           "audioBridgeCommand": {
             "type": "array",
@@ -338,6 +408,11 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "strategy": {
+            "type": "string",
+            "enum": ["agent", "bidi"],
+            "default": "agent"
+          },
           "provider": {
             "type": "string",
             "default": "openai"
@@ -347,11 +422,15 @@
           },
           "instructions": {
             "type": "string",
-            "default": "You are joining a private Google Meet as an OpenClaw agent. Keep spoken replies brief and natural. When a question needs deeper reasoning, current information, or tools, call openclaw_agent_consult before answering."
+            "default": "You are joining a private Google Meet as an OpenClaw voice transport. Keep spoken replies brief and natural. In agent mode, wait for OpenClaw consult results and speak them exactly. In bidi mode, answer directly and call openclaw_agent_consult for deeper reasoning, current information, or tools."
           },
           "introMessage": {
             "type": "string",
             "default": "Say exactly: I'm here and listening."
+          },
+          "agentId": {
+            "type": "string",
+            "description": "OpenClaw agent id used by openclaw_agent_consult. Defaults to \"main\"."
           },
           "toolPolicy": {
             "type": "string",

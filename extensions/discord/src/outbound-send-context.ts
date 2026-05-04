@@ -1,4 +1,4 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { createReplyToFanout, type ReplyToResolution } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveOutboundSendDep,
@@ -11,7 +11,7 @@ type DiscordSendRuntime = typeof import("./send.js");
 
 export type DiscordSendFn = DiscordSendRuntime["sendMessageDiscord"];
 export type DiscordVoiceSendFn = DiscordSendRuntime["sendVoiceMessageDiscord"];
-export type DiscordFormattingOptions = {
+type DiscordFormattingOptions = {
   textLimit?: number;
   maxLinesPerMessage?: number;
   tableMode?: NonNullable<Parameters<DiscordSendFn>[2]>["tableMode"];

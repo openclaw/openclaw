@@ -11,17 +11,13 @@ LINE connects to OpenClaw via the LINE Messaging API. The plugin runs as a webho
 receiver on the gateway and uses your channel access token + channel secret for
 authentication.
 
-Status: bundled plugin. Direct messages, group chats, media, locations, Flex
+Status: downloadable plugin. Direct messages, group chats, media, locations, Flex
 messages, template messages, and quick replies are supported. Reactions and threads
 are not supported.
 
-## Bundled plugin
+## Install
 
-LINE ships as a bundled plugin in current OpenClaw releases, so normal
-packaged builds do not need a separate install.
-
-If you are on an older build or a custom install that excludes LINE, install it
-manually:
+Install LINE before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/line
@@ -143,6 +139,9 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Streaming responses are buffered; LINE receives full chunks with a loading
   animation while the agent works.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
+- Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
+  to the agent, matching the shared media store used by other bundled channel
+  plugins.
 
 ## Channel data (rich messages)
 

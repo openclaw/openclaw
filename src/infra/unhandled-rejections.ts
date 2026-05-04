@@ -10,11 +10,13 @@ import {
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 
 type UnhandledRejectionHandler = (reason: unknown) => boolean;
+type UncaughtExceptionHandler = (error: unknown) => boolean;
 
 // Plugins resolve `openclaw/plugin-sdk/runtime` through their own staged
 // `node_modules`, which loads a separate copy of this module. To keep registry
 // state shared across instances, anchor the handlers Set on globalThis.
 const HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.unhandledRejection.handlers");
+const EXCEPTION_HANDLERS_GLOBAL_KEY = Symbol.for("openclaw.uncaughtException.handlers");
 const handlers: Set<UnhandledRejectionHandler> = (() => {
   const g = globalThis as unknown as Record<symbol, Set<UnhandledRejectionHandler>>;
   const existing = g[HANDLERS_GLOBAL_KEY];
@@ -23,6 +25,16 @@ const handlers: Set<UnhandledRejectionHandler> = (() => {
   }
   const created = new Set<UnhandledRejectionHandler>();
   g[HANDLERS_GLOBAL_KEY] = created;
+  return created;
+})();
+const exceptionHandlers: Set<UncaughtExceptionHandler> = (() => {
+  const g = globalThis as unknown as Record<symbol, Set<UncaughtExceptionHandler>>;
+  const existing = g[EXCEPTION_HANDLERS_GLOBAL_KEY];
+  if (existing instanceof Set) {
+    return existing;
+  }
+  const created = new Set<UncaughtExceptionHandler>();
+  g[EXCEPTION_HANDLERS_GLOBAL_KEY] = created;
   return created;
 })();
 
@@ -76,8 +88,23 @@ const TRANSIENT_SQLITE_CODES = new Set([
 
 const TRANSIENT_SQLITE_ERRCODES = new Set([5, 6, 10, 14]);
 
+const BENIGN_UNCAUGHT_EXCEPTION_CODES = new Set(["EPIPE", "EIO"]);
+const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_CODES = new Set([
+  "ECONNREFUSED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_DNS_RESOLVE_FAILED",
+  "UND_ERR_CONNECT",
+]);
+
 const TRANSIENT_NETWORK_MESSAGE_CODE_RE =
   /\b(ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|EPROTO|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT)\b/i;
+const BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE =
+  /\b(ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|ENOTFOUND|ETIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT)\b/i;
 
 const TRANSIENT_SQLITE_MESSAGE_CODE_RE =
   /\b(SQLITE_BUSY|SQLITE_CANTOPEN|SQLITE_IOERR|SQLITE_LOCKED)\b/i;
@@ -323,8 +350,105 @@ export function isTransientSqliteError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Checks if an error is a transient file watcher error that shouldn't crash the gateway.
+ * These are typically resource exhaustion issues (e.g., inotify watches exhausted) that
+ * can be recovered from by degrading to manual sync mode.
+ *
+ * Note: ENOSPC is a general POSIX error code (disk full, write failures, etc.).
+ * To avoid misclassifying unrelated storage failures, we require both the ENOSPC code
+ * AND a watch/inotify-related message indicator, similar to how hasSqliteSignal gates
+ * SQLite errors.
+ */
+export function isTransientFileWatchError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+
+  const hasFileWatchSignal = (message: string) =>
+    message.includes("inotify") ||
+    message.includes("watcher") ||
+    message.includes("file watcher") ||
+    message.includes("watch limit") ||
+    message.includes("max watches");
+  const hasFileWatchExhaustionSignal = (message: string) =>
+    message.includes("inotify watches") ||
+    message.includes("inotify watch") ||
+    message.includes("system limit for number of file watchers") ||
+    message.includes("watch limit") ||
+    message.includes("max watches");
+
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    // Skip non-object candidates early
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+
+    const code = extractErrorCodeOrErrno(candidate);
+    const rawMessage =
+      "message" in candidate && typeof candidate.message === "string" ? candidate.message : "";
+    const message = normalizeLowercaseStringOrEmpty(rawMessage);
+
+    // ENOSPC requires both the code AND a watch/inotify message indicator
+    // to avoid misclassifying general disk-full errors as transient watcher errors.
+    if (code === "ENOSPC") {
+      if (hasFileWatchSignal(message)) {
+        return true;
+      }
+      // ENOSPC without watch indicator is not classified here
+      continue;
+    }
+
+    // Without an ENOSPC code, only classify explicit watcher resource exhaustion.
+    // Generic "file watcher failed" labels can wrap permission/config/runtime failures.
+    if (!message) {
+      continue;
+    }
+    if (
+      (message.includes("no space left on device") && hasFileWatchSignal(message)) ||
+      hasFileWatchExhaustionSignal(message)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 export function isTransientUnhandledRejectionError(err: unknown): boolean {
-  return isTransientNetworkError(err) || isTransientSqliteError(err);
+  return (
+    isTransientNetworkError(err) || isTransientSqliteError(err) || isTransientFileWatchError(err)
+  );
+}
+
+function isBenignUncaughtNetworkException(err: unknown): boolean {
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && BENIGN_UNCAUGHT_EXCEPTION_NETWORK_CODES.has(code)) {
+      return true;
+    }
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const message = normalizeLowercaseStringOrEmpty((candidate as { message?: unknown }).message);
+    if (message && BENIGN_UNCAUGHT_EXCEPTION_NETWORK_MESSAGE_CODE_RE.test(message)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function isBenignUncaughtExceptionError(err: unknown): boolean {
+  if (isBenignUncaughtNetworkException(err)) {
+    return true;
+  }
+  for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
+    const code = extractErrorCodeOrErrno(candidate);
+    if (code && BENIGN_UNCAUGHT_EXCEPTION_CODES.has(code)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function registerUnhandledRejectionHandler(handler: UnhandledRejectionHandler): () => void {
@@ -343,6 +467,29 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
     } catch (err) {
       console.error(
         "[openclaw] Unhandled rejection handler failed:",
+        err instanceof Error ? (err.stack ?? err.message) : err,
+      );
+    }
+  }
+  return false;
+}
+
+export function registerUncaughtExceptionHandler(handler: UncaughtExceptionHandler): () => void {
+  exceptionHandlers.add(handler);
+  return () => {
+    exceptionHandlers.delete(handler);
+  };
+}
+
+export function isUncaughtExceptionHandled(error: unknown): boolean {
+  for (const handler of exceptionHandlers) {
+    try {
+      if (handler(error)) {
+        return true;
+      }
+    } catch (err) {
+      console.error(
+        "[openclaw] Uncaught exception handler failed:",
         err instanceof Error ? (err.stack ?? err.message) : err,
       );
     }

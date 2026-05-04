@@ -55,7 +55,7 @@ type CommandHandlerContext = {
 };
 
 function isBtwCommand(text: string): boolean {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -403,11 +403,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "think":
         if (!args) {
-          const levels = formatThinkingLevels(
-            state.sessionInfo.modelProvider,
-            state.sessionInfo.model,
-            "|",
-          );
+          const levels =
+            state.sessionInfo.thinkingLevels?.map((level) => level.label).join("|") ||
+            formatThinkingLevels(state.sessionInfo.modelProvider, state.sessionInfo.model, "|");
           chatLog.addSystem(`usage: /think <${levels}>`);
           break;
         }
@@ -636,6 +634,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
+        sessionId: state.currentSessionId,
         message: text,
         thinking: opts.thinking,
         deliver: deliverDefault,

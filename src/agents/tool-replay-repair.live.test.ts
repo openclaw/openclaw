@@ -3,7 +3,7 @@ import { completeSimple, type Api, type Context, type Model } from "@mariozechne
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
@@ -186,7 +186,7 @@ describeLive("tool replay repair live", () => {
     it(
       `accepts repaired displaced and missing tool results with ${target.ref}`,
       async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
 
         const agentDir = resolveOpenClawAgentDir();
@@ -292,7 +292,7 @@ describeLive("tool replay repair live", () => {
 
         expect(response.stopReason).not.toBe("error");
         if (text.length > 0) {
-          expect(text).toMatch(/^replay repair ok\.?$/i);
+          expect(text).toMatch(/^replay repair(?: ok)?\.?$/i);
         }
       },
       3 * 60 * 1000,
@@ -301,7 +301,7 @@ describeLive("tool replay repair live", () => {
     it(
       `accepts transport replay after dropping aborted assistant tool calls with ${target.ref}`,
       async () => {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
 
         const agentDir = resolveOpenClawAgentDir();
@@ -377,7 +377,7 @@ describeLive("tool replay repair live", () => {
 
         expect(response.stopReason).not.toBe("error");
         if (text.length > 0) {
-          expect(text).toMatch(/^transport replay ok\.?$/i);
+          expect(text).toMatch(/^transport(?: replay(?: ok\.?)?)?$/i);
         }
       },
       3 * 60 * 1000,

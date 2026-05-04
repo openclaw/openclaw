@@ -5,11 +5,15 @@ const hoisted = vi.hoisted(() => {
     stop: vi.fn(),
     updateConfig: vi.fn(),
   };
+  const stopModelPricingRefresh = vi.fn();
   return {
     heartbeatRunner,
     startHeartbeatRunner: vi.fn(() => heartbeatRunner),
     startChannelHealthMonitor: vi.fn(() => ({ stop: vi.fn() })),
-    startGatewayModelPricingRefresh: vi.fn(() => vi.fn()),
+    stopModelPricingRefresh,
+    startGatewayModelPricingRefresh: vi.fn(() => stopModelPricingRefresh),
+    loadModelPricingCacheModule: vi.fn(),
+    isVitestRuntimeEnv: vi.fn(() => false),
     recoverPendingDeliveries: vi.fn(async () => undefined),
     recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
     deliverOutboundPayloads: vi.fn(),
@@ -18,6 +22,10 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
   startHeartbeatRunner: hoisted.startHeartbeatRunner,
+}));
+
+vi.mock("../infra/env.js", () => ({
+  isVitestRuntimeEnv: hoisted.isVitestRuntimeEnv,
 }));
 
 vi.mock("../infra/outbound/deliver.js", () => ({
@@ -37,6 +45,10 @@ vi.mock("./channel-health-monitor.js", () => ({
 }));
 
 vi.mock("./model-pricing-cache.js", () => ({
+  ...(() => {
+    hoisted.loadModelPricingCacheModule();
+    return {};
+  })(),
   startGatewayModelPricingRefresh: hoisted.startGatewayModelPricingRefresh,
 }));
 
@@ -51,12 +63,32 @@ describe("server-runtime-services", () => {
     hoisted.startHeartbeatRunner.mockClear();
     hoisted.startChannelHealthMonitor.mockClear();
     hoisted.startGatewayModelPricingRefresh.mockClear();
+    hoisted.stopModelPricingRefresh.mockClear();
+    hoisted.loadModelPricingCacheModule.mockClear();
+    hoisted.isVitestRuntimeEnv.mockReset().mockReturnValue(false);
     hoisted.recoverPendingDeliveries.mockClear();
     hoisted.recoverPendingRestartContinuationDeliveries.mockClear();
     hoisted.deliverOutboundPayloads.mockClear();
   });
 
-  it("keeps scheduled services inert during initial runtime setup", () => {
+  it("skips model pricing bootstrap import when pricing is disabled", async () => {
+    activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: { models: { pricing: { enabled: false } } } as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron: { start: vi.fn(async () => undefined) },
+      logCron: { error: vi.fn() },
+      log: createLog(),
+    });
+
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
+  });
+
+  it("keeps scheduled services and pricing refresh inert during initial runtime setup", async () => {
     const services = startGatewayRuntimeServices({
       minimalTestGateway: false,
       cfgAtStart: {} as never,
@@ -69,11 +101,63 @@ describe("server-runtime-services", () => {
     });
 
     expect(hoisted.startChannelHealthMonitor).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled();
+    expect(hoisted.loadModelPricingCacheModule).not.toHaveBeenCalled();
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
     expect(hoisted.startHeartbeatRunner).not.toHaveBeenCalled();
     expect(hoisted.recoverPendingDeliveries).not.toHaveBeenCalled();
 
     services.heartbeatRunner.stop();
     expect(hoisted.heartbeatRunner.stop).not.toHaveBeenCalled();
+  });
+
+  it("starts model pricing refresh after scheduled services activate", async () => {
+    const pluginLookUpTable = {
+      index: { plugins: [] },
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    };
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+
+    const services = activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      logCron: { error: vi.fn() },
+      log,
+      pluginLookUpTable: pluginLookUpTable as never,
+    });
+
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(cron.start).toHaveBeenCalledTimes(1);
+    await vi.dynamicImportSettled();
+    expect(hoisted.startGatewayModelPricingRefresh).toHaveBeenCalledWith({
+      config: {},
+      pluginLookUpTable,
+    });
+    services.stopModelPricingRefresh();
+    expect(hoisted.stopModelPricingRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start model pricing refresh after scheduled services stop before import settles", async () => {
+    const cron = { start: vi.fn(async () => undefined) };
+    const services = activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      logCron: { error: vi.fn() },
+      log: createLog(),
+    });
+
+    services.stopModelPricingRefresh();
+    await vi.dynamicImportSettled();
+
+    expect(hoisted.startGatewayModelPricingRefresh).not.toHaveBeenCalled();
+    expect(hoisted.stopModelPricingRefresh).not.toHaveBeenCalled();
   });
 
   it("activates heartbeat, cron, and delivery recovery after sidecars are ready", async () => {
@@ -108,6 +192,29 @@ describe("server-runtime-services", () => {
         maxEnqueuedAt: 123,
       }),
     );
+  });
+
+  it("can defer cron startup while activating other scheduled services", async () => {
+    vi.useFakeTimers();
+    const cron = { start: vi.fn(async () => undefined) };
+    const log = createLog();
+
+    activateGatewayScheduledServices({
+      minimalTestGateway: false,
+      cfgAtStart: {} as never,
+      deps: {} as never,
+      sessionDeliveryRecoveryMaxEnqueuedAt: 123,
+      cron,
+      startCron: false,
+      logCron: { error: vi.fn() },
+      log,
+    });
+
+    expect(hoisted.startHeartbeatRunner).toHaveBeenCalledTimes(1);
+    expect(cron.start).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_250);
+    await vi.dynamicImportSettled();
+    expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledTimes(1);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {

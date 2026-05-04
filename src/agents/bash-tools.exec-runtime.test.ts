@@ -1,13 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const requestHeartbeatNowMock = vi.hoisted(() => vi.fn());
+const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeatNow: requestHeartbeatNowMock,
+  requestHeartbeat: requestHeartbeatMock,
 }));
 
 vi.mock("../infra/system-events.js", () => ({
@@ -25,6 +25,7 @@ let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExe
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
 let emitExecSystemEvent: typeof import("./bash-tools.exec-runtime.js").emitExecSystemEvent;
 let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").formatExecFailureReason;
+let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 
@@ -35,13 +36,14 @@ beforeAll(async () => {
     detectCursorKeyMode,
     emitExecSystemEvent,
     formatExecFailureReason,
+    renderExecUpdateText,
     resolveExecTarget,
     runExecProcess,
   } = await import("./bash-tools.exec-runtime.js"));
 });
 
 beforeEach(() => {
-  requestHeartbeatNowMock.mockClear();
+  requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
   supervisorMock.spawn.mockReset();
 });
@@ -314,6 +316,28 @@ describe("resolveExecTarget", () => {
   });
 });
 
+describe("renderExecUpdateText", () => {
+  it("uses a non-empty placeholder when an exec update has no output", () => {
+    expect(renderExecUpdateText({ tailText: "", warnings: [] })).toBe("(no output)");
+  });
+
+  it("preserves non-empty exec output", () => {
+    expect(renderExecUpdateText({ tailText: "hello", warnings: [] })).toBe("hello");
+  });
+
+  it("keeps warnings while still avoiding empty output text", () => {
+    expect(renderExecUpdateText({ tailText: "", warnings: ["Warning: retrying"] })).toBe(
+      "Warning: retrying\n\n(no output)",
+    );
+  });
+
+  it("combines warnings with non-empty output", () => {
+    expect(renderExecUpdateText({ tailText: "hello", warnings: ["Warning: retrying"] })).toBe(
+      "Warning: retrying\n\nhello",
+    );
+  });
+});
+
 describe("exec notifyOnExit suppression", () => {
   async function runBackgroundedExit(params: {
     reason: "manual-cancel" | "overall-timeout";
@@ -368,7 +392,7 @@ describe("exec notifyOnExit suppression", () => {
 
     expect(outcome.status).toBe("failed");
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("notifies for manual-cancelled background execs with output", async () => {
@@ -378,7 +402,7 @@ describe("exec notifyOnExit suppression", () => {
       expect.stringContaining("partial output"),
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalled();
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -388,13 +412,13 @@ describe("exec notifyOnExit suppression", () => {
       expect.stringContaining("Exec failed"),
       expect.objectContaining({ sessionKey: "agent:main:main" }),
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalled();
+    expect(requestHeartbeatMock).toHaveBeenCalled();
   });
 });
 
 describe("emitExecSystemEvent", () => {
   beforeEach(() => {
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     enqueueSystemEventMock.mockClear();
   });
 
@@ -417,8 +441,9 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
+      trusted: false,
     });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         coalesceMs: 0,
         reason: "exec-event",
@@ -436,8 +461,9 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      trusted: false,
     });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
       expect.objectContaining({
         coalesceMs: 0,
         reason: "exec-event",
@@ -452,7 +478,7 @@ describe("emitExecSystemEvent", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 });
 

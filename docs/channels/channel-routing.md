@@ -21,6 +21,12 @@ host configuration.
 - **AgentId**: an isolated workspace + session store (“brain”).
 - **SessionKey**: the bucket key used to store context and control concurrency.
 
+## Outbound target prefixes
+
+Explicit outbound targets may include a provider prefix, such as `telegram:123` or `tg:123`. Core treats that prefix as a channel-selection hint only when the selected channel is `last` or otherwise unresolved, and only when the loaded plugin advertises that prefix. If the caller already selected an explicit channel, the provider prefix must match that channel; cross-channel combinations such as WhatsApp delivery to `telegram:123` fail before plugin-specific target normalization.
+
+Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>`, `thread:<id>`, `imessage:<handle>`, and `sms:<number>` stay inside the selected channel's grammar. They do not select the provider by themselves.
+
 ## Session key shapes (examples)
 
 Direct messages collapse to the agent’s **main** session by default:
@@ -58,6 +64,13 @@ OpenClaw infers a pinned owner from `allowFrom` when all of these are true:
 
 In that mismatch case, OpenClaw still records inbound session metadata, but it
 skips updating the main session `lastRoute`.
+
+## Guarded inbound recording
+
+Channel plugins can mark an inbound session record as `createIfMissing: false`
+when a guarded path must not create a new OpenClaw session. In that mode,
+OpenClaw may update metadata and `lastRoute` for an existing session, but it
+does not create a route-only session entry just because a message was observed.
 
 ## Routing rules (how an agent is chosen)
 

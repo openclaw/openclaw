@@ -1,6 +1,5 @@
 import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
-import { buildAgentUserPromptPrefix } from "../../system-prompt.js";
 
 export type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
@@ -16,8 +15,8 @@ export type AttemptBootstrapRoutingInput = {
 
 export type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
-  shouldStripBootstrapFromContext: boolean;
-  userPromptPrefixText?: string;
+  includeBootstrapInSystemContext: boolean;
+  includeBootstrapInRuntimeContext: boolean;
 };
 
 export type AttemptWorkspaceBootstrapRoutingInput = Omit<
@@ -27,13 +26,19 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   isWorkspaceBootstrapPending: (workspaceDir: string) => Promise<boolean>;
 };
 
-export function shouldStripBootstrapFromEmbeddedContext(_params: {
+export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
-}): boolean {
-  return true;
+}): Pick<
+  AttemptBootstrapRouting,
+  "includeBootstrapInSystemContext" | "includeBootstrapInRuntimeContext"
+> {
+  return {
+    includeBootstrapInSystemContext: params.bootstrapMode === "full",
+    includeBootstrapInRuntimeContext: false,
+  };
 }
 
-export function resolveAttemptBootstrapRouting(
+function resolveAttemptBootstrapRouting(
   params: AttemptBootstrapRoutingInput,
 ): AttemptBootstrapRouting {
   const bootstrapMode = resolveBootstrapMode({
@@ -49,12 +54,7 @@ export function resolveAttemptBootstrapRouting(
 
   return {
     bootstrapMode,
-    shouldStripBootstrapFromContext: shouldStripBootstrapFromEmbeddedContext({
-      bootstrapMode,
-    }),
-    userPromptPrefixText: buildAgentUserPromptPrefix({
-      bootstrapMode,
-    }),
+    ...resolveBootstrapContextTargets({ bootstrapMode }),
   };
 }
 

@@ -5,17 +5,26 @@ import { createClientHarness } from "./test-support.js";
 const mocks = vi.hoisted(() => {
   const authBridge = {
     applyAuthProfile: vi.fn(async () => undefined),
+    authProfileId: vi.fn((params?: { authProfileId?: string }) => params?.authProfileId),
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
+  };
+  const managedBinary = {
+    startOptions: vi.fn(async (startOptions) => startOptions),
   };
   const providerAuth = {
     agentDir: vi.fn(() => "/tmp/openclaw-agent"),
   };
-  return { authBridge, providerAuth };
+  return { authBridge, managedBinary, providerAuth };
 });
 
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
+  resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
+}));
+
+vi.mock("./managed-binary.js", () => ({
+  resolveManagedCodexAppServerStartOptions: mocks.managedBinary.startOptions,
 }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -37,7 +46,13 @@ describe("listCodexAppServerModels", () => {
     resetSharedCodexAppServerClientForTests();
     vi.restoreAllMocks();
     mocks.authBridge.applyAuthProfile.mockClear();
+    mocks.authBridge.authProfileId.mockClear();
+    mocks.authBridge.authProfileId.mockImplementation(
+      (params?: { authProfileId?: string }) => params?.authProfileId,
+    );
     mocks.authBridge.startOptions.mockClear();
+    mocks.managedBinary.startOptions.mockClear();
+    mocks.managedBinary.startOptions.mockImplementation(async (startOptions) => startOptions);
     mocks.providerAuth.agentDir.mockClear();
   });
 

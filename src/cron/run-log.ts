@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
@@ -28,15 +29,16 @@ export type CronRunLogEntry = {
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 
-export type CronRunLogSortDir = "asc" | "desc";
-export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
+type CronRunLogSortDir = "asc" | "desc";
+type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
 
-export type ReadCronRunLogPageOptions = {
+type ReadCronRunLogPageOptions = {
   limit?: number;
   offset?: number;
   jobId?: string;
@@ -48,7 +50,7 @@ export type ReadCronRunLogPageOptions = {
   sortDir?: CronRunLogSortDir;
 };
 
-export type CronRunLogPageResult = {
+type CronRunLogPageResult = {
   entries: CronRunLogEntry[];
   total: number;
   offset: number;
@@ -198,6 +200,23 @@ export async function readCronRunLogEntries(
   return page.entries.toReversed();
 }
 
+export function readCronRunLogEntriesSync(
+  filePath: string,
+  opts?: { limit?: number; jobId?: string },
+): CronRunLogEntry[] {
+  const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
+  let raw: string;
+  try {
+    raw = fsSync.readFileSync(path.resolve(filePath), "utf-8");
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  return parseAllRunLogEntries(raw, { jobId: opts?.jobId }).slice(-limit);
+}
+
 function normalizeRunStatusFilter(status?: string): CronRunLogStatusFilter {
   if (status === "ok" || status === "error" || status === "skipped" || status === "all") {
     return status;
@@ -292,6 +311,7 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         status: obj.status,
         error: obj.error,
         summary: obj.summary,
+        runId: typeof obj.runId === "string" && obj.runId.trim() ? obj.runId : undefined,
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,

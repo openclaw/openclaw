@@ -1,17 +1,39 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { saveSessionStore } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
+import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../../../../test/helpers/plugins/temp-dir.js";
+import type { WhatsAppSendResult } from "../inbound/send-result.js";
+import {
+  evaluateSessionFreshness,
+  loadSessionStore,
+  resolveChannelResetConfig,
+  resolveSessionKey,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveStorePath,
+  resolveThreadFlag,
+} from "./config.runtime.js";
 import {
   debugMention,
   isBotMentionedFromTargets,
   resolveMentionTargets,
   resolveOwnerList,
 } from "./mentions.js";
-import { getSessionSnapshot } from "./session-snapshot.js";
 import type { WebInboundMsg } from "./types.js";
 import { elide, isLikelyWhatsAppCryptoError } from "./util.js";
+
+function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
+  };
+}
 
 const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
   ({
@@ -24,10 +46,64 @@ const makeMsg = (overrides: Partial<WebInboundMsg>): WebInboundMsg =>
     chatType: "group",
     chatId: "120363401234567890@g.us",
     sendComposing: async () => {},
-    reply: async () => {},
-    sendMedia: async () => {},
+    reply: async () => acceptedSendResult("text", "r1"),
+    sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   }) as WebInboundMsg;
+
+function getSessionSnapshotForTest(
+  cfg: OpenClawConfig,
+  from: string,
+  ctx?: {
+    sessionKey?: string | null;
+    isGroup?: boolean;
+    messageThreadId?: string | number | null;
+    threadLabel?: string | null;
+    threadStarterBody?: string | null;
+    parentSessionKey?: string | null;
+  },
+) {
+  const sessionCfg = cfg.session;
+  const scope = sessionCfg?.scope ?? "per-sender";
+  const key =
+    ctx?.sessionKey?.trim() ??
+    resolveSessionKey(
+      scope,
+      { From: from, To: "", Body: "" },
+      normalizeMainKey(sessionCfg?.mainKey),
+    );
+  const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
+  const entry = store[key];
+  const isThread = resolveThreadFlag({
+    sessionKey: key,
+    messageThreadId: ctx?.messageThreadId ?? null,
+    threadLabel: ctx?.threadLabel ?? null,
+    threadStarterBody: ctx?.threadStarterBody ?? null,
+    parentSessionKey: ctx?.parentSessionKey ?? null,
+  });
+  const resetType = resolveSessionResetType({ sessionKey: key, isGroup: ctx?.isGroup, isThread });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: resolveChannelResetConfig({
+      sessionCfg,
+      channel: entry?.lastChannel ?? entry?.channel,
+    }),
+  });
+  const freshness = entry
+    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now: Date.now(), policy: resetPolicy })
+    : { fresh: false };
+
+  return {
+    key,
+    entry,
+    fresh: freshness.fresh,
+    resetPolicy,
+    resetType,
+    dailyResetAt: freshness.dailyResetAt,
+    idleExpiresAt: freshness.idleExpiresAt,
+  };
+}
 
 describe("isBotMentionedFromTargets", () => {
   const mentionCfg = { mentionRegexes: [/\bopenclaw\b/i] };
@@ -70,9 +146,15 @@ describe("isBotMentionedFromTargets", () => {
     expectMentioned(msg, mentionCfg, true);
   });
 
-  it("ignores JID mentions in self-chat mode", () => {
+  it("ignores JID mentions in a true 1:1 self-chat (not a group)", () => {
     const cfg = { mentionRegexes: [/\bopenclaw\b/i], allowFrom: ["+999"] };
     const msg = makeMsg({
+      // Direct chat with self, not a group — the original "ignore mentions
+      // in self-chat" suppression still applies here so that mentioning the
+      // owner in their own DM does not falsely trigger the bot.
+      from: "999@s.whatsapp.net",
+      conversationId: "999@s.whatsapp.net",
+      chatType: "direct",
       body: "@owner ping",
       mentionedJids: ["999@s.whatsapp.net"],
       selfE164: "+999",
@@ -81,11 +163,33 @@ describe("isBotMentionedFromTargets", () => {
     expectMentioned(msg, cfg, false);
 
     const msgTextMention = makeMsg({
+      from: "999@s.whatsapp.net",
+      conversationId: "999@s.whatsapp.net",
+      chatType: "direct",
       body: "openclaw ping",
       selfE164: "+999",
       selfJid: "999@s.whatsapp.net",
     });
     expectMentioned(msgTextMention, cfg, true);
+  });
+
+  it("detects an explicit group @mention even when self is in allowFrom (#49317)", () => {
+    // Operator config commonly puts their own E.164 in allowFrom so they can
+    // run owner-only commands in groups; previously, that flipped the gate
+    // to "self-chat mode" and silently dropped mention detection in groups,
+    // including LID-style WhatsApp mentions that resolve to the bot's own
+    // E.164. After the fix, group conversations honor the identity-overlap
+    // check regardless of allowFrom.
+    const cfg = { mentionRegexes: [/\bopenclaw\b/i], allowFrom: ["+15551234567"] };
+    const msg = makeMsg({
+      // Default `from` is the @g.us group JID from `makeMsg`.
+      body: "@216372600647751 can you see this?",
+      mentionedJids: ["216372600647751@lid"],
+      selfE164: "+15551234567",
+      selfJid: "15551234567@s.whatsapp.net",
+      selfLid: "216372600647751@lid",
+    });
+    expectMentioned(msg, cfg, true);
   });
 
   it("honors explicit self-chat overrides without recomputing from allowFrom", () => {
@@ -176,9 +280,9 @@ describe("getSessionSnapshot", () => {
               whatsapp: { mode: "idle", idleMinutes: 360 },
             },
           },
-        } as Parameters<typeof getSessionSnapshot>[0];
+        } as OpenClawConfig;
 
-        const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
+        const snapshot = getSessionSnapshotForTest(cfg, "whatsapp:+15550001111", {
           sessionKey,
         });
 

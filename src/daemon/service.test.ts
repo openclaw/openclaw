@@ -1,7 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { makeTempWorkspace } from "../test-helpers/workspace.js";
+import { captureEnv } from "../test-utils/env.js";
 import type { GatewayService } from "./service.js";
 import {
   describeGatewayServiceRestart,
+  formatGatewayServiceStartRepairIssues,
   readGatewayServiceState,
   resolveGatewayService,
   startGatewayService,
@@ -47,6 +53,44 @@ describe("resolveGatewayService", () => {
   it("throws for unsupported platforms", () => {
     setPlatform("aix");
     expect(() => resolveGatewayService()).toThrow("Gateway service install not supported on aix");
+  });
+
+  it("guards mutating service adapters when config was written by a newer OpenClaw", async () => {
+    const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
+    const stateDir = path.join(tempHome, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const envSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    try {
+      await fs.mkdir(stateDir, { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: {
+              lastTouchedVersion: "9999.1.1",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      process.env.HOME = tempHome;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+
+      const service = resolveGatewayService();
+
+      await expect(service.restart({ env: process.env, stdout: process.stdout })).rejects.toThrow(
+        "Refusing to restart the gateway service",
+      );
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
   });
 
   it("describes scheduled restart handoffs consistently", () => {
@@ -123,6 +167,55 @@ describe("startGatewayService", () => {
     expect(result.state.installed).toBe(true);
     expect(result.state.loaded).toBe(true);
     expect(result.state.running).toBe(true);
+  });
+
+  it("requests repair before start when the loaded service version is stale", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+      })),
+      isLoaded: vi.fn(async () => true),
+      readRuntime: vi.fn(async () => ({ status: "stopped" })),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("repair-required");
+    if (result.outcome === "repair-required") {
+      expect(formatGatewayServiceStartRepairIssues(result.issues)).toContain(
+        "service was installed by OpenClaw 2026.4.24",
+      );
+    }
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
+  it("requests repair before start when the loaded service points at temporary install paths", async () => {
+    const service = createService({
+      readCommand: vi.fn(async () => ({
+        programArguments: [
+          "/private/tmp/openclaw-ai-install-cli-pr118/tools/node/bin/node",
+          "/tmp/openclaw-ai-install-cli-pr118/lib/node_modules/openclaw/dist/index.js",
+          "gateway",
+        ],
+        environment: {},
+      })),
+      isLoaded: vi.fn(async () => true),
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("repair-required");
+    if (result.outcome === "repair-required") {
+      expect(result.issues.map((issue) => issue.code)).toContain("temporary-program");
+    }
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("falls back to missing-install when restart fails and install artifacts are gone", async () => {

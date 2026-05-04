@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   applyXaiModelCompat,
@@ -12,10 +12,14 @@ import {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
+import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
+import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -83,8 +87,162 @@ function expectNoSubagentControlTools(tools: ReturnType<typeof createOpenClawCod
   expect(names.has("subagents")).toBe(false);
 }
 
+function applyRuntimeToolsAllow<T extends { name: string }>(tools: T[], toolsAllow: string[]) {
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
+  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+}
+
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
+
+  it("exposes gateway config and restart actions to owner sessions", () => {
+    const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
+    const gateway = tools.find((tool) => tool.name === "gateway");
+    expect(gateway).toBeDefined();
+
+    const parameters = gateway?.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const action = parameters.properties?.action as
+      | { const?: unknown; enum?: unknown[] }
+      | undefined;
+    const values = new Set<string>();
+    collectActionValues(action, values);
+
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
+  });
+
+  it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      senderIsOwner: false,
+      ownerOnlyToolAllowlist: ["cron"],
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("cron")).toBe(true);
+    expect(names.has("gateway")).toBe(false);
+    expect(names.has("nodes")).toBe(false);
+  });
+
+  it("resolves isolated cron runtime toolsAllow after the cron owner-only grant", () => {
+    const withoutGrant = applyRuntimeToolsAllow(
+      createOpenClawCodingTools({
+        config: testConfig,
+        senderIsOwner: false,
+      }),
+      ["cron"],
+    );
+    const errorWithoutGrant = buildEmptyExplicitToolAllowlistError({
+      sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
+      callableToolNames: withoutGrant.map((tool) => tool.name),
+      toolsEnabled: true,
+    });
+
+    expect(errorWithoutGrant?.message).toContain(
+      "No callable tools remain after resolving explicit tool allowlist (runtime toolsAllow: cron); no registered tools matched.",
+    );
+
+    const withGrant = applyRuntimeToolsAllow(
+      createOpenClawCodingTools({
+        config: testConfig,
+        senderIsOwner: false,
+        ownerOnlyToolAllowlist: ["cron"],
+      }),
+      ["cron"],
+    );
+
+    expect(withGrant.map((tool) => tool.name)).toEqual(["cron"]);
+    expect(
+      buildEmptyExplicitToolAllowlistError({
+        sources: [{ label: "runtime toolsAllow", entries: ["cron"] }],
+        callableToolNames: withGrant.map((tool) => tool.name),
+        toolsEnabled: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("uses runtime toolsAllow when materializing plugin tools", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["memory_search", "memory_get"],
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolAllowlist: expect.arrayContaining(["memory_search", "memory_get"]),
+      }),
+    );
+  });
+
+  it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["lobster"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolAllowlist: ["lobster", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
+      }),
+    );
+  });
+
+  it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { deny: ["pdf"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolDenylist: expect.arrayContaining(["pdf"]),
+      }),
+    );
+  });
+
+  it("records core tool-prep stages for hot-path diagnostics", () => {
+    const stages: string[] = [];
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      recordToolPrepStage: (name) => stages.push(name),
+      senderIsOwner: true,
+    });
+
+    expect(stages).toEqual(
+      expect.arrayContaining([
+        "tool-policy",
+        "workspace-policy",
+        "base-coding-tools",
+        "shell-tools",
+        "openclaw-tools:test-helper",
+        "openclaw-tools",
+        "message-provider-policy",
+        "model-provider-policy",
+        "authorization-policy",
+        "schema-normalization",
+        "tool-hooks",
+        "abort-wrappers",
+        "deferred-followup-descriptions",
+      ]),
+    );
+    expect(stages.indexOf("tool-policy")).toBeLessThan(stages.indexOf("workspace-policy"));
+    expect(stages.indexOf("workspace-policy")).toBeLessThan(stages.indexOf("base-coding-tools"));
+    expect(stages.indexOf("openclaw-tools:test-helper")).toBeLessThan(
+      stages.indexOf("openclaw-tools"),
+    );
+    expect(stages.indexOf("schema-normalization")).toBeLessThan(stages.indexOf("tool-hooks"));
+  });
 
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
@@ -353,6 +511,54 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("browser")).toBe(false);
   });
 
+  it("includes browser tool with full profile when browser is configured (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: { profile: "full" },
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // full profile must not filter any tools — browser, canvas, etc. must be present.
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("message")).toBe(true);
+  });
+
+  it("includes browser tool with full profile for non-owner senders (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: { profile: "full" },
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+      senderIsOwner: false,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // browser is NOT owner-only; it must be available to non-owner senders.
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    // owner-only tools should be filtered for non-owners
+    expect(names.has("gateway")).toBe(false);
+    expect(names.has("cron")).toBe(false);
+    expect(names.has("nodes")).toBe(false);
+  });
+
+  it("includes browser tool without explicit profile (defaults to no filtering) (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // No profile means no profile filtering — all tools pass.
+    expect(names.has("browser")).toBe(true);
+  });
+
   it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", () => {
     const baseConfig = {
       browser: { enabled: true },
@@ -401,6 +607,29 @@ describe("createOpenClawCodingTools", () => {
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
 
+  it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {
+    const codingTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      trigger: "heartbeat",
+      enableHeartbeatTool: true,
+      forceHeartbeatTool: true,
+    });
+
+    expect(codingTools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
+  });
+
+  it("enables heartbeat response when visible replies are message-tool-only", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        messages: { visibleReplies: "message_tool" },
+        tools: { profile: "coding" },
+      } as OpenClawConfig,
+      trigger: "heartbeat",
+    });
+
+    expect(tools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
+  });
+
   it("can keep message available when a cron route needs it under a provider coding profile", () => {
     const providerProfileTools = createOpenClawCodingTools({
       config: { tools: { byProvider: { openai: { profile: "coding" } } } },
@@ -417,6 +646,26 @@ describe("createOpenClawCodingTools", () => {
     });
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
   });
+
+  it.each(providerAliasCases)(
+    "applies canonical tools.byProvider deny policy to core tools for alias %s",
+    (alias, canonical) => {
+      const tools = createOpenClawCodingTools({
+        config: {
+          tools: {
+            byProvider: {
+              [canonical]: { deny: ["read"] },
+            },
+          },
+        } as OpenClawConfig,
+        modelProvider: alias,
+      });
+      const names = new Set(tools.map((tool) => tool.name));
+
+      expect(names.has("read")).toBe(false);
+      expect(names.has("write")).toBe(true);
+    },
+  );
 
   it("expands group shorthands in global tool policy", () => {
     const tools = createOpenClawCodingTools({

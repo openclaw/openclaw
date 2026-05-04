@@ -5,13 +5,13 @@ import {
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
+import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import {
   buildPendingHistoryContextFromMap,
   type HistoryEntry,
@@ -111,6 +111,7 @@ export async function buildTelegramInboundContextPayload(params: {
   topicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
+  audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
   options?: TelegramMessageContextOptions;
@@ -121,6 +122,16 @@ export async function buildTelegramInboundContextPayload(params: {
 }): Promise<{
   ctxPayload: FinalizedTelegramInboundContext;
   skillFilter: string[] | undefined;
+  turn: {
+    storePath: string;
+    recordInboundSession: TelegramMessageContextSessionRuntime["recordInboundSession"];
+    record: {
+      updateLastRoute?: Parameters<
+        TelegramMessageContextSessionRuntime["recordInboundSession"]
+      >[0]["updateLastRoute"];
+      onRecordError: (err: unknown) => void;
+    };
+  };
 }> {
   const {
     cfg,
@@ -146,6 +157,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
     stickerCacheHit,
     effectiveWasMentioned,
+    audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
     options,
@@ -344,6 +356,12 @@ export async function buildTelegramInboundContextPayload(params: {
     ReplyToBody: visibleReplyTarget?.body,
     ReplyToSender: visibleReplyTarget?.sender,
     ReplyToIsQuote: visibleReplyTarget?.kind === "quote" ? true : undefined,
+    ReplyToIsExternal: visibleReplyTarget?.source === "external_reply" ? true : undefined,
+    ReplyToQuoteText: visibleReplyTarget?.quoteText,
+    ReplyToQuotePosition: visibleReplyTarget?.quotePosition,
+    ReplyToQuoteEntities: visibleReplyTarget?.quoteEntities,
+    ReplyToQuoteSourceText: visibleReplyTarget?.quoteSourceText,
+    ReplyToQuoteSourceEntities: visibleReplyTarget?.quoteSourceEntities,
     ReplyToForwardedFrom: visibleReplyTarget?.forwardedFrom?.from,
     ReplyToForwardedFromType: visibleReplyTarget?.forwardedFrom?.fromType,
     ReplyToForwardedFromId: visibleReplyTarget?.forwardedFrom?.fromId,
@@ -372,6 +390,9 @@ export async function buildTelegramInboundContextPayload(params: {
       contextMedia.length > 0
         ? (contextMedia.map((m) => m.contentType).filter(Boolean) as string[])
         : undefined,
+    ...(audioTranscribedMediaIndex !== undefined
+      ? { MediaTranscribedIndexes: [audioTranscribedMediaIndex] }
+      : {}),
     Sticker: allMedia[0]?.stickerMetadata,
     StickerMediaIncluded: allMedia[0]?.stickerMetadata ? !stickerCacheHit : undefined,
     ...(locationData ? toLocationContext(locationData) : undefined),
@@ -404,42 +425,34 @@ export async function buildTelegramInboundContextPayload(params: {
       ? String(dmThreadId)
       : undefined;
 
-  await sessionRuntime.recordInboundSession({
-    storePath,
-    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-    ctx: ctxPayload,
-    updateLastRoute:
-      !isGroup || updateLastRouteThreadId != null
-        ? {
-            sessionKey: updateLastRouteSessionKey,
-            channel: "telegram",
-            to:
-              isGroup && updateLastRouteThreadId != null
-                ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
-                : `telegram:${chatId}`,
-            accountId: route.accountId,
-            threadId: updateLastRouteThreadId,
-            mainDmOwnerPin:
-              !isGroup &&
-              updateLastRouteSessionKey === route.mainSessionKey &&
-              pinnedMainDmOwner &&
-              senderId
-                ? {
-                    ownerRecipient: pinnedMainDmOwner,
-                    senderRecipient: senderId,
-                    onSkip: ({ ownerRecipient, senderRecipient }) => {
-                      logVerbose(
-                        `telegram: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                      );
-                    },
-                  }
-                : undefined,
-          }
-        : undefined,
-    onRecordError: (err) => {
-      logVerbose(`telegram: failed updating session meta: ${String(err)}`);
-    },
-  });
+  const updateLastRoute =
+    !isGroup || updateLastRouteThreadId != null
+      ? {
+          sessionKey: updateLastRouteSessionKey,
+          channel: "telegram" as const,
+          to:
+            isGroup && updateLastRouteThreadId != null
+              ? `telegram:${chatId}:topic:${updateLastRouteThreadId}`
+              : `telegram:${chatId}`,
+          accountId: route.accountId,
+          threadId: updateLastRouteThreadId,
+          mainDmOwnerPin:
+            !isGroup &&
+            updateLastRouteSessionKey === route.mainSessionKey &&
+            pinnedMainDmOwner &&
+            senderId
+              ? {
+                  ownerRecipient: pinnedMainDmOwner,
+                  senderRecipient: senderId,
+                  onSkip: (skipParams: { ownerRecipient: string; senderRecipient: string }) => {
+                    logVerbose(
+                      `telegram: skip main-session last route for ${skipParams.senderRecipient} (pinned owner ${skipParams.ownerRecipient})`,
+                    );
+                  },
+                }
+              : undefined,
+        }
+      : undefined;
 
   if (visibleReplyTarget && shouldLogVerbose()) {
     const preview = (visibleReplyTarget.body ?? "").replace(/\s+/g, " ").slice(0, 120);
@@ -466,5 +479,15 @@ export async function buildTelegramInboundContextPayload(params: {
   return {
     ctxPayload,
     skillFilter,
+    turn: {
+      storePath,
+      recordInboundSession: sessionRuntime.recordInboundSession,
+      record: {
+        updateLastRoute,
+        onRecordError: (err) => {
+          logVerbose(`telegram: failed updating session meta: ${String(err)}`);
+        },
+      },
+    },
   };
 }

@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { resolveAgentRuntimePolicy } from "./agent-runtime-policy.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type LegacyRuntimeModelProviderAlias = {
+type LegacyRuntimeModelProviderAlias = {
   /** Legacy provider id that encoded the runtime in the model ref. */
   legacyProvider: string;
   /** Canonical provider id that should own model selection. */
@@ -39,11 +40,17 @@ const CLI_RUNTIME_BY_PROVIDER = new Map(
   ]),
 );
 
+const CLI_RUNTIME_ALIASES = new Set(
+  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) =>
+    normalizeProviderId(entry.runtime),
+  ),
+);
+
 export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
 
-export function resolveLegacyRuntimeModelProviderAlias(
+function resolveLegacyRuntimeModelProviderAlias(
   provider: string,
 ): LegacyRuntimeModelProviderAlias | undefined {
   return LEGACY_ALIAS_BY_PROVIDER.get(normalizeProviderId(provider));
@@ -84,6 +91,11 @@ export function isLegacyRuntimeModelProvider(provider: string): boolean {
   return Boolean(resolveLegacyRuntimeModelProviderAlias(provider));
 }
 
+export function isCliRuntimeAlias(runtime: string | undefined): boolean {
+  const normalized = runtime?.trim();
+  return normalized ? CLI_RUNTIME_ALIASES.has(normalizeProviderId(normalized)) : false;
+}
+
 function resolveConfiguredRuntime(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -94,14 +106,15 @@ function resolveConfiguredRuntime(params: {
     return normalizeProviderId(override);
   }
   if (params.agentId) {
-    const agentRuntime = params.cfg?.agents?.list
-      ?.find((entry) => normalizeAgentId(entry.id) === normalizeAgentId(params.agentId ?? ""))
-      ?.embeddedHarness?.runtime?.trim();
+    const agentEntry = params.cfg?.agents?.list?.find(
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(params.agentId ?? ""),
+    );
+    const agentRuntime = resolveAgentRuntimePolicy(agentEntry)?.id?.trim();
     if (agentRuntime) {
       return normalizeProviderId(agentRuntime);
     }
   }
-  const defaults = params.cfg?.agents?.defaults?.embeddedHarness?.runtime?.trim();
+  const defaults = resolveAgentRuntimePolicy(params.cfg?.agents?.defaults)?.id?.trim();
   if (defaults) {
     return normalizeProviderId(defaults);
   }

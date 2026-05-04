@@ -7,6 +7,8 @@ import { handleCompactCommand } from "./commands-compact.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import { handleContextCommand } from "./commands-context-command.js";
 import { handleCrestodianCommand } from "./commands-crestodian.js";
+import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
+import { handleDockCommand } from "./commands-dock.js";
 import {
   handleCommandsListCommand,
   handleExportTrajectoryCommand,
@@ -29,6 +31,7 @@ import {
   handleStopCommand,
   handleUsageCommand,
 } from "./commands-session.js";
+import { handleSteerCommand } from "./commands-steer.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import { handleTtsCommands } from "./commands-tts.js";
@@ -38,6 +41,7 @@ import { handleWhoamiCommand } from "./commands-whoami.js";
 export function loadCommandHandlers(): CommandHandler[] {
   return [
     handlePluginCommand,
+    handleDockCommand,
     handleBtwCommand,
     handleBashCommand,
     handleActivationCommand,
@@ -51,7 +55,9 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleCommandsListCommand,
     handleToolsCommand,
     handleStatusCommand,
+    handleDiagnosticsCommand,
     handleTasksCommand,
+    handleSteerCommand,
     handleAllowlistCommand,
     handleApproveCommand,
     handleContextCommand,

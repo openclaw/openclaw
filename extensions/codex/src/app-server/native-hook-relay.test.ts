@@ -59,11 +59,25 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+      "hooks.Stop": [
+        {
+          matcher: null,
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --event before_agent_finalize",
+              timeout: 7,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
     });
     expect(JSON.stringify(config)).not.toContain("timeoutSec");
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
-    expect(config).not.toHaveProperty("hooks.Stop");
   });
 
   it("includes only requested hook events", () => {
@@ -108,6 +122,7 @@ describe("Codex native hook relay config", () => {
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],
+      "hooks.Stop": [],
     });
   });
 });
@@ -119,7 +134,7 @@ function createRelay(): NativeHookRelayRegistrationHandle {
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     runId: "run-1",
-    allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request"],
+    allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
     commandForEvent: (event) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --event ${event}`,

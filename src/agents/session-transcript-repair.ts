@@ -13,8 +13,6 @@ import {
   normalizeAllowedToolNames,
 } from "./tool-call-shared.js";
 
-export { isRedactedSessionsSpawnAttachment } from "./tool-call-shared.js";
-
 type RawToolCallBlock = {
   type?: unknown;
   id?: unknown;
@@ -80,6 +78,28 @@ function redactSessionsSpawnAttachmentsArgs(value: unknown): unknown {
   return { ...rec, attachments: next };
 }
 
+function redactSessionsSpawnAcpArgs(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const rec = value as Record<string, unknown>;
+  const next = { ...rec };
+  let changed = false;
+
+  for (const key of ["resumeSessionId", "streamTo"] as const) {
+    if (Object.hasOwn(rec, key)) {
+      next[key] = REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT;
+      changed = true;
+    }
+  }
+
+  return changed ? next : value;
+}
+
+function redactSessionsSpawnArgs(value: unknown): unknown {
+  return redactSessionsSpawnAcpArgs(redactSessionsSpawnAttachmentsArgs(value));
+}
+
 function redactSessionsSpawnAttachment(item: unknown): Record<string, unknown> {
   const next: Record<string, unknown> = {
     content: REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
@@ -113,10 +133,10 @@ function sanitizeToolCallBlock(block: RawToolCallBlock): RawToolCallBlock {
     return { ...(block as Record<string, unknown>), name: normalizedName } as RawToolCallBlock;
   }
 
-  // Redact large/sensitive inline attachment content from persisted transcripts.
-  // Apply redaction to both `.arguments` and `.input` properties since block structures can vary
-  const nextArgs = redactSessionsSpawnAttachmentsArgs(block.arguments);
-  const nextInput = redactSessionsSpawnAttachmentsArgs(block.input);
+  // Redact sensitive sessions_spawn payload fields from persisted transcripts.
+  // Apply redaction to both `.arguments` and `.input` properties since block structures can vary.
+  const nextArgs = redactSessionsSpawnArgs(block.arguments);
+  const nextInput = redactSessionsSpawnArgs(block.input);
   if (nextArgs === block.arguments && nextInput === block.input && !nameChanged) {
     return block;
   }
@@ -225,20 +245,20 @@ function normalizeToolResultName(
 
 export { makeMissingToolResult };
 
-export type ToolCallInputRepairReport = {
+type ToolCallInputRepairReport = {
   messages: AgentMessage[];
   droppedToolCalls: number;
   droppedAssistantMessages: number;
 };
 
-export type ToolCallInputRepairOptions = {
+type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
   allowProviderOwnedThinkingReplay?: boolean;
 };
 
-export type ErroredAssistantResultPolicy = "preserve" | "drop";
+type ErroredAssistantResultPolicy = "preserve" | "drop";
 
-export type ToolUseResultPairingOptions = {
+type ToolUseResultPairingOptions = {
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
   missingToolResultText?: string;
 };
@@ -263,7 +283,7 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
-export function repairToolCallInputs(
+function repairToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
 ): ToolCallInputRepairReport {
@@ -410,7 +430,7 @@ export function sanitizeToolUseResultPairing(
   return repairToolUseResultPairing(messages, options).messages;
 }
 
-export type ToolUseRepairReport = {
+type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
   droppedDuplicateCount: number;

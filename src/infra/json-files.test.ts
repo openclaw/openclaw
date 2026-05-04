@@ -3,7 +3,14 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic, writeTextAtomic } from "./json-files.js";
+import {
+  JsonFileReadError,
+  createAsyncLock,
+  readDurableJsonFile,
+  readJsonFile,
+  writeJsonAtomic,
+  writeTextAtomic,
+} from "./json-files.js";
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
@@ -42,6 +49,23 @@ describe("json file helpers", () => {
   ])("$name", async ({ setup, expected }) => {
     await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
       await expect(readJsonFile(await setup(base))).resolves.toEqual(expected);
+    });
+  });
+
+  it("reads durable json strictly while allowing missing files", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const validPath = path.join(base, "valid.json");
+      const invalidPath = path.join(base, "invalid.json");
+      const missingPath = path.join(base, "missing.json");
+      await fs.writeFile(validPath, '{"ok":true}', "utf8");
+      await fs.writeFile(invalidPath, "{not-json}", "utf8");
+
+      await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
+      await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
+      await expect(readDurableJsonFile(invalidPath)).rejects.toMatchObject({
+        filePath: invalidPath,
+        reason: "parse",
+      } satisfies Partial<JsonFileReadError>);
     });
   });
 

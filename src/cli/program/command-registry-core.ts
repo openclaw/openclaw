@@ -82,6 +82,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         exportName: "registerBackupCommand",
       },
       {
+        commandNames: ["migrate"],
+        loadModule: () => import("./register.migrate.js"),
+        exportName: "registerMigrateCommand",
+      },
+      {
         commandNames: ["doctor", "dashboard", "reset", "uninstall"],
         loadModule: () => import("./register.maintenance.js"),
         exportName: "registerMaintenanceCommands",
@@ -116,7 +121,7 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
   ...withProgramOnlySpecs(
     defineImportedProgramCommandGroupSpecs([
       {
-        commandNames: ["status", "health", "sessions", "tasks"],
+        commandNames: ["status", "health", "sessions", "commitments", "tasks"],
         loadModule: () => import("./register.status-health-sessions.js"),
         exportName: "registerStatusHealthSessionsCommands",
       },

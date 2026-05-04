@@ -3,9 +3,13 @@ import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
   resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent"),
-  ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
+  ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown) => {
+    void agentDir;
+    void options;
+    return { profiles: {} };
+  }),
   buildAuthHealthSummary: vi.fn(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
@@ -13,16 +17,22 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
-  loadConfig: mocks.loadConfig,
+  getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
 vi.mock("../../agents/agent-paths.js", () => ({
   resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-}));
+vi.mock("../../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
+    "../../agents/auth-profiles.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  };
+});
 
 vi.mock("../../agents/auth-health.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
@@ -55,7 +65,7 @@ function createOptions(
     client: null,
     isWebchatConnect: () => false,
     respond,
-    context: {} as unknown,
+    context: { getRuntimeConfig: mocks.getRuntimeConfig } as unknown,
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
@@ -92,7 +102,7 @@ describe("models.authStatus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     invalidateModelAuthStatusCache();
-    mocks.loadConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReturnValue({});
     mocks.ensureAuthProfileStore.mockReturnValue({ profiles: {} });
     mocks.buildAuthHealthSummary.mockReturnValue({
       now: 0,
@@ -187,6 +197,63 @@ describe("models.authStatus", () => {
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
   });
 
+  it("scopes external CLI auth overlays to configured providers", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          "opencode-go:default": { provider: "opencode-go", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "opencode-go/kimi-k2.6" },
+        },
+      },
+      models: {
+        providers: {
+          "opencode-go": {
+            baseUrl: "https://example.test/v1",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    });
+
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          mode: "scoped",
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+          providerIds: expect.arrayContaining(["opencode-go"]),
+          profileIds: ["opencode-go:default"],
+        }),
+      }),
+    );
+    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    const externalCli = (options as { externalCli?: { providerIds?: string[] } }).externalCli;
+    expect(externalCli?.providerIds).not.toContain("claude-cli");
+  });
+
+  it("disables external CLI auth overlays when config has no provider signal", async () => {
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
+      "/tmp/agent",
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          mode: "none",
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+        }),
+      }),
+    );
+  });
+
   it("still returns providers when usage fetch fails", async () => {
     mocks.buildAuthHealthSummary.mockReturnValue(createOpenAiCodexOauthHealthSummary());
     mocks.loadProviderUsageSummary.mockRejectedValue(new Error("timeout"));
@@ -258,7 +325,7 @@ describe("models.authStatus", () => {
     // auth already satisfies it, so forwarding to buildAuthHealthSummary
     // would flag it as missing and cry wolf. Inline string is the simplest
     // "available" SecretInput for testing.
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
           "openai-codex": { auth: "oauth", apiKey: "sk-xxxxx" },
@@ -278,7 +345,7 @@ describe("models.authStatus", () => {
     // through to the normal missing synthesis so the dashboard surfaces
     // the broken config instead of masking it.
     delete process.env.MODELS_AUTH_STATUS_TEST_MISSING_KEY;
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
           "openai-codex": {
@@ -301,7 +368,7 @@ describe("models.authStatus", () => {
 
   it("env SecretRef pointing at a set env var is treated as env-backed", async () => {
     process.env.MODELS_AUTH_STATUS_TEST_SET_KEY = "sk-real-value";
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
           "openai-codex": {
@@ -331,7 +398,7 @@ describe("models.authStatus", () => {
     // models.providers loop — otherwise a provider with resolvable apiKey
     // plus a matching auth.profiles entry re-adds itself and triggers the
     // false-missing alert we just fixed.
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
           "openai-codex": { auth: "oauth", apiKey: "sk-xxxxx" },
@@ -355,7 +422,7 @@ describe("models.authStatus", () => {
     // Without normalization, expectsOAuth.has(prov.provider) fires on the
     // raw `z.ai` key but prov.provider is `zai`, so the "configured oauth
     // but no oauth profile" signal silently skipped the alias path.
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       models: { providers: { "z.ai": { auth: "oauth" } } },
     });
     mocks.buildAuthHealthSummary.mockReturnValue({
@@ -389,7 +456,7 @@ describe("models.authStatus", () => {
   it("flags provider configured auth:oauth but with only api_key profile as missing", async () => {
     // Config says provider should use OAuth; store has only an api_key
     // credential (e.g. operator switched modes but forgot to login).
-    mocks.loadConfig.mockReturnValue({
+    mocks.getRuntimeConfig.mockReturnValue({
       models: { providers: { anthropic: { auth: "oauth" } } },
     });
     mocks.buildAuthHealthSummary.mockReturnValue({

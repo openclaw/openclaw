@@ -14,6 +14,7 @@ import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
@@ -145,7 +146,7 @@ export async function resolveCommandsSystemPromptBundle(
         },
       }
     : { enabled: false };
-  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg) : undefined;
+  const ttsHint = params.cfg ? buildTtsSystemPromptHint(params.cfg, sessionAgentId) : undefined;
 
   const systemPrompt = buildAgentSystemPrompt({
     workspaceDir,
@@ -167,6 +168,7 @@ export async function resolveCommandsSystemPromptBundle(
       config: params.cfg,
       sandboxed: sandboxRuntime.sandboxed,
     }),
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance(),
     runtimeInfo,
     sandboxInfo,
     memoryCitationsMode: params.cfg?.memory?.citations,

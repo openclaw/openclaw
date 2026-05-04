@@ -71,6 +71,10 @@ agents
 create agent work workspace ~/Projects/work
 models
 set default model openai/gpt-5.5
+plugins list
+plugins search slack
+plugin install clawhub:openclaw-codex-app-server
+plugin uninstall openclaw-codex-app-server
 talk to work agent
 talk to agent for ~/Projects/work
 audit
@@ -99,6 +103,8 @@ Read-only operations can run immediately:
 
 - show overview
 - list agents
+- list installed plugins
+- search ClawHub plugins
 - show model/backend status
 - run status or health checks
 - check Gateway reachability
@@ -116,6 +122,8 @@ you pass `--yes` for a direct command:
 - change the default model
 - start, stop, or restart the Gateway
 - create agents
+- install plugins from ClawHub or npm
+- uninstall plugins
 - run doctor repairs that rewrite config or state
 
 Applied writes are recorded in:
@@ -129,7 +137,7 @@ Discovery is not audited. Only applied operations and writes are logged.
 `openclaw onboard --modern` starts Crestodian as the modern onboarding preview.
 Plain `openclaw onboard` still runs classic onboarding.
 
-## Setup Bootstrap
+## Setup bootstrap
 
 `setup` is the chat-first onboarding bootstrap. It writes only through typed
 config operations and asks for approval first.
@@ -162,7 +170,7 @@ configured OpenClaw model. If no configured model is usable yet, it can fall
 back to local runtimes already present on the machine:
 
 - Claude Code CLI: `claude-cli/claude-opus-4-7`
-- Codex app-server harness: `openai/gpt-5.5` with `embeddedHarness.runtime: "codex"`
+- Codex app-server harness: `openai/gpt-5.5` with `agentRuntime.id: "codex"`
 - Codex CLI: `codex-cli/gpt-5.5`
 
 The model-assisted planner cannot mutate config directly. It must translate the
@@ -239,13 +247,16 @@ Security contract for remote rescue:
   operation, where the runtime already has unsandboxed local authority.
 - Require an explicit owner identity. Rescue must not accept wildcard sender
   rules, open group policy, unauthenticated webhooks, or anonymous channels.
-- Owner DMs only by default. Group/channel rescue requires explicit opt-in and
-  should still route approval prompts to the owner DM.
+- Owner DMs only by default. Group/channel rescue requires explicit opt-in.
+- Plugin search and list are read-only. Plugin install is local-only by default
+  because it downloads executable code. Plugin uninstall can be allowed as an
+  approved repair operation when rescue policy permits persistent writes.
 - Remote rescue cannot open the local TUI or switch into an interactive agent
   session. Use local `openclaw` for agent handoff.
 - Persistent writes still require approval, even in rescue mode.
-- Audit every applied rescue operation, including channel, account, sender,
-  session key, operation, config hash before, and config hash after.
+- Audit every applied rescue operation. Message-channel rescue records channel,
+  account, sender, and source-address metadata. Config-mutating operations also
+  record config hashes before and after.
 - Never echo secrets. SecretRef inspection should report availability, not
   values.
 - If the Gateway is alive, prefer Gateway typed operations. If the Gateway is

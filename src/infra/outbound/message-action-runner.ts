@@ -6,6 +6,7 @@ import {
   readStringParam,
 } from "../../agents/tools/common.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -25,8 +26,7 @@ import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
-import { buildChannelAccountBindings } from "../../routing/bindings.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -72,6 +72,7 @@ import {
 } from "./outbound-policy.js";
 import { executePollAction, executeSendAction } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -286,6 +287,80 @@ async function resolveChannel(
   return selection.channel;
 }
 
+function addCandidateAndUnprefixedAlias(candidates: Set<string>, value?: string | null) {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return;
+  }
+  candidates.add(normalized);
+  const unprefixed = normalized.replace(/^(channel|group|user):/i, "").trim();
+  if (unprefixed && unprefixed !== normalized) {
+    candidates.add(unprefixed);
+  }
+}
+
+function normalizeTargetForAccountBinding(channel: ChannelId, target: string): string | undefined {
+  try {
+    return normalizeTargetForProvider(channel, target);
+  } catch {
+    return undefined;
+  }
+}
+
+function inferPeerKindForAccountBinding(channel: ChannelId, target: string): ChatType | undefined {
+  const inferred = normalizeChatType(
+    getChannelPlugin(channel)?.messaging?.inferTargetChatType?.({ to: target }),
+  );
+  if (inferred) {
+    return inferred;
+  }
+  const normalized = normalizeTargetForAccountBinding(channel, target);
+  const candidates = [target, normalized].filter((value): value is string => Boolean(value));
+  if (candidates.some((value) => /^user:/i.test(value))) {
+    return "direct";
+  }
+  if (candidates.some((value) => /^(channel|group):/i.test(value))) {
+    return "channel";
+  }
+  return undefined;
+}
+
+function resolveTargetBoundAccountId(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  args: Record<string, unknown>;
+  agentId?: string;
+}): string | undefined {
+  if (!params.agentId) {
+    return undefined;
+  }
+  const target =
+    normalizeOptionalString(params.args.to) ?? normalizeOptionalString(params.args.channelId) ?? "";
+  if (!target) {
+    return resolveFirstBoundAccountId({
+      cfg: params.cfg,
+      channelId: params.channel,
+      agentId: params.agentId,
+    });
+  }
+
+  const candidates = new Set<string>();
+  addCandidateAndUnprefixedAlias(candidates, target);
+  addCandidateAndUnprefixedAlias(
+    candidates,
+    normalizeTargetForAccountBinding(params.channel, target),
+  );
+  const [peerId, ...exactPeerIdAliases] = Array.from(candidates);
+  return resolveFirstBoundAccountId({
+    cfg: params.cfg,
+    channelId: params.channel,
+    agentId: params.agentId,
+    peerId,
+    exactPeerIdAliases,
+    peerKind: inferPeerKindForAccountBinding(params.channel, target),
+  });
+}
+
 async function resolveActionTarget(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -365,6 +440,51 @@ type ResolvedActionContext = {
   resolvedTarget?: ResolvedMessagingTarget;
   abortSignal?: AbortSignal;
 };
+
+async function runGatewayPluginMessageActionOrNull(params: {
+  cfg: OpenClawConfig;
+  params: Record<string, unknown>;
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  accountId?: string | null;
+  dryRun: boolean;
+  gateway?: MessageActionRunnerGateway;
+  input: RunMessageActionParams;
+  agentId?: string;
+  result: (payload: unknown) => MessageActionRunResult;
+}): Promise<MessageActionRunResult | null> {
+  if (params.dryRun || !params.gateway) {
+    return null;
+  }
+  const plugin = resolveOutboundChannelPlugin({ channel: params.channel, cfg: params.cfg });
+  if (!plugin?.actions?.handleAction) {
+    return null;
+  }
+  const executionMode = plugin.actions.resolveExecutionMode?.({ action: params.action }) ?? "local";
+  if (executionMode !== "gateway") {
+    return null;
+  }
+  const payload = await callGatewayMessageAction<unknown>({
+    gateway: params.gateway,
+    actionParams: {
+      channel: params.channel,
+      action: params.action,
+      params: params.params,
+      accountId: params.accountId ?? undefined,
+      requesterSenderId: params.input.requesterSenderId ?? undefined,
+      senderIsOwner: params.input.senderIsOwner,
+      sessionKey: params.input.sessionKey,
+      sessionId: params.input.sessionId,
+      agentId: params.agentId,
+      toolContext: params.input.toolContext,
+      idempotencyKey: await resolveGatewayActionIdempotencyKey(
+        normalizeOptionalString(params.params.idempotencyKey),
+      ),
+    },
+  });
+  return params.result(payload);
+}
+
 function resolveGateway(input: RunMessageActionParams): MessageActionRunnerGateway | undefined {
   if (!input.gateway) {
     return undefined;
@@ -565,6 +685,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const gifPlayback = readBooleanParam(params, "gifPlayback") ?? false;
   const forceDocument =
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
+  const asVoice =
+    readBooleanParam(params, "asVoice") ??
+    readBooleanParam(params, "audioAsVoice") ??
+    parsed.audioAsVoice ??
+    false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
@@ -590,6 +715,31 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
   throwIfAborted(abortSignal);
+
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
+    cfg,
+    params,
+    channel,
+    action,
+    accountId,
+    dryRun,
+    gateway,
+    input,
+    agentId,
+    result: (payload) => ({
+      kind: "send",
+      channel,
+      action,
+      to,
+      handledBy: "plugin",
+      payload,
+      dryRun,
+    }),
+  });
+  if (gatewayPluginAction) {
+    return gatewayPluginAction;
+  }
+
   const send = await executeSendAction({
     ctx: {
       cfg,
@@ -626,6 +776,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     message,
     mediaUrl: mediaUrl || undefined,
     mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,
+    asVoice,
     gifPlayback,
     forceDocument,
     bestEffort: bestEffort ?? undefined,
@@ -673,6 +824,30 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
     message: base,
     preferPresentation: false,
   });
+
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
+    cfg,
+    params,
+    channel,
+    action,
+    accountId,
+    dryRun,
+    gateway,
+    input,
+    agentId,
+    result: (payload) => ({
+      kind: "poll",
+      channel,
+      action,
+      to,
+      handledBy: "plugin",
+      payload,
+      dryRun,
+    }),
+  });
+  if (gatewayPluginAction) {
+    return gatewayPluginAction;
+  }
 
   const poll = await executePollAction({
     ctx: {
@@ -758,35 +933,28 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
   if (!plugin?.actions?.handleAction) {
     throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
   }
-  const executionMode = plugin.actions.resolveExecutionMode?.({ action }) ?? "local";
-  if (executionMode === "gateway" && gateway) {
-    // Gateway-owned actions must execute where the live channel runtime exists.
-    const payload = await callGatewayMessageAction<unknown>({
-      gateway,
-      actionParams: {
-        channel,
-        action,
-        params,
-        accountId: accountId ?? undefined,
-        requesterSenderId: input.requesterSenderId ?? undefined,
-        senderIsOwner: input.senderIsOwner,
-        sessionKey: input.sessionKey,
-        sessionId: input.sessionId,
-        agentId,
-        toolContext: input.toolContext,
-        idempotencyKey: await resolveGatewayActionIdempotencyKey(
-          normalizeOptionalString(params.idempotencyKey),
-        ),
-      },
-    });
-    return {
+  const gatewayPluginAction = await runGatewayPluginMessageActionOrNull({
+    cfg,
+    params,
+    channel,
+    action,
+    accountId,
+    dryRun,
+    gateway,
+    input,
+    agentId,
+    result: (payload) => ({
       kind: "action",
       channel,
       action,
       handledBy: "plugin",
       payload,
       dryRun,
-    };
+    }),
+  });
+  if (gatewayPluginAction) {
+    // Gateway-owned actions must execute where the live channel runtime exists.
+    return gatewayPluginAction;
   }
 
   const handled = await dispatchChannelMessageAction({
@@ -848,11 +1016,12 @@ export async function runMessageAction(
   const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
-    const byAgent = buildChannelAccountBindings(cfg).get(channel);
-    const boundAccountIds = byAgent?.get(normalizeAgentId(resolvedAgentId));
-    if (boundAccountIds && boundAccountIds.length > 0) {
-      accountId = boundAccountIds[0];
-    }
+    accountId = resolveTargetBoundAccountId({
+      cfg,
+      channel,
+      args: params,
+      agentId: resolvedAgentId,
+    });
   }
   if (accountId) {
     params.accountId = accountId;
