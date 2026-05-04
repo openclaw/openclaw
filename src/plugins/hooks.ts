@@ -28,6 +28,8 @@ import type {
   PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
+  PluginHookBeforeModelCallEvent,
+  PluginHookBeforeModelCallResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
@@ -95,6 +97,8 @@ export type {
   PluginHookReplyDispatchResult,
   PluginHookBeforeModelResolveEvent,
   PluginHookBeforeModelResolveResult,
+  PluginHookBeforeModelCallEvent,
+  PluginHookBeforeModelCallResult,
   PluginHookBeforePromptBuildEvent,
   PluginHookBeforePromptBuildResult,
   PluginHookModelCallEndedEvent,
@@ -179,6 +183,7 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   agent_end: 30_000,
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
+  before_model_call: 15_000,
   before_prompt_build: 15_000,
 };
 
@@ -758,6 +763,37 @@ export function createHookRunner(
       "before_agent_reply",
       event,
       ctx,
+    );
+  }
+
+  /**
+   * Run before_model_call hook.
+   * Allows trusted plugins to block the final prepared model input before submission.
+   */
+  async function runBeforeModelCall(
+    event: PluginHookBeforeModelCallEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookBeforeModelCallResult | undefined> {
+    return runModifyingHook<"before_model_call", PluginHookBeforeModelCallResult>(
+      "before_model_call",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => {
+          if (acc?.block === true) {
+            return acc;
+          }
+          if (next.block === true) {
+            return {
+              block: true,
+              blockReason: next.blockReason,
+            };
+          }
+          return acc ?? {};
+        },
+        shouldStop: (result) => result.block === true,
+        terminalLabel: "block=true",
+      },
     );
   }
 
@@ -1359,6 +1395,7 @@ export function createHookRunner(
     runBeforePromptBuild,
     runBeforeAgentStart,
     runBeforeAgentReply,
+    runBeforeModelCall,
     runModelCallStarted,
     runModelCallEnded,
     runLlmInput,

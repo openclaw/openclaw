@@ -7,14 +7,27 @@ const hookCtx = {
 };
 
 async function expectLlmHookCall(params: {
-  hookName: "model_call_started" | "model_call_ended" | "llm_input" | "llm_output";
+  hookName:
+    | "before_model_call"
+    | "model_call_started"
+    | "model_call_ended"
+    | "llm_input"
+    | "llm_output";
   event: Record<string, unknown>;
   expectedEvent: Record<string, unknown>;
 }) {
   const handler = vi.fn();
   const { runner } = createHookRunnerWithRegistry([{ hookName: params.hookName, handler }]);
 
-  if (params.hookName === "model_call_started") {
+  if (params.hookName === "before_model_call") {
+    await runner.runBeforeModelCall(
+      {
+        ...params.event,
+        historyMessages: [...((params.event.historyMessages as unknown[] | undefined) ?? [])],
+      } as Parameters<typeof runner.runBeforeModelCall>[0],
+      hookCtx,
+    );
+  } else if (params.hookName === "model_call_started") {
     await runner.runModelCallStarted(
       params.event as Parameters<typeof runner.runModelCallStarted>[0],
       hookCtx,
@@ -99,6 +112,31 @@ describe("llm hook runner methods", () => {
       expectedEvent: { runId: "run-1", prompt: "hello" },
     },
     {
+      name: "runBeforeModelCall invokes registered before_model_call hooks",
+      hookName: "before_model_call" as const,
+      methodName: "runBeforeModelCall" as const,
+      event: {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        systemPrompt: "be careful",
+        prompt: "hello",
+        historyMessages: [{ role: "assistant", content: "prior" }],
+        imagesCount: 1,
+        sessionKey: "agent:main:session-1",
+        workspaceDir: "/tmp/workspace",
+        resolvedRef: "openai/gpt-5",
+        harnessId: "pi-embedded",
+      },
+      expectedEvent: {
+        runId: "run-1",
+        prompt: "hello",
+        historyMessages: [{ role: "assistant", content: "prior" }],
+        resolvedRef: "openai/gpt-5",
+      },
+    },
+    {
       name: "runLlmOutput invokes registered llm_output hooks",
       hookName: "llm_output" as const,
       methodName: "runLlmOutput" as const,
@@ -124,11 +162,13 @@ describe("llm hook runner methods", () => {
   it("hasHooks returns true for registered llm hooks", () => {
     const { runner } = createHookRunnerWithRegistry([
       { hookName: "model_call_started", handler: vi.fn() },
+      { hookName: "before_model_call", handler: vi.fn() },
       { hookName: "llm_input", handler: vi.fn() },
     ]);
 
     expect(runner.hasHooks("model_call_started")).toBe(true);
     expect(runner.hasHooks("model_call_ended")).toBe(false);
+    expect(runner.hasHooks("before_model_call")).toBe(true);
     expect(runner.hasHooks("llm_input")).toBe(true);
     expect(runner.hasHooks("llm_output")).toBe(false);
   });

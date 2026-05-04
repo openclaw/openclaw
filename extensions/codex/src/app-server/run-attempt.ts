@@ -23,6 +23,7 @@ import {
   resolveSessionAgentIds,
   resolveUserPath,
   runAgentHarnessAgentEndHook,
+  runAgentHarnessBeforeModelCallHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
@@ -994,7 +995,29 @@ export async function runCodexAppServerAttempt(
   ];
 
   let turn: CodexTurnStartResponse;
+  let turnStartRequested = false;
   try {
+    const beforeModelCall = await runAgentHarnessBeforeModelCallHook({
+      event: {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: sandboxSessionKey,
+        provider: params.provider,
+        model: params.modelId,
+        resolvedRef:
+          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+        harnessId: params.runtimePlan?.observability.harnessId ?? "codex",
+        workspaceDir: effectiveWorkspace,
+        systemPrompt: promptBuild.developerInstructions,
+        prompt: promptBuild.prompt,
+        historyMessages,
+        imagesCount: params.images?.length ?? 0,
+      },
+      ctx: hookContext,
+    });
+    if (beforeModelCall.action === "block") {
+      throw new Error(`model call blocked by before_model_call hook: ${beforeModelCall.reason}`);
+    }
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,
@@ -1003,6 +1026,7 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
+    turnStartRequested = true;
     turn = assertCodexTurnStartResponse(
       await client.request(
         "turn/start",
@@ -1028,21 +1052,23 @@ export async function runCodexAppServerAttempt(
       promptError: normalizeCodexTrajectoryError(error),
     });
     trajectoryEndRecorded = true;
-    runAgentHarnessLlmOutputHook({
-      event: {
-        runId: params.runId,
-        sessionId: params.sessionId,
-        provider: params.provider,
-        model: params.modelId,
-        resolvedRef:
-          params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
-        ...(params.runtimePlan?.observability.harnessId
-          ? { harnessId: params.runtimePlan.observability.harnessId }
-          : {}),
-        assistantTexts: [],
-      },
-      ctx: hookContext,
-    });
+    if (turnStartRequested) {
+      runAgentHarnessLlmOutputHook({
+        event: {
+          runId: params.runId,
+          sessionId: params.sessionId,
+          provider: params.provider,
+          model: params.modelId,
+          resolvedRef:
+            params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
+          ...(params.runtimePlan?.observability.harnessId
+            ? { harnessId: params.runtimePlan.observability.harnessId }
+            : {}),
+          assistantTexts: [],
+        },
+        ctx: hookContext,
+      });
+    }
     runAgentHarnessAgentEndHook({
       event: {
         messages: turnStartFailureMessages,

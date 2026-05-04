@@ -4,6 +4,8 @@ import type {
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeModelCallEvent,
+  PluginHookBeforeModelCallResult,
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
@@ -59,6 +61,37 @@ export type AgentHarnessBeforeAgentFinalizeOutcome =
   | { action: "continue" }
   | { action: "revise"; reason: string }
   | { action: "finalize"; reason?: string };
+
+export type AgentHarnessBeforeModelCallOutcome =
+  | { action: "continue" }
+  | { action: "block"; reason: string };
+
+export async function runAgentHarnessBeforeModelCallHook(params: {
+  event: PluginHookBeforeModelCallEvent;
+  ctx: AgentHarnessHookContext;
+  hookRunner?: AgentHarnessHookRunner;
+}): Promise<AgentHarnessBeforeModelCallOutcome> {
+  const hookRunner = params.hookRunner ?? getGlobalHookRunner();
+  if (
+    !hookRunner?.hasHooks("before_model_call") ||
+    typeof hookRunner.runBeforeModelCall !== "function"
+  ) {
+    return { action: "continue" };
+  }
+  return normalizeBeforeModelCallResult(
+    await hookRunner.runBeforeModelCall(params.event, buildAgentHookContext(params.ctx)),
+  );
+}
+
+function normalizeBeforeModelCallResult(
+  result: PluginHookBeforeModelCallResult | undefined,
+): AgentHarnessBeforeModelCallOutcome {
+  if (result?.block !== true) {
+    return { action: "continue" };
+  }
+  const reason = result.blockReason?.trim() || "blocked by before_model_call hook";
+  return { action: "block", reason };
+}
 
 export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
   event: PluginHookBeforeAgentFinalizeEvent;

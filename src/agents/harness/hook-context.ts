@@ -3,6 +3,7 @@ import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 export type AgentHarnessHookContext = {
   runId: string;
   jobId?: string;
+  trace?: PluginHookAgentContext["trace"];
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -18,6 +19,7 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
   return {
     runId: params.runId,
     ...(params.jobId ? { jobId: params.jobId } : {}),
+    ...(params.trace ? { trace: params.trace } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
