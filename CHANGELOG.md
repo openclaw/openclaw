@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.
 - Telegram: clean up tool-only draft previews after assistant message boundaries so transient `Surfacing...` tool-status bubbles do not linger when no matching final preview arrives. Thanks @BunsDev.
 - Cron: surface failed isolated-run diagnostics in `cron show`, status, and run history when requested tools are unavailable, so blocked cron runs report the actual tool-policy failure instead of a misleading green result. Fixes #75763. Thanks @RyanSandoval.
