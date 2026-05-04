@@ -30,6 +30,17 @@ describe("embedded acpx plugin config", () => {
     expect(resolved.timeoutSeconds).toBe(300);
   });
 
+  it("keeps explicit codexHome config", () => {
+    const resolved = resolveAcpxPluginConfig({
+      rawConfig: {
+        codexHome: "/tmp/openclaw-acpx-codex-home",
+      },
+      workspaceDir: "/tmp/openclaw-acpx",
+    });
+
+    expect(resolved.codexHome).toBe("/tmp/openclaw-acpx-codex-home");
+  });
+
   it("keeps explicit probeAgent config", () => {
     const resolved = resolveAcpxPluginConfig({
       rawConfig: {
@@ -138,6 +149,7 @@ describe("embedded acpx plugin config", () => {
       properties: expect.objectContaining({
         cwd: expect.any(Object),
         stateDir: expect.any(Object),
+        codexHome: expect.any(Object),
         probeAgent: expect.any(Object),
         timeoutSeconds: expect.objectContaining({
           default: 120,

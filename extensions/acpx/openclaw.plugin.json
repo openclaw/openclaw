@@ -19,6 +19,10 @@
         "type": "string",
         "minLength": 1
       },
+      "codexHome": {
+        "type": "string",
+        "minLength": 1
+      },
       "probeAgent": {
         "type": "string",
         "minLength": 1
@@ -100,6 +104,11 @@
     "stateDir": {
       "label": "State Directory",
       "help": "Directory used for embedded ACP session state and persistence."
+    },
+    "codexHome": {
+      "label": "Codex Home",
+      "help": "Optional $CODEX_HOME override for the embedded Codex ACP adapter. Defaults to OpenClaw's isolated ACPX Codex home. Set to a dedicated authenticated Codex home when the isolated home is not authenticated.",
+      "advanced": true
     },
     "permissionMode": {
       "label": "Permission Mode",

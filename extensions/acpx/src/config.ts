@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
@@ -117,6 +118,20 @@ function parseAcpxPluginConfig(value: unknown): ParseResult {
   };
 }
 
+function resolveUserHomeDir(): string {
+  return process.env.HOME?.trim() || os.homedir();
+}
+
+export function resolveAcpxHomePath(value: string): string {
+  if (value === "~") {
+    return resolveUserHomeDir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(resolveUserHomeDir(), value.slice(2));
+  }
+  return path.resolve(value);
+}
+
 function resolveOpenClawRoot(currentRoot: string): string {
   if (
     path.basename(currentRoot) === "acpx" &&
@@ -229,6 +244,9 @@ export function resolveAcpxPluginConfig(params: {
   const fallbackCwd = workspaceDir;
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
   const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
+  const codexHome = normalized.codexHome?.trim()
+    ? resolveAcpxHomePath(normalized.codexHome.trim())
+    : undefined;
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
   const openClawToolsMcpBridge = normalized.openClawToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
@@ -253,6 +271,7 @@ export function resolveAcpxPluginConfig(params: {
   return {
     cwd,
     stateDir,
+    codexHome,
     probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
