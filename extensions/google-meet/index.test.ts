@@ -329,9 +329,12 @@ describe("google-meet plugin", () => {
         autoJoin: true,
         waitForInCallMs: 20000,
         audioFormat: "pcm16-24khz",
+        audioBufferBytes: 4096,
         audioInputCommand: [
           "sox",
           "-q",
+          "--buffer",
+          "4096",
           "-t",
           "coreaudio",
           "BlackHole 2ch",
@@ -351,6 +354,8 @@ describe("google-meet plugin", () => {
         audioOutputCommand: [
           "sox",
           "-q",
+          "--buffer",
+          "4096",
           "-t",
           "raw",
           "-r",
@@ -410,18 +415,21 @@ describe("google-meet plugin", () => {
     };
 
     expect(entry.configSchema.uiHints).toMatchObject({
+      "chrome.audioBufferBytes": expect.objectContaining({ advanced: true }),
       "chrome.bargeInInputCommand": expect.objectContaining({ advanced: true }),
       "chrome.bargeInRmsThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInPeakThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
     });
     expect(manifest.uiHints).toMatchObject({
+      "chrome.audioBufferBytes": expect.objectContaining({ advanced: true }),
       "chrome.bargeInInputCommand": expect.objectContaining({ advanced: true }),
       "chrome.bargeInRmsThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInPeakThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
     });
     expect(manifest.configSchema?.properties?.chrome?.properties).toMatchObject({
+      audioBufferBytes: expect.objectContaining({ type: "number", default: 4096 }),
       bargeInInputCommand: expect.objectContaining({
         type: "array",
         items: { type: "string" },
@@ -465,6 +473,47 @@ describe("google-meet plugin", () => {
       audioInputCommand: ["capture-legacy"],
       audioOutputCommand: ["play-legacy"],
     });
+  });
+
+  it("lets generated Chrome audio commands use a configured SoX buffer", () => {
+    const config = resolveGoogleMeetConfig({ chrome: { audioBufferBytes: 2048 } });
+
+    expect(config.chrome.audioBufferBytes).toBe(2048);
+    expect(config.chrome.audioInputCommand).toEqual([
+      "sox",
+      "-q",
+      "--buffer",
+      "2048",
+      "-t",
+      "coreaudio",
+      "BlackHole 2ch",
+      "-t",
+      "raw",
+      "-r",
+      "24000",
+      "-c",
+      "1",
+      "-e",
+      "signed-integer",
+      "-b",
+      "16",
+      "-L",
+      "-",
+    ]);
+    expect(config.chrome.audioOutputCommand?.slice(0, 4)).toEqual([
+      "sox",
+      "-q",
+      "--buffer",
+      "2048",
+    ]);
+  });
+
+  it("clamps configured Chrome audio buffers above SoX's minimum", () => {
+    const config = resolveGoogleMeetConfig({ chrome: { audioBufferBytes: 1 } });
+
+    expect(config.chrome.audioBufferBytes).toBe(17);
+    expect(config.chrome.audioInputCommand?.slice(0, 4)).toEqual(["sox", "-q", "--buffer", "17"]);
+    expect(config.chrome.audioOutputCommand?.slice(0, 4)).toEqual(["sox", "-q", "--buffer", "17"]);
   });
 
   it("uses env fallbacks for OAuth, preview, and default meeting values", () => {

@@ -82,6 +82,11 @@ const googleMeetConfigSchema = {
       help: "Command-pair audio format. PCM16 24 kHz is the default Chrome/Meet path; G.711 mu-law 8 kHz remains available for legacy command pairs.",
       advanced: true,
     },
+    "chrome.audioBufferBytes": {
+      label: "Audio Buffer Bytes",
+      help: "SoX processing buffer for generated Chrome command-pair audio commands. Lower values reduce latency but may underrun on busy hosts.",
+      advanced: true,
+    },
     "chrome.audioInputCommand": {
       label: "Audio Input Command",
       help: "Command that writes meeting audio to stdout in chrome.audioFormat.",

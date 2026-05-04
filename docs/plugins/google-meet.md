@@ -1016,6 +1016,10 @@ Defaults:
 - `chrome.audioFormat: "pcm16-24khz"`: command-pair audio format. Use
   `"g711-ulaw-8khz"` only for legacy/custom command pairs that still emit
   telephony audio.
+- `chrome.audioBufferBytes: 4096`: SoX processing buffer for generated Chrome
+  command-pair audio commands. This is half of SoX's default 8192-byte buffer,
+  reducing default pipe latency while leaving room to raise it on busy hosts.
+  Values below SoX's minimum are clamped to 17 bytes.
 - `chrome.audioInputCommand`: SoX command reading from CoreAudio `BlackHole 2ch`
   and writing audio in `chrome.audioFormat`
 - `chrome.audioOutputCommand`: SoX command reading audio in `chrome.audioFormat`
@@ -1622,7 +1626,8 @@ Chrome talk-back modes need `BlackHole 2ch` plus either:
   bridge and pipes audio in `chrome.audioFormat` between those commands and the
   selected provider. Agent mode uses realtime transcription plus regular TTS;
   bidi mode uses the realtime voice provider. The default Chrome path is 24 kHz
-  PCM16; 8 kHz G.711 mu-law remains available for legacy command pairs.
+  PCM16 with `chrome.audioBufferBytes: 4096`; 8 kHz G.711 mu-law remains
+  available for legacy command pairs.
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local
   audio path and must exit after starting or validating its daemon. This is only
   valid for `bidi` because `agent` mode needs direct command-pair access for TTS.
