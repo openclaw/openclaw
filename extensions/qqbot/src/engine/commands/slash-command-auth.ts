@@ -21,7 +21,7 @@ import { createQQBotSenderMatcher, normalizeQQBotAllowFrom } from "../access/ind
  * - `allowFrom` not configured / empty / only `["*"]` → **false**
  *   (wildcard means "open to everyone", not explicit authorization)
  * - `allowFrom` contains at least one concrete entry AND sender
- *   matches → **true**
+ *   matches a concrete entry → **true**
  * - Group messages use `groupAllowFrom` when present, falling back
  *   to `allowFrom`.
  */
@@ -38,11 +38,11 @@ export function resolveSlashCommandAuth(params: {
 
   const normalized = normalizeQQBotAllowFrom(rawList);
 
-  // Require at least one explicit (non-wildcard) entry.
-  const hasExplicitEntry = normalized.some((entry) => entry !== "*");
-  if (!hasExplicitEntry) {
+  // Require and match only explicit (non-wildcard) entries.
+  const explicitEntries = normalized.filter((entry) => entry !== "*");
+  if (explicitEntries.length === 0) {
     return false;
   }
 
-  return createQQBotSenderMatcher(params.senderId)(normalized);
+  return createQQBotSenderMatcher(params.senderId)(explicitEntries);
 }

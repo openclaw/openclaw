@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import type { CommandsPort } from "../adapter/commands.port.js";
+import { resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { getFrameworkCommands, initCommands, matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext } from "./slash-commands.js";
 
@@ -92,17 +93,50 @@ describe("QQBot framework slash commands", () => {
     expect(writes).toHaveLength(0);
   });
 
-  it("writes streaming config when the sender is command-authorized", async () => {
+  it("does not write streaming config when allowFrom mixes wildcard with another sender", async () => {
     const writes: OpenClawConfig[] = [];
+    const allowFrom = ["*", "TRUSTED_OPENID"];
     installCommandRuntime(
       {
         channels: {
           qqbot: {
-            allowFrom: ["TRUSTED_OPENID"],
+            allowFrom,
+            streaming: false,
+          },
+        },
+      },
+      writes,
+    );
+
+    const commandAuthorized = resolveSlashCommandAuth({
+      senderId: "UNTRUSTED_OPENID",
+      isGroup: false,
+      allowFrom,
+    });
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        accountConfig: { allowFrom, streaming: false },
+        commandAuthorized,
+      }),
+    );
+
+    expect(commandAuthorized).toBe(false);
+    expect(result).toContain("权限不足");
+    expect(writes).toHaveLength(0);
+  });
+
+  it("writes streaming config when the sender is command-authorized", async () => {
+    const writes: OpenClawConfig[] = [];
+    const allowFrom = ["*", "TRUSTED_OPENID"];
+    installCommandRuntime(
+      {
+        channels: {
+          qqbot: {
+            allowFrom,
             streaming: false,
             accounts: {
               default: {
-                allowFrom: ["TRUSTED_OPENID"],
+                allowFrom,
                 streaming: false,
               },
             },
@@ -112,15 +146,21 @@ describe("QQBot framework slash commands", () => {
       writes,
     );
 
+    const commandAuthorized = resolveSlashCommandAuth({
+      senderId: "TRUSTED_OPENID",
+      isGroup: false,
+      allowFrom,
+    });
     const result = await matchSlashCommand(
       createStreamingContext({
         senderId: "TRUSTED_OPENID",
-        accountConfig: { allowFrom: ["TRUSTED_OPENID"], streaming: false },
-        commandAuthorized: true,
+        accountConfig: { allowFrom, streaming: false },
+        commandAuthorized,
       }),
     );
 
     const qqbot = getWrittenQQBotConfig(writes[0]);
+    expect(commandAuthorized).toBe(true);
     expect(result).toContain("已开启");
     expect(writes).toHaveLength(1);
     expect(qqbot?.streaming).toBe(true);
