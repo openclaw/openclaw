@@ -87,7 +87,10 @@ export function createWebSendApi(params: {
             ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
-          const fileName = sendOptions?.fileName?.trim() || "file";
+          // eslint-disable-next-line no-control-regex
+          const fileName =
+            sendOptions?.fileName?.replace(new RegExp("[\\x00-\\x1f\\x7f]", "g"), "").trim() ||
+            "file";
           payload = {
             document: mediaBuffer,
             fileName,
