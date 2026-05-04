@@ -401,6 +401,17 @@ children and Streamable HTTP/SSE streams do not outlive the run.
 - **Codex CLI sessions** resume via text output (no JSONL), which is less
   structured than the initial `--json` run. OpenClaw sessions still work
   normally.
+- **`/think` and `/reasoning` directives are inert against CLI backends.**
+  CLI backends spawn the underlying CLI with a fixed argv (see
+  [Defaults (plugin-owned)](#defaults-plugin-owned)) and OpenClaw does not
+  rewrite that argv per request from the session's stored thinking or
+  reasoning level. `/status` still surfaces the stored level for the active
+  session, but it only takes effect on API-mode providers — for example,
+  switching from `claude-cli` (subscription) to `anthropic` (API key) on the
+  same Anthropic model. When you need extended thinking on a CLI subscription
+  path, drive the underlying CLI's own thinking/effort UI directly (for the
+  Anthropic CLI, that is `claude`'s in-TUI thinking budget), or move the
+  agent to an API-mode provider for that conversation.
 
 ## Troubleshooting
 

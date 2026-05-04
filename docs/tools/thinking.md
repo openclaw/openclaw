@@ -36,6 +36,7 @@ title: "Thinking levels"
   - MiniMax (`minimax/*`) on the Anthropic-compatible streaming path defaults to `thinking: { type: "disabled" }` unless you explicitly set thinking in model params or request params. This avoids leaked `reasoning_content` deltas from MiniMax's non-native Anthropic stream format.
   - Z.AI (`zai/*`) only supports binary thinking (`on`/`off`). Any non-`off` level is treated as `on` (mapped to `low`).
   - Moonshot (`moonshot/*`) maps `/think off` to `thinking: { type: "disabled" }` and any non-`off` level to `thinking: { type: "enabled" }`. When thinking is enabled, Moonshot only accepts `tool_choice` `auto|none`; OpenClaw normalizes incompatible values to `auto`.
+- **CLI backends do not honor `/think` or `/reasoning`.** When a session is bound to a CLI backend (for example `claude-cli`, `codex-cli`, `gemini-cli`), OpenClaw spawns the underlying CLI with a fixed argv and does not rewrite that argv per request from the stored thinking level. `/status` keeps showing the stored level, but it only takes effect when the conversation is routed through an API-mode provider on the same model. See [CLI backends - Limitations](/gateway/cli-backends#limitations).
 
 ## Resolution order
 
