@@ -1033,7 +1033,9 @@ describe("device-pair /pair approve", () => {
       }),
     );
 
-    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1");
+    expect(vi.mocked(approveDevicePairing)).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.pairing"],
+    });
     expect(result).toEqual({ text: "✅ Paired Victim Phone (ios)." });
   });
 

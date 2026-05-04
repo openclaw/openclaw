@@ -536,6 +536,69 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("ignores non-Discord generic command owners when authorizing guild plugin commands", async () => {
+    const cfg = {
+      commands: {
+        ownerAllowFrom: ["telegram:123456789"],
+      },
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "345678901234567890": {
+              channels: {
+                "234567890123456789": {
+                  enabled: true,
+                  requireMention: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const commandSpec: NativeCommandSpec = {
+      name: "pair",
+      description: "Pair",
+      acceptsArgs: true,
+    };
+    const interaction = createInteraction({
+      channelType: ChannelType.GuildText,
+      channelId: "234567890123456789",
+      guildId: "345678901234567890",
+      guildName: "Test Guild",
+    });
+    interaction.user.id = "999999999999999999";
+    interaction.options.getString.mockReturnValue("now");
+
+    expect(
+      registerPluginCommand("demo-plugin", {
+        name: "pair",
+        description: "Pair device",
+        acceptsArgs: true,
+        requireAuth: false,
+        handler: async ({ args }) => ({ text: `open:${args ?? ""}` }),
+      }),
+    ).toEqual({ ok: true });
+    const executeSpy = runtimeModuleMocks.executePluginCommand.mockResolvedValue({
+      text: "open:now",
+    });
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(executeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.objectContaining({ name: "pair" }),
+        args: "now",
+      }),
+    );
+    expect(interaction.followUp).toHaveBeenCalledWith(
+      expect.objectContaining({ content: "open:now" }),
+    );
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("rejects group DM slash commands outside dm.groupChannels before dispatch", async () => {
     const cfg = {
       commands: {

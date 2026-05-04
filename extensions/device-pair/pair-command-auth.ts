@@ -10,6 +10,8 @@ type PairingCommandAuthState = {
   approvalCallerScopes?: readonly string[];
 };
 
+const COMMAND_OWNER_PAIRING_SCOPES = ["operator.pairing"] as const;
+
 function isInternalGatewayPairingCaller(params: PairingCommandAuthParams): boolean {
   return params.channel === "webchat" || Array.isArray(params.gatewayClientScopes);
 }
@@ -37,7 +39,7 @@ export function resolvePairingCommandAuthState(
     return {
       isInternalGatewayCaller,
       isMissingPairingPrivilege: false,
-      approvalCallerScopes: undefined,
+      approvalCallerScopes: COMMAND_OWNER_PAIRING_SCOPES,
     };
   }
 

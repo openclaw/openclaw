@@ -25,7 +25,7 @@ describe("device-pair pairing command auth", () => {
     ).toEqual({
       isInternalGatewayCaller: false,
       isMissingPairingPrivilege: false,
-      approvalCallerScopes: undefined,
+      approvalCallerScopes: ["operator.pairing"],
     });
   });
 

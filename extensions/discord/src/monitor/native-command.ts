@@ -107,6 +107,9 @@ function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | un
         }
         continue;
       }
+      if (prefix !== "user" && prefix !== "pk") {
+        continue;
+      }
     }
     entries.push(trimmed);
   }
