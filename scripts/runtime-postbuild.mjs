@@ -36,6 +36,14 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   ["route-reply.runtime-uzaOjbd1.js", "route-reply.runtime.js"],
   ["runtime-plugins.runtime-CNAfmQRG.js", "runtime-plugins.runtime.js"],
   ["tts.runtime-D-THXDsp.js", "tts.runtime.js"],
+  // v2026.5.2 -> v2026.5.3-beta.3 gateway shutdown chunks. The running
+  // gateway may resolve these only after an npm package tree replacement.
+  ["server-close-DsVPJDIx.js", "server-close.runtime.js"],
+  ["server-close-DvAvfgr8.js", "server-close.runtime.js"],
+  // v2026.5.3 beta reply-dispatch lazy chunks.
+  ["provider-dispatcher-6EQEtc-t.js", "provider-dispatcher.runtime.js"],
+  ["provider-dispatcher-BpL2E92x.js", "provider-dispatcher.runtime.js"],
+  ["provider-dispatcher-JG96SkLX.js", "provider-dispatcher.runtime.js"],
 ];
 const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {

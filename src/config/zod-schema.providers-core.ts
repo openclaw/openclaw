@@ -84,6 +84,7 @@ const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const ChannelStreamingProgressSchema = z
@@ -93,6 +94,7 @@ const ChannelStreamingProgressSchema = z
     maxLines: z.number().int().positive().optional(),
     render: z.enum(["text", "rich"]).optional(),
     toolProgress: z.boolean().optional(),
+    commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
 const ChannelPreviewStreamingConfigSchema = z

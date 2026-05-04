@@ -91,4 +91,8 @@ describe("diagnostic session context", () => {
 
     expect(readLastAssistantFromSessionFile(filePath)).toBe("newer");
   });
+
+  it("ignores missing transcript tail files", () => {
+    expect(readLastAssistantFromSessionFile(path.join(tempDir!, "missing.jsonl"))).toBeUndefined();
+  });
 });

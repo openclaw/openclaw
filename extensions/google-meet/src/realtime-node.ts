@@ -31,6 +31,9 @@ import {
   isGoogleMeetLikelyAssistantEchoTranscript,
   convertGoogleMeetBridgeAudioForStt,
   convertGoogleMeetTtsAudioForBridge,
+  formatGoogleMeetAgentAudioModelLog,
+  formatGoogleMeetAgentTtsResultLog,
+  formatGoogleMeetRealtimeVoiceModelLog,
   type GoogleMeetRealtimeEventEntry,
   type GoogleMeetRealtimeTranscriptEntry,
 } from "./realtime.js";
@@ -73,6 +76,7 @@ export async function startNodeAgentAudioBridge(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   nodeId: string;
   bridgeId: string;
   logger: RuntimeLogger;
@@ -96,6 +100,13 @@ export async function startNodeAgentAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
+  params.logger.info(
+    formatGoogleMeetAgentAudioModelLog({
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   let agentConsultActive = false;
   let pendingAgentQuestion: string | undefined;
@@ -175,6 +186,7 @@ export async function startNodeAgentAudioBridge(params: {
         if (!result.success || !result.audioBuffer || !result.sampleRate) {
           throw new Error(result.error ?? "TTS conversion failed");
         }
+        params.logger.info(formatGoogleMeetAgentTtsResultLog("node agent", result));
         await pushOutputAudio(
           convertGoogleMeetTtsAudioForBridge(
             result.audioBuffer,
@@ -214,6 +226,7 @@ export async function startNodeAgentAudioBridge(params: {
           runtime: params.runtime,
           logger: params.logger,
           meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
           args: {
             question: currentQuestion,
             responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -362,6 +375,7 @@ export async function startNodeRealtimeAudioBridge(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   nodeId: string;
   bridgeId: string;
   logger: RuntimeLogger;
@@ -390,6 +404,15 @@ export async function startNodeRealtimeAudioBridge(params: {
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   const strategy = params.config.realtime.strategy;
+  params.logger.info(
+    formatGoogleMeetRealtimeVoiceModelLog({
+      strategy,
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      fallbackModel: params.config.realtime.model,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
   let agentConsultActive = false;
   let pendingAgentQuestion: string | undefined;
   let agentConsultDebounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -437,6 +460,7 @@ export async function startNodeRealtimeAudioBridge(params: {
           runtime: params.runtime,
           logger: params.logger,
           meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
           args: {
             question: currentQuestion,
             responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -614,6 +638,7 @@ export async function startNodeRealtimeAudioBridge(params: {
         runtime: params.runtime,
         logger: params.logger,
         meetingSessionId: params.meetingSessionId,
+        requesterSessionKey: params.requesterSessionKey,
         args: event.args,
         transcript,
       })

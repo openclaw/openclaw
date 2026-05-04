@@ -1259,6 +1259,32 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it("passes the caller session key through tool joins for agent context forking", async () => {
+    const { tools } = setup(
+      {},
+      { toolContext: { sessionKey: "agent:main:discord:channel:general" } },
+    );
+    const gatewayParams: unknown[] = [];
+    googleMeetPluginTesting.setCallGatewayFromCliForTests(async (_method, _opts, params) => {
+      gatewayParams.push(params);
+      return { ok: true };
+    });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+
+    await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      requesterSessionKey: "agent:main:wrong",
+    });
+
+    expect(gatewayParams[0]).toMatchObject({
+      url: "https://meet.google.com/abc-defg-hij",
+      requesterSessionKey: "agent:main:discord:channel:general",
+    });
+  });
+
   it("explains that Twilio joins need dial-in details", async () => {
     const { tools } = setup({ defaultTransport: "twilio" });
     const tool = tools[0] as {
@@ -3806,6 +3832,7 @@ describe("google-meet plugin", () => {
     const provider: RealtimeTranscriptionProviderPlugin = {
       id: "openai",
       label: "OpenAI",
+      defaultModel: "gpt-4o-transcribe",
       autoSelectOrder: 1,
       resolveConfig: ({ rawConfig }) => rawConfig,
       isConfigured: () => true,
@@ -3847,6 +3874,10 @@ describe("google-meet plugin", () => {
           success: true,
           audioBuffer: Buffer.from([1, 0, 2, 0]),
           sampleRate: 24_000,
+          provider: "elevenlabs",
+          providerModel: "eleven_multilingual_v2",
+          providerVoice: "pMsXgVXv3BLzUgSXRplE",
+          outputFormat: "pcm16",
         })),
       },
       agent: {
@@ -3882,6 +3913,9 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] agent audio bridge starting: transcriptionProvider=openai transcriptionModel=gpt-4o-transcribe tts=telephony audioFormat=pcm16-24khz",
+    );
     inputStdout.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
     callbacks?.onTranscript?.("Please summarize the launch.");
     await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -3892,6 +3926,9 @@ describe("google-meet plugin", () => {
       text: "Use the Portugal launch data.",
       cfg: {},
     });
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] agent TTS: provider=elevenlabs model=eleven_multilingual_v2 voice=pMsXgVXv3BLzUgSXRplE outputFormat=pcm16 sampleRate=24000",
+    );
     expect(Buffer.concat(outputStdinWrites)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(handle.getHealth()).toMatchObject({
       providerConnected: true,
@@ -3942,6 +3979,7 @@ describe("google-meet plugin", () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI",
+      defaultModel: "gpt-realtime-1.5",
       autoSelectOrder: 1,
       resolveConfig: ({ rawConfig }) => rawConfig,
       isConfigured: () => true,
@@ -4023,6 +4061,9 @@ describe("google-meet plugin", () => {
       spawn: spawnMock,
     });
 
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
+    );
     inputStdout.write(Buffer.from([1, 2, 3]));
     callbacks?.onAudio(Buffer.from([4, 5]));
     callbacks?.onMark?.("mark-1");
@@ -4154,6 +4195,7 @@ describe("google-meet plugin", () => {
     const provider: RealtimeVoiceProviderPlugin = {
       id: "openai",
       label: "OpenAI",
+      defaultModel: "gpt-realtime-1.5",
       autoSelectOrder: 1,
       resolveConfig: ({ rawConfig }) => rawConfig,
       isConfigured: () => true,
@@ -4492,6 +4534,9 @@ describe("google-meet plugin", () => {
       providers: [provider],
     });
 
+    expect(noopLogger.info).toHaveBeenCalledWith(
+      "[google-meet] realtime voice bridge starting: strategy=bidi provider=openai model=gpt-realtime audioFormat=pcm16-24khz",
+    );
     callbacks?.onAudio(Buffer.from([1, 2, 3]));
     callbacks?.onClearAudio();
     callbacks?.onReady?.();

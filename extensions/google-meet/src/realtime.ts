@@ -409,6 +409,93 @@ export function buildGoogleMeetSpeakExactUserMessage(text: string): string {
   ].join("\n");
 }
 
+function readLogString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function formatLogValue(value: string | undefined): string {
+  const normalized = value?.replace(/\s+/g, "_").slice(0, 180);
+  return normalized || "unknown";
+}
+
+function resolveProviderModelForLog(params: {
+  provider: { defaultModel?: string };
+  providerConfig: RealtimeVoiceProviderConfig | RealtimeTranscriptionProviderConfig;
+  fallbackModel?: string;
+}): string {
+  return (
+    readLogString(params.providerConfig.model) ??
+    readLogString(params.providerConfig.modelId) ??
+    readLogString(params.fallbackModel) ??
+    readLogString(params.provider.defaultModel) ??
+    "provider-default"
+  );
+}
+
+export function formatGoogleMeetRealtimeVoiceModelLog(params: {
+  strategy: string;
+  provider: RealtimeVoiceProviderPlugin;
+  providerConfig: RealtimeVoiceProviderConfig;
+  fallbackModel?: string;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+}): string {
+  return [
+    `[google-meet] realtime voice bridge starting: strategy=${formatLogValue(params.strategy)}`,
+    `provider=${formatLogValue(params.provider.id)}`,
+    `model=${formatLogValue(
+      resolveProviderModelForLog({
+        provider: params.provider,
+        providerConfig: params.providerConfig,
+        fallbackModel: params.fallbackModel,
+      }),
+    )}`,
+    `audioFormat=${formatLogValue(params.audioFormat)}`,
+  ].join(" ");
+}
+
+export function formatGoogleMeetAgentAudioModelLog(params: {
+  provider: RealtimeTranscriptionProviderPlugin;
+  providerConfig: RealtimeTranscriptionProviderConfig;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+}): string {
+  return [
+    `[google-meet] agent audio bridge starting: transcriptionProvider=${formatLogValue(
+      params.provider.id,
+    )}`,
+    `transcriptionModel=${formatLogValue(
+      resolveProviderModelForLog({
+        provider: params.provider,
+        providerConfig: params.providerConfig,
+      }),
+    )}`,
+    "tts=telephony",
+    `audioFormat=${formatLogValue(params.audioFormat)}`,
+  ].join(" ");
+}
+
+type GoogleMeetTtsResultLogFields = {
+  provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
+  outputFormat?: string;
+  sampleRate?: number;
+  fallbackFrom?: string;
+};
+
+export function formatGoogleMeetAgentTtsResultLog(
+  prefix: string,
+  result: GoogleMeetTtsResultLogFields,
+): string {
+  return [
+    `[google-meet] ${prefix} TTS: provider=${formatLogValue(result.provider)}`,
+    `model=${formatLogValue(result.providerModel)}`,
+    `voice=${formatLogValue(result.providerVoice)}`,
+    `outputFormat=${formatLogValue(result.outputFormat)}`,
+    `sampleRate=${result.sampleRate ?? "unknown"}`,
+    ...(result.fallbackFrom ? [`fallbackFrom=${formatLogValue(result.fallbackFrom)}`] : []),
+  ].join(" ");
+}
+
 function normalizeGoogleMeetTtsPromptText(text: string | undefined): string | undefined {
   const trimmed = text?.trim();
   if (!trimmed) {
@@ -426,6 +513,7 @@ export async function startCommandAgentAudioBridge(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   inputCommand: string[];
   outputCommand: string[];
   logger: RuntimeLogger;
@@ -464,6 +552,13 @@ export async function startCommandAgentAudioBridge(params: {
     fullConfig: params.fullConfig,
     providers: params.providers,
   });
+  params.logger.info(
+    formatGoogleMeetAgentAudioModelLog({
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
 
   const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
     if (proc.killed && signal !== "SIGKILL") {
@@ -577,6 +672,7 @@ export async function startCommandAgentAudioBridge(params: {
         if (!result.success || !result.audioBuffer || !result.sampleRate) {
           throw new Error(result.error ?? "TTS conversion failed");
         }
+        params.logger.info(formatGoogleMeetAgentTtsResultLog("agent", result));
         writeOutputAudio(
           convertGoogleMeetTtsAudioForBridge(
             result.audioBuffer,
@@ -616,6 +712,7 @@ export async function startCommandAgentAudioBridge(params: {
           runtime: params.runtime,
           logger: params.logger,
           meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
           args: {
             question: currentQuestion,
             responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -727,6 +824,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   inputCommand: string[];
   outputCommand: string[];
   logger: RuntimeLogger;
@@ -956,6 +1054,15 @@ export async function startCommandRealtimeAudioBridge(params: {
     providers: params.providers,
   });
   const strategy = params.config.realtime.strategy;
+  params.logger.info(
+    formatGoogleMeetRealtimeVoiceModelLog({
+      strategy,
+      provider: resolved.provider,
+      providerConfig: resolved.providerConfig,
+      fallbackModel: params.config.realtime.model,
+      audioFormat: params.config.chrome.audioFormat,
+    }),
+  );
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const realtimeEvents: GoogleMeetRealtimeEventEntry[] = [];
   let agentConsultActive = false;
@@ -1004,6 +1111,7 @@ export async function startCommandRealtimeAudioBridge(params: {
           runtime: params.runtime,
           logger: params.logger,
           meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
           args: {
             question: currentQuestion,
             responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -1104,6 +1212,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         runtime: params.runtime,
         logger: params.logger,
         meetingSessionId: params.meetingSessionId,
+        requesterSessionKey: params.requesterSessionKey,
         args: event.args,
         transcript,
       })

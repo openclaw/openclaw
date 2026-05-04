@@ -568,8 +568,18 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
+    return;
+  }
+  const configuredEntry = params.normalized?.entries[params.record.id];
+  if (
+    params.normalized?.enabled === false ||
+    configuredEntry?.enabled === false ||
+    params.normalized?.deny.includes(params.record.id) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(params.record.id))
+  ) {
     return;
   }
   const declaredChannels = params.record.channels
@@ -597,6 +607,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
 function pushManifestCompatibilityDiagnostics(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
   pushProviderAuthEnvVarsCompatDiagnostic(params);
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
@@ -856,7 +867,7 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-          pushManifestCompatibilityDiagnostics({ record, diagnostics });
+          pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
       }
@@ -881,7 +892,7 @@ export function loadPluginManifestRegistry(
       if (candidateWins) {
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-        pushManifestCompatibilityDiagnostics({ record, diagnostics });
+        pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
         isIntentionalInstalledBundledDuplicate({
@@ -909,7 +920,7 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(record);
-    pushManifestCompatibilityDiagnostics({ record, diagnostics });
+    pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };

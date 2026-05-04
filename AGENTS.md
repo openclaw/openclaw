@@ -72,7 +72,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - After landing PR: search duplicate open issues/PRs. Before closing: comment why + canonical link.
 - If an issue/PR is already fixed on current `main` or solved by a new release: comment with proof + canonical commit/PR/release, then close.
 - GH comments with markdown backticks, `$`, or shell snippets: avoid inline double-quoted `--body`; use single quotes or `--body-file`.
-- PR create: body required. Include concise Summary + Verification sections; mention issue/PR refs, behavior changed, and exact local/Testbox/CI proof. Never open an empty-body or placeholder-body PR.
+- PR create: description/body always required. Include concise Summary + Verification sections; mention issue/PR refs, behavior changed, and exact local/Testbox/CI proof. Never open an empty-description, empty-body, or placeholder-body PR.
 - PR execution artifacts/screenshots: attach them to the PR, comment, or an external artifact store. Do not add `.github/pr-assets` or other PR-only assets to the repo.
 - PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
 - When working on an issue or PR, always end the user-facing final answer with the full GitHub URL.

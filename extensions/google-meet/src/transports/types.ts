@@ -7,6 +7,7 @@ export type GoogleMeetJoinRequest = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetModeInput;
   message?: string;
+  requesterSessionKey?: string;
   timeoutMs?: number;
   dialInNumber?: string;
   pin?: string;

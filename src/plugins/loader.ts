@@ -99,7 +99,6 @@ import {
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
-import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -107,7 +106,7 @@ import {
 import { withProfile } from "./plugin-load-profile.js";
 import {
   createPluginModuleLoaderCache,
-  getCachedPluginSourceModuleLoader,
+  getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -480,8 +479,8 @@ function runPluginRegisterSync(
 
 function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-  const loadSourceModule = (modulePath: string) => {
-    return getCachedPluginSourceModuleLoader({
+  const createLoaderForModule = (modulePath: string) => {
+    return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
@@ -495,18 +494,8 @@ function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkRes
       pluginSdkResolution: options.pluginSdkResolution,
     });
   };
-  return (modulePath: string): unknown => {
-    if (shouldPreferNativeModuleLoad(modulePath)) {
-      const native = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
-      if (native.ok) {
-        return native.moduleExport;
-      }
-    }
-    // Source .ts runtime shims import sibling ".js" specifiers that only exist
-    // after build. Jiti remains the dev/source fallback because it rewrites those
-    // imports against the source graph and applies SDK aliases.
-    return loadSourceModule(modulePath)(toSafeImportPath(modulePath));
-  };
+  return (modulePath: string): unknown =>
+    createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
 }
 
 function resolveCanonicalDistRuntimeSource(source: string): string {

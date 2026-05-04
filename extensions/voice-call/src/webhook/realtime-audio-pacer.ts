@@ -4,6 +4,7 @@ const TELEPHONY_CHUNK_MS = 20;
 const DEFAULT_SPEECH_RMS_THRESHOLD = 0.02;
 const DEFAULT_REQUIRED_LOUD_CHUNKS = 2;
 const DEFAULT_REQUIRED_QUIET_CHUNKS = 10;
+const DEFAULT_MAX_QUEUED_AUDIO_BYTES = TELEPHONY_SAMPLE_RATE * 120;
 const PCM16_MAX_AMPLITUDE = 32768;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
 
@@ -27,10 +28,13 @@ export type RealtimeTwilioAudioPacerSendJson = (message: unknown) => boolean;
 export class RealtimeTwilioAudioPacer {
   private queue: RealtimeTwilioAudioQueueItem[] = [];
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private queuedAudioBytes = 0;
   private closed = false;
 
   constructor(
     private readonly params: {
+      maxQueuedAudioBytes?: number;
+      onBackpressure?: () => void;
       sendJson: RealtimeTwilioAudioPacerSendJson;
       streamSid: string;
     },
@@ -40,13 +44,19 @@ export class RealtimeTwilioAudioPacer {
     if (this.closed || muLaw.length === 0) {
       return;
     }
+    const maxQueuedAudioBytes = this.params.maxQueuedAudioBytes ?? DEFAULT_MAX_QUEUED_AUDIO_BYTES;
     for (let offset = 0; offset < muLaw.length; offset += TELEPHONY_CHUNK_BYTES) {
       const chunk = Buffer.from(muLaw.subarray(offset, offset + TELEPHONY_CHUNK_BYTES));
+      if (this.queuedAudioBytes + chunk.length > maxQueuedAudioBytes) {
+        this.failBackpressure();
+        return;
+      }
       this.queue.push({
         type: "audio",
         chunk,
         durationMs: Math.max(1, Math.round((chunk.length / TELEPHONY_SAMPLE_RATE) * 1000)),
       });
+      this.queuedAudioBytes += chunk.length;
     }
     this.ensurePump();
   }
@@ -65,6 +75,7 @@ export class RealtimeTwilioAudioPacer {
     }
     this.clearTimer();
     this.queue = [];
+    this.queuedAudioBytes = 0;
     this.params.sendJson({ event: "clear", streamSid: this.params.streamSid });
   }
 
@@ -72,6 +83,7 @@ export class RealtimeTwilioAudioPacer {
     this.closed = true;
     this.clearTimer();
     this.queue = [];
+    this.queuedAudioBytes = 0;
   }
 
   private clearTimer(): void {
@@ -88,6 +100,11 @@ export class RealtimeTwilioAudioPacer {
     }
   }
 
+  private failBackpressure(): void {
+    this.close();
+    this.params.onBackpressure?.();
+  }
+
   private pump(): void {
     this.timer = null;
     if (this.closed) {
@@ -101,6 +118,7 @@ export class RealtimeTwilioAudioPacer {
     let delayMs = 0;
     let sent = true;
     if (item.type === "audio") {
+      this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
       sent = this.params.sendJson({
         event: "media",
         streamSid: this.params.streamSid,
@@ -117,6 +135,7 @@ export class RealtimeTwilioAudioPacer {
 
     if (!sent) {
       this.queue = [];
+      this.queuedAudioBytes = 0;
       return;
     }
     if (this.queue.length > 0) {

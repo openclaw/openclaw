@@ -113,7 +113,7 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 1. In Telegram, message your bot: `/pair`
 2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
 3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
-4. Paste the setup code and connect.
+4. Scan the QR code or paste the setup code and connect.
 5. Back in Telegram: `/pair pending` (review request IDs, role, and scopes), then approve.
 
 The setup code is a base64-encoded JSON payload that contains:
@@ -133,6 +133,13 @@ That bootstrap token carries the built-in pairing bootstrap profile:
   role contract and the caller session's operator scopes
 
 Treat the setup code like a password while it is valid.
+
+For Tailscale, public, or other non-loopback mobile pairing, use Tailscale
+Serve/Funnel or another `wss://` Gateway URL. Direct non-loopback `ws://` setup
+URLs are rejected before QR/setup-code issuance. Plaintext `ws://` setup codes
+are limited to loopback URLs; private-network `ws://` clients still require the explicit
+`OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` break-glass described in the remote
+Gateway guide.
 
 ### Approve a node device
 

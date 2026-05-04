@@ -175,6 +175,7 @@ export function createGatewayCloseHandler(params: {
   canvasHost: CanvasHostHandler | null;
   canvasHostServer: CanvasHostServer | null;
   releasePluginRouteRegistry?: (() => void) | null;
+  channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
   disposeSessionMcpRuntimes?: () => Promise<void>;
@@ -270,8 +271,9 @@ export function createGatewayCloseHandler(params: {
       if (params.canvasHostServer) {
         await shutdownStep("canvas-host-server", () => params.canvasHostServer!.close(), warnings);
       }
-      for (const plugin of listChannelPlugins()) {
-        await shutdownStep(`channel/${plugin.id}`, () => params.stopChannel(plugin.id), warnings);
+      const channelIds = params.channelIds ?? listChannelPlugins().map((plugin) => plugin.id);
+      for (const channelId of channelIds) {
+        await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId), warnings);
       }
       await shutdownStep("agent-harnesses", () => disposeRegisteredAgentHarnesses(), warnings);
       await Promise.all([
