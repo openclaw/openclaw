@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
-  type PostCompactionLoopGuard,
 } from "./post-compaction-loop-guard.js";
 
 function callOutcome(toolName: string, args: unknown, result: string) {

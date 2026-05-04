@@ -28972,6 +28972,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Plugin-defined configuration payload interpreted by that plugin's own schema and validation rules. Use only documented fields from the plugin to prevent ignored or invalid settings.",
       tags: ["advanced"],
     },
+    "tools.loopDetection.postCompactionGuard.enabled": {
+      help: "Enable the post-compaction loop guard that aborts the run when the agent repeats the same (tool, args, result) triple windowSize times immediately after auto-compaction-retry (default: true).",
+      tags: ["tools"],
+    },
+    "tools.loopDetection.postCompactionGuard.windowSize": {
+      help: "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+      tags: ["tools"],
+    },
     "models.providers.*.headers.*": {
       sensitive: true,
       tags: ["security", "models"],
