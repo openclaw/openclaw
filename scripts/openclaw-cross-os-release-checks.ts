@@ -779,7 +779,9 @@ async function runUpgradeLane(params) {
       timeoutMs: updateTimeoutMs(),
       check: false,
     });
-    if (isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform)) {
+    const usedWindowsPackagedUpgradeFallback =
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(updateResult, process.platform);
+    if (usedWindowsPackagedUpgradeFallback) {
       logLanePhase(lane, "update-fallback-install");
       await installPackageSpec({
         lane,
@@ -793,14 +795,21 @@ async function runUpgradeLane(params) {
       });
     }
 
-    logLanePhase(lane, "update-status");
-    await runOpenClaw({
-      lane,
-      env: updateEnv,
-      args: ["update", "status", "--json"],
-      logPath: join(params.logsDir, "upgrade-update-status.log"),
-      timeoutMs: 2 * 60 * 1000,
-    });
+    if (
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: process.platform,
+        usedWindowsPackagedUpgradeFallback,
+      })
+    ) {
+      logLanePhase(lane, "update-status");
+      await runOpenClaw({
+        lane,
+        env: updateEnv,
+        args: ["update", "status", "--json"],
+        logPath: join(params.logsDir, "upgrade-update-status.log"),
+        timeoutMs: 2 * 60 * 1000,
+      });
+    }
     logLanePhase(lane, "run-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
@@ -1348,6 +1357,13 @@ export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
     /[/\\]\.openclaw-\d+-\d+[/\\]/u.test(output) &&
     /\.node['"]?/iu.test(output)
   );
+}
+
+export function shouldRunPackagedUpgradeStatusProbe({
+  platform = process.platform,
+  usedWindowsPackagedUpgradeFallback,
+} = {}) {
+  return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
