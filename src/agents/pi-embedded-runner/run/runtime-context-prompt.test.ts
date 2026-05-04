@@ -37,6 +37,25 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("can preserve runtime context in the prompt for legacy-style local cache behavior", () => {
+    const effectivePrompt = [
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"message_id":"m-1"}',
+      "```",
+      "",
+      "visible ask",
+    ].join("\n");
+
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt,
+        transcriptPrompt: "visible ask",
+        preserveRuntimeContextInPrompt: true,
+      }),
+    ).toEqual({ prompt: effectivePrompt });
+  });
+
   it("preserves prompt additions as hidden runtime context", () => {
     expect(
       resolveRuntimeContextPromptParts({

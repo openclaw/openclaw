@@ -2782,6 +2782,8 @@ export async function runEmbeddedAttempt(
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
+            preserveRuntimeContextInPrompt:
+              process.env.OPENCLAW_PRESERVE_RUNTIME_CONTEXT_IN_PROMPT === "1",
           });
           const currentTurnPromptContextSuffix = promptSubmission.runtimeOnly
             ? ""

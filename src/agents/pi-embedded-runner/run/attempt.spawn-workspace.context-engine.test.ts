@@ -207,6 +207,52 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     }
   });
 
+  it("can preserve runtime context in the submitted prompt when local cache mode is enabled", async () => {
+    const previous = process.env.OPENCLAW_PRESERVE_RUNTIME_CONTEXT_IN_PROMPT;
+    process.env.OPENCLAW_PRESERVE_RUNTIME_CONTEXT_IN_PROMPT = "1";
+    const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
+
+    try {
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        attemptOverrides: {
+          prompt: [
+            "visible ask",
+            "",
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "secret runtime context",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+          transcriptPrompt: "visible ask",
+        },
+        sessionPrompt: async (session, prompt) => {
+          seen.prompt = prompt;
+          seen.messages = [...session.messages];
+          seen.systemPrompt = session.agent.state.systemPrompt;
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
+        },
+      });
+
+      expect(seen.prompt).toContain("visible ask");
+      expect(seen.prompt).toContain("OPENCLAW_INTERNAL_CONTEXT");
+      expect(seen.prompt).toContain("secret runtime context");
+      expect(result.finalPromptText).toBe(seen.prompt);
+      expect(JSON.stringify(seen.messages)).not.toContain("openclaw.runtime-context");
+      expect(seen.systemPrompt ?? "").not.toContain("secret runtime context");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_PRESERVE_RUNTIME_CONTEXT_IN_PROMPT;
+      } else {
+        process.env.OPENCLAW_PRESERVE_RUNTIME_CONTEXT_IN_PROMPT = previous;
+      }
+    }
+  });
+
   it("keeps bootstrap truncation warnings out of WebChat runtime context", async () => {
     const seen: { prompt?: string; messages?: unknown[] } = {};
     hoisted.resolveBootstrapContextForRunMock.mockResolvedValueOnce({

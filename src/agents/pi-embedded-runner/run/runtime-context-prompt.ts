@@ -85,7 +85,12 @@ function removeLastPromptOccurrence(text: string, prompt: string): string | null
 export function resolveRuntimeContextPromptParts(params: {
   effectivePrompt: string;
   transcriptPrompt?: string;
+  preserveRuntimeContextInPrompt?: boolean;
 }): RuntimeContextPromptParts {
+  if (params.preserveRuntimeContextInPrompt) {
+    return { prompt: params.effectivePrompt };
+  }
+
   const transcriptPrompt = params.transcriptPrompt;
   if (transcriptPrompt === undefined || transcriptPrompt === params.effectivePrompt) {
     return { prompt: params.effectivePrompt };
