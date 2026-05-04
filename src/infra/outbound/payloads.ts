@@ -5,6 +5,7 @@ import {
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
+import { stripLeadingInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -137,7 +138,7 @@ function createOutboundPayloadPlanEntry(
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "", {
+  const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
     extractMarkdownImages: context.extractMarkdownImages,
   });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
