@@ -232,6 +232,66 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", undefined);
   });
 
+  it("renders commentary assistant agent events for a pending run without keeping them in the final", () => {
+    const {
+      state,
+      chatLog,
+      tui,
+      setActivityStatus,
+      isLocalRunId,
+      handleAgentEvent,
+      handleChatEvent,
+    } = createHandlersHarness({
+      state: {
+        activeChatRunId: null,
+        pendingOptimisticUserMessage: true,
+        pendingChatRunId: "run-commentary",
+      },
+    });
+
+    handleAgentEvent({
+      runId: "run-commentary",
+      stream: "assistant",
+      data: {
+        phase: "commentary",
+        text: "I am checking files",
+        delta: "I am checking files",
+      },
+    });
+
+    expect(state.activeChatRunId).toBe("run-commentary");
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(state.pendingChatRunId).toBeNull();
+    expect(isLocalRunId("run-commentary")).toBe(true);
+    expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+    expect(chatLog.updateAssistant).toHaveBeenCalledWith("I am checking files", "run-commentary");
+    expect(tui.requestRender).toHaveBeenCalled();
+
+    handleAgentEvent({
+      runId: "run-commentary",
+      stream: "assistant",
+      data: {
+        phase: "commentary",
+        text: "I am checking files\nReading tests",
+        delta: "\nReading tests",
+      },
+    });
+
+    expect(chatLog.updateAssistant).toHaveBeenLastCalledWith(
+      "I am checking files\nReading tests",
+      "run-commentary",
+    );
+
+    handleChatEvent({
+      runId: "run-commentary",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Done" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("Done", "run-commentary");
+  });
+
   it("accepts chat events when session key is an alias of the active canonical key", () => {
     const { state, chatLog, handleChatEvent } = createHandlersHarness({
       state: {

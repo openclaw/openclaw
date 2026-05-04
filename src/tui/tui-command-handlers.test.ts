@@ -124,7 +124,7 @@ describe("tui command handlers", () => {
     const sendChat = vi.fn(() => sendPromise);
     const setActivityStatus = vi.fn();
 
-    const { handleCommand, requestRender } = createHarness({
+    const { handleCommand, requestRender, state } = createHarness({
       sendChat,
       setActivityStatus,
     });
@@ -133,6 +133,8 @@ describe("tui command handlers", () => {
     await Promise.resolve();
 
     expect(setActivityStatus).toHaveBeenCalledWith("sending");
+    expect(typeof state.pendingChatRunId).toBe("string");
+    expect(state.pendingChatRunId?.length).toBeGreaterThan(0);
     const sendingOrder = setActivityStatus.mock.invocationCallOrder[0] ?? 0;
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.some((order) => order > sendingOrder)).toBe(true);

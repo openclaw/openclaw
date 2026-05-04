@@ -627,6 +627,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!isBtw) {
         chatLog.addUser(text);
         state.pendingOptimisticUserMessage = true;
+        state.pendingChatRunId = runId;
         setActivityStatus("sending");
       } else {
         noteLocalBtwRunId?.(runId);
@@ -642,7 +643,6 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        state.pendingChatRunId = runId;
         setActivityStatus("waiting");
         tui.requestRender();
       }
