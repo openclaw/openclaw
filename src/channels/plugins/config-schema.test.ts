@@ -8,9 +8,15 @@ import {
 
 describe("buildChannelConfigSchema", () => {
   it("builds json schema when toJSONSchema is available", () => {
-    const schema = z.object({ enabled: z.boolean().default(true) });
+    const schema = z.object({
+      mandatory: z.string(),
+      enabled: z.boolean().optional().default(true),
+    });
     const result = buildChannelConfigSchema(schema);
-    expect(result.schema).toMatchObject({ type: "object" });
+    expect(result.schema).toMatchObject({
+      type: "object",
+      required: ["mandatory"],
+    });
   });
 
   it("falls back when toJSONSchema is missing (zod v3 plugin compatibility)", () => {
@@ -31,6 +37,7 @@ describe("buildChannelConfigSchema", () => {
     expect(toJSONSchema).toHaveBeenCalledWith({
       target: "draft-07",
       unrepresentable: "any",
+      io: "input",
     });
     expect(result.schema).toEqual({
       type: "object",

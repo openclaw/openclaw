@@ -136,6 +136,7 @@ export function buildChannelConfigSchema(
       schema: schemaWithJson.toJSONSchema({
         target: "draft-07",
         unrepresentable: "any",
+        io: "input",
       }) as JsonSchemaObject,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
       runtime: {
