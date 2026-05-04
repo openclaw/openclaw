@@ -1160,7 +1160,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime-deps: include packaged OpenClaw identity in bundled plugin loader cache keys, so same-path package upgrades stop reusing stale versioned runtime-deps mirrors. Fixes #75045. Thanks @sahilsatralkar.
 - Plugin SDK: restore reply-prefix and reply-pipeline helpers on the deprecated root/compat SDK surface so external plugins still using `openclaw/plugin-sdk` do not fail message dispatch after update. Fixes #75171. Thanks @zhangxiliang.
 - Plugins/runtime-deps: prune inactive same-package versioned runtime-deps roots after bundled dependency repair, so upgrades do not leave old `openclaw-<version>-<hash>` package caches behind after doctor runs. Thanks @vincentkoc.
-- Browser: make existing-session `start` idempotent when Chrome MCP is already attached, avoiding duplicate `chrome-devtools-mcp` spawns and repeated Chrome remote-debugging consent prompts. Thanks @methazoo.
+- Browser: make existing-session `start` idempotent when Chrome MCP is already attached, avoiding duplicate `chrome-devtools-mcp` spawns and repeated Chrome remote-debugging consent prompts. Thanks @mzogithub.
 
 - Plugins/runtime-deps: prune legacy version-scoped plugin runtime-deps roots during bundled dependency repair and cover the path in Package Acceptance's upgrade-survivor matrix, so upgrades from 2026.4.x no longer leave stale per-plugin runtime trees after doctor runs. Thanks @vincentkoc.
 - Plugins/runtime-deps: keep Gateway startup plugin imports and runtime plugin fallback loads verify-only after startup/config repair planning, so packaged installs no longer spawn package-manager repair from hot paths after readiness. Refs #75283 and #75069. Thanks @brokemac79 and @xiaohuaxi.
