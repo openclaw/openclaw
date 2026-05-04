@@ -307,6 +307,10 @@ function buildCompactionContextEngineRuntimeContext(params: {
   contextEnginePluginId?: string;
   contextTokenBudget?: number;
 }): ContextEngineRuntimeContext {
+  const { sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.params.sessionKey,
+    config: params.params.config,
+  });
   return {
     ...params.params,
     ...buildEmbeddedCompactionRuntimeContext({
@@ -337,6 +341,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
     ...resolveContextEngineCapabilities({
       config: params.params.config,
       sessionKey: params.params.sessionKey,
+      agentId: sessionAgentId,
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.compaction",
     }),
