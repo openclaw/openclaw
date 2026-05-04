@@ -1318,6 +1318,52 @@ export async function runEmbeddedPiAgent(
             }
             continue;
           }
+          // Irreducible overflow: system prompt + user prompt alone exceeds
+          // the context budget. Compaction cannot help — return immediately
+          // to avoid spinning through MAX_OVERFLOW_COMPACTION_ATTEMPTS of
+          // no-op compaction cycles (each burning ~20s of event loop time).
+          if (preflightRecovery?.route === "irreducible_overflow") {
+            const errorText = promptError
+              ? formatErrorMessage(promptError)
+              : "Context overflow: system prompt exceeds the model context window.";
+            log.error(
+              `[context-overflow-diag] irreducible overflow — skipping compaction entirely. ` +
+                `sessionKey=${params.sessionKey ?? params.sessionId} ` +
+                `provider=${provider}/${modelId} sessionFile=${activeSessionFile}`,
+            );
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid: resolveReplayInvalidForAttempt(),
+              livenessState: "blocked",
+            });
+            return {
+              payloads: [
+                {
+                  text:
+                    "Context overflow: system prompt exceeds the model context window. " +
+                    "Reduce the number of skills/plugins or use a larger-context model.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta: buildErrorAgentMeta({
+                  sessionId: sessionIdUsed,
+                  provider,
+                  model: model.id,
+                  contextTokens: ctxInfo.tokens,
+                  usageAccumulator,
+                  lastRunPromptUsage,
+                  lastAssistant: sessionLastAssistant,
+                  lastTurnTotal,
+                }),
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                replayInvalid: resolveReplayInvalidForAttempt(),
+                livenessState: "blocked",
+                error: { kind: "context_overflow", message: errorText },
+              },
+            };
+          }
           const requestedSelection = shouldSwitchToLiveModel({
             cfg: params.config,
             sessionKey: resolvedSessionKey,
