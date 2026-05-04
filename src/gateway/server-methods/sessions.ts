@@ -12,7 +12,6 @@ import {
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
-import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import {
   loadSessionStore,
   runSessionsCleanup,
@@ -68,7 +67,6 @@ import {
   validateSessionsResetParams,
   validateSessionsResolveParams,
   validateSessionsSendParams,
-  type SessionsListParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
@@ -99,6 +97,11 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
+import {
+  buildSessionsListCacheKey,
+  invalidateSessionsListResultCache,
+  loadSessionsListResultCached,
+} from "../sessions-list-result-cache.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -118,99 +121,6 @@ let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
 let loggedSlowSessionsListCatalog = false;
 
 const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
-const SESSIONS_LIST_RESULT_CACHE_TTL_MS = 60_000;
-const SESSIONS_LIST_RESULT_CACHE_MAX = 24;
-
-type SessionsListResult = Awaited<ReturnType<typeof listSessionsFromStoreAsync>>;
-
-const sessionsListResultCache = new Map<string, { storedAt: number; result: SessionsListResult }>();
-const sessionsListInFlight = new Map<string, Promise<SessionsListResult>>();
-
-function normalizeSessionsListCacheValue(value: unknown): string | number | boolean | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : undefined;
-  }
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.floor(value);
-  }
-  if (typeof value === "boolean") {
-    return value;
-  }
-  return undefined;
-}
-
-function buildSessionsListCacheKey(params: {
-  cfg: OpenClawConfig;
-  storePath: string;
-  opts: SessionsListParams;
-}): string {
-  const p = params.opts;
-  return JSON.stringify({
-    config: resolveRuntimeConfigCacheKey(params.cfg),
-    storePath: params.storePath,
-    agentId: normalizeSessionsListCacheValue(p.agentId),
-    activeMinutes: normalizeSessionsListCacheValue(p.activeMinutes),
-    limit: normalizeSessionsListCacheValue(p.limit),
-    includeGlobal: normalizeSessionsListCacheValue(p.includeGlobal),
-    includeUnknown: normalizeSessionsListCacheValue(p.includeUnknown),
-    spawnedBy: normalizeSessionsListCacheValue(p.spawnedBy),
-    label: normalizeSessionsListCacheValue(p.label),
-    search: normalizeSessionsListCacheValue(p.search),
-    includeDerivedTitles: normalizeSessionsListCacheValue(p.includeDerivedTitles),
-    includeLastMessage: normalizeSessionsListCacheValue(p.includeLastMessage),
-  });
-}
-
-function clearSessionsListResultCache(): void {
-  sessionsListResultCache.clear();
-  sessionsListInFlight.clear();
-}
-
-function readCachedSessionsListResult(cacheKey: string): SessionsListResult | undefined {
-  const cached = sessionsListResultCache.get(cacheKey);
-  if (!cached) {
-    return undefined;
-  }
-  if (Date.now() - cached.storedAt > SESSIONS_LIST_RESULT_CACHE_TTL_MS) {
-    sessionsListResultCache.delete(cacheKey);
-    return undefined;
-  }
-  return cached.result;
-}
-
-function writeCachedSessionsListResult(cacheKey: string, result: SessionsListResult): void {
-  if (sessionsListResultCache.size >= SESSIONS_LIST_RESULT_CACHE_MAX) {
-    const oldestKey = sessionsListResultCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      sessionsListResultCache.delete(oldestKey);
-    }
-  }
-  sessionsListResultCache.set(cacheKey, { storedAt: Date.now(), result });
-}
-
-async function loadSessionsListResultCached(
-  cacheKey: string,
-  load: () => Promise<SessionsListResult>,
-): Promise<SessionsListResult> {
-  const cached = readCachedSessionsListResult(cacheKey);
-  if (cached) {
-    return cached;
-  }
-  const inflight = sessionsListInFlight.get(cacheKey);
-  if (inflight) {
-    return await inflight;
-  }
-  const promise = load();
-  sessionsListInFlight.set(cacheKey, promise);
-  try {
-    const result = await promise;
-    writeCachedSessionsListResult(cacheKey, result);
-    return result;
-  } finally {
-    sessionsListInFlight.delete(cacheKey);
-  }
-}
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
@@ -325,7 +235,7 @@ function emitSessionsChanged(
   >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
-  clearSessionsListResultCache();
+  invalidateSessionsListResultCache();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;
