@@ -233,6 +233,14 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
 export function resolveToolLoopDetectionConfig(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
+  /**
+   * What initiated this run. Heartbeat runs default loop detection ON
+   * unless the user has explicitly opted out (see {@link applyHeartbeatLoopDetectionDefault}).
+   * Without this, a heartbeat that emits the same `HEARTBEAT_OK`-shaped
+   * tool-call response on every turn keeps cycling until context overflow,
+   * burning tens of thousands of tokens per tick (see issue #21597).
+   */
+  trigger?: string;
 }): ToolLoopDetectionConfig | undefined {
   const global = params.cfg?.tools?.loopDetection;
   const agent =
@@ -240,6 +248,14 @@ export function resolveToolLoopDetectionConfig(params: {
       ? resolveAgentConfig(params.cfg, params.agentId)?.tools?.loopDetection
       : undefined;
 
+  const merged = mergeLoopDetectionConfigs(global, agent);
+  return applyHeartbeatLoopDetectionDefault(merged, params.trigger);
+}
+
+function mergeLoopDetectionConfigs(
+  global: ToolLoopDetectionConfig | undefined,
+  agent: ToolLoopDetectionConfig | undefined,
+): ToolLoopDetectionConfig | undefined {
   if (!agent) {
     return global;
   }
@@ -255,6 +271,29 @@ export function resolveToolLoopDetectionConfig(params: {
       ...agent.detectors,
     },
   };
+}
+
+/**
+ * Heartbeat runs are the canonical "unbounded loop" failure surface (issue
+ * #21597): the model emits an effectively-final response (e.g. `HEARTBEAT_OK`)
+ * along with tool calls, the runtime treats the tool calls as the real signal
+ * and re-prompts, the model imitates its own previous turn, and the cycle
+ * continues until context overflow.  The {@link detectToolCallLoop} framework
+ * already handles this once enabled, so for heartbeat triggers we flip the
+ * default from off to on.  Any explicit `enabled` value (true or false) wins;
+ * this only fills in the unset case.
+ */
+function applyHeartbeatLoopDetectionDefault(
+  config: ToolLoopDetectionConfig | undefined,
+  trigger: string | undefined,
+): ToolLoopDetectionConfig | undefined {
+  if (trigger !== "heartbeat") {
+    return config;
+  }
+  if (config?.enabled !== undefined) {
+    return config;
+  }
+  return { ...(config ?? {}), enabled: true };
 }
 
 export const __testing = {
@@ -837,7 +876,11 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       runId: options?.runId,
       ...(options?.trace ? { trace: options.trace } : {}),
-      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+      loopDetection: resolveToolLoopDetectionConfig({
+        cfg: options?.config,
+        agentId,
+        trigger: options?.trigger,
+      }),
     }),
   );
   options?.recordToolPrepStage?.("tool-hooks");
