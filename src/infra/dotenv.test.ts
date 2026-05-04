@@ -44,6 +44,8 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
   "ComSpec",
   "COMSPEC",
+  "LocalAppData",
+  "LOCALAPPDATA",
   "ProgramFiles",
   "PROGRAMFILES",
   "ProgramW6432",
@@ -338,6 +340,8 @@ describe("loadDotEnv", () => {
           [
             "ComSpec=.\\evil-comspec",
             "COMSPEC=.\\evil-comspec-upper",
+            "LocalAppData=.\\evil-local-app-data",
+            "LOCALAPPDATA=.\\evil-local-app-data-upper",
             "ProgramFiles=.\\evil-pfiles",
             "PROGRAMFILES=.\\evil-pfiles-upper",
             "ProgramW6432=.\\evil-pw6432",
@@ -715,6 +719,7 @@ describe("workspace .env blocklist completeness", () => {
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",
           "IRC_HOST",
+          "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
