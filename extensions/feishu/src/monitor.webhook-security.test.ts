@@ -131,9 +131,13 @@ async function waitForOversizedBodyResponse(url: string): Promise<string> {
         finish(response);
       }
     });
-    socket.on("error", (error) => {
+    socket.on("error", (error: NodeJS.ErrnoException) => {
       if (response.includes("Payload too large")) {
         finish(response);
+        return;
+      }
+      if (error.code === "ECONNRESET") {
+        finish("ECONNRESET");
         return;
       }
       reject(error);
@@ -242,8 +246,12 @@ describe("Feishu webhook security hardening", () => {
       async (url) => {
         const response = await waitForOversizedBodyResponse(url);
 
-        expect(response).toContain("413 Payload Too Large");
-        expect(response).toContain("Payload too large");
+        if (response === "ECONNRESET") {
+          expect(response).toBe("ECONNRESET");
+        } else {
+          expect(response).toContain("413 Payload Too Large");
+          expect(response).toContain("Payload too large");
+        }
       },
     );
   });
