@@ -773,7 +773,6 @@ describe("switchChatSession", () => {
       sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
-      sessionsShowArchived: false,
       settings,
       applySettings(next: typeof settings) {
         state.settings = next;
