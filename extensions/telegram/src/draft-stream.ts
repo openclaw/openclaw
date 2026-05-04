@@ -256,6 +256,7 @@ export function createTelegramDraftStream(params: {
   let rateLimitedUntilMs = 0;
   let pendingForceNewMessage = false;
   let backoffRetryTimer: ReturnType<typeof setTimeout> | undefined;
+  let gateRetryTimer: ReturnType<typeof setTimeout> | undefined;
   let deferredFlush: (() => void) | undefined;
   type PreviewSendParams = {
     renderedText: string;
@@ -452,6 +453,12 @@ export function createTelegramDraftStream(params: {
     }
 
     if (!acquireChatSendGate(chatId, streamId, chatSendIntervalMs, streamState.final)) {
+      if (!gateRetryTimer) {
+        gateRetryTimer = setTimeout(() => {
+          gateRetryTimer = undefined;
+          deferredFlush?.();
+        }, chatSendIntervalMs);
+      }
       return false;
     }
 
@@ -535,6 +542,10 @@ export function createTelegramDraftStream(params: {
     if (backoffRetryTimer) {
       clearTimeout(backoffRetryTimer);
       backoffRetryTimer = undefined;
+    }
+    if (gateRetryTimer) {
+      clearTimeout(gateRetryTimer);
+      gateRetryTimer = undefined;
     }
     await stopForClear();
   };
