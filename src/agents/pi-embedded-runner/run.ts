@@ -856,7 +856,7 @@ export async function runEmbeddedPiAgent(
         modelId?: string;
       }) => {
         const { profileId, reason } = failure;
-        if (!profileId || !reason || reason === "timeout") {
+        if (!profileId || !reason || reason === "timeout" || reason === "format") {
           return;
         }
         await markAuthProfileFailure({

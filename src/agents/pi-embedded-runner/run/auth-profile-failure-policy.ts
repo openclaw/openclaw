@@ -6,8 +6,16 @@ export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
   policy?: AuthProfileFailurePolicy;
 }): AuthProfileFailureReason | null {
-  // Helper-local runs and transport timeouts should not poison shared provider auth health.
-  if (params.policy === "local" || !params.failoverReason || params.failoverReason === "timeout") {
+  // Helper-local runs, transport timeouts, and request-format errors should
+  // not poison shared provider auth health.  Format failures (e.g.
+  // invalid_request_error due to a corrupted transcript) are request-specific
+  // data issues, not indicators of provider unavailability.
+  if (
+    params.policy === "local" ||
+    !params.failoverReason ||
+    params.failoverReason === "timeout" ||
+    params.failoverReason === "format"
+  ) {
     return null;
   }
   return params.failoverReason;

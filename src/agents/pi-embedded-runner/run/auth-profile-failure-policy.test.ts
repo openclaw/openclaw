@@ -39,4 +39,18 @@ describe("resolveAuthProfileFailureReason", () => {
       }),
     ).toBeNull();
   });
+
+  it("does not persist format errors as auth-profile health (#76829)", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "format",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "format",
+        policy: "shared",
+      }),
+    ).toBeNull();
+  });
 });
