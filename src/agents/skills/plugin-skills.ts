@@ -18,8 +18,8 @@ const log = createSubsystemLogger("skills");
 export function resolvePluginSkillDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;
-  /** Override the managed skills directory for testing. */
-  managedSkillsDir?: string;
+  /** Override the plugin skills directory for testing. */
+  pluginSkillsDir?: string;
 }): string[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
@@ -96,15 +96,15 @@ export function resolvePluginSkillDirs(params: {
     }
   }
 
-  publishPluginSkillsToManagedSkillsDir(resolved, {
-    managedSkillsDir: params.managedSkillsDir,
+  publishPluginSkills(resolved, {
+    pluginSkillsDir: params.pluginSkillsDir,
   });
 
   return resolved;
 }
 
-function resolveDefaultManagedSkillsDir(): string {
-  return path.join(CONFIG_DIR, "skills");
+function resolveDefaultPluginSkillsDir(): string {
+  return path.join(CONFIG_DIR, "plugin-skills");
 }
 
 /**
@@ -119,7 +119,7 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
     if (existing) {
       log.warn(
         `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
-          `only the first will be published to managed skills`,
+          `only the first will be published`,
       );
       return;
     }
@@ -142,7 +142,7 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
     if (existing) {
       log.warn(
         `plugin skill name collision: "${basename}" resolves to both ${existing} and ${childPath}; ` +
-          `only the first will be published to managed skills`,
+          `only the first will be published`,
       );
       continue;
     }
@@ -152,14 +152,14 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
 
 /**
  * Creates symlinks from each resolved plugin skill directory into the
- * managed skills directory (~/.openclaw/skills/) so the agent SDK can
+ * plugin skills directory (~/.openclaw/plugin-skills/) so the agent SDK can
  * discover them at the conventional file-system path.
+ *
+ * The plugin-skills directory is fully owned by OpenClaw — every entry is
+ * a generated symlink. Cleanup of stale links is therefore safe.
  */
-function publishPluginSkillsToManagedSkillsDir(
-  skillDirs: string[],
-  opts?: { managedSkillsDir?: string },
-): void {
-  const managedSkillsDir = opts?.managedSkillsDir ?? resolveDefaultManagedSkillsDir();
+function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
+  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolveDefaultPluginSkillsDir();
   const managedTargets = new Map<string, string>();
 
   // Collect basename → target mappings, reporting collisions.
@@ -170,12 +170,12 @@ function publishPluginSkillsToManagedSkillsDir(
     collectSkillTargets(dir, managedTargets);
   }
 
-  // Create symlinks — but never replace an existing managed entry.
-  // Managed skills outrank plugin extra dirs.
+  // Plugin skill symlinks are owned by OpenClaw and publish at extra-dir
+  // precedence, so they never shadow managed or bundled skills.
   for (const [name, target] of managedTargets) {
-    const linkPath = path.join(managedSkillsDir, name);
+    const linkPath = path.join(pluginSkillsDir, name);
     try {
-      fs.mkdirSync(managedSkillsDir, { recursive: true });
+      fs.mkdirSync(pluginSkillsDir, { recursive: true });
     } catch {
       // best-effort; symlink will fail below if dir is truly unusable
     }
@@ -185,39 +185,39 @@ function publishPluginSkillsToManagedSkillsDir(
         continue;
       }
       log.warn(
-        `managed skill symlink "${linkPath}" already exists, skipping plugin skill "${target}"`,
+        `plugin skill symlink "${linkPath}" already exists, skipping plugin skill "${target}"`,
       );
       continue;
     } catch (err) {
       if (!isNotFoundError(err)) {
-        log.warn(`failed to inspect managed skill symlink "${linkPath}": ${String(err)}`);
+        log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
         continue;
       }
     }
     try {
       fs.symlinkSync(target, linkPath, "dir");
     } catch (err) {
-      log.warn(
-        `failed to create managed skill symlink "${linkPath}" → "${target}": ${String(err)}`,
-      );
+      log.warn(`failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`);
     }
   }
 
   // Clean up stale symlinks for plugin skills that are no longer active.
-  let managedEntries: fs.Dirent[];
+  // The plugin-skills directory is fully owned by OpenClaw: every entry is a
+  // generated symlink, so stale-link removal is safe without extra proof.
+  let existingEntries: fs.Dirent[];
   try {
-    managedEntries = fs.readdirSync(managedSkillsDir, { withFileTypes: true });
+    existingEntries = fs.readdirSync(pluginSkillsDir, { withFileTypes: true });
   } catch {
     return;
   }
-  for (const entry of managedEntries) {
+  for (const entry of existingEntries) {
     if (!entry.isSymbolicLink()) {
       continue;
     }
     if (managedTargets.has(entry.name)) {
       continue;
     }
-    const linkPath = path.join(managedSkillsDir, entry.name);
+    const linkPath = path.join(pluginSkillsDir, entry.name);
     try {
       const target = fs.readlinkSync(linkPath);
       // Only remove symlinks that point to directories that no longer exist.
@@ -244,5 +244,5 @@ function isNotFoundError(err: unknown): boolean {
 }
 
 export const __testing = {
-  publishPluginSkillsToManagedSkillsDir,
+  publishPluginSkills,
 };

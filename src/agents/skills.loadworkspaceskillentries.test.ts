@@ -77,6 +77,7 @@ function loadTestWorkspaceSkillEntries(
   return loadWorkspaceSkillEntries(workspaceDir, {
     managedSkillsDir: path.join(workspaceDir, ".managed"),
     bundledSkillsDir: "",
+    pluginSkillsDir: path.join(workspaceDir, ".plugin-skills"),
     ...opts,
   });
 }

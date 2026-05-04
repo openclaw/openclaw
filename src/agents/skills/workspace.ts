@@ -412,6 +412,7 @@ function loadSkillEntries(
     agentId?: string;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    pluginSkillsDir?: string;
   },
 ): SkillEntry[] {
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
@@ -631,14 +632,15 @@ function loadSkillEntries(
   const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const pluginSkillsDir = opts?.pluginSkillsDir ?? path.join(CONFIG_DIR, "plugin-skills");
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
   const pluginSkillDirs = resolvePluginSkillDirs({
     workspaceDir,
     config: opts?.config,
-    managedSkillsDir,
+    pluginSkillsDir,
   });
-  const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
+  const mergedExtraDirs = [...extraDirs, pluginSkillsDir, ...pluginSkillDirs];
 
   const bundledSkills = bundledSkillsDir
     ? loadSkills({
@@ -938,6 +940,7 @@ export function loadWorkspaceSkillEntries(
     config?: OpenClawConfig;
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
+    pluginSkillsDir?: string;
     skillFilter?: string[];
     agentId?: string;
     eligibility?: SkillEligibilityContext;
