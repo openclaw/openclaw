@@ -2355,8 +2355,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
-            corpusSupplements: previousMemoryCorpusSupplements,
-            promptSupplements: previousMemoryPromptSupplements,
+            corpusSupplements: [
+              ...previousMemoryCorpusSupplements,
+              ...memoryPluginState.corpusSupplements.filter(
+                (s) => !previousMemoryCorpusSupplements.some((p) => p.pluginId === s.pluginId),
+              ),
+            ],
+            promptSupplements: [
+              ...previousMemoryPromptSupplements,
+              ...memoryPluginState.promptSupplements.filter(
+                (s) => !previousMemoryPromptSupplements.some((p) => p.pluginId === s.pluginId),
+              ),
+            ],
           });
         }
         registry.plugins.push(record);
@@ -2370,8 +2380,18 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
-          corpusSupplements: previousMemoryCorpusSupplements,
-          promptSupplements: previousMemoryPromptSupplements,
+          corpusSupplements: [
+            ...previousMemoryCorpusSupplements,
+            ...memoryPluginState.corpusSupplements.filter(
+              (s) => !previousMemoryCorpusSupplements.some((p) => p.pluginId === s.pluginId),
+            ),
+          ],
+          promptSupplements: [
+            ...previousMemoryPromptSupplements,
+            ...memoryPluginState.promptSupplements.filter(
+              (s) => !previousMemoryPromptSupplements.some((p) => p.pluginId === s.pluginId),
+            ),
+          ],
         });
         recordPluginError({
           logger,
