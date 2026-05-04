@@ -20,6 +20,7 @@ import {
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
+  buildNpmGlobalInstallArgs,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
   buildDiscordSmokeGuildsConfig,
@@ -29,10 +30,13 @@ import {
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
   CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
+  CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS,
+  CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
   CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
+  isRecoverableWindowsPackagedUpgradeSwapCleanupFailure,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
   normalizeWindowsCommandShimPath,
@@ -51,6 +55,7 @@ import {
   resolveRunnerMatrix,
   resolveStaticFileContentType,
   shouldExerciseManagedGatewayLifecycleAfterInstall,
+  shouldRunPackagedUpgradeStatusProbe,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
   shouldSkipInstallerDaemonHealthCheck,
   shouldStopManagedGatewayBeforeManualFallback,
@@ -77,6 +82,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     );
     expect(CROSS_OS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(180_000);
     expect(CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS).toBeGreaterThanOrEqual(300_000);
+  });
+
+  it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(20 * 60);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
+      CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
+    );
+    expect(
+      CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
+        CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
+    ).toBeGreaterThanOrEqual(5 * 60 * 1000);
   });
 
   it("accepts OK agent output from the captured log when stdout is empty", () => {
@@ -201,6 +217,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(allowlist).not.toContain("document-extract");
     expect(allowlist).not.toContain("microsoft");
     expect(allowlist).not.toContain("web-readability");
+  });
+
+  it("can stage packaged-upgrade baselines without npm lifecycle scripts", () => {
+    expect(buildNpmGlobalInstallArgs("openclaw@2026.5.2", { ignoreScripts: true })).toEqual([
+      "install",
+      "-g",
+      "openclaw@2026.5.2",
+      "--omit=dev",
+      "--no-fund",
+      "--no-audit",
+      "--ignore-scripts",
+      "--loglevel=notice",
+    ]);
   });
 
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {
@@ -674,6 +703,80 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         { candidateVersion: "2026.4.27" },
       ),
     ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("recognizes the shipped Windows updater native-module backup cleanup failure", () => {
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "error",
+            reason: "global install swap",
+            after: { version: "2026.5.2" },
+            steps: [
+              {
+                name: "global install swap",
+                exitCode: 1,
+                stderrTail:
+                  "EPERM: operation not permitted, unlink 'C:\\Users\\runner\\prefix\\node_modules\\.openclaw-5748-1777776287462\\node_modules\\@mariozechner\\clipboard-win32-x64-msvc\\clipboard.win32-x64-msvc.node'",
+              },
+            ],
+          }),
+          stderr: "",
+        },
+        "win32",
+      ),
+    ).toBe(true);
+  });
+
+  it("skips the packaged upgrade status probe after the Windows fallback install", () => {
+    expect(
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: "win32",
+        usedWindowsPackagedUpgradeFallback: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: "win32",
+        usedWindowsPackagedUpgradeFallback: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunPackagedUpgradeStatusProbe({
+        platform: "linux",
+        usedWindowsPackagedUpgradeFallback: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not recover unrelated packaged update failures", () => {
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "error",
+            reason: "global install swap",
+            steps: [{ name: "global install swap", exitCode: 1, stderrTail: "ENOENT: missing" }],
+          }),
+          stderr: "",
+        },
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
+        {
+          exitCode: 1,
+          stdout:
+            "EPERM: operation not permitted, unlink '/tmp/prefix/node_modules/.openclaw-1-2/native.node'",
+          stderr: "",
+        },
+        "linux",
+      ),
+    ).toBe(false);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {

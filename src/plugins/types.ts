@@ -1172,6 +1172,7 @@ export type ProviderSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
+  trigger?: "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 };
 
 export type ProviderTransformSystemPromptContext = ProviderSystemPromptContributionContext & {
@@ -1812,6 +1813,7 @@ export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
   label: string;
   aliases?: string[];
+  defaultModel?: string;
   autoSelectOrder?: number;
   resolveConfig?: (
     ctx: RealtimeTranscriptionProviderResolveConfigContext,
@@ -1829,6 +1831,7 @@ export type RealtimeVoiceProviderPlugin = {
   id: RealtimeVoiceProviderId;
   label: string;
   aliases?: string[];
+  defaultModel?: string;
   autoSelectOrder?: number;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
@@ -1966,6 +1969,11 @@ export type OpenClawPluginCommandDefinition = {
   description: string;
   /** Localized descriptions for native command surfaces that support them. */
   descriptionLocalizations?: Record<string, string>;
+  /**
+   * Optional channel ids this command belongs to.
+   * Omit to keep the command available on every channel surface.
+   */
+  channels?: readonly string[];
   /** Optional system-prompt guidance for agents when this command is registered. */
   agentPromptGuidance?: readonly string[];
   /** Whether this command accepts arguments */

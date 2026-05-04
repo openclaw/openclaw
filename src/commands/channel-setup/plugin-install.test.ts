@@ -607,7 +607,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     // npm-only entry (no local path)
     const npmOnlyEntry: ChannelPluginCatalogEntry = {
       id: "wecom",
-      pluginId: "wecom",
+      pluginId: "wecom-openclaw-plugin",
       meta: {
         id: "wecom",
         label: "WeCom",
@@ -621,8 +621,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     };
     installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
-      pluginId: "wecom",
-      installPath: "/tmp/wecom",
+      pluginId: "wecom-openclaw-plugin",
+      installPath: "/tmp/wecom-openclaw-plugin",
     });
     vi.mocked(fs.existsSync).mockReturnValue(false);
     resolveBundledPluginSources.mockReturnValue(new Map());
@@ -637,7 +637,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(result.installed).toBe(true);
-    expect(result.pluginId).toBe("wecom");
+    expect(result.pluginId).toBe("wecom-openclaw-plugin");
   });
 
   it("reloads the setup plugin registry without using plugin registry cache", () => {
