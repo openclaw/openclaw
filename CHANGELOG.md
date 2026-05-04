@@ -130,6 +130,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenAI Codex: reject extra operands for read-only `/codex status`, `models`, `account`, `mcp`, `skills`, and `binding` commands before querying or exposing app-server state. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape app-server thread, model, MCP, skill, and Computer Use readouts before posting them back into chat. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape app-server status and account probe errors before posting them back into chat. Thanks @vincentkoc.
+- Providers/OpenAI Codex: return sanitized failure replies for `/codex` control commands when the app-server rejects or times out, instead of leaking raw transport errors into chat. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape app-server status model ids and fallback account summaries while keeping normal account emails readable. Thanks @vincentkoc.
 - Providers/OpenAI Codex: escape bound-thread ids, workspace paths, and model names in bind, resume, binding, thread-action, and model-control replies. Thanks @vincentkoc.
 - Providers/OpenAI Codex: harden command readouts and parsing for markdown underscores, bound model status, bind errors, generated rate-limit summaries, blank option values, and duplicate command flags. Thanks @vincentkoc.

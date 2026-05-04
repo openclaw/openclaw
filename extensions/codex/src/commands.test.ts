@@ -1860,6 +1860,41 @@ describe("codex command", () => {
     expect(`${mcp.text}\n${skills.text}`).not.toContain("@here");
   });
 
+  it("returns sanitized command failures instead of leaking app-server errors", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-123", cwd: "/repo" }),
+    );
+    const failure = () => {
+      throw new Error("app-server failed <@U123> [trusted](https://evil) @here");
+    };
+    const expectSanitizedFailure = (result: PluginCommandResult) => {
+      expect(result.text).toContain(
+        "Codex command failed: app-server failed &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+      );
+      expect(result.text).not.toContain("<@U123>");
+      expect(result.text).not.toContain("[trusted](https://evil)");
+      expect(result.text).not.toContain("@here");
+    };
+
+    for (const [args, deps] of [
+      ["models", createDeps({ listCodexAppServerModels: vi.fn(failure) })],
+      ["threads", createDeps({ codexControlRequest: vi.fn(failure) })],
+      ["mcp", createDeps({ codexControlRequest: vi.fn(failure) })],
+      ["skills", createDeps({ codexControlRequest: vi.fn(failure) })],
+      ["resume thread-123", createDeps({ codexControlRequest: vi.fn(failure) })],
+      ["compact", createDeps({ codexControlRequest: vi.fn(failure) })],
+      ["review", createDeps({ codexControlRequest: vi.fn(failure) })],
+      ["bind", createDeps({ startCodexConversationThread: vi.fn(failure) })],
+      ["stop", createDeps({ stopCodexConversationTurn: vi.fn(failure) })],
+      ["steer keep going", createDeps({ steerCodexConversationTurn: vi.fn(failure) })],
+      ["model gpt-5.4", createDeps({ setCodexConversationModel: vi.fn(failure) })],
+    ] as const) {
+      expectSanitizedFailure(await handleCodexCommand(createContext(args, sessionFile), { deps }));
+    }
+  });
+
   it("binds the current conversation to a Codex app-server thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(
