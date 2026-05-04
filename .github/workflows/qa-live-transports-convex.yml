@@ -51,6 +51,9 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    # All downstream jobs `needs: authorize_actor`, so they auto-skip.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     steps:
       - name: Require maintainer-level repository access

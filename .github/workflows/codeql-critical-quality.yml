@@ -144,6 +144,9 @@ permissions:
 jobs:
   quality-shards:
     name: Select Critical Quality shards
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    # Downstream quality-* jobs all `needs: quality-shards`, so they auto-skip too.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
@@ -530,7 +533,8 @@ jobs:
 
   ui-control-plane:
     name: Critical Quality (ui-control-plane)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -552,7 +556,8 @@ jobs:
 
   web-media-runtime-boundary:
     name: Critical Quality (web-media-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:

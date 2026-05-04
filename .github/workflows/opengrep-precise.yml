@@ -36,7 +36,8 @@ permissions:
 jobs:
   scan:
     name: Scan changed paths (precise)
-    if: ${{ !github.event.pull_request.draft }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
