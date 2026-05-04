@@ -1305,7 +1305,6 @@ export const dispatchTelegramMessage = async ({
     } finally {
       await draftLaneEventQueue;
       progressDraftGate.cancel();
-      reasoningStreamSink?.onEnd();
       if (isDispatchSuperseded()) {
         if (answerLane.hasStreamedMessage || typeof answerLane.stream?.messageId() === "number") {
           retainPreviewOnCleanupByLane.answer = true;
