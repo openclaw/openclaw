@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createContext, Script } from "node:vm";
+import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -479,17 +480,13 @@ describe("google-meet plugin", () => {
     });
   });
 
-  it("declares barge-in config metadata in the plugin entry and manifest", () => {
+  it("declares advanced config metadata in the plugin entry and manifest", () => {
     const manifest = JSON.parse(
       readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
     ) as {
       uiHints?: Record<string, unknown>;
-      configSchema?: {
-        properties?: {
-          chrome?: {
-            properties?: Record<string, unknown>;
-          };
-        };
+      configSchema?: JsonSchemaObject & {
+        properties?: Record<string, JsonSchemaObject & { properties?: Record<string, unknown> }>;
       };
     };
     const entry = plugin as unknown as {
@@ -504,6 +501,7 @@ describe("google-meet plugin", () => {
       "chrome.bargeInRmsThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInPeakThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
+      "voiceCall.postDtmfSpeechDelayMs": expect.objectContaining({ advanced: true }),
     });
     expect(manifest.uiHints).toMatchObject({
       "chrome.audioBufferBytes": expect.objectContaining({ advanced: true }),
@@ -511,6 +509,7 @@ describe("google-meet plugin", () => {
       "chrome.bargeInRmsThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInPeakThreshold": expect.objectContaining({ advanced: true }),
       "chrome.bargeInCooldownMs": expect.objectContaining({ advanced: true }),
+      "voiceCall.postDtmfSpeechDelayMs": expect.objectContaining({ advanced: true }),
     });
     expect(manifest.configSchema?.properties?.chrome?.properties).toMatchObject({
       audioBufferBytes: expect.objectContaining({ type: "number", default: 4096 }),
@@ -522,6 +521,19 @@ describe("google-meet plugin", () => {
       bargeInPeakThreshold: expect.objectContaining({ type: "number", default: 2500 }),
       bargeInCooldownMs: expect.objectContaining({ type: "number", default: 900 }),
     });
+    expect(manifest.configSchema?.properties?.voiceCall?.properties).toMatchObject({
+      postDtmfSpeechDelayMs: expect.objectContaining({ type: "number", default: 5000 }),
+    });
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema!,
+      cacheKey: "google-meet.manifest.voice-call-post-dtmf-speech-delay",
+      value: {
+        voiceCall: {
+          postDtmfSpeechDelayMs: 750,
+        },
+      },
+    });
+    expect(result.ok).toBe(true);
   });
 
   it("resolves the realtime consult agent id", () => {
