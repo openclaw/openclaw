@@ -4796,6 +4796,70 @@ public struct PluginControlUiDescriptor: Codable, Sendable {
     }
 }
 
+public struct PluginsSessionActionParams: Codable, Sendable {
+    public let pluginid: String
+    public let actionid: String
+    public let sessionkey: String?
+    public let payload: AnyCodable?
+
+    public init(
+        pluginid: String,
+        actionid: String,
+        sessionkey: String?,
+        payload: AnyCodable?)
+    {
+        self.pluginid = pluginid
+        self.actionid = actionid
+        self.sessionkey = sessionkey
+        self.payload = payload
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case actionid = "actionId"
+        case sessionkey = "sessionKey"
+        case payload
+    }
+}
+
+public struct PluginsSessionActionResult: Codable, Sendable {
+    public let ok: Bool
+    public let result: AnyCodable?
+    public let continueagent: Bool?
+    public let reply: AnyCodable?
+    public let error: String?
+    public let code: String?
+    public let details: AnyCodable?
+
+    public init(
+        ok: Bool,
+        result: AnyCodable?,
+        continueagent: Bool?,
+        reply: AnyCodable?,
+        error: String?,
+        code: String?,
+        details: AnyCodable?)
+    {
+        self.ok = ok
+        self.result = result
+        self.continueagent = continueagent
+        self.reply = reply
+        self.error = error
+        self.code = code
+        self.details = details
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case result
+        case continueagent = "continueAgent"
+        case reply
+        case error
+        case code
+        case details
+    }
+}
+
 public struct PluginsUiDescriptorsParams: Codable, Sendable {}
 
 public struct PluginsUiDescriptorsResult: Codable, Sendable {

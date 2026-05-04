@@ -346,6 +346,7 @@ type PluginRegistrySnapshot = {
     securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
+    sessionActions: NonNullable<PluginRegistry["sessionActions"]>;
     conversationBindingResolvedHandlers: PluginRegistry["conversationBindingResolvedHandlers"];
     diagnostics: PluginRegistry["diagnostics"];
   };
@@ -387,6 +388,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
       services: [...registry.services],
       commands: [...registry.commands],
+      sessionActions: [...(registry.sessionActions ?? [])],
       conversationBindingResolvedHandlers: [...registry.conversationBindingResolvedHandlers],
       diagnostics: [...registry.diagnostics],
     },
@@ -427,6 +429,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
   registry.services = snapshot.arrays.services;
   registry.commands = snapshot.arrays.commands;
+  registry.sessionActions = snapshot.arrays.sessionActions;
   registry.conversationBindingResolvedHandlers =
     snapshot.arrays.conversationBindingResolvedHandlers;
   registry.diagnostics = snapshot.arrays.diagnostics;

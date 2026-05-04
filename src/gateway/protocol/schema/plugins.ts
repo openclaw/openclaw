@@ -32,3 +32,26 @@ export const PluginsUiDescriptorsResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const PluginsSessionActionParamsSchema = Type.Object(
+  {
+    pluginId: NonEmptyString,
+    actionId: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
+    payload: Type.Optional(PluginJsonValueSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const PluginsSessionActionResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    result: Type.Optional(PluginJsonValueSchema),
+    continueAgent: Type.Optional(Type.Boolean()),
+    reply: Type.Optional(PluginJsonValueSchema),
+    error: Type.Optional(Type.String()),
+    code: Type.Optional(Type.String()),
+    details: Type.Optional(PluginJsonValueSchema),
+  },
+  { additionalProperties: false },
+);

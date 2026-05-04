@@ -102,6 +102,8 @@ import type {
 } from "./conversation-binding.types.js";
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import type {
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginJsonValue,
@@ -111,6 +113,7 @@ import type {
   PluginRunContextGetParams,
   PluginRunContextPatch,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobHandle,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
@@ -207,6 +210,8 @@ export type {
 } from "./cli-backend.types.js";
 export * from "./hook-types.js";
 export type {
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginAgentEventSubscriptionRegistration,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
@@ -224,6 +229,9 @@ export type {
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginSessionExtensionProjection,
+  PluginSessionActionContext,
+  PluginSessionActionRegistration,
+  PluginSessionActionResult,
   PluginToolMetadataRegistration,
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
@@ -2511,6 +2519,8 @@ export type OpenClawPluginApi = {
   registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
   /** Subscribe to sanitized agent events through the host-owned plugin lifecycle. */
   registerAgentEventSubscription: (subscription: PluginAgentEventSubscriptionRegistration) => void;
+  /** Emit a host-routed, plugin-attributed agent event for workflow/UI subscribers. */
+  emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
   /** Store namespaced, JSON-compatible data for the active run. Cleared on run end/error. */
   setRunContext: (patch: PluginRunContextPatch) => boolean;
   /** Read namespaced plugin data for a run. */
@@ -2524,6 +2534,8 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
+  /** Register a typed session action that clients can dispatch through the Gateway. */
+  registerSessionAction: (action: PluginSessionActionRegistration) => void;
   /** Register the active detached task runtime for this plugin (exclusive slot). */
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,

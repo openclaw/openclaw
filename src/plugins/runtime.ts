@@ -63,6 +63,17 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): bool
   );
 }
 
+function isRegistryPinned(registry: PluginRegistry): boolean {
+  return (
+    (state.httpRoute.pinned && state.httpRoute.registry === registry) ||
+    (state.channel.pinned && state.channel.registry === registry)
+  );
+}
+
+function isRegistryLive(registry: PluginRegistry): boolean {
+  return state.activeRegistry === registry || isRegistryPinned(registry);
+}
+
 async function cleanupPreviousPluginHostRegistry(params: {
   previousRegistry: PluginRegistry;
 }): Promise<void> {
@@ -83,6 +94,25 @@ async function cleanupPreviousPluginHostRegistry(params: {
     nextRegistry,
     shouldCleanup,
   });
+}
+
+function cleanupRetiredPluginHostRegistry(previousRegistry: PluginRegistry): void {
+  if (!registryHasPluginHostCleanupWork(previousRegistry)) {
+    return;
+  }
+  void cleanupPreviousPluginHostRegistry({
+    previousRegistry,
+  }).catch((error) => {
+    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
+  });
+}
+
+function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean {
+  if (!registry || isRegistryLive(registry)) {
+    return false;
+  }
+  markPluginRegistryRetired(registry);
+  return true;
 }
 
 function syncPluginAgentEventBridge(registry: PluginRegistry | null): void {
@@ -137,11 +167,8 @@ export function setActivePluginRegistry(
   workspaceDir?: string,
 ) {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
-  if (previousRegistry && previousRegistry !== registry) {
-    markPluginRegistryRetired(previousRegistry);
-  }
-  markPluginRegistryActive(registry);
   state.activeRegistry = registry;
+  markPluginRegistryActive(registry);
   state.activeVersion += 1;
   syncTrackedSurface(state.httpRoute, registry, true);
   syncTrackedSurface(state.channel, registry, true);
@@ -149,18 +176,13 @@ export function setActivePluginRegistry(
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
   syncPluginAgentEventBridge(registry);
-  if (
-    !previousRegistry ||
-    previousRegistry === registry ||
-    !registryHasPluginHostCleanupWork(previousRegistry)
-  ) {
+  if (!previousRegistry || previousRegistry === registry) {
     return;
   }
-  void cleanupPreviousPluginHostRegistry({
-    previousRegistry,
-  }).catch((error) => {
-    log.warn(`plugin host registry cleanup failed: ${String(error)}`);
-  });
+  if (!retirePluginRegistryIfUnused(previousRegistry)) {
+    return;
+  }
+  cleanupRetiredPluginHostRegistry(previousRegistry);
 }
 
 export function getActivePluginRegistry(): PluginRegistry | null {
@@ -174,6 +196,7 @@ export function getActivePluginRegistryWorkspaceDir(): string | undefined {
 export function requireActivePluginRegistry(): PluginRegistry {
   if (!state.activeRegistry) {
     state.activeRegistry = createEmptyPluginRegistry();
+    markPluginRegistryActive(state.activeRegistry);
     state.activeVersion += 1;
     syncTrackedSurface(state.httpRoute, state.activeRegistry);
     syncTrackedSurface(state.channel, state.activeRegistry);
@@ -182,14 +205,23 @@ export function requireActivePluginRegistry(): PluginRegistry {
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
+  const previousRegistry = asPluginRegistry(state.httpRoute.registry);
   installSurfaceRegistry(state.httpRoute, registry, true);
+  markPluginRegistryActive(registry);
+  if (retirePluginRegistryIfUnused(previousRegistry)) {
+    cleanupRetiredPluginHostRegistry(previousRegistry!);
+  }
 }
 
 export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) {
   if (registry && state.httpRoute.registry !== registry) {
     return;
   }
+  const previousRegistry = asPluginRegistry(state.httpRoute.registry);
   installSurfaceRegistry(state.httpRoute, state.activeRegistry, false);
+  if (retirePluginRegistryIfUnused(previousRegistry)) {
+    cleanupRetiredPluginHostRegistry(previousRegistry!);
+  }
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
@@ -231,14 +263,23 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
  *  gateway startup after the initial plugin load so that config-schema reads
  *  and other non-primary registry loads cannot evict channel plugins. */
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
+  const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, registry, true);
+  markPluginRegistryActive(registry);
+  if (retirePluginRegistryIfUnused(previousRegistry)) {
+    cleanupRetiredPluginHostRegistry(previousRegistry!);
+  }
 }
 
 export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
   if (registry && state.channel.registry !== registry) {
     return;
   }
+  const previousRegistry = asPluginRegistry(state.channel.registry);
   installSurfaceRegistry(state.channel, state.activeRegistry, false);
+  if (retirePluginRegistryIfUnused(previousRegistry)) {
+    cleanupRetiredPluginHostRegistry(previousRegistry!);
+  }
 }
 
 /** Return the registry that should be used for channel plugin resolution.
