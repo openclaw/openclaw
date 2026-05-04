@@ -51,7 +51,7 @@ export type ExecToolDefaults = {
 };
 
 export type ExecApprovalFollowupOutcome = {
-  status: "completed" | "failed";
+  status: "completed" | "failed" | "killed";
   exitCode: number | null;
   timedOut: boolean;
   aggregated: string;
