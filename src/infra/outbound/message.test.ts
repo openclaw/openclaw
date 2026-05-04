@@ -410,4 +410,46 @@ describe("sendMessage", () => {
       }),
     );
   });
+
+  it("routes Hermes arbiter metadata through gateway even for direct-mode channels", async () => {
+    const hermesArbiter = buildHermesArbiterMetadata({
+      topic: "ops",
+      botName: "alpha",
+      actionType: "status",
+      traceId: "trace-direct-1",
+      idempotencyKey: "idem-direct-1",
+      extra: { arbiter_reason: "direct-mode-unit-test" },
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi direct",
+        threadId: 123,
+        idempotencyKey: "direct-idem",
+        hermesArbiter,
+      }),
+    ).resolves.toMatchObject({
+      channel: "forum",
+      to: "123456",
+      via: "gateway",
+      result: { messageId: "gw-1" },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          to: "123456",
+          message: "hi direct",
+          threadId: "123",
+          idempotencyKey: "direct-idem",
+          metadata: hermesArbiter,
+        }),
+      }),
+    );
+  });
 });
