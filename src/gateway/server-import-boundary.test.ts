@@ -50,4 +50,15 @@ describe("gateway startup import boundaries", () => {
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
   });
+
+  it("marks gateway close before awaiting gateway_stop hooks", () => {
+    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const closeStart = serverImpl.indexOf("close: async (opts)");
+    const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
+    const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
+
+    expect(closeStart).toBeGreaterThan(-1);
+    expect(markStart).toBeGreaterThan(closeStart);
+    expect(markStart).toBeLessThan(hookStart);
+  });
 });

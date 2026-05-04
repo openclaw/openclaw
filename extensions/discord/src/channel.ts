@@ -130,6 +130,13 @@ function startDiscordStartupProbe(params: {
         );
       }
     } catch (err) {
+      if (!params.abortSignal.aborted) {
+        params.setStatus({
+          accountId: params.accountId,
+          bot: undefined,
+          application: undefined,
+        });
+      }
       if (getDiscordRuntime().logging.shouldLogVerbose()) {
         params.log?.debug?.(`[${params.accountId}] bot probe failed: ${String(err)}`);
       }

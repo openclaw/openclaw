@@ -894,8 +894,20 @@ export async function startGatewayServer(
   deps.cron = runtimeState.cronState.cron;
 
   let closePreludeStarted = false;
-  const runClosePrelude = async () => {
+  let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearPostReadyMaintenanceTimer = () => {
+    if (!postReadyMaintenanceTimer) {
+      return;
+    }
+    clearTimeout(postReadyMaintenanceTimer);
+    postReadyMaintenanceTimer = null;
+  };
+  const markClosePreludeStarted = () => {
     closePreludeStarted = true;
+    clearPostReadyMaintenanceTimer();
+  };
+  const runClosePrelude = async () => {
+    markClosePreludeStarted();
     clearCurrentPluginMetadataSnapshot();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
@@ -1492,28 +1504,30 @@ export async function startGatewayServer(
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
     if (!minimalTestGateway) {
-      const handle = setTimeout(() => {
-        void gatewayRuntimeServices.runGatewayPostReadyMaintenance({
-          startMaintenance: earlyRuntime.startMaintenance,
-          applyMaintenance: (maintenance) => {
-            runtimeState.tickInterval = maintenance.tickInterval;
-            runtimeState.healthInterval = maintenance.healthInterval;
-            runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
-            runtimeState.mediaCleanup = maintenance.mediaCleanup;
-          },
-          shouldStartCron: () => !gatewayCronStartHandled,
-          markCronStartHandled: () => {
-            gatewayCronStartHandled = true;
-          },
-          cron: runtimeState.cronState.cron,
-          logCron,
-          log,
-          recordPostReadyMemory: () => {
-            startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
-          },
-        });
-      }, POST_READY_MAINTENANCE_DELAY_MS);
-      handle.unref?.();
+      postReadyMaintenanceTimer = gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
+        delayMs: POST_READY_MAINTENANCE_DELAY_MS,
+        isClosing: () => closePreludeStarted,
+        onStarted: () => {
+          postReadyMaintenanceTimer = null;
+        },
+        startMaintenance: earlyRuntime.startMaintenance,
+        applyMaintenance: (maintenance) => {
+          runtimeState.tickInterval = maintenance.tickInterval;
+          runtimeState.healthInterval = maintenance.healthInterval;
+          runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
+          runtimeState.mediaCleanup = maintenance.mediaCleanup;
+        },
+        shouldStartCron: () => !gatewayCronStartHandled,
+        markCronStartHandled: () => {
+          gatewayCronStartHandled = true;
+        },
+        cron: runtimeState.cronState.cron,
+        logCron,
+        log,
+        recordPostReadyMemory: () => {
+          startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
+        },
+      });
     } else {
       startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
     }
@@ -1527,6 +1541,7 @@ export async function startGatewayServer(
   return {
     close: async (opts) => {
       try {
+        markClosePreludeStarted();
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
