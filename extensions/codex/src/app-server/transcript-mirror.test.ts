@@ -12,6 +12,7 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { readSessionMessages } from "../../../../src/gateway/session-utils.fs.js";
 import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 
 const tempDirs: string[] = [];
@@ -117,6 +118,74 @@ describe("mirrorCodexAppServerTranscript", () => {
       .filter(Boolean)
       .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
     expect(records.slice(1)).toHaveLength(2);
+  });
+
+  it("keeps previous turns on the active transcript branch when consecutive app-server turns mirror with different scopes", async () => {
+    const sessionFile = await createTempSessionFile();
+    const storePath = path.join(path.dirname(sessionFile), "sessions.json");
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "turn one user" }],
+          timestamp: 1000,
+        }),
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "turn one assistant" }],
+          timestamp: 1001,
+        }),
+      ],
+      idempotencyScope: "codex-app-server:thread-1:turn-1",
+    });
+
+    await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [
+        makeAgentUserMessage({
+          content: [{ type: "text", text: "turn two user" }],
+          timestamp: 2000,
+        }),
+        makeAgentAssistantMessage({
+          content: [{ type: "text", text: "turn two assistant" }],
+          timestamp: 2001,
+        }),
+      ],
+      idempotencyScope: "codex-app-server:thread-1:turn-2",
+    });
+
+    const raw = await fs.readFile(sessionFile, "utf8");
+    const records = raw
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type?: string;
+            id?: string;
+            parentId?: string | null;
+            message?: { role?: string };
+          },
+      )
+      .filter((record) => record.type === "message");
+    expect(records.map((record) => record.message?.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+    ]);
+    for (let index = 1; index < records.length; index += 1) {
+      expect(records[index]?.parentId).toBe(records[index - 1]?.id);
+    }
+
+    const visibleHistory = readSessionMessages("session", storePath, sessionFile);
+    expect(JSON.stringify(visibleHistory)).toContain("turn one user");
+    expect(JSON.stringify(visibleHistory)).toContain("turn one assistant");
+    expect(JSON.stringify(visibleHistory)).toContain("turn two user");
+    expect(JSON.stringify(visibleHistory)).toContain("turn two assistant");
   });
 
   it("runs before_message_write before appending mirrored transcript messages", async () => {
