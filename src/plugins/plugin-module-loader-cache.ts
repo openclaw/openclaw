@@ -1,4 +1,5 @@
-import { createJiti } from "jiti";
+import { createRequire } from "node:module";
+import type { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
@@ -45,6 +46,9 @@ export type PluginModuleLoaderStatsSnapshot = {
 
 const DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES = 128;
 const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
+const JITI_FACTORY_OVERRIDE_KEY = Symbol.for("openclaw.pluginModuleLoaderJitiFactoryOverride");
+const requireForJiti = createRequire(import.meta.url);
+let createJitiLoaderFactory: PluginModuleLoaderFactory | undefined;
 const pluginModuleLoaderStats = {
   calls: 0,
   nativeHits: 0,
@@ -94,6 +98,26 @@ export function resetPluginModuleLoaderStatsForTest(): void {
   pluginModuleLoaderStats.sourceTransformForced = 0;
   pluginModuleLoaderStats.sourceTransformFallbacks = 0;
   pluginModuleLoaderStats.sourceTransformTargets.clear();
+}
+
+function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
+  const override = (
+    globalThis as typeof globalThis & {
+      [JITI_FACTORY_OVERRIDE_KEY]?: PluginModuleLoaderFactory;
+    }
+  )[JITI_FACTORY_OVERRIDE_KEY];
+  if (override) {
+    return override;
+  }
+  if (createJitiLoaderFactory) {
+    return createJitiLoaderFactory;
+  }
+  const loaded = requireForJiti("jiti") as { createJiti?: PluginModuleLoaderFactory };
+  if (typeof loaded.createJiti !== "function") {
+    throw new Error("jiti module did not export createJiti");
+  }
+  createJitiLoaderFactory = loaded.createJiti;
+  return createJitiLoaderFactory;
 }
 
 export function createPluginModuleLoaderCache(
@@ -166,10 +190,13 @@ function createLazySourceTransformLoader(params: {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
-    const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
-      ...buildPluginLoaderJitiOptions(params.aliasMap),
-      tryNative: params.tryNative,
-    });
+    const jitiLoader = (params.createLoader ?? loadCreateJitiLoaderFactory())(
+      params.loaderFilename,
+      {
+        ...buildPluginLoaderJitiOptions(params.aliasMap),
+        tryNative: params.tryNative,
+      },
+    );
     loadWithSourceTransform = new Proxy(jitiLoader, {
       apply(target, thisArg, argArray) {
         const [first, ...rest] = argArray as [unknown, ...unknown[]];
