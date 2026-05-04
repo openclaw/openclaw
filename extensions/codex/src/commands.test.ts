@@ -320,7 +320,11 @@ describe("codex command", () => {
         account: {
           ok: true as const,
           value: {
-            account: { type: "chatgpt", email: unsafe, planType: "plus" },
+            account: {
+              type: "chatgpt" as const,
+              email: unsafe,
+              planType: "plus" as const,
+            },
             requiresOpenaiAuth: false,
           },
         },
