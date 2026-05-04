@@ -1233,6 +1233,75 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it('session-stored reasoningLevel "off" wins over configured defaults', async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "off" },
+    });
+    let seenReasoningCallback: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        seenReasoningCallback = replyOptions?.onReasoningStream;
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      // Both configured defaults are "stream", but the explicit session "off"
+      // must short-circuit and not fall through to the configured defaults.
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "stream" },
+          list: [{ id: "default", reasoningDefault: "stream" }],
+        },
+      } as unknown as OpenClawConfig,
+      streamMode: "off",
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(seenReasoningCallback).toBeUndefined();
+  });
+
+  it('per-agent reasoningDefault "off" wins over global agents.defaults.reasoningDefault', async () => {
+    loadSessionStore.mockReturnValue({});
+    let seenReasoningCallback: unknown;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        seenReasoningCallback = replyOptions?.onReasoningStream;
+        await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s-no-stored",
+          CommandAuthorized: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      // Global default is "stream" but per-agent explicit "off" must win.
+      cfg: {
+        agents: {
+          defaults: { reasoningDefault: "stream" },
+          list: [{ id: "default", reasoningDefault: "off" }],
+        },
+      } as unknown as OpenClawConfig,
+      streamMode: "off",
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(seenReasoningCallback).toBeUndefined();
+  });
+
   it("does not fall back to configured reasoningDefault when sender is unauthorized", async () => {
     loadSessionStore.mockReturnValue({});
     let seenReasoningCallback: unknown;

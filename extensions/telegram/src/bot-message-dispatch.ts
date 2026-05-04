@@ -211,6 +211,11 @@ function resolveTelegramReasoningLevel(params: {
   canUseReasoningState: boolean;
 }): TelegramReasoningLevel {
   const { cfg, sessionKey, agentId, telegramDeps, canUseReasoningState } = params;
+  // Explicit session-stored "off" must stop the chain rather than fall through
+  // to configured defaults, otherwise a global agents.defaults.reasoningDefault
+  // can re-enable reasoning despite the user having explicitly turned it off
+  // via /reasoning. Mirrors the nullish-coalescing precedence at
+  // src/auto-reply/reply/get-reply-directives.ts:456.
   if (sessionKey) {
     try {
       const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
@@ -219,7 +224,7 @@ function resolveTelegramReasoningLevel(params: {
       });
       const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
       const level = entry?.reasoningLevel;
-      if (level === "on" || level === "stream") {
+      if (level === "on" || level === "stream" || level === "off") {
         return level;
       }
     } catch {
@@ -236,7 +241,9 @@ function resolveTelegramReasoningLevel(params: {
     return "off";
   }
   const perAgentDefault = cfg.agents?.list?.find((entry) => entry.id === agentId)?.reasoningDefault;
-  if (perAgentDefault === "on" || perAgentDefault === "stream") {
+  // Explicit per-agent "off" wins over global defaults, same precedence as the
+  // shared resolver above.
+  if (perAgentDefault === "on" || perAgentDefault === "stream" || perAgentDefault === "off") {
     return perAgentDefault;
   }
   const globalDefault = cfg.agents?.defaults?.reasoningDefault;
