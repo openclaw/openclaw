@@ -369,6 +369,103 @@ describe("matrix live qa scenarios", () => {
     expect(shardIds.toSorted()).toEqual(allIds.toSorted());
   });
 
+  it("waits for the driver Matrix approval reaction echo before awaiting the decision", async () => {
+    const context = matrixQaScenarioContext();
+    let approvalId = "";
+    const gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
+      if (method === "exec.approval.request") {
+        const params = args.find(
+          (arg): arg is { id?: unknown } => typeof arg === "object" && arg !== null && "id" in arg,
+        );
+        const payload =
+          typeof params === "object" && params !== null ? (params as { id?: unknown }) : undefined;
+        approvalId = String(payload?.id ?? "approval-missing");
+        return { id: approvalId, status: "accepted" };
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once", id: approvalId };
+      }
+      throw new Error(`unexpected gateway method ${method}`);
+    });
+    context.gatewayCall = gatewayCall;
+    const rootEventId = "$approval-thread-root";
+    const approvalEventId = "$approval-thread-event";
+    const sendReaction = vi.fn().mockResolvedValue("$driver-approval-reaction");
+    const waitForRoomEvent = vi
+      .fn()
+      .mockImplementationOnce(async () => ({
+        event: matrixQaMessageEvent({
+          approval: {
+            allowedDecisions: ["allow-once", "deny"],
+            hasCommandText: true,
+            id: approvalId,
+            kind: "exec",
+            state: "pending",
+            type: "approval.request",
+            version: 1,
+          },
+          body: "approval requested",
+          eventId: approvalEventId,
+          kind: "message",
+          relatesTo: {
+            eventId: rootEventId,
+            inReplyToId: rootEventId,
+            isFallingBack: true,
+            relType: "m.thread",
+          },
+        }),
+        since: "driver-sync-approval",
+      }))
+      .mockImplementationOnce(async () => ({
+        event: {
+          eventId: "$bot-approval-option",
+          kind: "reaction",
+          reaction: {
+            eventId: approvalEventId,
+            key: "✅",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@sut:matrix-qa.test",
+          type: "m.reaction",
+        } satisfies MatrixQaObservedEvent,
+        since: "driver-sync-option",
+      }))
+      .mockImplementationOnce(async () => ({
+        event: {
+          eventId: "$driver-approval-reaction",
+          kind: "reaction",
+          reaction: {
+            eventId: approvalEventId,
+            key: "✅",
+          },
+          roomId: "!main:matrix-qa.test",
+          sender: "@driver:matrix-qa.test",
+          type: "m.reaction",
+        } satisfies MatrixQaObservedEvent,
+        since: "driver-sync-driver-reaction",
+      }));
+    createMatrixQaClient.mockReturnValue({
+      primeRoom: vi.fn().mockResolvedValue("driver-sync-start"),
+      sendReaction,
+      sendTextMessage: vi.fn().mockResolvedValue(rootEventId),
+      waitForRoomEvent,
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-approval-thread-target",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, context)).resolves.toMatchObject({
+      artifacts: {
+        reactionEventId: "$driver-approval-reaction",
+        reactionTargetEventId: approvalEventId,
+      },
+    });
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(3);
+    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+  });
+
   it("lets explicit Matrix scenario ids override the selected profile", () => {
     expect(
       scenarioTesting

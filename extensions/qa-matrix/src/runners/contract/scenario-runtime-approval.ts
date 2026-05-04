@@ -179,6 +179,23 @@ async function reactToApproval(params: {
     messageId: params.targetEventId,
     roomId: params.roomId,
   });
+  await client
+    .waitForRoomEvent({
+      observedEvents: params.context.observedEvents,
+      predicate: (event) =>
+        event.roomId === params.roomId &&
+        event.sender === params.context.driverUserId &&
+        event.type === "m.reaction" &&
+        event.reaction?.eventId === params.targetEventId &&
+        event.reaction.key === emoji,
+      roomId: params.roomId,
+      timeoutMs: params.context.timeoutMs,
+    })
+    .catch((err: unknown) => {
+      throw new Error(
+        `Matrix approval reaction ${eventId} was not observed before waiting for the gateway decision: ${String(err)}`,
+      );
+    });
   return {
     eventId,
     reaction: {
