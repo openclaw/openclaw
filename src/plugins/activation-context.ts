@@ -79,9 +79,9 @@ export function withActivatedPluginIds(params: {
     return params.config;
   }
   const originalAllow = params.config?.plugins?.allow ?? [];
-  // Empty allowlists are still open; allowlist mode only stops compat from widening configured allowlists.
+  // Empty allowlists are still open; only explicit compat widens configured allowlists.
   const useAllowlistDiscovery =
-    params.config?.plugins?.bundledDiscovery === "allowlist" && originalAllow.length > 0;
+    params.config?.plugins?.bundledDiscovery !== "compat" && originalAllow.length > 0;
   const originalAllowSet = useAllowlistDiscovery ? new Set(originalAllow) : undefined;
   const allow = new Set(originalAllow);
   const entries = {

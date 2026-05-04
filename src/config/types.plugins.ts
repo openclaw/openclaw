@@ -55,10 +55,10 @@ export type PluginsConfig = {
    * Controls how bundled plugins participate in runtime provider discovery when
    * `allow` is configured.
    *
-   * - `"compat"` (default): bundled provider plugins are force-loaded on
-   *   every chat turn regardless of the allowlist (legacy behavior).
-   * - `"allowlist"`: bundled provider plugins are gated by `allow` and
-   *   `entries.<id>.enabled` like third-party plugins.
+   * - `"allowlist"` (default): bundled provider plugins are gated by `allow`
+   *   and `entries.<id>.enabled` like third-party plugins.
+   * - `"compat"`: legacy mode for migrated configs; bundled provider plugins
+   *   can be force-loaded regardless of the allowlist.
    */
   bundledDiscovery?: "compat" | "allowlist";
   load?: PluginsLoadConfig;

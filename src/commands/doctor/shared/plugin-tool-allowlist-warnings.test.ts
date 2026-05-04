@@ -113,10 +113,13 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("warns when restrictive plugins.allow leaves bundled provider discovery in compat mode", () => {
+  it("warns when restrictive plugins.allow leaves bundled provider discovery in explicit compat mode", () => {
     const warnings = collectBundledProviderAllowlistPolicyWarnings({
       cfg: {
-        plugins: { allow: ["telegram"] },
+        plugins: {
+          allow: ["telegram"],
+          bundledDiscovery: "compat",
+        },
       },
     });
 
@@ -125,16 +128,18 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
-  it("does not warn when bundled provider discovery follows the allowlist", () => {
-    const warnings = collectBundledProviderAllowlistPolicyWarnings({
-      cfg: {
-        plugins: {
-          allow: ["telegram"],
-          bundledDiscovery: "allowlist",
-        },
-      },
-    });
+  it.each([
+    { name: "default", plugins: { allow: ["telegram"] } },
+    {
+      name: "explicit allowlist",
+      plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" },
+    },
+  ])(
+    "does not warn when bundled provider discovery follows the allowlist ($name)",
+    ({ plugins }) => {
+      const warnings = collectBundledProviderAllowlistPolicyWarnings({ cfg: { plugins } });
 
-    expect(warnings).toEqual([]);
-  });
+      expect(warnings).toEqual([]);
+    },
+  );
 });

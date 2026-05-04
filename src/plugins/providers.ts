@@ -255,7 +255,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
-  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery === "allowlist";
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(registry, (plugin) => {
     if (
@@ -298,6 +298,9 @@ function isProviderPluginEligibleForSetupDiscovery(params: {
   ) {
     return false;
   }
+  if (params.plugin.origin === "bundled") {
+    return true;
+  }
   return isActivatedManifestOwner({
     plugin: toManifestOwnerRecord(params.plugin),
     normalizedConfig: params.normalizedConfig,
@@ -313,7 +316,7 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
-  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery === "allowlist";
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   return resolveProviderOwnerPluginIds({
     ...params,
     isEligible: (plugin, normalizedConfig) =>

@@ -32,7 +32,7 @@ function filterAllowlistedBundledPluginIds(
 ) {
   const allow = config?.plugins?.allow;
   if (
-    config?.plugins?.bundledDiscovery !== "allowlist" ||
+    config?.plugins?.bundledDiscovery === "compat" ||
     !Array.isArray(allow) ||
     allow.length === 0
   ) {

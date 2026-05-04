@@ -24191,7 +24191,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             enum: ["compat", "allowlist"],
             title: "Bundled Plugin Discovery",
             description:
-              'Controls bundled plugin runtime discovery when plugins.allow is configured. "compat" (default) preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn. "allowlist" gates bundled provider plugins by plugins.allow like third-party plugins.',
+              'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
           },
         },
         additionalProperties: false,
@@ -28874,7 +28874,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "plugins.bundledDiscovery": {
       label: "Bundled Plugin Discovery",
-      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "compat" (default) preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn. "allowlist" gates bundled provider plugins by plugins.allow like third-party plugins.',
+      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
       tags: ["advanced"],
     },
     "plugins.deny": {

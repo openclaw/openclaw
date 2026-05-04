@@ -445,7 +445,7 @@ describe("resolvePluginWebSearchProviders", () => {
     const providers = resolvePluginWebSearchProviders({
       config: {
         plugins: {
-          allow: ["perplexity"],
+          allow: ["brave"],
         },
       },
       mode: "setup",
