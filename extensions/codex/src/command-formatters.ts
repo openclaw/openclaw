@@ -48,7 +48,9 @@ export function formatModels(result: CodexAppServerModelListResult): string {
   }
   const lines = [
     "Codex models:",
-    ...result.models.map((model) => `- ${model.id}${model.isDefault ? " (default)" : ""}`),
+    ...result.models.map(
+      (model) => `- ${formatCodexDisplayText(model.id)}${model.isDefault ? " (default)" : ""}`,
+    ),
   ];
   if (result.truncated) {
     lines.push("- More models available; output truncated.");
@@ -73,9 +75,9 @@ export function formatThreads(response: JsonValue | undefined): string {
         readString(record, "cwd"),
         readString(record, "updatedAt") ?? readString(record, "lastUpdatedAt"),
       ].filter(Boolean);
-      return `- ${id}${title ? ` - ${title}` : ""}${
-        details.length > 0 ? ` (${details.join(", ")})` : ""
-      }\n  Resume: /codex resume ${id}`;
+      return `- ${formatCodexDisplayText(id)}${title ? ` - ${formatCodexDisplayText(title)}` : ""}${
+        details.length > 0 ? ` (${details.map(formatCodexDisplayText).join(", ")})` : ""
+      }\n  Resume: ${formatCodexResumeHint(id)}`;
     }),
   ].join("\n");
 }
@@ -94,19 +96,21 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
   const lines = [
     `Computer Use: ${status.ready ? "ready" : status.enabled ? "not ready" : "disabled"}`,
   ];
-  lines.push(`Plugin: ${status.pluginName} (${computerUsePluginState(status)})`);
   lines.push(
-    `MCP server: ${status.mcpServerName}${
+    `Plugin: ${formatCodexDisplayText(status.pluginName)} (${computerUsePluginState(status)})`,
+  );
+  lines.push(
+    `MCP server: ${formatCodexDisplayText(status.mcpServerName)}${
       status.mcpServerAvailable ? ` (${status.tools.length} tools)` : " (unavailable)"
     }`,
   );
   if (status.marketplaceName) {
-    lines.push(`Marketplace: ${status.marketplaceName}`);
+    lines.push(`Marketplace: ${formatCodexDisplayText(status.marketplaceName)}`);
   }
   if (status.tools.length > 0) {
-    lines.push(`Tools: ${status.tools.slice(0, 8).join(", ")}`);
+    lines.push(`Tools: ${status.tools.slice(0, 8).map(formatCodexDisplayText).join(", ")}`);
   }
-  lines.push(status.message);
+  lines.push(formatCodexDisplayText(status.message));
   return lines.join("\n");
 }
 
@@ -126,9 +130,67 @@ export function formatList(response: JsonValue | undefined, label: string): stri
     `${label}:`,
     ...entries.slice(0, 25).map((entry) => {
       const record = isJsonObject(entry) ? entry : {};
-      return `- ${readString(record, "name") ?? readString(record, "id") ?? JSON.stringify(entry)}`;
+      return `- ${formatCodexDisplayText(
+        readString(record, "name") ?? readString(record, "id") ?? JSON.stringify(entry),
+      )}`;
     }),
   ].join("\n");
+}
+
+const CODEX_RESUME_SAFE_THREAD_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
+
+function formatCodexResumeHint(threadId: string): string {
+  const safe = formatCodexTextForDisplay(threadId);
+  if (!CODEX_RESUME_SAFE_THREAD_ID_PATTERN.test(safe)) {
+    return "copy the thread id above and run /codex resume <thread-id>";
+  }
+  return `/codex resume ${safe}`;
+}
+
+function formatCodexDisplayText(value: string): string {
+  return escapeCodexChatText(formatCodexTextForDisplay(value));
+}
+
+function formatCodexTextForDisplay(value: string): string {
+  let safe = "";
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
+  }
+  safe = safe.trim();
+  return safe || "<unknown>";
+}
+
+function escapeCodexChatText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("@", "\uff20")
+    .replaceAll("`", "\uff40")
+    .replaceAll("[", "\uff3b")
+    .replaceAll("]", "\uff3d")
+    .replaceAll("(", "\uff08")
+    .replaceAll(")", "\uff09")
+    .replaceAll("*", "\u2217")
+    .replaceAll("~", "\uff5e")
+    .replaceAll("|", "\uff5c");
+}
+
+function isUnsafeDisplayCodePoint(codePoint: number): boolean {
+  return (
+    codePoint <= 0x001f ||
+    (codePoint >= 0x007f && codePoint <= 0x009f) ||
+    codePoint === 0x00ad ||
+    codePoint === 0x061c ||
+    codePoint === 0x180e ||
+    (codePoint >= 0x200b && codePoint <= 0x200f) ||
+    (codePoint >= 0x202a && codePoint <= 0x202e) ||
+    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
+    codePoint === 0xfeff ||
+    (codePoint >= 0xfff9 && codePoint <= 0xfffb) ||
+    (codePoint >= 0xe0000 && codePoint <= 0xe007f)
+  );
 }
 
 export function buildHelp(): string {

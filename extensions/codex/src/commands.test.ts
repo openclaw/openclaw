@@ -199,6 +199,29 @@ describe("codex command", () => {
     });
   });
 
+  it("escapes Codex app-server model ids before chat display", async () => {
+    const deps = createDeps({
+      listCodexAppServerModels: vi.fn(async () => ({
+        models: [
+          {
+            id: "gpt-5.4 <@U123> [trusted](https://evil)",
+            model: "gpt-5.4",
+            inputModalities: ["text"],
+            supportedReasoningEfforts: ["medium"],
+          },
+        ],
+      })),
+    });
+
+    const result = await handleCodexCommand(createContext("models"), { deps });
+
+    expect(result.text).toContain(
+      "gpt-5.4 &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+  });
+
   it("reports status unavailable when every Codex probe fails", async () => {
     const config = { auth: { order: { "openai-codex": ["openai-codex:work"] } } };
     const offline = { ok: false as const, error: "offline" };
@@ -399,6 +422,32 @@ describe("codex command", () => {
       pluginConfig: undefined,
       forceEnable: false,
     });
+  });
+
+  it("escapes Codex Computer Use status fields before chat display", async () => {
+    const readCodexComputerUseStatus = vi.fn(async () => ({
+      ...computerUseReadyStatus(),
+      pluginName: "<@U123>",
+      mcpServerName: "computer-use [server](https://evil)",
+      marketplaceName: "desktop_tools",
+      tools: ["list_apps", "[click](https://evil)"],
+      message: "Computer Use is ready @here.",
+    }));
+
+    const result = await handleCodexCommand(createContext("computer-use status"), {
+      deps: createDeps({ readCodexComputerUseStatus }),
+    });
+
+    expect(result.text).toContain("Plugin: &lt;\uff20U123&gt; (installed)");
+    expect(result.text).toContain(
+      "MCP server: computer-use \uff3bserver\uff3d\uff08https://evil\uff09 (2 tools)",
+    );
+    expect(result.text).toContain("Marketplace: desktop_tools");
+    expect(result.text).toContain("Tools: list_apps, \uff3bclick\uff3d\uff08https://evil\uff09");
+    expect(result.text).toContain("Computer Use is ready \uff20here.");
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[click](https://evil)");
+    expect(result.text).not.toContain("@here");
   });
 
   it("formats disabled installed Codex Computer Use plugins", async () => {
@@ -1529,6 +1578,51 @@ describe("codex command", () => {
       limit: 10,
       searchTerm: "fix",
     });
+  });
+
+  it("escapes Codex thread fields and avoids unsafe resume commands", async () => {
+    const codexControlRequest = vi.fn(async () => ({
+      data: [
+        {
+          id: "thread-123\n`bad`",
+          title: "<@U123> [trusted](https://evil) @here",
+          model: "gpt_5",
+          cwd: "/repo_(x)",
+        },
+      ],
+    }));
+    const deps = createDeps({ codexControlRequest });
+
+    const result = await handleCodexCommand(createContext("threads"), { deps });
+
+    expect(result.text).toContain("thread-123?\uff40bad\uff40");
+    expect(result.text).toContain(
+      "&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
+    );
+    expect(result.text).toContain("(gpt_5, /repo_\uff08x\uff09)");
+    expect(result.text).toContain(
+      "Resume: copy the thread id above and run /codex resume <thread-id>",
+    );
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("[trusted](https://evil)");
+    expect(result.text).not.toContain("Resume: /codex resume thread-123");
+  });
+
+  it("escapes Codex MCP and skill list entries before chat display", async () => {
+    const codexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({ data: [{ name: "<@U123> [mcp](https://evil)" }] })
+      .mockResolvedValueOnce({ data: [{ id: "skill_1 @here" }] });
+    const deps = createDeps({ codexControlRequest });
+
+    const mcp = await handleCodexCommand(createContext("mcp"), { deps });
+    const skills = await handleCodexCommand(createContext("skills"), { deps });
+
+    expect(mcp.text).toContain("&lt;\uff20U123&gt; \uff3bmcp\uff3d\uff08https://evil\uff09");
+    expect(skills.text).toContain("skill_1 \uff20here");
+    expect(`${mcp.text}\n${skills.text}`).not.toContain("<@U123>");
+    expect(`${mcp.text}\n${skills.text}`).not.toContain("[mcp](https://evil)");
+    expect(`${mcp.text}\n${skills.text}`).not.toContain("@here");
   });
 
   it("binds the current conversation to a Codex app-server thread", async () => {
