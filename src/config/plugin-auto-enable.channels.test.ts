@@ -335,6 +335,27 @@ describe("applyPluginAutoEnable channels", () => {
   });
 
   describe("preferOver channel prioritization", () => {
+    it("uses the plugin manifest id for built-in channel claims", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: {
+            wecom: { token: "enabled" },
+          },
+        },
+        env: makeIsolatedEnv(),
+        manifestRegistry: makeRegistry([
+          {
+            id: "wecom-openclaw-plugin",
+            channels: ["wecom"],
+          },
+        ]),
+      });
+
+      expect(result.config.plugins?.entries?.["wecom-openclaw-plugin"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.wecom).toBeUndefined();
+      expect(result.changes.join("\n")).toContain("enabled automatically.");
+    });
+
     it("uses manifest channel config preferOver metadata for plugin channels", () => {
       const result = applyPluginAutoEnable({
         config: {

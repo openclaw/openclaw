@@ -303,7 +303,7 @@ function collectPluginIdsForConfiguredChannel(
   if (preferredIds.size > 0) {
     return [...preferredIds].toSorted((left, right) => left.localeCompare(right));
   }
-  return [builtInId ?? claims[0]?.plugin.id ?? normalizedChannelId];
+  return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
