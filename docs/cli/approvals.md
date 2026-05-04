@@ -63,6 +63,9 @@ or `openclaw approvals set --node <id|name|ip>`.
 openclaw approvals get
 openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
+
+openclaw approvals pending
+openclaw approvals pending --json
 ```
 
 `openclaw approvals get` now shows the effective exec policy for local, gateway, and node targets:
@@ -77,6 +80,19 @@ Precedence is intentional:
 - requested `tools.exec` policy can narrow or broaden intent, but the effective result is still derived from the host rules
 - `--node` combines the node host approvals file with gateway `tools.exec` policy, because both still apply at runtime
 - if gateway config is unavailable, the CLI falls back to the node approvals snapshot and notes that the final runtime policy could not be computed
+
+`openclaw approvals pending` queries the running Gateway for unresolved exec approval
+requests. Use it when a headless agent or chat surface reports an approval id and
+you need to inspect the requested command from a terminal:
+
+```bash
+openclaw approvals pending
+openclaw approvals pending --json
+```
+
+The table output shows the approval id prefix, agent, host, command preview,
+wait time, and time remaining. The JSON output returns the raw
+`exec.approval.list` records for monitoring and scripting.
 
 ## Replace approvals from a file
 
@@ -176,6 +192,10 @@ Targeting notes:
 `allowlist add|remove` also supports:
 
 - `--agent <id>` (defaults to `*`)
+
+`pending` queries the running Gateway only, so it supports shared Gateway RPC
+options (`--url`, `--token`, `--timeout`, `--json`) but not `--node` or
+`--gateway`.
 
 ## Notes
 
