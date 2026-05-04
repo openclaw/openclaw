@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildChannelProgressDraftLine,
   createChannelProgressDraftGate,
   DEFAULT_PROGRESS_DRAFT_LABELS,
   formatChannelProgressDraftLine,
@@ -9,6 +10,7 @@ import {
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
+  resolveChannelProgressDraftRender,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -195,8 +197,9 @@ describe("channel-streaming", () => {
   });
 
   it("formats bounded progress draft text", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2 } } };
+    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2, render: "rich" } } };
     expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
+    expect(resolveChannelProgressDraftRender(entry)).toBe("rich");
     expect(
       formatChannelProgressDraftText({
         entry,
@@ -245,6 +248,20 @@ describe("channel-streaming", () => {
   });
 
   it("formats progress draft lines with shared tool display labels", () => {
+    expect(
+      buildChannelProgressDraftLine({
+        event: "tool",
+        name: "write",
+        args: { path: "/tmp/demo/index.html" },
+      }),
+    ).toMatchObject({
+      kind: "tool",
+      icon: "✍️",
+      label: "Write",
+      detail: "to /tmp/demo/index.html",
+      text: "✍️ Write: to /tmp/demo/index.html",
+      toolName: "write",
+    });
     expect(
       formatChannelProgressDraftLine({
         event: "tool",

@@ -958,6 +958,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
+                render: {
+                  type: "string",
+                  enum: ["text", "rich"],
+                },
                 toolProgress: {
                   type: "boolean",
                 },
@@ -2391,6 +2395,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                      },
+                      render: {
+                        type: "string",
+                        enum: ["text", "rich"],
                       },
                       toolProgress: {
                         type: "boolean",
@@ -9139,6 +9147,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
+                render: {
+                  type: "string",
+                  enum: ["text", "rich"],
+                },
                 toolProgress: {
                   type: "boolean",
                 },
@@ -12365,6 +12377,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
+                render: {
+                  type: "string",
+                  enum: ["text", "rich"],
+                },
                 toolProgress: {
                   type: "boolean",
                 },
@@ -13327,6 +13343,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
                       },
+                      render: {
+                        type: "string",
+                        enum: ["text", "rich"],
+                      },
                       toolProgress: {
                         type: "boolean",
                       },
@@ -13897,6 +13917,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       "streaming.progress.maxLines": {
         label: "Slack Progress Max Lines",
         help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+      },
+      "streaming.progress.render": {
+        label: "Slack Progress Renderer",
+        help: 'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
       },
       "streaming.progress.toolProgress": {
         label: "Slack Progress Tool Lines",
@@ -14693,6 +14717,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
+                },
+                render: {
+                  type: "string",
+                  enum: ["text", "rich"],
                 },
                 toolProgress: {
                   type: "boolean",
@@ -15793,6 +15821,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         type: "integer",
                         exclusiveMinimum: 0,
                         maximum: 9007199254740991,
+                      },
+                      render: {
+                        type: "string",
+                        enum: ["text", "rich"],
                       },
                       toolProgress: {
                         type: "boolean",
