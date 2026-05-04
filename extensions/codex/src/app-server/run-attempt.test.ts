@@ -952,7 +952,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toContain("make the default webpage openclaw");
   });
 
-  it("passes OpenClaw bootstrap files through Codex config instructions", async () => {
+  it("passes OpenClaw bootstrap files through Codex developer instructions", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -967,14 +967,18 @@ describe("runCodexAppServerAttempt", () => {
     await run;
 
     const threadStart = harness.requests.find((request) => request.method === "thread/start");
-    const config = (threadStart?.params as { config?: { instructions?: string } }).config;
-    expect(config).toEqual(
-      expect.objectContaining({
-        instructions: expect.stringContaining("Soul voice goes here."),
-      }),
-    );
-    expect(config?.instructions).toContain("Codex loads AGENTS.md natively");
-    expect(config?.instructions).not.toContain("Follow AGENTS guidance.");
+    const params = threadStart?.params as {
+      config?: { instructions?: string };
+      developerInstructions?: string;
+    };
+    const config = params.config;
+
+    // Regression for #77363: persona/style bootstrap (SOUL.md) must reach the
+    // explicit developerInstructions field, not config.instructions.
+    expect(params.developerInstructions).toContain("Soul voice goes here.");
+    expect(params.developerInstructions).toContain("Codex loads AGENTS.md natively");
+    expect(params.developerInstructions).not.toContain("Follow AGENTS guidance.");
+    expect(config?.instructions).toBeUndefined();
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
