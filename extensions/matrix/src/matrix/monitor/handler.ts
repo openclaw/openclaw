@@ -1580,12 +1580,15 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
-                event: "tool",
-                name: toolName,
-                phase: payload.phase,
-                args: payload.args,
-              }),
+              formatChannelProgressDraftLine(
+                {
+                  event: "tool",
+                  name: toolName,
+                  phase: payload.phase,
+                  args: payload.args,
+                },
+                payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+              ),
               { toolName },
             );
           },

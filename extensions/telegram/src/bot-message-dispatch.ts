@@ -1174,12 +1174,15 @@ export const dispatchTelegramMessage = async ({
                       await statusReactionController.setTool(toolName);
                     }
                     await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine({
-                        event: "tool",
-                        name: toolName,
-                        phase: payload.phase,
-                        args: payload.args,
-                      }),
+                      formatChannelProgressDraftLine(
+                        {
+                          event: "tool",
+                          name: toolName,
+                          phase: payload.phase,
+                          args: payload.args,
+                        },
+                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                      ),
                       { toolName },
                     );
                   },

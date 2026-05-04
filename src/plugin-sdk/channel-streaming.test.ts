@@ -208,6 +208,16 @@ describe("channel-streaming", () => {
         modified: ["/tmp/demo/index.html", "/tmp/demo/style.css"],
       }),
     ).toBe("🩹 Apply Patch: /tmp/demo/{index.html, style.css}");
+    expect(
+      formatChannelProgressDraftLine(
+        {
+          event: "tool",
+          name: "exec",
+          args: { command: "pnpm test -- --watch=false" },
+        },
+        { detailMode: "raw" },
+      ),
+    ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

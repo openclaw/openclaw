@@ -1084,12 +1084,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                     await statusReactions.setTool(payload.name);
                   }
                   await pushPreviewToolProgress(
-                    formatChannelProgressDraftLine({
-                      event: "tool",
-                      name: payload.name,
-                      phase: payload.phase,
-                      args: payload.args,
-                    }),
+                    formatChannelProgressDraftLine(
+                      {
+                        event: "tool",
+                        name: payload.name,
+                        phase: payload.phase,
+                        args: payload.args,
+                      },
+                      payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                    ),
                     { toolName: payload.name },
                   );
                 },

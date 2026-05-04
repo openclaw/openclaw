@@ -1537,6 +1537,7 @@ export async function runAgentTurnWithFallback(params: {
                           evt.data.args && typeof evt.data.args === "object"
                             ? (evt.data.args as Record<string, unknown>)
                             : undefined,
+                        detailMode: params.toolProgressDetail,
                       });
                     }
                   }

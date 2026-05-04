@@ -85,6 +85,7 @@ export type GetReplyOptions = {
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;
+    detailMode?: "explain" | "raw";
   }) => Promise<void> | void;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {

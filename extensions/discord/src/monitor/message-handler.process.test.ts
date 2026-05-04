@@ -102,6 +102,7 @@ type DispatchInboundParams = {
       name?: string;
       phase?: string;
       args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
     }) => Promise<void> | void;
     onItemEvent?: (payload: {
       progressText?: string;
@@ -1531,6 +1532,38 @@ describe("processDiscordMessage draft streaming", () => {
       "preview-1",
       { content: "done" },
       expect.objectContaining({ rest: expect.anything() }),
+    );
+  });
+
+  it("uses raw tool-progress detail in Discord progress drafts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n🛠️ Exec: run tests, `pnpm test -- --watch=false`\n• done",
     );
   });
 
