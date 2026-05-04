@@ -1309,7 +1309,7 @@ export async function runPreparedReply(
         }
       : undefined;
 
-  return runReplyAgent({
+  const reply = await runReplyAgent({
     commandBody: prefixedCommandBody,
     transcriptCommandBody,
     followupRun,

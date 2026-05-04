@@ -679,6 +679,7 @@ async function loadSessionsOnce(
     if (offset > 0) {
       params.offset = offset;
     }
+    params.includeDerivedTitles = true;
     const search = overrides?.search?.trim();
     if (search) {
       params.search = search;
