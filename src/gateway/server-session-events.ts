@@ -14,6 +14,7 @@ import {
   readSessionMessageCountAsync,
   type GatewaySessionRow,
 } from "./session-utils.js";
+import { invalidateSessionsListResultCache } from "./sessions-list-result-cache.js";
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
@@ -108,6 +109,7 @@ async function handleTranscriptUpdateBroadcast(
   if (!sessionKey || update.message === undefined) {
     return;
   }
+  invalidateSessionsListResultCache();
   const connIds = new Set<string>();
   for (const connId of params.sessionEventSubscribers.getAll()) {
     connIds.add(connId);
@@ -170,6 +172,7 @@ export function createLifecycleEventBroadcastHandler(params: {
   sessionEventSubscribers: SessionEventSubscribers;
 }) {
   return (event: SessionLifecycleEvent): void => {
+    invalidateSessionsListResultCache();
     const connIds = params.sessionEventSubscribers.getAll();
     if (connIds.size === 0) {
       return;
