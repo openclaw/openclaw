@@ -38,7 +38,8 @@ permissions: {}
 
 jobs:
   stale:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: write
       pull-requests: write
@@ -241,7 +242,8 @@ jobs:
             That channel is the escape hatch for high-quality PRs that get auto-closed.
 
   backfill-stale-closures:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stale_closures == true }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && inputs.backfill_stale_closures == true }}
     permissions:
       issues: write
       pull-requests: write
@@ -486,7 +488,8 @@ jobs:
             }
 
   lock-closed-issues:
-    if: ${{ github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || inputs.backfill_stale_closures != true) }}
     permissions:
       issues: write
     runs-on: blacksmith-16vcpu-ubuntu-2404

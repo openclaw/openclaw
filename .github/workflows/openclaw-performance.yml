@@ -56,6 +56,8 @@ env:
 jobs:
   kova:
     name: ${{ matrix.title }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: github.repository == 'openclaw/openclaw'
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 240
     strategy:

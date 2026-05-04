@@ -37,7 +37,8 @@ permissions:
 jobs:
   security-high:
     name: Security High (${{ matrix.category }})
-    if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
+    # Skip on the mctlhq fork — pinned to Blacksmith runners not provisioned there.
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
