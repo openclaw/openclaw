@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 - Control UI: point the Appearance tweakcn browse action and docs at the live tweakcn editor route instead of the removed `/themes` page. Fixes #77048.
 - Control UI: render Dream Diary prose through the sanitized markdown pipeline, so diary bold/italic/header markdown no longer appears as literal source text. Fixes #62413.
 - Control UI: render tool results whose output arrives as text-block arrays and give expanded tool output a scrollable block, so read/exec output remains visible in WebChat. Fixes #77054.
+- Voice Call/Google Meet: pace Twilio realtime audio, clear queued playback on local speech starts, and enable Gemini Live session resumption plus context compression defaults for lower-latency Meet dial-in joins. (#77064) Thanks @scoootscooob.
 - MCP: include serialized conversation/message payloads in the primary text content for `conversations_list` and `messages_read`, while preserving `structuredContent` for capable clients. Fixes #77024.
 - Media: treat `EPERM` from the post-write media fsync step as best-effort, allowing WebChat and channel uploads to finish on Windows filesystems that reject `fsync` after a successful write. Fixes #76844.
 - Diagnostics: include last progress, cron job/run ids, stopped cron job name, and the last assistant transcript snippet in stalled-session and stuck-session recovery logs so cron stalls show what was stopped.
