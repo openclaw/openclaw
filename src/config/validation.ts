@@ -13,6 +13,10 @@ import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
+import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -91,6 +95,22 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function formatMissingOfficialExternalPluginWarning(pluginId: string): string | null {
+  const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
+  if (!catalogEntry) {
+    return null;
+  }
+  const install = resolveOfficialExternalPluginInstall(catalogEntry);
+  const npmSpec = install?.npmSpec?.trim();
+  const clawhubSpec = install?.clawhubSpec?.trim();
+  const installSpec =
+    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  if (!installSpec) {
+    return null;
+  }
+  return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
 }
 
 function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
@@ -1440,6 +1460,16 @@ function validateConfigObjectWithPluginsBase(
         issues.push({ path, message });
       }
       return;
+    }
+    if (opts?.warnOnly) {
+      const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
+      if (externalInstallWarning) {
+        warnings.push({
+          path,
+          message: externalInstallWarning,
+        });
+        return;
+      }
     }
     if (opts?.warnOnly) {
       warnings.push({

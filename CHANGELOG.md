@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.
 - Dependencies: refresh runtime and provider packages including Pi 0.73.0, ACPX adapters, OpenAI, Anthropic, Slack, and TypeScript native preview, while keeping the Bedrock runtime installer override pinned below the Windows ARM Node 24 npm resolver failure.
 - Agents/performance: pass the resolved workspace through BTW, compaction, embedded-run model generation, and PDF model setup so explicit agent-dir model refreshes can reuse the current workspace-scoped plugin metadata snapshot instead of falling back to cold plugin metadata scans. (#77519, #77532)
 - Config/plugin auto-enable: prefer the claiming plugin manifest id over a built-in channel alias when auto-allowlisting a configured channel, so WeCom/Yuanbao-style aliases resolve to the installed plugin id. Thanks @Beandon13.
