@@ -188,6 +188,7 @@ Docs: https://docs.openclaw.ai
 - Plugin tools: honor explicit tool denylists while selecting plugin tool runtimes, so denied plugin tools are not materialized for direct command or gateway surfaces before later policy filtering. Thanks @vincentkoc.
 - Plugin tools: filter factory-returned tools by manifest per-tool optional policy, so optional sibling tools from a shared runtime factory stay hidden unless explicitly allowed. Thanks @vincentkoc.
 - Agents/transcripts: retry context-overflow compaction from the current transcript only after the inbound user turn was actually persisted, and keep WebChat agent-run live delivery from writing duplicate Pi-managed assistant turns. Fixes #76424. (#77033)
+- Agents/sessions: keep spawned cross-agent fleet sessions visible under default tree-scoped session tools and prevent constrained Control UI session lists from briefly showing rows that current filters cannot keep.
 - Agents/bootstrap: keep pending `BOOTSTRAP.md` and bootstrap truncation notices in system-prompt Project Context instead of copying setup text or raw warning diagnostics into WebChat user/runtime context. Fixes #76946.
 - Gateway/install: keep `.env`-managed values in the macOS LaunchAgent env file while still tracking `OPENCLAW_SERVICE_MANAGED_ENV_KEYS`, so regenerated services do not boot without managed auth/provider keys. Fixes #75374.
 - Gateway/restart: verify listener PIDs by argv when `lsof` reports only the Node process name, so stale gateway cleanup can find macOS `cnode` listeners. Fixes #70664.

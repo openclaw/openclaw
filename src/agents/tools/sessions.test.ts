@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.js";
+import type { SessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
@@ -14,7 +15,7 @@ type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
   tools: {
     agentToAgent: { enabled: boolean };
-    sessions?: { visibility: "all" | "own" };
+    sessions?: { visibility: SessionToolsVisibility };
   };
 };
 
@@ -417,13 +418,20 @@ describe("resolveAnnounceTarget", () => {
 describe("sessions_list gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    callGatewayMock.mockResolvedValue({
-      path: "/tmp/sessions.json",
-      sessions: [
-        { key: "agent:main:main", kind: "direct" },
-        { key: "agent:other:main", kind: "direct" },
-      ],
-    });
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method === "sessions.list" && request.params?.spawnedBy) {
+          return { path: "/tmp/sessions.json", sessions: [] };
+        }
+        return {
+          path: "/tmp/sessions.json",
+          sessions: [
+            { key: "agent:main:main", kind: "direct" },
+            { key: "agent:other:main", kind: "direct" },
+          ],
+        };
+      },
+    );
   });
 
   it("filters out other agents when tools.agentToAgent.enabled is false", async () => {
@@ -432,6 +440,47 @@ describe("sessions_list gating", () => {
     expect(result.details).toMatchObject({
       count: 1,
       sessions: [{ key: MAIN_AGENT_SESSION_KEY }],
+    });
+  });
+
+  it("keeps cross-agent spawned children visible in tree-scoped sessions_list", async () => {
+    const crossAgentChild = "agent:ops:subagent:worker";
+    callGatewayMock.mockReset();
+    callGatewayMock.mockImplementation(
+      async (request: { method?: string; params?: Record<string, unknown> }) => {
+        if (request.method === "sessions.list" && request.params?.spawnedBy) {
+          return {
+            path: "(multiple)",
+            sessions: [{ key: crossAgentChild, kind: "direct" }],
+          };
+        }
+        if (request.method === "sessions.list") {
+          return {
+            path: "(multiple)",
+            sessions: [
+              { key: MAIN_AGENT_SESSION_KEY, kind: "direct" },
+              { key: crossAgentChild, kind: "direct", spawnedBy: MAIN_AGENT_SESSION_KEY },
+              { key: "agent:ops:main", kind: "direct" },
+            ],
+          };
+        }
+        return {};
+      },
+    );
+
+    const tool = createMainSessionsListTool();
+    const result = await tool.execute("call1", {});
+
+    expect(callGatewayMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "sessions.list",
+        params: expect.objectContaining({ agentId: undefined }),
+      }),
+    );
+    expect(result.details).toMatchObject({
+      count: 2,
+      sessions: [{ key: MAIN_AGENT_SESSION_KEY }, { key: crossAgentChild }],
     });
   });
 

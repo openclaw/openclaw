@@ -56,7 +56,16 @@ type SessionsLoadControl = {
   ownsStateLoading: boolean;
 };
 
+type EffectiveSessionsListParams = {
+  includeGlobal: boolean;
+  includeUnknown: boolean;
+  showArchived: boolean;
+  activeMinutes: number;
+  limit: number;
+};
+
 const sessionsLoadControls = new WeakMap<object, SessionsLoadControl>();
+const sessionsListParamsByState = new WeakMap<object, EffectiveSessionsListParams>();
 
 const SESSION_EVENT_ROW_FIELDS = [
   "abortedLastRun",
@@ -155,6 +164,52 @@ function projectSessionsResultForAvailability(
 
 function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
+function resolveEffectiveSessionsListParams(
+  state: SessionsState,
+  overrides?: LoadSessionsOverrides,
+): EffectiveSessionsListParams {
+  const showArchived = overrides?.showArchived ?? state.sessionsShowArchived;
+  return {
+    includeGlobal: overrides?.includeGlobal ?? state.sessionsIncludeGlobal,
+    includeUnknown: overrides?.includeUnknown ?? state.sessionsIncludeUnknown,
+    showArchived,
+    activeMinutes: showArchived
+      ? 0
+      : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0)),
+    limit: overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0),
+  };
+}
+
+function getActiveSessionsListParams(state: SessionsState): EffectiveSessionsListParams {
+  return (
+    sessionsListParamsByState.get(state as object) ?? resolveEffectiveSessionsListParams(state)
+  );
+}
+
+function canInsertSessionChangedRow(state: SessionsState, row: GatewaySessionRow): boolean {
+  const params = getActiveSessionsListParams(state);
+  if (!params.includeGlobal && (row.key === "global" || row.kind === "global")) {
+    return false;
+  }
+  if (!params.includeUnknown && (row.key === "unknown" || row.kind === "unknown")) {
+    return false;
+  }
+  if (!params.showArchived && row.archived === true) {
+    return false;
+  }
+  if (params.limit > 0) {
+    return false;
+  }
+  if (params.activeMinutes > 0) {
+    const updatedAt =
+      typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
+    if (updatedAt < Date.now() - params.activeMinutes * 60_000) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function checkpointSummarySignature(
@@ -345,6 +400,9 @@ export function applySessionsChangedEvent(
     existingIndex >= 0
       ? previousRows.map((row, index) => (index === existingIndex ? nextRow : row))
       : [nextRow, ...previousRows];
+  if (existingIndex < 0 && !canInsertSessionChangedRow(state, nextRow)) {
+    return { applied: false };
+  }
   const sessions = nextRows.toSorted(compareSessionRowsByUpdatedAt);
   const eventTs = typeof payload.ts === "number" && Number.isFinite(payload.ts) ? payload.ts : null;
   state.sessionsResult = {
@@ -419,13 +477,8 @@ async function loadSessionsOnce(
     const previousRows = new Map(
       (state.sessionsResult?.sessions ?? []).map((row) => [row.key, row] as const),
     );
-    const includeGlobal = overrides?.includeGlobal ?? state.sessionsIncludeGlobal;
-    const includeUnknown = overrides?.includeUnknown ?? state.sessionsIncludeUnknown;
-    const showArchived = overrides?.showArchived ?? state.sessionsShowArchived;
-    const activeMinutes = showArchived
-      ? 0
-      : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
-    const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+    const effectiveParams = resolveEffectiveSessionsListParams(state, overrides);
+    const { includeGlobal, includeUnknown, showArchived, activeMinutes, limit } = effectiveParams;
     const params: Record<string, unknown> = {
       includeGlobal,
       includeUnknown,
@@ -440,6 +493,7 @@ async function loadSessionsOnce(
     if (res) {
       state.sessionsResult = projectSessionsResultForAvailability(res, { showArchived });
       const nextKeys = new Set(state.sessionsResult.sessions.map((row) => row.key));
+      sessionsListParamsByState.set(state as object, effectiveParams);
       for (const key of Object.keys(state.sessionsCheckpointItemsByKey)) {
         if (!nextKeys.has(key)) {
           invalidateCheckpointCacheForKey(state, key);

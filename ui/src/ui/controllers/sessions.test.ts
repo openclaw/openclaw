@@ -802,4 +802,31 @@ describe("applySessionsChangedEvent", () => {
       updatedAt: 2,
     });
   });
+
+  it("does not locally insert websocket rows into a limited sessions.list result", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:current", kind: "direct", updatedAt: 10 }],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, { activeMinutes: 10, limit: 1 });
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:new",
+      ts: 2,
+      kind: "direct",
+      updatedAt: Date.now(),
+    });
+
+    expect(applied).toEqual({ applied: false });
+    expect(state.sessionsResult?.sessions.map((row) => row.key)).toEqual(["agent:main:current"]);
+  });
 });

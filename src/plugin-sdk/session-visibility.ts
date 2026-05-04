@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway as defaultCallGateway } from "../gateway/call.js";
+import { logDebug } from "../logger.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -52,7 +53,11 @@ export async function listSpawnedSessionKeys(params: {
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
     const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
     return new Set(keys);
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logDebug(
+      `sessions: failed to list spawned session keys for ${params.requesterSessionKey}: ${message}`,
+    );
     return new Set();
   }
 }
@@ -165,15 +170,15 @@ function a2aDeniedMessage(action: SessionAccessAction): string {
 
 function crossVisibilityMessage(action: SessionAccessAction): string {
   if (action === "history") {
-    return "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return "Session history visibility is restricted for non-spawned cross-agent sessions. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access.";
   }
   if (action === "send") {
-    return "Session send visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return "Session send visibility is restricted for non-spawned cross-agent sessions. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access.";
   }
   if (action === "status") {
-    return "Session status visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+    return "Session status visibility is restricted for non-spawned cross-agent sessions. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access.";
   }
-  return "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.";
+  return "Session list visibility is restricted for non-spawned cross-agent sessions. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access.";
 }
 
 function selfVisibilityMessage(action: SessionAccessAction): string {
@@ -196,6 +201,20 @@ export function createSessionVisibilityChecker(params: {
 
   const check = (targetSessionKey: string): SessionAccessResult => {
     const targetAgentId = resolveAgentIdFromSessionKey(targetSessionKey);
+    const isCurrentSession = targetSessionKey === params.requesterSessionKey;
+    const isSpawnedSession = spawnedKeys?.has(targetSessionKey) === true;
+
+    if (params.visibility === "tree") {
+      if (isCurrentSession || isSpawnedSession) {
+        return { allowed: true };
+      }
+      return {
+        allowed: false,
+        status: "forbidden",
+        error: treeVisibilityMessage(params.action),
+      };
+    }
+
     const isCrossAgent = targetAgentId !== requesterAgentId;
     if (isCrossAgent) {
       if (params.visibility !== "all") {
@@ -222,23 +241,11 @@ export function createSessionVisibilityChecker(params: {
       return { allowed: true };
     }
 
-    if (params.visibility === "self" && targetSessionKey !== params.requesterSessionKey) {
+    if (params.visibility === "self" && !isCurrentSession) {
       return {
         allowed: false,
         status: "forbidden",
         error: selfVisibilityMessage(params.action),
-      };
-    }
-
-    if (
-      params.visibility === "tree" &&
-      targetSessionKey !== params.requesterSessionKey &&
-      !spawnedKeys?.has(targetSessionKey)
-    ) {
-      return {
-        allowed: false,
-        status: "forbidden",
-        error: treeVisibilityMessage(params.action),
       };
     }
 

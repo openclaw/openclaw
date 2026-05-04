@@ -401,11 +401,13 @@ export function createSessionStatusTool(opts?: {
 
       if (requestedKeyRaw.startsWith("agent:") && !isSemanticCurrentRequest) {
         const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
-        ensureAgentAccess(requestedAgentId);
-        const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
+        const visibilityTarget = normalizeVisibilityTargetSessionKey(
+          requestedKeyRaw,
+          requestedAgentId,
         );
+        const access = visibilityGuard.check(visibilityTarget);
         if (!access.allowed) {
+          ensureAgentAccess(requestedAgentId);
           throw new Error(access.error);
         }
       }
@@ -453,11 +455,17 @@ export function createSessionStatusTool(opts?: {
           if (!visibleSession.ok) {
             throw new Error("Session status visibility is restricted to the current session tree.");
           }
-          // If resolution points at another agent, enforce A2A policy before switching stores.
-          ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
+          const visibleAgentId = resolveAgentIdFromSessionKey(visibleSession.key);
+          const visibleAccess = visibilityGuard.check(
+            normalizeVisibilityTargetSessionKey(visibleSession.key, visibleAgentId),
+          );
+          if (!visibleAccess.allowed) {
+            ensureAgentAccess(visibleAgentId);
+            throw new Error(visibleAccess.error);
+          }
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
-          agentId = resolveAgentIdFromSessionKey(visibleSession.key);
+          agentId = visibleAgentId;
           storePath = resolveStorePath(cfg.session?.store, { agentId });
           store = loadSessionStore(storePath);
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({

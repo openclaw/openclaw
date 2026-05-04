@@ -1380,6 +1380,44 @@ describe("session_status tool", () => {
     );
   });
 
+  it("allows cross-agent spawned session_status under tree visibility without agent-to-agent access", async () => {
+    const childKey = "agent:ops:subagent:worker";
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      [childKey]: {
+        sessionId: "s-child",
+        updatedAt: 20,
+        spawnedBy: "agent:main:main",
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "tree" },
+        agentToAgent: { enabled: false },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+        },
+      },
+    };
+    mockSpawnedSessionList((spawnedBy) =>
+      spawnedBy === "agent:main:main" ? [{ key: childKey }] : [],
+    );
+
+    const tool = getSessionStatusTool("agent:main:main");
+    const result = await tool.execute("call-cross-agent-child", { sessionKey: childKey });
+
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe(childKey);
+  });
+
   it("blocks unsandboxed same-agent session_status outside self visibility", async () => {
     resetSessionStore({
       "agent:main:main": {

@@ -1,14 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 import { __testing as sessionsResolutionTesting } from "./sessions-resolution.js";
+
+const loggerMocks = vi.hoisted(() => ({
+  logDebug: vi.fn(),
+}));
+
+vi.mock("../../logger.js", () => ({
+  logDebug: loggerMocks.logDebug,
+}));
+
+beforeEach(() => {
+  loggerMocks.logDebug.mockReset();
+  sessionsResolutionTesting.setDepsForTest();
+});
 
 describe("resolveSessionToolsVisibility", () => {
   it("defaults to tree when unset or invalid", () => {
@@ -109,6 +123,23 @@ describe("createAgentToAgentPolicy", () => {
 });
 
 describe("createSessionVisibilityGuard", () => {
+  it("logs and fails closed when spawned key listing fails", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async () => {
+        throw new Error("gateway unavailable");
+      }) as never,
+    });
+
+    const keys = await listSpawnedSessionKeys({
+      requesterSessionKey: "agent:main:main",
+    });
+
+    expect(keys.size).toBe(0);
+    expect(loggerMocks.logDebug).toHaveBeenCalledWith(
+      "sessions: failed to list spawned session keys for agent:main:main: gateway unavailable",
+    );
+  });
+
   it("does not block exact same-agent spawned targets that fall past the spawned list cap", async () => {
     sessionsResolutionTesting.setDepsForTest({
       callGateway: vi.fn(async (request: { method?: string; params?: { key?: string } }) => {
@@ -141,6 +172,36 @@ describe("createSessionVisibilityGuard", () => {
     sessionsResolutionTesting.setDepsForTest();
   });
 
+  it("allows cross-agent spawned targets under tree visibility without broad agent-to-agent access", async () => {
+    sessionsResolutionTesting.setDepsForTest({
+      callGateway: vi.fn(async (request: { method?: string }) => {
+        if (request.method === "sessions.list") {
+          return {
+            sessions: [{ key: "agent:ops:subagent:worker-1" }],
+          };
+        }
+        return {};
+      }) as never,
+    });
+
+    const guard = await createSessionVisibilityGuard({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({} as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:ops:subagent:worker-1")).toEqual({ allowed: true });
+    expect(guard.check("agent:ops:main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session list visibility is restricted to the current session tree (tools.sessions.visibility=tree).",
+    });
+
+    sessionsResolutionTesting.setDepsForTest();
+  });
+
   it("blocks cross-agent send when agent-to-agent is disabled", async () => {
     const guard = await createSessionVisibilityGuard({
       action: "send",
@@ -154,6 +215,24 @@ describe("createSessionVisibilityGuard", () => {
       status: "forbidden",
       error:
         "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
+    });
+  });
+
+  it("explains non-spawned cross-agent targets under same-agent visibility", async () => {
+    const guard = await createSessionVisibilityGuard({
+      action: "send",
+      requesterSessionKey: "agent:main:main",
+      visibility: "agent",
+      a2aPolicy: createAgentToAgentPolicy({
+        tools: { agentToAgent: { enabled: true, allow: ["*"] } },
+      } as unknown as OpenClawConfig),
+    });
+
+    expect(guard.check("agent:ops:main")).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error:
+        "Session send visibility is restricted for non-spawned cross-agent sessions. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access.",
     });
   });
 

@@ -204,6 +204,83 @@ test("sessions.list marks sessions with active abortable runs", async () => {
   );
 });
 
+test("sessions.list reflects session store changes across repeated calls", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { updatedAt: 10 }),
+    },
+  });
+
+  const { ws } = await openClient();
+  const params = { includeGlobal: true, includeUnknown: true };
+  const first = await rpcReq<{
+    sessions: Array<{ key: string }>;
+  }>(ws, "sessions.list", params);
+
+  expect(first.ok).toBe(true);
+  expect(first.payload?.sessions.map((session) => session.key)).toEqual(["agent:main:main"]);
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { updatedAt: 10 }),
+      "dashboard:new": sessionStoreEntry("sess-new", { updatedAt: 20 }),
+    },
+  });
+
+  const second = await rpcReq<{
+    sessions?: Array<{ key: string }>;
+  }>(ws, "sessions.list", params);
+
+  expect(second.ok).toBe(true);
+  expect(second.payload?.sessions?.map((session) => session.key)).toEqual([
+    "agent:main:dashboard:new",
+    "agent:main:main",
+  ]);
+  ws.close();
+});
+
+test("sessions.list spawnedBy filter sees cross-agent children without agentId", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = { store: storeTemplate };
+  testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
+  const now = Date.now();
+
+  await writeSessionStore({
+    storePath: storeTemplate.replace("{agentId}", "main"),
+    agentId: "main",
+    entries: {
+      main: sessionStoreEntry("sess-main", { updatedAt: now }),
+    },
+  });
+  await writeSessionStore({
+    storePath: storeTemplate.replace("{agentId}", "ops"),
+    agentId: "ops",
+    entries: {
+      "subagent:worker": sessionStoreEntry("sess-ops-worker", {
+        updatedAt: now + 1,
+        spawnedBy: "agent:main:main",
+      }),
+    },
+  });
+
+  const { ws } = await openClient();
+  const listed = await rpcReq<{
+    sessions?: Array<{ key: string; spawnedBy?: string }>;
+  }>(ws, "sessions.list", { spawnedBy: "agent:main:main" });
+
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.sessions).toEqual([
+    expect.objectContaining({
+      key: "agent:ops:subagent:worker",
+      spawnedBy: "agent:main:main",
+    }),
+  ]);
+  ws.close();
+});
+
 test("sessions.list yields before responding during bulk transcript hydration", async () => {
   const { dir } = await createSessionStoreDir();
   const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {};
