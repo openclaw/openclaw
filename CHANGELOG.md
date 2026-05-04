@@ -56,6 +56,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
 - Control UI/sessions: apply reliable `sessions.changed` snapshots in-place and refetch only for partial events, avoiding redundant `sessions.list` regeneration during active session updates.
 - Control UI/sessions: explain the Sessions filter controls with hover tooltips and raise the default list limit to 200 rows.
+- Control UI/sessions: expand compaction checkpoint details from checkpoint-bearing rows and keep token totals on one line.
 - Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
 - Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
 - Control UI/Gateway: keep long-running dashboard WebSocket sessions alive with protocol pings and keep Stop available after reconnect or reload by recovering session-scoped active-run abort state. Fixes #70991. Thanks @alexandre-leng.

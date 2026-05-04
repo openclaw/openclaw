@@ -311,6 +311,80 @@ describe("sessions view", () => {
     expect(text).not.toContain("Object (telegram)");
   });
 
+  it("expands checkpoint details from row activation when checkpoints exist", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const row = container.querySelector("tbody tr.session-data-row");
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+    const tokenCell = container.querySelector(".session-token-cell");
+    expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+  });
+
+  it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:with-checkpoint",
+              kind: "direct",
+              updatedAt: 20,
+              compactionCheckpointCount: 1,
+              latestCompactionCheckpoint: {
+                checkpointId: "checkpoint-1",
+                createdAt: 20,
+                reason: "manual",
+              },
+            },
+            {
+              key: "agent:main:no-checkpoint",
+              kind: "direct",
+              updatedAt: 10,
+              compactionCheckpointCount: 0,
+            },
+          ]),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    const checkbox = rows[0]?.querySelector("input[type=checkbox]");
+    checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
+  });
+
   it("filters rows by agent identity name", async () => {
     const container = document.createElement("div");
     render(

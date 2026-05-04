@@ -2309,6 +2309,10 @@
   font-size: 13px;
 }
 
+.sessions-table {
+  min-width: 1240px;
+}
+
 .data-table th {
   position: sticky;
   top: 0;
@@ -2380,6 +2384,15 @@
   background: var(--bg-hover);
 }
 
+.session-data-row--expandable {
+  cursor: pointer;
+}
+
+.session-data-row--expandable:focus-visible {
+  outline: 1px solid var(--border-strong);
+  outline-offset: -2px;
+}
+
 .data-table tbody tr:last-child td {
   border-bottom: none;
 }
@@ -2412,6 +2425,11 @@
 .data-table-badge--unknown {
   color: var(--muted);
   background: var(--bg-hover);
+}
+
+.session-token-cell {
+  min-width: 112px;
+  white-space: nowrap;
 }
 
 /* Checkbox column */
