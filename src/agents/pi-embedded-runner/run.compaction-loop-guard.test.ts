@@ -50,16 +50,18 @@ function recordToolOutcome(
   runId?: string,
 ): void {
   const toolCallId = `${toolName}-${state.toolOutcomeSeq ?? 0}`;
-  recordToolCall(state, toolName, toolParams, toolCallId, undefined, {
-    ...(runId ? { runId } : {}),
-  });
-  recordToolCallOutcome(state, {
+  const scope = runId ? { runId } : undefined;
+  recordToolCall(state, toolName, toolParams, toolCallId, undefined, scope);
+  const outcome: Parameters<typeof recordToolCallOutcome>[1] = {
     toolName,
     toolParams,
     toolCallId,
     result,
-    ...(runId ? { runId } : {}),
-  });
+  };
+  if (runId) {
+    outcome.runId = runId;
+  }
+  recordToolCallOutcome(state, outcome);
 }
 
 describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
