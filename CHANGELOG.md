@@ -57,6 +57,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram/streaming: sanitize tool-progress draft preview backticks before shared compaction, so long backtick-heavy progress text still renders inside the safe code-formatted preview instead of collapsing to an ellipsis.
+- UI/chat: remove the unsupported `line-clamp` declaration from the chat queue text rule to eliminate Firefox console noise without changing visible truncation behavior. Thanks @ZanderH-code.
 - Agents/Pi: suppress persistence for synthetic mid-turn overflow continuation prompts, so transcript-retry recovery does not write the "continue from transcript" prompt as a new user turn. Thanks @vincentkoc.
 - Agents/tools: strip reasoning text from visible rich presentation titles, blocks, buttons, and select labels before message-tool sends, so structured channel payloads cannot leak hidden planning. Thanks @vincentkoc.
 - Telegram: keep reply-dispatch lazy provider runtime chunks behind stable dist names and delete `/reasoning stream` previews after final delivery so package updates and live reasoning drafts do not leave Telegram turns broken or noisy. Thanks @BunsDev.
