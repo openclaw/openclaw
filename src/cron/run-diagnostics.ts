@@ -139,8 +139,8 @@ export function normalizeCronRunDiagnostics(
           : {}),
       ...(entry.truncated === true || normalized.truncated ? { truncated: true } : {}),
     });
-    if (entries.length >= MAX_ENTRIES) {
-      break;
+    if (entries.length > MAX_ENTRIES) {
+      entries.shift();
     }
   }
   const summary = trimSummary(

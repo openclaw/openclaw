@@ -15,15 +15,43 @@ describe("cron run diagnostics", () => {
         ts: i,
         source: "exec",
         severity: "error",
-        message: i === 0 ? `secret sk-1234567890abcdef ${"a".repeat(1_100)}` : `entry ${i}`,
+        message: i === 11 ? `secret sk-1234567890abcdef ${"a".repeat(1_100)}` : `entry ${i}`,
       })),
     });
 
     expect(diagnostics?.entries).toHaveLength(10);
-    expect(diagnostics?.entries[0]?.message).toMatch(/…$/);
-    expect(diagnostics?.entries[0]?.message).not.toContain("sk-1234567890abcdef");
-    expect(diagnostics?.entries[0]?.truncated).toBe(true);
+    expect(diagnostics?.entries[0]?.message).toBe("entry 2");
+    expect(diagnostics?.entries.at(-1)?.message).toMatch(/…$/);
+    expect(diagnostics?.entries.at(-1)?.message).not.toContain("sk-1234567890abcdef");
+    expect(diagnostics?.entries.at(-1)?.truncated).toBe(true);
     expect(diagnostics?.summary).toHaveLength(2_000);
+  });
+
+  it("preserves later terminal diagnostics when capping entries", () => {
+    const diagnostics = normalizeCronRunDiagnostics({
+      entries: [
+        ...Array.from({ length: 10 }, (_, i) => ({
+          ts: i,
+          source: "tool",
+          severity: "warn",
+          message: `tool warning ${i}`,
+        })),
+        {
+          ts: 11,
+          source: "delivery",
+          severity: "error",
+          message: "delivery failed",
+        },
+      ],
+    });
+
+    expect(diagnostics?.entries).toHaveLength(10);
+    expect(diagnostics?.entries.map((entry) => entry.message)).not.toContain("tool warning 0");
+    expect(diagnostics?.entries.at(-1)).toMatchObject({
+      source: "delivery",
+      severity: "error",
+      message: "delivery failed",
+    });
   });
 
   it("returns undefined for empty diagnostics", () => {
