@@ -154,11 +154,12 @@ export function registerMemoryCorpusSupplement(
   pluginId: string,
   supplement: MemoryCorpusSupplement,
 ): void {
-  const next = memoryPluginState.corpusSupplements.filter(
-    (registration) => registration.pluginId !== pluginId,
+  const exists = memoryPluginState.corpusSupplements.some(
+    (registration) => registration.pluginId === pluginId,
   );
-  next.push({ pluginId, supplement });
-  memoryPluginState.corpusSupplements = next;
+  if (!exists) {
+    memoryPluginState.corpusSupplements.push({ pluginId, supplement });
+  }
 }
 
 export function registerMemoryCapability(
