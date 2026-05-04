@@ -12,6 +12,22 @@ import { SESSION_LABEL_MAX_LENGTH } from "../../../sessions/session-label.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 
 export const NonEmptyString = Type.String({ minLength: 1 });
+
+// Bounds on the device handshake fields. Kept generous enough for every
+// valid Ed25519 form (PEM ~120 chars, base64url 43; signature base64url
+// 86) while denying attackers the ability to push 64 KB strings into
+// crypto.createPublicKey / crypto.verify on the pre-auth path.
+export const DEVICE_PUBLIC_KEY_MAX_LENGTH = 1024;
+export const DEVICE_SIGNATURE_MAX_LENGTH = 256;
+export const DeviceHandshakePublicKeyString = Type.String({
+  minLength: 1,
+  maxLength: DEVICE_PUBLIC_KEY_MAX_LENGTH,
+});
+export const DeviceHandshakeSignatureString = Type.String({
+  minLength: 1,
+  maxLength: DEVICE_SIGNATURE_MAX_LENGTH,
+});
+
 export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
 export const ChatSendSessionKeyString = Type.String({
   minLength: 1,

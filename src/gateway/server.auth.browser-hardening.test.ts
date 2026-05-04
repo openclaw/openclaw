@@ -267,7 +267,12 @@ describe("gateway auth browser hardening", () => {
       try {
         const second = await connectReq(secondWs, { token: "wrong" });
         expect(second.ok).toBe(false);
-        expect(second.error?.message ?? "").toContain("retry later");
+        // Either the shared-secret token bucket or the device-signature
+        // bucket may fire first; both indicate a per-origin lockout.
+        expect(
+          (second.error?.message ?? "").includes("retry later") ||
+            (second.error?.message ?? "").includes("rate-limited"),
+        ).toBe(true);
       } finally {
         secondWs.close();
       }
@@ -306,7 +311,12 @@ describe("gateway auth browser hardening", () => {
       try {
         const third = await connectReq(thirdWs, { token: "wrong" });
         expect(third.ok).toBe(false);
-        expect(third.error?.message ?? "").toContain("retry later");
+        // Either the shared-secret token bucket or the device-signature
+        // bucket may fire first for the locked origin.
+        expect(
+          (third.error?.message ?? "").includes("retry later") ||
+            (third.error?.message ?? "").includes("rate-limited"),
+        ).toBe(true);
       } finally {
         thirdWs.close();
       }

@@ -689,7 +689,12 @@ export function registerControlUiAndPairingSuite(): void {
         deviceIdentityPath,
       });
       expect(deviceLocked.ok).toBe(false);
-      expect(deviceLocked.error?.message ?? "").toContain("retry later");
+      // Either the device-token bucket or the device-signature bucket may
+      // fire first; both indicate a per-IP lockout on the device path.
+      expect(
+        (deviceLocked.error?.message ?? "").includes("retry later") ||
+          (deviceLocked.error?.message ?? "").includes("rate-limited"),
+      ).toBe(true);
       wsDeviceLocked.close();
 
       const wsShared = await openWs(port);
@@ -703,7 +708,12 @@ export function registerControlUiAndPairingSuite(): void {
         deviceIdentityPath,
       });
       expect(deviceStillLocked.ok).toBe(false);
-      expect(deviceStillLocked.error?.message ?? "").toContain("retry later");
+      // Either the device-token bucket or the device-signature bucket may
+      // keep the device path locked.
+      expect(
+        (deviceStillLocked.error?.message ?? "").includes("retry later") ||
+          (deviceStillLocked.error?.message ?? "").includes("rate-limited"),
+      ).toBe(true);
       wsDeviceReal.close();
     } finally {
       await server.close();
