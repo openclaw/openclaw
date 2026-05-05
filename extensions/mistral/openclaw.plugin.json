@@ -94,6 +94,7 @@
             "id": "mistral-medium-3-5",
             "name": "Mistral Medium 3.5",
             "input": ["text", "image"],
+            "reasoning": true,
             "contextWindow": 262144,
             "maxTokens": 8192,
             "cost": {
