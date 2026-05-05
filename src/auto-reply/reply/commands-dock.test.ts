@@ -102,6 +102,29 @@ describe("handleDockCommand", () => {
     expect(params.sessionEntry?.lastTo).toBe("UserCase123");
   });
 
+  it("matches source identityLinks from provider-native direct peer ids", async () => {
+    const params = buildDockParams("/dock-discord", {
+      NativeDirectUserId: "native-direct-42",
+      SenderId: "display-42",
+      From: "display-42",
+    });
+    params.cfg.session = {
+      ...params.cfg.session,
+      identityLinks: {
+        nativeAlice: ["telegram:native-direct-42", "discord:NativeTarget123"],
+      },
+    };
+
+    const result = await handleDockCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "Docked replies to discord." },
+    });
+    expect(params.sessionEntry?.lastChannel).toBe("discord");
+    expect(params.sessionEntry?.lastTo).toBe("NativeTarget123");
+  });
+
   it("does not claim unrelated slash commands", async () => {
     const result = await handleDockCommand(buildDockParams("/status"), true);
 
