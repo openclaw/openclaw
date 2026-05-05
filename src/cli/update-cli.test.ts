@@ -1059,6 +1059,67 @@ describe("update-cli", () => {
     );
   });
 
+  it("detects missing plugin payloads from persisted records before npm updates", async () => {
+    const installPath = createCaseDir("openclaw-missing-plugin-payload");
+    fsSync.mkdirSync(installPath, { recursive: true });
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: config,
+      resolved: config,
+      sourceConfig: config,
+      config,
+      runtimeConfig: config,
+    });
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/demo@1.0.0",
+        installPath,
+      },
+    });
+    syncPluginsForUpdateChannel.mockResolvedValueOnce({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    });
+    pathExists.mockImplementation(async (candidate: string) => candidate === installPath);
+    vi.mocked(defaultRuntime.writeJson).mockClear();
+
+    await updateCommand({ json: true, restart: false });
+
+    const updateCall = updateNpmInstalledPlugins.mock.calls.at(-1)?.[0] as
+      | { skipIds?: Set<string> }
+      | undefined;
+    expect(updateCall?.skipIds?.has("demo")).toBe(true);
+    const jsonOutput = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as
+      | UpdateRunResult
+      | undefined;
+    expect(jsonOutput?.status).toBe("ok");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("ok");
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
+      pluginId: "demo",
+    });
+    expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]?.reason).toContain(
+      "package.json is missing",
+    );
+    expect(jsonOutput?.postUpdate?.plugins?.npm.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "error",
+    });
+  });
+
   it("prints non-fatal plugin warnings in human update output", async () => {
     updateNpmInstalledPlugins.mockResolvedValueOnce({
       changed: false,

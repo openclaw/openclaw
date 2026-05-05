@@ -1208,9 +1208,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     return missingIds;
   };
 
-  const missingPayloadIds = await collectMissingPayloadWarnings(
-    pluginConfig.plugins?.installs ?? {},
-  );
+  const missingPayloadIds = await collectMissingPayloadWarnings(pluginInstallRecords);
 
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,

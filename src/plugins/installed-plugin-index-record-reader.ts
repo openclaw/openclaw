@@ -141,11 +141,14 @@ function mergeRecoveredManagedNpmInstallRecords(
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   index: unknown,
 ): Record<string, PluginInstallRecord> | null {
-  if (!isRecord(index) || !Array.isArray(index.plugins)) {
+  if (!isRecord(index)) {
     return null;
   }
   if (Object.prototype.hasOwnProperty.call(index, "installRecords")) {
     return readRecordMap(index.installRecords) ?? {};
+  }
+  if (!Array.isArray(index.plugins)) {
+    return null;
   }
   const records: Record<string, PluginInstallRecord> = {};
   for (const entry of index.plugins) {

@@ -124,10 +124,29 @@ function assertCorruptUpdate(updateJsonPath, pluginId) {
   if (plugins.status !== "ok") {
     throw new Error(`expected post-update plugin status ok, got ${JSON.stringify(plugins.status)}`);
   }
+  assertCorruptPluginDetails(plugins, pluginId);
+}
+
+function assertCorruptPluginResult(pluginJsonPath, pluginId) {
+  const plugins = readJson(pluginJsonPath);
+  if (plugins.status !== "ok") {
+    throw new Error(`expected post-update plugin status ok, got ${JSON.stringify(plugins.status)}`);
+  }
+  assertCorruptPluginDetails(plugins, pluginId);
+}
+
+function assertCorruptPluginDetails(plugins, pluginId) {
   const outcomes = plugins.npm?.outcomes ?? [];
   const outcome = outcomes.find((entry) => entry?.pluginId === pluginId);
   if (!outcome || outcome.status !== "error") {
-    throw new Error(`expected error outcome for ${pluginId}, got ${JSON.stringify(outcomes)}`);
+    throw new Error(
+      `expected error outcome for ${pluginId}, got ${JSON.stringify({
+        outcomes,
+        warnings: plugins.warnings ?? [],
+        sync: plugins.sync,
+        integrityDrifts: plugins.integrityDrifts ?? [],
+      })}`,
+    );
   }
   const warnings = plugins.warnings ?? [];
   const warning = warnings.find((entry) => entry?.pluginId === pluginId);
@@ -146,6 +165,21 @@ function assertCorruptUpdate(updateJsonPath, pluginId) {
   }
 }
 
+function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
+  const payload = readJson(updateJsonPath);
+  if (payload.status !== "error" || payload.reason !== "post-update-plugins") {
+    throw new Error(
+      `expected legacy post-update plugin failure, got ${JSON.stringify({
+        status: payload.status,
+        reason: payload.reason,
+      })}`,
+    );
+  }
+  if (!payload.after?.version) {
+    throw new Error(`expected core update to install a new version: ${JSON.stringify(payload)}`);
+  }
+}
+
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
   "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
@@ -155,6 +189,8 @@ const commands = {
   "assert-snapshot": () => assertSnapshot(arg),
   "assert-output": () => assertOutput(arg),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
+  "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
+  "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
 };
 const run = commands[command];
 await (
