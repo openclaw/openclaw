@@ -430,6 +430,7 @@ export function handleMessageUpdate(
   if (evtType === "thinking_start" || evtType === "thinking_delta" || evtType === "thinking_end") {
     if (evtType === "thinking_start" || evtType === "thinking_delta") {
       openReasoningStream(ctx);
+      ctx.state.hadThinkingInMessage = true;
     }
     const thinkingDelta = typeof assistantRecord?.delta === "string" ? assistantRecord.delta : "";
     const thinkingContent =
@@ -485,7 +486,18 @@ export function handleMessageUpdate(
     assistantRecord?.partial && typeof assistantRecord.partial === "object"
       ? (assistantRecord.partial as AssistantMessage)
       : msg;
-  const deliveryPhase = resolveAssistantMessagePhase(partialAssistant);
+  const providerPhase = resolveAssistantMessagePhase(partialAssistant);
+  // When the provider doesn't set a phase (Anthropic/Bedrock), derive it from
+  // thinking state: if thinking blocks were seen in this assistant message, text
+  // that follows is the final answer. Scoped to non-OpenAI-Responses streams
+  // since those attach phase metadata at text_end (providerPhase is temporarily
+  // undefined during text_delta, and forcing final_answer would bypass the
+  // pending-phase guard).
+  const deliveryPhase =
+    providerPhase ??
+    (ctx.state.hadThinkingInMessage && !isOpenAiResponsesAssistantMessage(partialAssistant)
+      ? "final_answer"
+      : undefined);
   const streamItemId = resolveAssistantStreamItemId({
     contentIndex: assistantRecord?.contentIndex,
     message: partialAssistant,
