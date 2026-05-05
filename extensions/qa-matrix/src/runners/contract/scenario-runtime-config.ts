@@ -22,7 +22,7 @@ async function writeMatrixQaGatewayConfigFile(configPath: string, config: unknow
   await replaceFileAtomic({
     filePath: configPath,
     content: `${JSON.stringify(config, null, 2)}\n`,
-    fileMode: 0o600,
+    mode: 0o600,
     tempPrefix: ".matrix-qa-config",
   });
 }

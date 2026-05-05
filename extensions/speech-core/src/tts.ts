@@ -21,10 +21,7 @@ import {
   selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  createPrivateTempWorkspaceSync,
-  resolvePreferredOpenClawTmpDir,
-} from "openclaw/plugin-sdk/sandbox";
+import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import { writePrivateTextAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -1123,7 +1120,7 @@ export async function textToSpeech(params: {
     outputFormat = transcoded.outputFormat;
   }
 
-  const temp = createPrivateTempWorkspaceSync({
+  const temp = tempWorkspaceSync({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-",
   });

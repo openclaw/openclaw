@@ -5,11 +5,11 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { fileStore } from "@openclaw/fs-safe";
 import { sanitizeUntrustedFileName } from "../infra/filename.js";
-import { isPathInside, root as fsRoot } from "../infra/fs-safe.js";
+import { isPathInside } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveConfigDir } from "../utils.js";
@@ -76,6 +76,15 @@ function resolveMediaRelativePath(id: string, subdir: string, caller: string): s
   }
   const safeSubdir = resolveMediaSubdir(subdir, caller);
   return safeSubdir ? path.join(safeSubdir, id) : id;
+}
+
+function openMediaStore(maxBytes = MAX_BYTES) {
+  return fileStore({
+    rootDir: resolveMediaDir(),
+    dirMode: 0o700,
+    maxBytes,
+    mode: MEDIA_FILE_MODE,
+  });
 }
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
@@ -161,63 +170,12 @@ async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): P
 }
 
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
-  const mediaDir = await ensureMediaDir();
-  const now = Date.now();
-  const recursive = options.recursive ?? false;
-  const pruneEmptyDirs = recursive && (options.pruneEmptyDirs ?? false);
-
-  const removeExpiredFilesInDir = async (dir: string): Promise<boolean> => {
-    const dirEntries = await fs.readdir(dir).catch(() => null);
-    if (!dirEntries) {
-      return false;
-    }
-    for (const entry of dirEntries) {
-      const fullPath = path.join(dir, entry);
-      const stat = await fs.lstat(fullPath).catch(() => null);
-      if (!stat || stat.isSymbolicLink()) {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        if (recursive) {
-          const childIsEmpty = await removeExpiredFilesInDir(fullPath);
-          if (childIsEmpty) {
-            await fs.rmdir(fullPath).catch(() => {});
-          }
-        }
-        continue;
-      }
-      if (!stat.isFile()) {
-        continue;
-      }
-      if (now - stat.mtimeMs > ttlMs) {
-        await fs.rm(fullPath, { force: true }).catch(() => {});
-      }
-    }
-    if (!pruneEmptyDirs) {
-      return false;
-    }
-    const remainingEntries = await fs.readdir(dir).catch(() => null);
-    return remainingEntries !== null && remainingEntries.length === 0;
-  };
-
-  const entries = await fs.readdir(mediaDir).catch(() => []);
-  for (const file of entries) {
-    const full = path.join(mediaDir, file);
-    const stat = await fs.lstat(full).catch(() => null);
-    if (!stat || stat.isSymbolicLink()) {
-      continue;
-    }
-    if (stat.isDirectory()) {
-      const dirIsEmpty = await removeExpiredFilesInDir(full);
-      if (dirIsEmpty) {
-        await fs.rmdir(full).catch(() => {});
-      }
-      continue;
-    }
-    if (stat.isFile() && now - stat.mtimeMs > ttlMs) {
-      await fs.rm(full, { force: true }).catch(() => {});
-    }
-  }
+  await openMediaStore().pruneExpired({
+    maxDepth: options.recursive ? undefined : 1,
+    ttlMs,
+    recursive: options.recursive ?? true,
+    pruneEmptyDirs: options.pruneEmptyDirs,
+  });
 }
 
 function looksLikeUrl(src: string) {
@@ -351,22 +309,19 @@ function buildSavedMediaResult(params: {
 }
 
 async function writeSavedMediaBuffer(params: {
-  dir: string;
+  subdir: string;
   id: string;
   buffer: Buffer;
 }): Promise<string> {
-  const dest = path.join(params.dir, params.id);
-  await retryAfterRecreatingDir(params.dir, async () => {
-    await replaceFileAtomic({
-      filePath: dest,
-      content: params.buffer,
-      dirMode: 0o700,
-      fileMode: MEDIA_FILE_MODE,
-      tempPrefix: `.${params.id}`,
-      syncTempFile: true,
-    });
-  });
-  return dest;
+  const dir = resolveMediaScopedDir(params.subdir, "writeSavedMediaBuffer");
+  const relativePath = resolveMediaRelativePath(params.id, params.subdir, "writeSavedMediaBuffer");
+  return await retryAfterRecreatingDir(
+    dir,
+    async () =>
+      await openMediaStore(params.buffer.byteLength).write(relativePath, params.buffer, {
+        tempPrefix: `.${params.id}`,
+      }),
+  );
 }
 
 export type SaveMediaSourceErrorCode =
@@ -432,7 +387,7 @@ export async function saveMediaSource(
     const saved = await retryAfterRecreatingDir(dir, () =>
       writeSiblingTempFile({
         dir,
-        fileMode: MEDIA_FILE_MODE,
+        mode: MEDIA_FILE_MODE,
         tempPrefix: `.${baseId}`,
         writeTemp: async (tempPath) => {
           const { headerMime, sniffBuffer, size } = await downloadToFile(
@@ -466,7 +421,7 @@ export async function saveMediaSource(
     const mime = await detectMime({ buffer, filePath: source });
     const ext = extensionForMime(mime) ?? path.extname(source);
     const id = buildSavedMediaId({ baseId, ext });
-    await writeSavedMediaBuffer({ dir, id, buffer });
+    await writeSavedMediaBuffer({ subdir, id, buffer });
     return buildSavedMediaResult({ dir, id, size: stat.size, contentType: mime });
   } catch (err) {
     if (isFsSafeError(err)) {
@@ -494,7 +449,7 @@ export async function saveMediaBuffer(
   const ext =
     headerExt ?? extensionForMime(mime) ?? safeOriginalFilenameExtension(originalFilename) ?? "";
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
-  await writeSavedMediaBuffer({ dir, id, buffer });
+  await writeSavedMediaBuffer({ subdir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
 }
 
@@ -524,14 +479,9 @@ export async function saveMediaBuffer(
  */
 export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
   const relativePath = resolveMediaRelativePath(id, subdir, "resolveMediaBufferPath");
-  const mediaRoot = await fsRoot(resolveMediaDir()).catch(() => null);
-  if (!mediaRoot) {
-    throw new Error(
-      `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
-    );
-  }
-
-  const opened = await mediaRoot.open(relativePath).catch(() => null);
+  const opened = await openMediaStore()
+    .open(relativePath)
+    .catch(() => null);
   if (!opened?.stat.isFile()) {
     throw new Error(
       `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
@@ -557,12 +507,9 @@ export async function readMediaBuffer(
   maxBytes = MAX_BYTES,
 ): Promise<ReadMediaBufferResult> {
   const relativePath = resolveMediaRelativePath(id, subdir, "readMediaBuffer");
-  const mediaRoot = await fsRoot(resolveMediaDir()).catch(() => null);
-  if (!mediaRoot) {
-    throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
-  }
-
-  const opened = await mediaRoot.open(relativePath).catch(() => null);
+  const opened = await openMediaStore(maxBytes)
+    .open(relativePath)
+    .catch(() => null);
   if (!opened?.stat.isFile()) {
     throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
   }
@@ -604,6 +551,5 @@ export async function readMediaBuffer(
  */
 export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
   const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
-  const mediaRoot = await fsRoot(resolveMediaDir());
-  await mediaRoot.remove(relativePath);
+  await openMediaStore().remove(relativePath);
 }

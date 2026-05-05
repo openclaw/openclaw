@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { replaceDirectoryStaged } from "@openclaw/fs-safe/atomic";
+import { replaceDirectoryAtomic } from "@openclaw/fs-safe/atomic";
 import { withTempDir } from "../infra/install-source-utils.js";
 import {
   createSafeNpmInstallArgs,
@@ -193,7 +193,7 @@ async function replaceManagedGitRepo(params: {
   persistentRepoDir: string;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   try {
-    await replaceDirectoryStaged({
+    await replaceDirectoryAtomic({
       stagedDir: params.stagedRepoDir,
       targetDir: params.persistentRepoDir,
       backupPrefix: ".repo-backup-",

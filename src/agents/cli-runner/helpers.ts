@@ -11,7 +11,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
-import { createPrivateTempWorkspace } from "../../infra/private-temp-workspace.js";
+import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
@@ -310,7 +310,7 @@ export async function writeCliSystemPromptFile(params: {
   ) {
     return { cleanup: async () => {} };
   }
-  const workspace = await createPrivateTempWorkspace({
+  const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-cli-system-prompt-",
   });

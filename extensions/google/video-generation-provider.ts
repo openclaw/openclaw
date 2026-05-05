@@ -7,10 +7,7 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  withPrivateTempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
@@ -154,7 +151,7 @@ async function downloadGeneratedVideo(params: {
   file: unknown;
   index: number;
 }): Promise<GeneratedVideoAsset> {
-  return await withPrivateTempWorkspace(
+  return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-google-video-" },
     async ({ dir: tempDir }) => {
       const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);

@@ -1,5 +1,5 @@
 import path from "node:path";
-import { createPrivateTempWorkspace } from "../infra/private-temp-workspace.js";
+import { tempWorkspace } from "../infra/private-temp-workspace.js";
 import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
 
 const DEFAULT_QR_PNG_SCALE = 6;
@@ -102,7 +102,7 @@ export async function writeQrPngTempFile(
   const dirPrefix = resolveQrTempPathSegment("dirPrefix", opts.dirPrefix);
   const fileName = resolveQrTempPathSegment("fileName", opts.fileName ?? "qr.png");
   const pngBase64 = await renderQrPngBase64(input, opts);
-  const workspace = await createPrivateTempWorkspace({ rootDir: opts.tmpRoot, prefix: dirPrefix });
+  const workspace = await tempWorkspace({ rootDir: opts.tmpRoot, prefix: dirPrefix });
   const dirPath = workspace.dir;
   try {
     const filePath = await workspace.writePrivate(fileName, Buffer.from(pngBase64, "base64"));

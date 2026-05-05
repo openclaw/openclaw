@@ -492,7 +492,7 @@ async function writeDreamsFileAtomic(dreamsPath: string, content: string): Promi
   await replaceFileAtomic({
     filePath: dreamsPath,
     content,
-    fileMode: 0o600,
+    mode: 0o600,
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
     throwOnCleanupError: true,

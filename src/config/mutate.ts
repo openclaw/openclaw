@@ -106,7 +106,7 @@ async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<vo
     filePath,
     content: `${JSON.stringify(value, null, 2)}\n`,
     dirMode: 0o700,
-    fileMode: 0o600,
+    mode: 0o600,
     tempPrefix: path.basename(filePath),
     beforeRename: async () => {
       await fs.access(filePath).then(

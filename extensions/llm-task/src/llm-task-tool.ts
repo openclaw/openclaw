@@ -2,7 +2,7 @@ import path from "node:path";
 import Ajv from "ajv";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
-import { resolvePreferredOpenClawTmpDir, withPrivateTempWorkspace } from "../api.js";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 
 const AjvCtor = Ajv as unknown as typeof import("ajv").default;
@@ -207,7 +207,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
 
       const fullPrompt = `${system}\n\nTASK:\n${prompt}\n\nINPUT_JSON:\n${inputJson}\n`;
 
-      return await withPrivateTempWorkspace(
+      return await withTempWorkspace(
         { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-llm-task-" },
         async ({ dir: tmpDir }) => {
           const sessionId = `llm-task-${Date.now()}`;

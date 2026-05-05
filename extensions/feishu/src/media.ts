@@ -8,7 +8,7 @@ import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
-  withPrivateTempWorkspace,
+  withTempWorkspace,
   withTempDownloadPath,
 } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -751,7 +751,7 @@ async function transcodeToFeishuVoiceOpus(params: {
   fileName: string;
   contentType?: string;
 }): Promise<{ buffer: Buffer; fileName: string; contentType: string }> {
-  return await withPrivateTempWorkspace(
+  return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-voice-" },
     async (workspace) => {
       const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));

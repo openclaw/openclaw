@@ -97,7 +97,7 @@ export async function restoreCredsFromBackupIfNeeded(authDir: string): Promise<b
       filePath: credsPath,
       content: backupRaw,
       dirMode: 0o700,
-      fileMode: 0o600,
+      mode: 0o600,
       tempPrefix: ".creds.restore",
     });
     logger.warn({ credsPath }, "restored corrupted WhatsApp creds.json from backup");

@@ -646,7 +646,7 @@ export function writeDiagnosticStabilityBundleSync(
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,
       dirMode: 0o700,
-      fileMode: 0o600,
+      mode: 0o600,
       tempPrefix: ".openclaw-stability",
     });
     pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);

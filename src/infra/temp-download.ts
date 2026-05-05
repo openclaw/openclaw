@@ -1,9 +1,9 @@
 import {
   buildRandomTempFilePath as buildRandomTempFilePathInRoot,
-  createTempFileTarget,
   sanitizeTempFileName,
-  withTempFileTarget,
-  type TempFileTarget,
+  type TempFile,
+  tempFile,
+  withTempFile,
 } from "@openclaw/fs-safe/temp";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
@@ -13,7 +13,7 @@ const logger = createSubsystemLogger("infra:temp-download");
 export { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 export { sanitizeTempFileName };
 
-type TempDownloadTarget = TempFileTarget;
+type TempDownloadTarget = TempFile;
 
 function resolveTempRoot(tmpDir?: string): string {
   return tmpDir ?? resolvePreferredOpenClawTmpDir();
@@ -40,7 +40,7 @@ export async function createTempDownloadTarget(params: {
   fileName?: string;
   tmpDir?: string;
 }): Promise<TempDownloadTarget> {
-  return await createTempFileTarget({
+  return await tempFile({
     rootDir: resolveTempRoot(params.tmpDir),
     prefix: params.prefix,
     fileName: params.fileName,
@@ -58,7 +58,7 @@ export async function withTempDownloadPath<T>(
   },
   fn: (tmpPath: string) => Promise<T>,
 ): Promise<T> {
-  return await withTempFileTarget(
+  return await withTempFile(
     {
       rootDir: resolveTempRoot(params.tmpDir),
       prefix: params.prefix,

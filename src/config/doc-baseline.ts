@@ -602,7 +602,7 @@ function writeFileAtomic(filePath: string, content: string): void {
     filePath,
     content,
     dirMode: 0o755,
-    fileMode: 0o644,
+    mode: 0o644,
     tempPrefix: path.basename(filePath),
   });
 }

@@ -15,7 +15,7 @@ import {
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
-  withPrivateTempWorkspace,
+  withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import type { OpenShellSandboxBackend } from "./backend.types.js";
@@ -412,7 +412,7 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async syncWorkspaceFromRemote(): Promise<void> {
-    await withPrivateTempWorkspace(
+    await withTempWorkspace(
       { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-sync-" },
       async ({ dir: tmpDir }) => {
         const result = await runOpenShellCli({
@@ -441,7 +441,7 @@ class OpenShellSandboxBackendImpl {
   }
 
   private async uploadPathToRemote(localPath: string, remotePath: string): Promise<void> {
-    await withPrivateTempWorkspace(
+    await withTempWorkspace(
       { rootDir: resolveOpenShellTmpRoot(), prefix: "openclaw-openshell-upload-" },
       async ({ dir: tmpDir }) => {
         // Stage a symlink-free snapshot so upload never dereferences host paths

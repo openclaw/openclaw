@@ -5,7 +5,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
-import { withPrivateTempWorkspace } from "./private-temp-workspace.js";
+import { withTempWorkspace } from "./private-temp-workspace.js";
 
 export type NpmSpecResolution = {
   name?: string;
@@ -107,9 +107,7 @@ export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
 ): Promise<T> {
-  return await withPrivateTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) =>
-    fn(tmp.dir),
-  );
+  return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
 }
 
 export async function resolveArchiveSourcePath(archivePath: string): Promise<

@@ -20,7 +20,7 @@ export async function writeCredsJsonAtomically(authDir: string, creds: unknown):
     filePath: credsPath,
     content: json,
     dirMode: 0o700,
-    fileMode: CREDS_FILE_MODE,
+    mode: CREDS_FILE_MODE,
     tempPrefix: ".creds",
     syncTempFile: true,
     syncParentDir: true,

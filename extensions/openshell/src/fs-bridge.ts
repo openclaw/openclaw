@@ -7,6 +7,7 @@ import type {
   SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { createWritableRenameTargetResolver } from "openclaw/plugin-sdk/sandbox";
+import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import type { OpenShellFsBridgeContext, OpenShellSandboxBackend } from "./backend.types.js";
 import { movePathWithCopyFallback } from "./mirror.js";
 
@@ -298,11 +299,6 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
-}
-
-function isPathInside(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 async function assertLocalPathSafety(params: {

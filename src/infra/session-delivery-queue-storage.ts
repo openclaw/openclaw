@@ -90,7 +90,7 @@ async function writeQueueEntry(filePath: string, entry: QueuedSessionDelivery): 
   await replaceFileAtomic({
     filePath,
     content: JSON.stringify(entry, null, 2),
-    fileMode: 0o600,
+    mode: 0o600,
     tempPrefix: ".session-delivery-queue",
   });
 }

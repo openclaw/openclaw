@@ -1,10 +1,7 @@
 import path from "node:path";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
-import {
-  resolvePreferredOpenClawTmpDir,
-  withPrivateTempWorkspace,
-} from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { formatError } from "./session-errors.js";
 import {
   sanitizeAssistantVisibleText,
@@ -186,7 +183,7 @@ async function transcodeToWhatsAppVoiceOpus(params: {
   buffer: Buffer;
   fileName: string;
 }): Promise<Buffer> {
-  return await withPrivateTempWorkspace(
+  return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "whatsapp-voice-" },
     async (workspace) => {
       const ext = path.extname(params.fileName).toLowerCase();

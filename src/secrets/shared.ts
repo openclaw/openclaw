@@ -65,7 +65,7 @@ export function writeTextFileAtomic(pathname: string, value: string, mode = 0o60
     replaceFileAtomicSync({
       filePath: pathname,
       content: value,
-      fileMode: mode,
+      mode,
       tempPrefix: ".openclaw-secrets",
     });
     return;

@@ -21,10 +21,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  createPrivateTempWorkspace,
-  resolvePreferredOpenClawTmpDir,
-} from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
@@ -239,7 +236,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
     isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
-      const temp = await createPrivateTempWorkspace({
+      const temp = await tempWorkspace({
         rootDir: resolvePreferredOpenClawTmpDir(),
         prefix: "tts-microsoft-",
       });

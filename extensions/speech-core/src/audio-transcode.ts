@@ -1,8 +1,5 @@
 import { spawn } from "node:child_process";
-import {
-  createPrivateTempWorkspaceSync,
-  resolvePreferredOpenClawTmpDir,
-} from "openclaw/plugin-sdk/sandbox";
+import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 
 type TranscodeOutcome =
   | { ok: true; buffer: Buffer }
@@ -55,7 +52,7 @@ export async function transcodeAudioBuffer(params: {
     return { ok: false, reason: "platform-unsupported" };
   }
 
-  const tmp = createPrivateTempWorkspaceSync({
+  const tmp = tempWorkspaceSync({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",
   });

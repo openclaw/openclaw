@@ -3,10 +3,7 @@ import { createRequire } from "node:module";
 import type { Readable } from "node:stream";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  createPrivateTempWorkspace,
-  resolvePreferredOpenClawTmpDir,
-} from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const require = createRequire(import.meta.url);
 
@@ -154,7 +151,7 @@ function estimateDurationSeconds(pcm: Buffer): number {
 export async function writeVoiceWavFile(
   pcm: Buffer,
 ): Promise<{ path: string; durationSeconds: number }> {
-  const workspace = await createPrivateTempWorkspace({
+  const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "discord-voice-",
   });

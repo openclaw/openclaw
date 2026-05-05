@@ -1,9 +1,9 @@
 export {
-  createPrivateTempWorkspace,
-  createPrivateTempWorkspaceSync,
-  withPrivateTempWorkspace,
-  withPrivateTempWorkspaceSync,
-  type PrivateTempWorkspace,
-  type PrivateTempWorkspaceOptions,
-  type PrivateTempWorkspaceSync,
+  tempWorkspace,
+  tempWorkspaceSync,
+  type TempWorkspace,
+  type TempWorkspaceOptions,
+  type TempWorkspaceSync,
+  withTempWorkspace,
+  withTempWorkspaceSync,
 } from "@openclaw/fs-safe/temp";

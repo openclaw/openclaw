@@ -147,7 +147,7 @@ export function writeGatewayRestartIntentSync(opts: {
     replaceFileAtomicSync({
       filePath: intentPath,
       content: `${JSON.stringify(payload)}\n`,
-      fileMode: 0o600,
+      mode: 0o600,
       tempPrefix: ".gateway-restart-intent",
     });
     return true;

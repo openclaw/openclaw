@@ -207,7 +207,7 @@ describe("fs-safe", () => {
 
     const absolutePath = path.join(root, "absolute.txt");
     await fs.writeFile(absolutePath, "absolute");
-    const byAbsolutePath = await rootFs.readPath(absolutePath);
+    const byAbsolutePath = await rootFs.readAbsolute(absolutePath);
     expect(byAbsolutePath.buffer.toString("utf8")).toBe("absolute");
 
     const scopedPath = path.join(root, "scoped.txt");

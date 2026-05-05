@@ -1,5 +1,5 @@
 import path from "node:path";
-import { withPrivateTempWorkspace } from "../infra/private-temp-workspace.js";
+import { withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
 
@@ -50,7 +50,7 @@ export async function transcodeAudioBufferToOpus(params: {
   bitrate?: string;
   channels?: number;
 }): Promise<Buffer> {
-  return await withPrivateTempWorkspace(
+  return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
       prefix: normalizeTempPrefix(params.tempPrefix),

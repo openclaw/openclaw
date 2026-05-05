@@ -1,18 +1,18 @@
 import {
-  createPrivateTempWorkspace,
+  tempWorkspace,
   resolvePreferredOpenClawTmpDir,
-  type PrivateTempWorkspace,
+  type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 
 export function createTempDirHarness() {
-  const tempDirs: PrivateTempWorkspace[] = [];
+  const tempDirs: TempWorkspace[] = [];
 
   return {
     async cleanup() {
       await Promise.all(tempDirs.splice(0).map((dir) => dir.cleanup()));
     },
     async makeTempDir(prefix: string) {
-      const dir = await createPrivateTempWorkspace({
+      const dir = await tempWorkspace({
         rootDir: resolvePreferredOpenClawTmpDir(),
         prefix,
       });
