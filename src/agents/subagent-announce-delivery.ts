@@ -885,7 +885,9 @@ async function sendSubagentAnnounceDirectly(params: {
       });
     const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const completionFallbackText =
-      params.expectsCompletionMessage && shouldDeliverAgentFinal && !agentMediatedCompletion
+      params.expectsCompletionMessage &&
+      deliveryTarget.deliver &&
+      (!agentMediatedCompletion || requiresMessageToolDelivery)
         ? extractThreadCompletionFallbackText(params.internalEvents)
         : "";
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
@@ -1070,6 +1072,24 @@ async function sendSubagentAnnounceDirectly(params: {
       requiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
     ) {
+      const didFallback = await sendCompletionFallback({
+        cfg,
+        channel: deliveryTarget.channel,
+        to: deliveryTarget.to,
+        accountId: deliveryTarget.accountId,
+        threadId: deliveryTarget.threadId,
+        content: completionFallbackText,
+        requesterSessionKey: canonicalRequesterSessionKey,
+        bestEffortDeliver: params.bestEffortDeliver,
+        idempotencyKey: params.directIdempotencyKey,
+        signal: params.signal,
+      });
+      if (didFallback) {
+        return {
+          delivered: true,
+          path: resolveCompletionFallbackPath(deliveryTarget.threadId),
+        };
+      }
       return {
         delivered: false,
         path: "direct",
