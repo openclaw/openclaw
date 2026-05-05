@@ -146,37 +146,62 @@ describe("talk realtime gateway relay", () => {
     expect(bridge.close).toHaveBeenCalled();
   });
 
-  it("rejects relay control from a different connection", () => {
+  it("rebinds relay control to the latest browser connection and replays ready", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const bridge = {
+      connect: vi.fn(async () => {
+        bridgeRequest?.onReady?.();
+      }),
+      sendAudio: vi.fn(),
+      setMediaTimestamp: vi.fn(),
+      submitToolResult: vi.fn(),
+      acknowledgeMark: vi.fn(),
+      close: vi.fn(),
+      isConnected: vi.fn(() => true),
+    };
     const provider: RealtimeVoiceProviderPlugin = {
       id: "relay-test",
       label: "Relay Test",
       isConfigured: () => true,
-      createBridge: () => ({
-        connect: vi.fn(async () => undefined),
-        sendAudio: vi.fn(),
-        setMediaTimestamp: vi.fn(),
-        submitToolResult: vi.fn(),
-        acknowledgeMark: vi.fn(),
-        close: vi.fn(),
-        isConnected: vi.fn(() => true),
-      }),
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return bridge;
+      },
     };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
     const session = createTalkRealtimeRelaySession({
-      context: { broadcastToConnIds: vi.fn() } as never,
+      context: {
+        broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+          events.push({ event, payload, connIds: [...connIds] });
+        },
+      } as never,
       connId: "conn-1",
       provider,
       providerConfig: {},
       instructions: "brief",
       tools: [],
     });
+    await Promise.resolve();
 
-    expect(() =>
-      sendTalkRealtimeRelayAudio({
-        relaySessionId: session.relaySessionId,
-        connId: "conn-2",
-        audioBase64: Buffer.from("audio").toString("base64"),
-      }),
-    ).toThrow("Unknown realtime relay session");
+    sendTalkRealtimeRelayAudio({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-2",
+      audioBase64: Buffer.from("audio").toString("base64"),
+    });
+
+    expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio"));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: { relaySessionId: session.relaySessionId, type: "ready" },
+          connIds: ["conn-1"],
+        }),
+        expect.objectContaining({
+          payload: { relaySessionId: session.relaySessionId, type: "ready" },
+          connIds: ["conn-2"],
+        }),
+      ]),
+    );
   });
 
   it("caps active relay sessions per browser connection", () => {

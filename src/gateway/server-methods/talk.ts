@@ -13,10 +13,7 @@ import {
 } from "../../realtime-voice/agent-consult-tool.js";
 import { getRealtimeVoiceProvider } from "../../realtime-voice/provider-registry.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
-import type {
-  RealtimeVoiceBrowserSession,
-  RealtimeVoiceProviderConfig,
-} from "../../realtime-voice/provider-types.js";
+import type { RealtimeVoiceProviderConfig } from "../../realtime-voice/provider-types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -206,11 +203,29 @@ function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: str
       ...voiceCallRealtime.providers,
       ...talkProviderConfigs,
     },
+    realtimeTransport: config.talk?.realtimeTransport ?? "auto",
   };
 }
 
-function buildRealtimeInstructions(): string {
-  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+function shouldAttemptProviderBrowserSession(params: {
+  providerId: string;
+  transport: "auto" | "gateway-relay" | "provider-browser";
+}): boolean {
+  if (params.transport === "gateway-relay") {
+    return false;
+  }
+  if (params.transport === "provider-browser") {
+    return true;
+  }
+  return normalizeLowercaseStringOrEmpty(params.providerId) !== "google";
+}
+
+function buildRealtimeInstructions(locale?: string): string {
+  const normalizedLocale = normalizeOptionalString(locale);
+  const localeHint = normalizedLocale
+    ? ` The user's browser locale is ${normalizedLocale}; follow that language unless the user explicitly asks otherwise.`
+    : "";
+  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise.${localeHint} If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
 }
 
 function withRealtimeBrowserOverrides(
@@ -227,12 +242,6 @@ function withRealtimeBrowserOverrides(
     overrides.voice = voice;
   }
   return Object.keys(overrides).length > 0 ? { ...providerConfig, ...overrides } : providerConfig;
-}
-
-function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
-  const provider = normalizeLowercaseStringOrEmpty(session.provider);
-  const transport = (session as { transport?: string }).transport ?? "webrtc-sdp";
-  return provider === "google" && transport === "webrtc-sdp";
 }
 
 function isFallbackEligibleTalkReason(reason: TalkSpeakReason): boolean {
@@ -519,20 +528,6 @@ export const talkHandlers: GatewayRequestHandlers = {
         cfgForResolve: runtimeConfig,
         noRegisteredProviderMessage: "No realtime voice provider registered",
       });
-      if (resolution.provider.createBrowserSession) {
-        const session = await resolution.provider.createBrowserSession({
-          providerConfig: resolution.providerConfig,
-          instructions: buildRealtimeInstructions(),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
-          model: normalizeOptionalString(typedParams.model),
-          voice: normalizeOptionalString(typedParams.voice),
-        });
-        if (!isUnsupportedBrowserWebRtcSession(session)) {
-          respond(true, session, undefined);
-          return;
-        }
-      }
-
       const connId = client?.connId;
       if (!connId) {
         respond(
@@ -544,12 +539,34 @@ export const talkHandlers: GatewayRequestHandlers = {
       }
       const model = normalizeOptionalString(typedParams.model);
       const voice = normalizeOptionalString(typedParams.voice);
+      const browserProviderConfig = withRealtimeBrowserOverrides(resolution.providerConfig, {
+        model,
+        voice,
+      });
+      const instructions = buildRealtimeInstructions(client?.connect?.locale);
+      if (
+        resolution.provider.createBrowserSession &&
+        shouldAttemptProviderBrowserSession({
+          providerId: resolution.provider.id,
+          transport: realtimeConfig.realtimeTransport,
+        })
+      ) {
+        const browserSession = await resolution.provider.createBrowserSession({
+          providerConfig: browserProviderConfig,
+          instructions,
+          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+          model,
+          voice,
+        });
+        respond(true, browserSession, undefined);
+        return;
+      }
       const session = createTalkRealtimeRelaySession({
         context,
         connId,
         provider: resolution.provider,
-        providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, { model, voice }),
-        instructions: buildRealtimeInstructions(),
+        providerConfig: browserProviderConfig,
+        instructions,
         tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
         model,
         voice,

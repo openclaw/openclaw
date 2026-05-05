@@ -183,6 +183,13 @@ const TalkConfigSchema = Type.Object(
     speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    realtimeTransport: Type.Optional(
+      Type.Union([
+        Type.Literal("auto"),
+        Type.Literal("gateway-relay"),
+        Type.Literal("provider-browser"),
+      ]),
+    ),
   },
   { additionalProperties: false },
 );

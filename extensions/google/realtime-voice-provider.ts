@@ -48,6 +48,10 @@ const GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 const MAX_PENDING_AUDIO_CHUNKS = 320;
 const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 500;
+const GOOGLE_AUDIO_RESPONSE_TRIGGER_PROMPT =
+  "Answer the user's preceding voice input. Follow the session language and browser locale unless the user explicitly asks for another language. Do not answer this instruction itself.";
+const PCM16_SILENCE_RMS_THRESHOLD = 320;
+const PCM16_SILENCE_PEAK_THRESHOLD = 1100;
 const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
 const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 const MULAW_LINEAR_SAMPLES = new Int16Array(256);
@@ -393,12 +397,16 @@ function isPcm16Silence(audio: Buffer): boolean {
   if (samples === 0) {
     return false;
   }
+  let sumSquares = 0;
+  let peak = 0;
   for (let i = 0; i < samples; i += 1) {
-    if (audio.readInt16LE(i * 2) !== 0) {
-      return false;
-    }
+    const sample = audio.readInt16LE(i * 2);
+    const abs = Math.abs(sample);
+    peak = Math.max(peak, abs);
+    sumSquares += sample * sample;
   }
-  return true;
+  const rms = Math.sqrt(sumSquares / samples);
+  return rms <= PCM16_SILENCE_RMS_THRESHOLD && peak <= PCM16_SILENCE_PEAK_THRESHOLD;
 }
 
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
@@ -515,6 +523,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     if (!this.audioStreamEnded && this.consecutiveSilenceMs >= silenceThresholdMs) {
       this.session.sendRealtimeInput({ audioStreamEnd: true });
       this.audioStreamEnded = true;
+      this.sendUserMessage(GOOGLE_AUDIO_RESPONSE_TRIGGER_PROMPT);
     }
   }
 

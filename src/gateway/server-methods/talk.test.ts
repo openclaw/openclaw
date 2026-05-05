@@ -243,9 +243,10 @@ describe("talk.realtime.session handler", () => {
     vi.clearAllMocks();
   });
 
-  it("falls back to the gateway relay when Google returns a WebRTC-shaped browser session", async () => {
+  it("uses the gateway relay for Google browser Talk by default", async () => {
     const createBrowserSession = vi.fn(async () => ({
       provider: "google",
+      transport: "json-pcm-websocket",
       clientSecret: "legacy-google-secret",
     }));
     const createBridge = vi.fn();
@@ -291,7 +292,7 @@ describe("talk.realtime.session handler", () => {
       } as never,
     });
 
-    expect(createBrowserSession).toHaveBeenCalledTimes(1);
+    expect(createBrowserSession).not.toHaveBeenCalled();
     expect(mocks.createTalkRealtimeRelaySession).toHaveBeenCalledWith(
       expect.objectContaining({
         connId: "conn-1",
@@ -308,5 +309,90 @@ describe("talk.realtime.session handler", () => {
       }),
       undefined,
     );
+  });
+
+  it("keeps non-Google provider browser sessions in auto mode", async () => {
+    const browserSession = {
+      provider: "openai",
+      transport: "webrtc-sdp" as const,
+      clientSecret: "openai-secret",
+    };
+    const createBrowserSession = vi.fn(async () => browserSession);
+    const provider = {
+      id: "openai",
+      label: "OpenAI Realtime",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "openai-key" },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "main", provider: "openai" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              provider: "openai",
+              providers: { openai: { apiKey: "openai-key" } },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(createBrowserSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, browserSession, undefined);
+  });
+
+  it("allows opting browser Talk into provider browser sessions", async () => {
+    const browserSession = {
+      provider: "google",
+      transport: "json-pcm-websocket",
+      clientSecret: "legacy-google-secret",
+    };
+    const createBrowserSession = vi.fn(async () => browserSession);
+    const provider = {
+      id: "google",
+      label: "Google Live Voice",
+      isConfigured: () => true,
+      createBrowserSession,
+      createBridge: vi.fn(),
+    };
+    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
+      provider,
+      providerConfig: { apiKey: "gemini-key" },
+    });
+
+    const respond = vi.fn();
+    await talkHandlers["talk.realtime.session"]({
+      req: { type: "req", id: "1", method: "talk.realtime.session" },
+      params: { sessionKey: "main", provider: "google" },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () =>
+          ({
+            talk: {
+              provider: "google",
+              realtimeTransport: "provider-browser",
+              providers: { google: { apiKey: "gemini-key" } },
+            },
+          }) as OpenClawConfig,
+      } as never,
+    });
+
+    expect(createBrowserSession).toHaveBeenCalledTimes(1);
+    expect(mocks.createTalkRealtimeRelaySession).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, browserSession, undefined);
   });
 });

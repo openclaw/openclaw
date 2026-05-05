@@ -73,6 +73,8 @@ export type TalkConfig = {
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
   silenceTimeoutMs?: number;
+  /** Browser realtime transport selection for Control UI Talk (default: auto). */
+  realtimeTransport?: "auto" | "gateway-relay" | "provider-browser";
 };
 
 export type TalkConfigResponse = TalkConfig & {
