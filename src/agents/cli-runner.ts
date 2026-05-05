@@ -246,7 +246,6 @@ export async function runPreparedCliAgent(
   }): Promise<void> => {
     try {
       const nowMs = Date.now();
-      const originalText = params.transcriptPrompt ?? params.prompt;
       const sessionManager = SessionManager.open(params.sessionFile);
       sessionManager.appendMessage({
         role: "user",
@@ -254,8 +253,7 @@ export async function runPreparedCliAgent(
         timestamp: nowMs,
         idempotencyKey: `hook-block:before_agent_run:user:${params.runId}`,
         __openclaw: {
-          originalBlockedContent: {
-            content: originalText ? [{ type: "text", text: originalText }] : [],
+          beforeAgentRunBlocked: {
             blockedBy: block.pluginId,
             reason: block.reason,
             blockedAt: nowMs,

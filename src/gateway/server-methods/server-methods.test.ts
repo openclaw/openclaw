@@ -455,31 +455,6 @@ describe("sanitizeChatHistoryMessages", () => {
       },
     ]);
   });
-
-  it("truncates blocked original sidecar content with the chat history text cap", () => {
-    const result = sanitizeChatHistoryMessages(
-      [
-        {
-          role: "user",
-          content: [{ type: "text", text: "The agent cannot read this message." }],
-          __openclaw: {
-            originalBlockedContent: {
-              content: [{ type: "text", text: "secret ".repeat(20) }],
-            },
-          },
-        },
-      ],
-      24,
-    );
-
-    expect(
-      (
-        result[0] as {
-          __openclaw?: { originalBlockedContent?: { content?: Array<{ text?: string }> } };
-        }
-      ).__openclaw?.originalBlockedContent?.content?.[0]?.text,
-    ).toBe("secret secret secret sec\n...(truncated)...");
-  });
 });
 
 describe("projectRecentChatDisplayMessages", () => {

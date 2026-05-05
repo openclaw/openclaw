@@ -1433,8 +1433,7 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const isBlockedUserMessage =
-    normalizedRole === "user" && normalizedMessage.isBlockedOriginalContent === true;
+  const isBlockedUserMessage = false;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 

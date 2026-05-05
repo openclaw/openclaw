@@ -118,7 +118,6 @@ export {
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   readSessionMessagesAsync,
-  stripBlockedOriginalContentMeta,
   visitSessionMessagesAsync,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";

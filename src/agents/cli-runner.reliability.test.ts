@@ -707,9 +707,12 @@ describe("runCliAgent reliability", () => {
       const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
       const blockedLine = JSON.parse(lines[lines.length - 1]);
       expect(blockedLine.message.content[0].text).toBe("The agent cannot read this message.");
-      expect(blockedLine.message.__openclaw.originalBlockedContent.content[0].text).toBe(
-        "secret prompt",
-      );
+      expect(JSON.stringify(blockedLine)).not.toContain("secret prompt");
+      expect(blockedLine.message.__openclaw.beforeAgentRunBlocked).toMatchObject({
+        blockedBy: "policy-plugin",
+        reason: "contains protected content",
+      });
+      expect(Object.hasOwn(blockedLine.message.__openclaw, "beforeAgentRunBlocked")).toBe(true);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -54,33 +54,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        struct ParamsWithBlockedOriginals: Codable {
-            var sessionKey: String
-            var includeBlockedOriginalContent: Bool
-        }
-        struct LegacyParams: Codable {
-            var sessionKey: String
-        }
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(
-            ParamsWithBlockedOriginals(sessionKey: sessionKey, includeBlockedOriginalContent: true))
+        struct Params: Codable { var sessionKey: String }
+        let data = try JSONEncoder().encode(Params(sessionKey: sessionKey))
         let json = String(data: data, encoding: .utf8)
-        let res: Data
-        do {
-            res = try await self.gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
-        } catch {
-            guard Self.isUnsupportedBlockedOriginalHistoryParam(error) else { throw error }
-            let legacyData = try encoder.encode(LegacyParams(sessionKey: sessionKey))
-            let legacyJson = String(data: legacyData, encoding: .utf8)
-            res = try await self.gateway.request(method: "chat.history", paramsJSON: legacyJson, timeoutSeconds: 15)
-        }
+        let res = try await self.gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: res)
-    }
-
-    private static func isUnsupportedBlockedOriginalHistoryParam(_ error: Error) -> Bool {
-        guard let response = error as? GatewayResponseError else { return false }
-        guard response.code == ErrorCode.invalidRequest.rawValue else { return false }
-        return response.message.contains("includeBlockedOriginalContent")
     }
 
     func sendMessage(

@@ -92,7 +92,7 @@ function appendBlockedUserMessageWithSessionManager(params: {
     timestamp: Date.now(),
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     __openclaw: {
-      originalBlockedContent: {
+      beforeAgentRunBlocked: {
         content: params.originalText ? [{ type: "text", text: params.originalText }] : [],
         blockedBy: params.pluginId,
         reason: params.reason,
@@ -1305,9 +1305,7 @@ describe("readSessionMessages", () => {
     });
 
     expect(messageId).toBeTruthy();
-    const out = readSessionMessages(sessionId, storePath, sessionFile, {
-      includeBlockedOriginalContent: true,
-    });
+    const out = readSessionMessages(sessionId, storePath, sessionFile, {});
     expect(
       out.map((message) => ({
         role: (message as { role?: string }).role,
@@ -1319,8 +1317,8 @@ describe("readSessionMessages", () => {
       { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
     ]);
     expect(
-      (out[2] as { __openclaw?: { originalBlockedContent?: { content?: unknown } } }).__openclaw
-        ?.originalBlockedContent?.content,
+      (out[2] as { __openclaw?: { beforeAgentRunBlocked?: { content?: unknown } } }).__openclaw
+        ?.beforeAgentRunBlocked?.content,
     ).toEqual([{ type: "text", text: "[hitl:block] hello" }]);
   });
 
@@ -1359,17 +1357,15 @@ describe("readSessionMessages", () => {
       reason: "blocked by test policy",
     });
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile, {
-      includeBlockedOriginalContent: true,
-    });
+    const out = readSessionMessages(sessionId, storePath, sessionFile, {});
     expect(
       out.map((message) => ({
         role: (message as { role?: string }).role,
         original: (
           message as {
-            __openclaw?: { originalBlockedContent?: { content?: Array<{ text?: string }> } };
+            __openclaw?: { beforeAgentRunBlocked?: { content?: Array<{ text?: string }> } };
           }
-        ).__openclaw?.originalBlockedContent?.content?.[0]?.text,
+        ).__openclaw?.beforeAgentRunBlocked?.content?.[0]?.text,
       })),
     ).toEqual([
       { role: "user", original: "[hitl:block] first" },

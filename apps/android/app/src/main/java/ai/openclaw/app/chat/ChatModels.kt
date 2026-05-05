@@ -4,7 +4,6 @@ data class ChatMessage(
   val id: String,
   val role: String,
   val content: List<ChatMessageContent>,
-  val originalBlockedContent: List<ChatMessageContent> = emptyList(),
   val timestampMs: Long?,
 )
 

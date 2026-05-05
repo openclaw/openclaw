@@ -80,18 +80,6 @@ function resolveLimit(req: IncomingMessage): number | undefined {
   return Math.min(MAX_SESSION_HISTORY_LIMIT, Math.max(1, value));
 }
 
-function shouldIncludeBlockedOriginalContent(
-  req: IncomingMessage,
-  requestAuth: Parameters<typeof resolveTrustedHttpOperatorScopes>[1],
-): boolean {
-  const raw = getRequestUrl(req).searchParams.get("includeBlockedOriginalContent");
-  if (raw !== "1" && raw !== "true") {
-    return false;
-  }
-  const scopes = resolveTrustedHttpOperatorScopes(req, requestAuth);
-  return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
-}
-
 function canonicalizePath(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -149,8 +137,7 @@ export async function handleSessionHistoryHttpRequest(
   if (!authResult) {
     return true;
   }
-  const { cfg, requestAuth } = authResult;
-  const includeBlockedOriginalContent = shouldIncludeBlockedOriginalContent(req, requestAuth);
+  const { cfg } = authResult;
 
   const target = resolveGatewaySessionStoreTarget({ cfg, key: sessionKey });
   const store = loadSessionStore(target.storePath);
@@ -179,7 +166,6 @@ export async function handleSessionHistoryHttpRequest(
           entry.sessionFile,
           {
             ...resolveSessionHistoryTailReadOptions(limit),
-            includeBlockedOriginalContent,
           },
         )
       : undefined;
@@ -191,7 +177,6 @@ export async function handleSessionHistoryHttpRequest(
       ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
           mode: "full",
           reason: "session history cursor pagination",
-          includeBlockedOriginalContent,
         })
       : []);
   const historySnapshot = buildSessionHistorySnapshot({
@@ -238,7 +223,6 @@ export async function handleSessionHistoryHttpRequest(
     maxChars: effectiveMaxChars,
     limit,
     cursor,
-    includeBlockedOriginalContent,
   });
   sentHistory = sseState.snapshot();
   setSseHeaders(res);
@@ -308,13 +292,6 @@ export async function handleSessionHistoryHttpRequest(
       return false;
     }
     const requestedScopes = resolveTrustedHttpOperatorScopes(req, currentRequestAuth.requestAuth);
-    if (
-      includeBlockedOriginalContent &&
-      !requestedScopes.includes(ADMIN_SCOPE) &&
-      !requestedScopes.includes(TALK_SECRETS_SCOPE)
-    ) {
-      return false;
-    }
     return authorizeOperatorScopesForMethod("chat.history", requestedScopes).allowed;
   };
 

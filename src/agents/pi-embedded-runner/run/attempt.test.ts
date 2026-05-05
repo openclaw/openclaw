@@ -151,15 +151,14 @@ describe("normalizeMessagesForLlmBoundary", () => {
     );
   });
 
-  it("strips blocked original content metadata from the LLM boundary", () => {
+  it("keeps only safe blocked metadata at the LLM boundary", () => {
     const input = [
       {
         role: "user",
         content: [{ type: "text", text: "The agent cannot read this message." }],
         timestamp: 1,
         __openclaw: {
-          originalBlockedContent: {
-            content: [{ type: "text", text: "secret prompt" }],
+          beforeAgentRunBlocked: {
             blockedBy: "policy-plugin",
             reason: "contains protected content",
             blockedAt: 1,
@@ -175,7 +174,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output[0]?.content).toEqual([
       { type: "text", text: "The agent cannot read this message." },
     ]);
-    expect(output[0]).not.toHaveProperty("__openclaw");
+    expect(output[0]).toHaveProperty("__openclaw.beforeAgentRunBlocked");
     expect(JSON.stringify(output)).not.toContain("secret prompt");
     expect(input[0]).toHaveProperty("__openclaw");
   });

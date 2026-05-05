@@ -58,7 +58,6 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
-  isBlockedOriginalContent?: boolean;
   audioAsVoice?: boolean;
   replyTarget?:
     | {

@@ -347,14 +347,6 @@ function sanitizeChatHistoryMessage(
     }
   }
 
-  if ("__openclaw" in entry) {
-    const sanitized = sanitizeBlockedOriginalContentMeta(entry.__openclaw, maxChars);
-    if (sanitized.changed) {
-      entry.__openclaw = sanitized.meta;
-      changed = true;
-    }
-  }
-
   return { message: changed ? entry : message, changed };
 }
 

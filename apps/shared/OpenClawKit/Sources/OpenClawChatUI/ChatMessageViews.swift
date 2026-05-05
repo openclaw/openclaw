@@ -275,14 +275,7 @@ private struct ChatMessageBody: View {
     }
 
     private var displayContent: [OpenClawChatMessageContent] {
-        if self.isBlockedUserMessage, let original = self.message.originalBlockedContent {
-            return original
-        }
-        return self.message.content
-    }
-
-    private var isBlockedUserMessage: Bool {
-        self.isUser && !(self.message.originalBlockedContent?.isEmpty ?? true)
+        self.message.content
     }
 
     private var toolCalls: [OpenClawChatMessageContent] {

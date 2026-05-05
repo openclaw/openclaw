@@ -492,37 +492,11 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
-  return stripBlockedOriginalContentFromMessages(
-    stripHistoricalRuntimeContextCustomMessages(normalized),
-  );
+  return stripHistoricalRuntimeContextCustomMessages(normalized);
 }
 
 function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => structuredClone(message));
-}
-
-function stripBlockedOriginalContentFromMessages(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map(stripBlockedOriginalContentFromMessage);
-}
-
-function stripBlockedOriginalContentFromMessage(message: AgentMessage): AgentMessage {
-  const record = message as AgentMessage & { __openclaw?: unknown };
-  const meta =
-    record.__openclaw && typeof record.__openclaw === "object" && !Array.isArray(record.__openclaw)
-      ? (record.__openclaw as Record<string, unknown>)
-      : undefined;
-  if (!meta || !Object.hasOwn(meta, "originalBlockedContent")) {
-    return message;
-  }
-  const { originalBlockedContent: _originalBlockedContent, ...remainingMeta } = meta;
-  const { __openclaw: _openclaw, ...remainingMessage } = record;
-  if (Object.keys(remainingMeta).length === 0) {
-    return remainingMessage as AgentMessage;
-  }
-  return {
-    ...remainingMessage,
-    __openclaw: remainingMeta,
-  } as unknown as AgentMessage;
 }
 
 function sessionMessagesContainIdempotencyKey(
@@ -2829,18 +2803,13 @@ export async function runEmbeddedAttempt(
               return true;
             }
             const nowMs = Date.now();
-            const originalBlockedContent =
-              blockedTranscriptPrompt.length > 0
-                ? [{ type: "text" as const, text: blockedTranscriptPrompt }]
-                : [];
             const redactedUserMessage = {
               role: "user" as const,
               content: [{ type: "text" as const, text: block.message }],
               timestamp: nowMs,
               idempotencyKey,
               __openclaw: {
-                originalBlockedContent: {
-                  content: originalBlockedContent,
+                beforeAgentRunBlocked: {
                   blockedBy: block.pluginId,
                   reason: block.reason,
                   blockedAt: nowMs,
@@ -3352,9 +3321,7 @@ export async function runEmbeddedAttempt(
             );
           }
         }
-        messagesSnapshot = stripBlockedOriginalContentFromMessages(
-          snapshotSelection.messagesSnapshot,
-        );
+        messagesSnapshot = snapshotSelection.messagesSnapshot;
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
         lastAssistant = messagesSnapshot

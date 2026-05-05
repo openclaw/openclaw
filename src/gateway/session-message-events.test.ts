@@ -314,20 +314,18 @@ describe("session.message websocket events", () => {
           role: "user",
           content: [{ type: "text", text: "The agent cannot read this message." }],
           __openclaw: {
-            originalBlockedContent: {
-              content: [{ type: "text", text: "secret blocked prompt" }],
-            },
+            beforeAgentRunBlocked: { blockedBy: "policy-plugin", reason: "blocked", blockedAt: 1 },
           },
         },
       });
 
       const payload = messageEvent.payload as {
-        message?: { content?: unknown; __openclaw?: { originalBlockedContent?: unknown } };
+        message?: { content?: unknown; __openclaw?: { beforeAgentRunBlocked?: unknown } };
       };
       expect(payload.message?.content).toEqual([
         { type: "text", text: "The agent cannot read this message." },
       ]);
-      expect(payload.message?.__openclaw?.originalBlockedContent).toBeUndefined();
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
     });
   });
 
@@ -353,8 +351,7 @@ describe("session.message websocket events", () => {
           role: "user",
           content: [{ type: "text", text: "The agent cannot read this message." }],
           __openclaw: {
-            originalBlockedContent: {
-              content: [{ type: "text", text: "secret blocked prompt" }],
+            beforeAgentRunBlocked: {
               blockedBy: "policy-plugin",
               reason: "contains protected content",
               blockedAt: Date.now(),
@@ -368,14 +365,14 @@ describe("session.message websocket events", () => {
         message?: {
           role?: unknown;
           content?: unknown;
-          __openclaw?: { originalBlockedContent?: unknown };
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
         };
       };
       expect(payload.message?.role).toBe("user");
       expect(payload.message?.content).toEqual([
         { type: "text", text: "The agent cannot read this message." },
       ]);
-      expect(payload.message?.__openclaw?.originalBlockedContent).toBeUndefined();
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
     });
   });
 

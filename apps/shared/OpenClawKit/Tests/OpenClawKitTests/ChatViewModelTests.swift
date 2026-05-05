@@ -16,7 +16,6 @@ private func chatBlockedUserMessage(redactedText: String, originalText: String, 
         "role": "user",
         "content": [["type": "text", "text": redactedText]],
         "__openclaw": [
-            "originalBlockedContent": [
                 "content": [["type": "text", "text": originalText]],
             ],
         ],
@@ -630,7 +629,6 @@ extension TestChatTransportState {
                     message.role == "user" &&
                         message.content.compactMap(\.text).joined(separator: "\n") ==
                         "The agent cannot read this message." &&
-                        message.originalBlockedContent?.compactMap(\.text).joined(separator: "\n") ==
                         "hello from mac webchat"
                 }
                 let hasAssistant = vm.messages.contains { message in

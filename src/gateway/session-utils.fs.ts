@@ -139,28 +139,7 @@ export function attachOpenClawTranscriptMeta(
   };
 }
 
-export function stripBlockedOriginalContentMeta(message: unknown): unknown {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return message;
-  }
-  const record = message as Record<string, unknown>;
-  const existing =
-    record.__openclaw && typeof record.__openclaw === "object" && !Array.isArray(record.__openclaw)
-      ? (record.__openclaw as Record<string, unknown>)
-      : null;
-  if (!existing || !("originalBlockedContent" in existing)) {
-    return message;
-  }
-  const { originalBlockedContent: _originalBlockedContent, ...remainingMeta } = existing;
-  return {
-    ...record,
-    __openclaw: remainingMeta,
-  };
-}
-
-type SessionMessageProjectionOptions = {
-  includeBlockedOriginalContent?: boolean;
-};
+type SessionMessageProjectionOptions = Record<never, never>;
 
 export function readSessionMessages(
   sessionId: string,
@@ -605,7 +584,7 @@ export async function visitSessionMessagesAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   visit: (message: unknown, seq: number) => void,
-  opts: { mode: "full"; reason: string; includeBlockedOriginalContent?: boolean },
+  opts: { mode: "full"; reason: string },
 ): Promise<number> {
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
   if (!filePath) {
@@ -759,36 +738,9 @@ function parsedSessionEntryToMessage(
   }
   const entry = parsed as Record<string, unknown>;
   if (entry.message) {
-    const messageRecord =
-      entry.message && typeof entry.message === "object" && !Array.isArray(entry.message)
-        ? (entry.message as Record<string, unknown>)
-        : undefined;
-    const messageOpenClaw =
-      messageRecord?.__openclaw &&
-      typeof messageRecord.__openclaw === "object" &&
-      !Array.isArray(messageRecord.__openclaw)
-        ? (messageRecord.__openclaw as Record<string, unknown>)
-        : undefined;
-    const originalBlockedContent =
-      opts?.includeBlockedOriginalContent === true &&
-      !messageOpenClaw?.originalBlockedContent &&
-      entry.originalBlockedContent &&
-      typeof entry.originalBlockedContent === "object" &&
-      !Array.isArray(entry.originalBlockedContent)
-        ? {
-            originalBlockedContent: {
-              content: (entry.originalBlockedContent as { content?: unknown }).content,
-            },
-          }
-        : {};
-    const projectedMessage =
-      opts?.includeBlockedOriginalContent === true
-        ? entry.message
-        : stripBlockedOriginalContentMeta(entry.message);
-    return attachOpenClawTranscriptMeta(projectedMessage, {
+    return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
       seq,
-      ...originalBlockedContent,
     });
   }
 

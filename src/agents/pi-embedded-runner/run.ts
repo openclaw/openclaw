@@ -1834,12 +1834,7 @@ export async function runEmbeddedPiAgent(
               livenessState: "blocked",
             });
             return {
-              payloads: [
-                {
-                  text: errorText,
-                  isError: true,
-                },
-              ],
+              payloads: [],
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta: buildErrorAgentMeta({

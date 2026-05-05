@@ -6,7 +6,6 @@ import {
   attachOpenClawTranscriptMeta,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesAsync,
-  stripBlockedOriginalContentMeta,
 } from "./session-utils.js";
 
 type SessionHistoryTranscriptMeta = {
@@ -157,7 +156,6 @@ export class SessionHistorySseState {
   private readonly maxChars: number;
   private readonly limit: number | undefined;
   private readonly cursor: string | undefined;
-  private readonly includeBlockedOriginalContent: boolean;
   private sentHistory: PaginatedSessionHistory;
   private rawTranscriptSeq: number;
 
@@ -169,14 +167,12 @@ export class SessionHistorySseState {
     maxChars?: number;
     limit?: number;
     cursor?: string;
-    includeBlockedOriginalContent?: boolean;
   }): SessionHistorySseState {
     return new SessionHistorySseState({
       target: params.target,
       maxChars: params.maxChars,
       limit: params.limit,
       cursor: params.cursor,
-      includeBlockedOriginalContent: params.includeBlockedOriginalContent,
       initialRawMessages: params.rawMessages,
       rawTranscriptSeq: params.rawTranscriptSeq,
       totalRawMessages: params.totalRawMessages,
@@ -188,7 +184,6 @@ export class SessionHistorySseState {
     maxChars?: number;
     limit?: number;
     cursor?: string;
-    includeBlockedOriginalContent?: boolean;
     initialRawMessages: unknown[];
     rawTranscriptSeq?: number;
     totalRawMessages?: number;
@@ -197,7 +192,6 @@ export class SessionHistorySseState {
     this.maxChars = params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
     this.limit = params.limit;
     this.cursor = params.cursor;
-    this.includeBlockedOriginalContent = params.includeBlockedOriginalContent === true;
     const rawSnapshot = {
       rawMessages: params.initialRawMessages,
       ...(typeof params.rawTranscriptSeq === "number"
@@ -235,10 +229,7 @@ export class SessionHistorySseState {
       return null;
     }
     this.rawTranscriptSeq += 1;
-    const projectedMessage = this.includeBlockedOriginalContent
-      ? update.message
-      : stripBlockedOriginalContentMeta(update.message);
-    const nextMessage = attachOpenClawTranscriptMeta(projectedMessage, {
+    const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
     });
@@ -286,7 +277,6 @@ export class SessionHistorySseState {
         this.target.sessionFile,
         {
           ...resolveSessionHistoryTailReadOptions(this.limit),
-          includeBlockedOriginalContent: this.includeBlockedOriginalContent,
         },
       );
       return {
@@ -303,7 +293,6 @@ export class SessionHistorySseState {
         {
           mode: "full",
           reason: "session history cursor pagination",
-          includeBlockedOriginalContent: this.includeBlockedOriginalContent,
         },
       ),
     };

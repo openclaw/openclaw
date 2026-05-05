@@ -664,11 +664,7 @@ describe("grouped chat rendering", () => {
       {
         role: "user",
         content: [{ type: "text", text: "The agent cannot read this message." }],
-        __openclaw: {
-          originalBlockedContent: {
-            content: [{ type: "text", text: "secret blocked prompt" }],
-          },
-        },
+        __openclaw: {},
         timestamp: 1000,
       },
       "user",

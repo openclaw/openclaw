@@ -334,30 +334,12 @@ class ChatController(
   }
 
   private suspend fun requestChatHistoryJson(sessionKey: String): String {
-    val params =
+    return session.request(
+      "chat.history",
       buildJsonObject {
         put("sessionKey", JsonPrimitive(sessionKey))
-        put("includeBlockedOriginalContent", JsonPrimitive(true))
-      }
-    val response = session.requestDetailed("chat.history", params.toString())
-    if (response.ok) return response.payloadJson ?: ""
-    val error = response.error
-    if (
-      error?.code == "INVALID_REQUEST" &&
-        error.message.contains("includeBlockedOriginalContent")
-    ) {
-      val legacyParams =
-        buildJsonObject {
-          put("sessionKey", JsonPrimitive(sessionKey))
-        }
-      val legacyResponse = session.requestDetailed("chat.history", legacyParams.toString())
-      if (legacyResponse.ok) return legacyResponse.payloadJson ?: ""
-      val legacyError = legacyResponse.error
-      throw IllegalStateException(
-        "${legacyError?.code ?: "UNAVAILABLE"}: ${legacyError?.message ?: "request failed"}",
-      )
-    }
-    throw IllegalStateException("${error?.code ?: "UNAVAILABLE"}: ${error?.message ?: "request failed"}")
+      }.toString(),
+    )
   }
 
   private suspend fun pollHealthIfNeeded(force: Boolean) {
@@ -535,21 +517,11 @@ class ChatController(
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
         val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
-        val originalBlockedContent =
-          obj["__openclaw"]
-            .asObjectOrNull()
-            ?.get("originalBlockedContent")
-            .asObjectOrNull()
-            ?.get("content")
-            .asArrayOrNull()
-            ?.mapNotNull(::parseMessageContent)
-            ?: emptyList()
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
           role = role,
           content = content,
-          originalBlockedContent = originalBlockedContent,
           timestampMs = ts,
         )
       }
@@ -677,14 +649,6 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
           .orEmpty(),
       ).joinToString(separator = "\u001F")
     }
-  val blockedFingerprint =
-    message.originalBlockedContent.joinToString(separator = "\u001E") { part ->
-      listOf(
-        part.type.trim().lowercase(),
-        part.text?.trim().orEmpty(),
-      ).joinToString(separator = "\u001F")
-    }
-
   if (timestamp.isEmpty() && contentFingerprint.isEmpty()) return null
   return listOf(role, timestamp, contentFingerprint, blockedFingerprint).joinToString(separator = "|")
 }

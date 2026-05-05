@@ -240,17 +240,7 @@ function expandTextContent(text: string): {
 export function normalizeMessage(message: unknown): NormalizedMessage {
   const m = message as Record<string, unknown>;
   let role = typeof m.role === "string" ? m.role : "unknown";
-  let isBlockedOriginalContent = false;
-  let contentRaw = m.content;
-
-  if (role === "user") {
-    const oc = m.__openclaw as Record<string, unknown> | undefined;
-    const obc = oc?.originalBlockedContent as { content?: unknown } | undefined;
-    if (obc && Array.isArray(obc.content) && obc.content.length > 0) {
-      contentRaw = obc.content;
-      isBlockedOriginalContent = true;
-    }
-  }
+  const contentRaw = m.content;
 
   // Detect tool messages by common gateway shapes.
   // Some tool events come through as assistant role with tool_* items in the content array.
@@ -396,7 +386,6 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     timestamp,
     id,
     senderLabel,
-    ...(isBlockedOriginalContent ? { isBlockedOriginalContent: true } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
