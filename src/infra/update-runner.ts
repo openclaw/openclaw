@@ -61,6 +61,12 @@ export type UpdateRunResult = {
       status: "ok" | "skipped" | "error";
       reason?: string;
       changed: boolean;
+      warnings?: Array<{
+        pluginId?: string;
+        reason: string;
+        message: string;
+        guidance: string[];
+      }>;
       sync: {
         changed: boolean;
         switchedToBundled: string[];

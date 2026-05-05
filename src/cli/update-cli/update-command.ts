@@ -123,6 +123,7 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   ...SERVICE_REFRESH_PATH_ENV_KEYS,
   "OPENCLAW_PROFILE",
 ] as const;
+const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -156,6 +157,8 @@ type MissingPluginInstallPayload = {
   installPath?: string;
   reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
 };
+
+type PostUpdatePluginWarning = NonNullable<PostCorePluginUpdateResult["warnings"]>[number];
 
 function pickUpdateQuip(): string {
   return UPDATE_QUIPS[Math.floor(Math.random() * UPDATE_QUIPS.length)] ?? "Update complete.";
@@ -238,6 +241,47 @@ function formatMissingPluginPayloadReason(entry: MissingPluginInstallPayload): s
     return `package.json is missing under ${entry.installPath}`;
   }
   return `package directory is missing: ${entry.installPath}`;
+}
+
+function formatPostUpdatePluginInspectGuidance(pluginId: string): string {
+  return `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`;
+}
+
+function createPostUpdatePluginWarning(params: {
+  pluginId?: string;
+  reason: string;
+}): PostUpdatePluginWarning {
+  const reason = params.reason.trim() || "unknown plugin post-update failure";
+  const guidance = [
+    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE,
+    ...(params.pluginId ? [formatPostUpdatePluginInspectGuidance(params.pluginId)] : []),
+  ];
+  return {
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    reason,
+    message: params.pluginId
+      ? `Plugin "${params.pluginId}" could not be processed after the core update: ${reason} ${guidance.join(" ")}`
+      : `Plugin post-update processing could not complete after the core update: ${reason} ${guidance.join(" ")}`,
+    guidance,
+  };
+}
+
+function addPostUpdatePluginGuidance(outcome: PluginUpdateOutcome): PluginUpdateOutcome {
+  if (outcome.status !== "error") {
+    return outcome;
+  }
+  const guidance = [
+    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE,
+    formatPostUpdatePluginInspectGuidance(outcome.pluginId),
+  ];
+  const missing = guidance.filter((entry) => !outcome.message.includes(entry));
+  if (missing.length === 0) {
+    return outcome;
+  }
+  return {
+    ...outcome,
+    message: `${outcome.message} ${missing.join(" ")}`,
+  };
 }
 
 export function shouldPrepareUpdatedInstallRestart(params: {
@@ -1050,6 +1094,7 @@ async function updatePluginsAfterCoreUpdate(params: {
         outcomes: [],
       },
       integrityDrifts: [],
+      warnings: [],
     };
   }
 
@@ -1066,16 +1111,43 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.heading("Updating plugins..."));
   }
 
+  const warnings: PostUpdatePluginWarning[] = [];
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const syncConfig = withPluginInstallRecords(
+    params.configSnapshot.sourceConfig,
+    pluginInstallRecords,
+  );
   const syncResult = await syncPluginsForUpdateChannel({
-    config: withPluginInstallRecords(params.configSnapshot.sourceConfig, pluginInstallRecords),
+    config: syncConfig,
     channel: params.channel,
     workspaceDir: params.root,
     externalizedBundledPluginBridges: await listPersistedBundledPluginLocationBridges({
       workspaceDir: params.root,
     }),
     logger: pluginLogger,
+  }).catch((error: unknown) => {
+    const warning = createPostUpdatePluginWarning({
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    warnings.push(warning);
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.warn(warning.message));
+    }
+    return {
+      config: syncConfig,
+      changed: false,
+      summary: {
+        switchedToBundled: [],
+        switchedToClawHub: [],
+        switchedToNpm: [],
+        warnings: [warning.message],
+        errors: [],
+      },
+    };
   });
+  for (const error of syncResult.summary.errors) {
+    warnings.push(createPostUpdatePluginWarning({ reason: error }));
+  }
   let pluginConfig = syncResult.config;
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
@@ -1106,7 +1178,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     return false;
   };
 
-  const repairMissingPayloads = async (
+  const collectMissingPayloadWarnings = async (
     records: Record<string, PluginInstallRecord>,
   ): Promise<readonly string[]> => {
     const missing = await collectMissingPluginInstallPayloads({
@@ -1118,33 +1190,25 @@ async function updatePluginsAfterCoreUpdate(params: {
       return [];
     }
     const missingIds = missing.map((entry) => entry.pluginId);
-    if (!params.opts.json) {
-      defaultRuntime.log(
-        theme.warn(
-          `Recovering missing plugin install payloads: ${missing
-            .map((entry) => `${entry.pluginId} (${formatMissingPluginPayloadReason(entry)})`)
-            .join(", ")}.`,
-        ),
-      );
+    for (const entry of missing) {
+      const warning = createPostUpdatePluginWarning({
+        pluginId: entry.pluginId,
+        reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+      });
+      warnings.push(warning);
+      pluginUpdateOutcomes.push({
+        pluginId: entry.pluginId,
+        status: "error",
+        message: warning.message,
+      });
+      if (!params.opts.json) {
+        defaultRuntime.log(theme.warn(warning.message));
+      }
     }
-    const repairResult = await updateNpmInstalledPlugins({
-      config: pluginConfig,
-      pluginIds: missingIds,
-      timeoutMs: params.timeoutMs,
-      updateChannel: params.channel,
-      skipDisabledPlugins: true,
-      disableOnFailure: true,
-      logger: pluginLogger,
-      onIntegrityDrift: onPluginIntegrityDrift,
-    });
-    pluginConfig = repairResult.config;
-    pluginsChanged ||= repairResult.changed;
-    npmPluginsChanged ||= repairResult.changed;
-    pluginUpdateOutcomes.push(...repairResult.outcomes);
     return missingIds;
   };
 
-  const repairedMissingPayloadIds = await repairMissingPayloads(
+  const missingPayloadIds = await collectMissingPayloadWarnings(
     pluginConfig.plugins?.installs ?? {},
   );
 
@@ -1152,16 +1216,46 @@ async function updatePluginsAfterCoreUpdate(params: {
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
     updateChannel: params.channel,
-    skipIds: new Set([...syncResult.summary.switchedToNpm, ...repairedMissingPayloadIds]),
+    skipIds: new Set([...syncResult.summary.switchedToNpm, ...missingPayloadIds]),
     skipDisabledPlugins: true,
-    disableOnFailure: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
+  }).catch((error: unknown) => {
+    const warning = createPostUpdatePluginWarning({
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    warnings.push(warning);
+    if (!params.opts.json) {
+      defaultRuntime.log(theme.warn(warning.message));
+    }
+    return {
+      config: pluginConfig,
+      changed: false,
+      outcomes: [
+        {
+          pluginId: "unknown",
+          status: "error" as const,
+          message: warning.message,
+        },
+      ],
+    };
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
   npmPluginsChanged ||= npmResult.changed;
-  pluginUpdateOutcomes.push(...npmResult.outcomes);
+  const guidedNpmOutcomes = npmResult.outcomes.map(addPostUpdatePluginGuidance);
+  pluginUpdateOutcomes.push(...guidedNpmOutcomes);
+  for (const outcome of guidedNpmOutcomes) {
+    if (outcome.status !== "error") {
+      continue;
+    }
+    warnings.push(
+      createPostUpdatePluginWarning({
+        pluginId: outcome.pluginId,
+        reason: outcome.message,
+      }),
+    );
+  }
 
   const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
     records: pluginConfig.plugins?.installs ?? {},
@@ -1169,13 +1263,20 @@ async function updatePluginsAfterCoreUpdate(params: {
     skipDisabledPlugins: true,
   });
   pluginUpdateOutcomes.push(
-    ...remainingMissingPayloads.map(
-      (entry): PluginUpdateOutcome => ({
-        pluginId: entry.pluginId,
-        status: "error",
-        message: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+    ...remainingMissingPayloads
+      .filter((entry) => !missingPayloadIds.includes(entry.pluginId))
+      .map((entry): PluginUpdateOutcome => {
+        const warning = createPostUpdatePluginWarning({
+          pluginId: entry.pluginId,
+          reason: `Plugin install payload missing after update: ${formatMissingPluginPayloadReason(entry)}.`,
+        });
+        warnings.push(warning);
+        return {
+          pluginId: entry.pluginId,
+          status: "error",
+          message: warning.message,
+        };
       }),
-    ),
   );
 
   if (pluginsChanged) {
@@ -1198,12 +1299,9 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   if (params.opts.json) {
     return {
-      status:
-        syncResult.summary.errors.length > 0 ||
-        pluginUpdateOutcomes.some((outcome) => outcome.status === "error")
-          ? "error"
-          : "ok",
+      status: "ok",
       changed: pluginsChanged,
+      warnings,
       sync: {
         changed: syncResult.changed,
         switchedToBundled: syncResult.summary.switchedToBundled,
@@ -1242,7 +1340,7 @@ async function updatePluginsAfterCoreUpdate(params: {
     defaultRuntime.log(theme.warn(warning));
   }
   for (const error of syncResult.summary.errors) {
-    defaultRuntime.log(theme.error(error));
+    defaultRuntime.log(theme.warn(createPostUpdatePluginWarning({ reason: error }).message));
   }
 
   const updated = pluginUpdateOutcomes.filter((entry) => entry.status === "updated").length;
@@ -1267,16 +1365,13 @@ async function updatePluginsAfterCoreUpdate(params: {
     if (outcome.status !== "error") {
       continue;
     }
-    defaultRuntime.log(theme.error(outcome.message));
+    defaultRuntime.log(theme.warn(outcome.message));
   }
 
   return {
-    status:
-      syncResult.summary.errors.length > 0 ||
-      pluginUpdateOutcomes.some((outcome) => outcome.status === "error")
-        ? "error"
-        : "ok",
+    status: "ok",
     changed: pluginsChanged,
+    warnings,
     sync: {
       changed: syncResult.changed,
       switchedToBundled: syncResult.summary.switchedToBundled,
@@ -1854,10 +1949,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         defaultRuntime.writeJson(result);
       }
     }
-    if (pluginUpdate.status === "error") {
-      defaultRuntime.exit(1);
-      return;
-    }
     defaultRuntime.exit(0);
     return;
   }
@@ -2249,28 +2340,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
     ? {
         ...result,
-        status: postCorePluginUpdate.status === "error" ? "error" : result.status,
-        ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
         postUpdate: {
           ...result.postUpdate,
           plugins: postCorePluginUpdate,
         },
       }
     : result;
-
-  if (postCorePluginUpdate?.status === "error") {
-    if (opts.json) {
-      defaultRuntime.writeJson(resultWithPostUpdate);
-    } else {
-      defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
-    }
-    await maybeRestartServiceAfterFailedPackageUpdate({
-      prePackageServiceStop,
-      jsonMode: Boolean(opts.json),
-    });
-    defaultRuntime.exit(1);
-    return;
-  }
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;

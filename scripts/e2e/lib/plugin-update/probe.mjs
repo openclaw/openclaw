@@ -112,7 +112,41 @@ function assertOutput(logPath) {
   }
 }
 
-const [command, arg] = process.argv.slice(2);
+function assertCorruptUpdate(updateJsonPath, pluginId) {
+  const payload = readJson(updateJsonPath);
+  if (payload.status !== "ok") {
+    throw new Error(`expected core update status ok, got ${JSON.stringify(payload.status)}`);
+  }
+  const plugins = payload.postUpdate?.plugins;
+  if (!plugins) {
+    throw new Error(`missing postUpdate.plugins in update output: ${JSON.stringify(payload)}`);
+  }
+  if (plugins.status !== "ok") {
+    throw new Error(`expected post-update plugin status ok, got ${JSON.stringify(plugins.status)}`);
+  }
+  const outcomes = plugins.npm?.outcomes ?? [];
+  const outcome = outcomes.find((entry) => entry?.pluginId === pluginId);
+  if (!outcome || outcome.status !== "error") {
+    throw new Error(`expected error outcome for ${pluginId}, got ${JSON.stringify(outcomes)}`);
+  }
+  const warnings = plugins.warnings ?? [];
+  const warning = warnings.find((entry) => entry?.pluginId === pluginId);
+  if (!warning) {
+    throw new Error(`expected warning for ${pluginId}, got ${JSON.stringify(warnings)}`);
+  }
+  const text = JSON.stringify({ outcome, warning });
+  for (const expected of [
+    "package.json is missing",
+    "Run openclaw doctor --fix to attempt automatic repair.",
+    `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
+  ]) {
+    if (!text.includes(expected)) {
+      throw new Error(`expected update output to include ${expected}: ${text}`);
+    }
+  }
+}
+
+const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
   "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
   seed: seedInstallState,
@@ -120,6 +154,7 @@ const commands = {
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),
   "assert-snapshot": () => assertSnapshot(arg),
   "assert-output": () => assertOutput(arg),
+  "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
 };
 const run = commands[command];
 await (
