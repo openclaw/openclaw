@@ -447,7 +447,10 @@ async function isGitAvailable(): Promise<boolean> {
   return gitAvailabilityPromise;
 }
 
-async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
+async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean, enabled: boolean) {
+  if (!enabled) {
+    return;
+  }
   if (!isBrandNewWorkspace) {
     return;
   }
@@ -467,6 +470,13 @@ async function ensureGitRepo(dir: string, isBrandNewWorkspace: boolean) {
 export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
+  /**
+   * When `true` (default), brand-new workspaces are initialized as a local
+   * git repository (`git init`). Pass `false` to opt out — useful for hosts
+   * that manage versioning or backups outside of git, or that don't want
+   * agents to perceive the workspace as a tracked repo.
+   */
+  gitInit?: boolean;
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -584,7 +594,7 @@ export async function ensureAgentWorkspace(params?: {
   if (stateDirty) {
     await writeWorkspaceSetupState(statePath, state);
   }
-  await ensureGitRepo(dir, isBrandNewWorkspace);
+  await ensureGitRepo(dir, isBrandNewWorkspace, params?.gitInit !== false);
 
   return {
     dir,
