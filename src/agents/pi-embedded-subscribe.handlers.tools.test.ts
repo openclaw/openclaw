@@ -482,14 +482,15 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(onToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
         text: expect.stringContaining("```txt\n/approve 12345678 allow-once\n```"),
-        channelData: {
+        channelData: expect.objectContaining({
           execApproval: expect.objectContaining({
             approvalId: "12345678-1234-1234-1234-123456789012",
             approvalSlug: "12345678",
             approvalKind: "exec",
             allowedDecisions: ["allow-once", "allow-always", "deny"],
           }),
-        },
+          toolName: "exec",
+        }),
         interactive: expect.objectContaining({
           blocks: expect.any(Array),
         }),
@@ -527,14 +528,15 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     expect(onToolResult).toHaveBeenCalledWith(
       expect.objectContaining({
         text: expect.not.stringContaining("allow-always"),
-        channelData: {
+        channelData: expect.objectContaining({
           execApproval: expect.objectContaining({
             approvalId: "12345678-1234-1234-1234-123456789012",
             approvalSlug: "12345678",
             approvalKind: "exec",
             allowedDecisions: ["allow-once", "deny"],
           }),
-        },
+          toolName: "exec",
+        }),
         interactive: expect.objectContaining({
           blocks: expect.any(Array),
         }),

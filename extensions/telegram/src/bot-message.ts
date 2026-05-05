@@ -2,6 +2,8 @@ import type { ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-types";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveTypingMode } from "../../../src/auto-reply/reply/typing-mode.js";
+import { resolveRunTypingPolicy } from "../../../src/auto-reply/reply/typing-policy.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   buildTelegramMessageContext,
@@ -107,9 +109,55 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           (options?.ingressBuffer ? ` buffer=${options.ingressBuffer}` : ""),
       );
     }
-    void context.sendTyping().catch((err) => {
-      logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+    const earlyTypingChannel =
+      context.ctxPayload?.OriginatingChannel ?? context.ctxPayload?.Provider;
+    const earlyTypingRunKind =
+      options?.runKind ?? options?.kind ?? context.ctxPayload?.RunKind ?? "telegram-inbound";
+    const isEarlyHeartbeat =
+      options?.isHeartbeat === true || context.ctxPayload?.Provider === "heartbeat";
+    const earlyTypingPolicy = resolveRunTypingPolicy({
+      requestedPolicy: options?.typingPolicy,
+      suppressTyping: options?.suppressTyping === true,
+      isHeartbeat: isEarlyHeartbeat,
+      systemEvent:
+        options?.systemEvent === true ||
+        context.ctxPayload?.Provider === "cron-event" ||
+        context.ctxPayload?.Provider === "exec-event",
+      originatingChannel: earlyTypingChannel,
     });
+    const earlyTypingMode = resolveTypingMode({
+      configured: cfg.session?.typingMode ?? cfg.agents?.defaults?.typingMode,
+      isGroupChat:
+        context.ctxPayload?.ChatType === "group" || context.ctxPayload?.ChatType === "channel",
+      wasMentioned: context.ctxPayload?.WasMentioned === true,
+      isHeartbeat: isEarlyHeartbeat,
+      typingPolicy: earlyTypingPolicy.typingPolicy,
+      suppressTyping: earlyTypingPolicy.suppressTyping,
+      sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+    });
+    const sessionIsUserVisible =
+      context.ctxPayload?.Provider === "telegram" &&
+      context.ctxPayload?.ChatType !== "internal" &&
+      options?.internal !== true;
+    const runOriginatedFromThisTelegramChat =
+      earlyTypingChannel === "telegram" &&
+      context.ctxPayload?.OriginatingTo === `telegram:${context.chatId}`;
+    const runIsProducingOrExpectedToProduceVisibleOutput = earlyTypingMode === "instant";
+    const runKindAllowsTyping =
+      earlyTypingRunKind !== "subagent-internal" &&
+      earlyTypingRunKind !== "background-internal" &&
+      earlyTypingRunKind !== "yield-wait";
+    const shouldSendTyping =
+      earlyTypingChannel === "telegram" &&
+      sessionIsUserVisible &&
+      runOriginatedFromThisTelegramChat &&
+      runIsProducingOrExpectedToProduceVisibleOutput &&
+      runKindAllowsTyping;
+    if (shouldSendTyping) {
+      void context.sendTyping().catch((err) => {
+        logVerbose(`telegram early typing cue failed for chat ${context.chatId}: ${String(err)}`);
+      });
+    }
     try {
       await dispatchTelegramMessage({
         context,

@@ -6,16 +6,7 @@ import {
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import {
-  createChannelProgressDraftGate,
-  formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
-  formatChannelProgressDraftText,
-  isChannelProgressDraftWorkToolName,
-  resolveChannelProgressDraftMaxLines,
-  resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-streaming";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import type {
   OpenClawConfig,
@@ -231,24 +222,6 @@ function resolveTelegramReasoningLevel(params: {
   return "off";
 }
 
-const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
-
-function clipProgressMarkdownText(text: string): string {
-  if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
-    return text;
-  }
-  return `${text.slice(0, MAX_PROGRESS_MARKDOWN_TEXT_CHARS - 1).trimEnd()}…`;
-}
-
-function sanitizeProgressMarkdownText(text: string): string {
-  return text.replaceAll("`", "'");
-}
-
-function formatProgressAsMarkdownCode(text: string): string {
-  const clipped = clipProgressMarkdownText(text);
-  return `\`${sanitizeProgressMarkdownText(clipped)}\``;
-}
-
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -425,7 +398,6 @@ export const dispatchTelegramMessage = async ({
       ? (replyQuoteMessageId ?? msg.message_id)
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
-  const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];
@@ -480,78 +452,10 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  const previewToolProgressEnabled =
-    Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
-  let previewToolProgressSuppressed = false;
-  let previewToolProgressLines: string[] = [];
   let answerLaneHasAssistantContent = false;
-  const renderProgressDraft = async (options?: { flush?: boolean }) => {
-    if (!answerLane.stream || streamMode !== "progress") {
-      return;
-    }
-    const previewText = formatChannelProgressDraftText({
-      entry: telegramCfg,
-      lines: previewToolProgressLines,
-      seed: progressSeed,
-      formatLine: formatProgressAsMarkdownCode,
-    });
-    if (!previewText || previewText === answerLane.lastPartialText) {
-      return;
-    }
-    answerLane.lastPartialText = previewText;
-    answerLane.hasStreamedMessage = true;
-    answerLane.stream.update(previewText);
-    if (options?.flush) {
-      await answerLane.stream.flush();
-    }
-  };
-  const progressDraftGate = createChannelProgressDraftGate({
-    onStart: () => renderProgressDraft({ flush: true }),
-  });
-  const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
-    if (!answerLane.stream) {
-      return;
-    }
-    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
-      return;
-    }
-    const normalized = sanitizeProgressMarkdownText(line?.replace(/\s+/g, " ").trim() ?? "");
-    if (streamMode !== "progress") {
-      if (!previewToolProgressEnabled || previewToolProgressSuppressed || !normalized) {
-        return;
-      }
-      const previous = previewToolProgressLines.at(-1);
-      if (previous === normalized) {
-        return;
-      }
-      previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-        -resolveChannelProgressDraftMaxLines(telegramCfg),
-      );
-      const previewText = formatChannelProgressDraftText({
-        entry: telegramCfg,
-        lines: previewToolProgressLines,
-        seed: progressSeed,
-        formatLine: formatProgressAsMarkdownCode,
-      });
-      answerLane.lastPartialText = previewText;
-      answerLane.hasStreamedMessage = true;
-      answerLane.stream.update(previewText);
-      return;
-    }
-    if (previewToolProgressEnabled && !previewToolProgressSuppressed && normalized) {
-      const previous = previewToolProgressLines.at(-1);
-      if (previous !== normalized) {
-        previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-          -resolveChannelProgressDraftMaxLines(telegramCfg),
-        );
-      }
-    }
-    const alreadyStarted = progressDraftGate.hasStarted;
-    await progressDraftGate.noteWork();
-    if (alreadyStarted && progressDraftGate.hasStarted) {
-      await renderProgressDraft();
-    }
-  };
+  // Telegram progress-preview drafts are disabled. They leak internal tool/process
+  // activity into user-visible chat previews ("Pinching...", Process/Edit/Exec).
+  // Final replies and explicitly admitted typing actions remain handled elsewhere.
   let splitReasoningOnNextStream = false;
   let skipNextAnswerMessageStartRotation = false;
   let pendingCompactionReplayBoundary = false;
@@ -634,8 +538,6 @@ export const dispatchTelegramMessage = async ({
         return;
       }
       answerLaneHasAssistantContent = true;
-      previewToolProgressSuppressed = true;
-      previewToolProgressLines = [];
     }
     lane.hasStreamedMessage = true;
     if (
@@ -1161,8 +1063,6 @@ export const dispatchTelegramMessage = async ({
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
                           reasoningStepState.resetForNextStep();
-                          previewToolProgressSuppressed = false;
-                          previewToolProgressLines = [];
                           if (skipNextAnswerMessageStartRotation) {
                             skipNextAnswerMessageStartRotation = false;
                             activePreviewLifecycleByLane.answer = "transient";
@@ -1189,107 +1089,23 @@ export const dispatchTelegramMessage = async ({
                     ? () =>
                         enqueueDraftLaneEvent(async () => {
                           splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-                          previewToolProgressSuppressed = false;
-                          previewToolProgressLines = [];
                         })
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !previewStreamingEnabled || Boolean(answerLane.stream),
-                  onToolStart: async (payload) => {
-                    const toolName = payload.name?.trim();
-                    if (statusReactionController && toolName) {
-                      await statusReactionController.setTool(toolName);
-                    }
-                    await pushPreviewToolProgress(
-                      formatChannelProgressDraftLineForEntry(
-                        telegramCfg,
-                        {
-                          event: "tool",
-                          name: toolName,
-                          phase: payload.phase,
-                          args: payload.args,
-                        },
-                        payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                      ),
-                      { toolName },
-                    );
-                  },
-                  onItemEvent: async (payload) => {
-                    await pushPreviewToolProgress(
-                      formatChannelProgressDraftLineForEntry(telegramCfg, {
-                        event: "item",
-                        itemKind: payload.kind,
-                        title: payload.title,
-                        name: payload.name,
-                        phase: payload.phase,
-                        status: payload.status,
-                        summary: payload.summary,
-                        progressText: payload.progressText,
-                        meta: payload.meta,
-                      }),
-                    );
-                  },
-                  onPlanUpdate: async (payload) => {
-                    if (payload.phase !== "update") {
-                      return;
-                    }
-                    await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine({
-                        event: "plan",
-                        phase: payload.phase,
-                        title: payload.title,
-                        explanation: payload.explanation,
-                        steps: payload.steps,
-                      }),
-                    );
-                  },
-                  onApprovalEvent: async (payload) => {
-                    if (payload.phase !== "requested") {
-                      return;
-                    }
-                    await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine({
-                        event: "approval",
-                        phase: payload.phase,
-                        title: payload.title,
-                        command: payload.command,
-                        reason: payload.reason,
-                        message: payload.message,
-                      }),
-                    );
-                  },
-                  onCommandOutput: async (payload) => {
-                    if (payload.phase !== "end") {
-                      return;
-                    }
-                    await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine({
-                        event: "command-output",
-                        phase: payload.phase,
-                        title: payload.title,
-                        name: payload.name,
-                        status: payload.status,
-                        exitCode: payload.exitCode,
-                      }),
-                    );
-                  },
-                  onPatchSummary: async (payload) => {
-                    if (payload.phase !== "end") {
-                      return;
-                    }
-                    await pushPreviewToolProgress(
-                      formatChannelProgressDraftLine({
-                        event: "patch",
-                        phase: payload.phase,
-                        title: payload.title,
-                        name: payload.name,
-                        added: payload.added,
-                        modified: payload.modified,
-                        deleted: payload.deleted,
-                        summary: payload.summary,
-                      }),
-                    );
-                  },
+                  onToolStart: statusReactionController
+                    ? async (payload) => {
+                        const toolName = payload.name?.trim();
+                        if (toolName) {
+                          await statusReactionController.setTool(toolName);
+                        }
+                      }
+                    : undefined,
+                  onItemEvent: undefined,
+                  onPlanUpdate: undefined,
+                  onApprovalEvent: undefined,
+                  onCommandOutput: undefined,
+                  onPatchSummary: undefined,
                   onCompactionStart:
                     statusReactionController || answerLane.stream
                       ? async () => {
@@ -1327,7 +1143,6 @@ export const dispatchTelegramMessage = async ({
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
     } finally {
       await draftLaneEventQueue;
-      progressDraftGate.cancel();
       if (isDispatchSuperseded()) {
         if (answerLane.hasStreamedMessage || typeof answerLane.stream?.messageId() === "number") {
           retainPreviewOnCleanupByLane.answer = true;

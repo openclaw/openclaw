@@ -50,8 +50,7 @@ describe("telegramApprovalNativeRuntime", () => {
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
   });
 
-  it("passes topic thread ids to typing and message delivery", async () => {
-    const sendTyping = vi.fn().mockResolvedValue({ ok: true });
+  it("passes topic thread ids to message delivery without pre-typing", async () => {
     const sendMessage = vi.fn().mockResolvedValue({
       chatId: "-1003841603622",
       messageId: "m1",
@@ -63,7 +62,6 @@ describe("telegramApprovalNativeRuntime", () => {
       context: {
         token: "tg-token",
         deps: {
-          sendTyping,
           sendMessage,
         },
       },
@@ -100,14 +98,6 @@ describe("telegramApprovalNativeRuntime", () => {
       },
     });
 
-    expect(sendTyping).toHaveBeenCalledWith(
-      "-1003841603622",
-      expect.objectContaining({
-        token: "tg-token",
-        accountId: "default",
-        messageThreadId: 928,
-      }),
-    );
     expect(sendMessage).toHaveBeenCalledWith(
       "-1003841603622",
       "pending",

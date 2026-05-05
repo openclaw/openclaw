@@ -7,6 +7,8 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-types";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import type { SourceReplyDeliveryMode } from "../../../src/auto-reply/get-reply-options.types.js";
+import type { TypingPolicy } from "../../../src/auto-reply/types.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 
 export type TelegramMediaRef = {
@@ -21,6 +23,14 @@ export type TelegramMessageContextOptions = {
   messageIdOverride?: string;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
+  typingPolicy?: TypingPolicy;
+  suppressTyping?: boolean;
+  isHeartbeat?: boolean;
+  systemEvent?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  internal?: boolean;
+  runKind?: string;
+  kind?: string;
 };
 
 export type TelegramLogger = {
