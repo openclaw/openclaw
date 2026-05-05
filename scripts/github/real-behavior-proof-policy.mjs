@@ -56,11 +56,20 @@ const standaloneMissingProofRegex =
 const mockOnlyEvidenceRegex =
   /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|vitest|lint|typecheck|tsgo|build|check)\b|\b(?:vitest|unit tests?|mock(?:ed|s)?|snapshots?|lint|typechecks?|tsgo|ci(?:\s+passes?)?)\b/i;
 
-const realEvidenceRegex =
-  /!\[[^\]]*\]\([^)]+\)|github\.com\/user-attachments\/assets\/|github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+\/artifacts\/\d+|https?:\/\/\S+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)\b|\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt|linked\s+artifacts?|artifact\s+links?)\b/i;
+const artifactEvidenceRegex =
+  /!\[[^\]]*\]\([^)]+\)|github\.com\/user-attachments\/assets\/|github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+\/artifacts\/\d+|https?:\/\/\S+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)\b/i;
+
+const evidenceDescriptorRegex =
+  /\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt|linked\s+artifacts?|artifact\s+links?)\b|```[\s\S]*\n[\s\S]*\n```/i;
 
 const liveCommandRegex =
   /\b(?:openclaw|node|docker|curl|gh|ssh|adb|xcrun|xcodebuild|open|npm\s+run|pnpm\s+openclaw)\b/i;
+
+const mockOnlyEvidenceStripRegex =
+  /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|vitest|lint|typecheck|tsgo|build|check)\b|\b(?:vitest|unit tests?|mock(?:ed|s)?|snapshots?|lint|typechecks?|tsgo|ci(?:\s+passes?)?|tests?|passed|passes|green|success|succeeded|with|and|the|branch|only|output|transcript|capture|fenced)\b/gi;
+
+const evidenceDescriptorStripRegex =
+  /\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt|linked\s+artifacts?|artifact\s+links?)\b/gi;
 
 function escapeRegex(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -169,6 +178,15 @@ function isMissingValue(value, field) {
   return missingValueRegex.test(trimmed);
 }
 
+function hasNonMockEvidencePayload(value) {
+  const payload = value
+    .replace(evidenceDescriptorStripRegex, "")
+    .replace(mockOnlyEvidenceStripRegex, "")
+    .replace(/```(?:\w+)?|```/g, "")
+    .replace(/[`$>:\-_.()[\]\s]+/g, "");
+  return Boolean(payload);
+}
+
 function result(status, reason, details = {}) {
   return {
     status,
@@ -221,11 +239,22 @@ export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {
   const proofContentForMockDetection = [fields.evidence, fields.observedResult, fields.steps].join(
     "\n",
   );
+  const hasArtifactEvidence = artifactEvidenceRegex.test(evidenceContent);
+  const hasNonMockPayload = hasNonMockEvidencePayload(evidenceContent);
+  const hasMockEvidenceSignal = mockOnlyEvidenceRegex.test(proofContentForMockDetection);
+  if (hasMockEvidenceSignal && !hasArtifactEvidence && !hasNonMockPayload) {
+    return result(
+      "mock_only",
+      "Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental and do not count as real behavior proof.",
+      { fields },
+    );
+  }
+
   const hasRealEvidence =
-    realEvidenceRegex.test(evidenceContent) || liveCommandRegex.test(evidenceContent);
-  const hasMockOnlyEvidence =
-    mockOnlyEvidenceRegex.test(proofContentForMockDetection) && !hasRealEvidence;
-  if (hasMockOnlyEvidence) {
+    hasArtifactEvidence ||
+    (evidenceDescriptorRegex.test(evidenceContent) && hasNonMockPayload) ||
+    liveCommandRegex.test(evidenceContent);
+  if (hasMockEvidenceSignal && !hasRealEvidence) {
     return result(
       "mock_only",
       "Unit tests, mocks, snapshots, lint, typechecks, and CI are supplemental and do not count as real behavior proof.",

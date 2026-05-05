@@ -105,6 +105,29 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
   });
 
+  it("fails external PRs whose terminal label only contains test or CI output", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody(
+          [
+            "Terminal transcript:",
+            "```text",
+            "$ pnpm test",
+            "CI passed with Vitest mocks",
+            "```",
+          ].join("\n"),
+          {
+            steps: "pnpm test",
+            observedResult: "CI passes.",
+          },
+        ),
+      ),
+    });
+
+    expect(evaluation.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
   it("passes maintainer, bot, and override cases", () => {
     expect(
       evaluateRealBehaviorProof({
