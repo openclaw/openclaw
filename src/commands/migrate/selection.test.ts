@@ -3,7 +3,12 @@ import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import {
   applyMigrationSelectedSkillItemIds,
   applyMigrationSkillSelection,
+  getDefaultMigrationSkillSelectionValues,
+  MIGRATION_SKILL_SELECTION_SKIP,
+  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
   MIGRATION_SKILL_NOT_SELECTED_REASON,
+  resolveInteractiveMigrationSkillSelection,
 } from "./selection.js";
 
 function skillItem(params: {
@@ -134,6 +139,51 @@ describe("applyMigrationSkillSelection", () => {
 
     expect(selected.summary).toMatchObject({ planned: 0, skipped: 2 });
     expect(selected.items.every((item) => item.status === "skipped")).toBe(true);
+  });
+
+  it("defaults interactive selection to planned skills only", () => {
+    expect(
+      getDefaultMigrationSkillSelectionValues([
+        skillItem({ id: "skill:alpha", name: "alpha" }),
+        skillItem({
+          id: "skill:beta",
+          name: "beta",
+          status: "conflict",
+          reason: "target exists",
+        }),
+      ]),
+    ).toEqual(["skill:alpha"]);
+  });
+
+  it("resolves interactive special options with skip and toggle-off precedence", () => {
+    const items = [
+      skillItem({ id: "skill:alpha", name: "alpha" }),
+      skillItem({
+        id: "skill:beta",
+        name: "beta",
+        status: "conflict",
+        reason: "target exists",
+      }),
+    ];
+
+    expect(
+      resolveInteractiveMigrationSkillSelection(items, [
+        MIGRATION_SKILL_SELECTION_SKIP,
+        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+      ]),
+    ).toEqual({ action: "skip" });
+    expect(
+      resolveInteractiveMigrationSkillSelection(items, [
+        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+        MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+      ]),
+    ).toEqual({ action: "select", selectedItemIds: new Set() });
+    expect(
+      resolveInteractiveMigrationSkillSelection(items, [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON]),
+    ).toEqual({
+      action: "select",
+      selectedItemIds: new Set(["skill:alpha", "skill:beta"]),
+    });
   });
 
   it("rejects unknown explicit skill selectors with available choices", () => {

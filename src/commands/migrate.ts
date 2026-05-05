@@ -18,8 +18,13 @@ import {
   applyMigrationSkillSelection,
   formatMigrationSkillSelectionHint,
   formatMigrationSkillSelectionLabel,
+  getDefaultMigrationSkillSelectionValues,
   getMigrationSkillSelectionValue,
   getSelectableMigrationSkillItems,
+  MIGRATION_SKILL_SELECTION_SKIP,
+  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+  MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+  resolveInteractiveMigrationSkillSelection,
 } from "./migrate/selection.js";
 import type {
   MigrateApplyOptions,
@@ -53,15 +58,29 @@ async function promptCodexMigrationSkillSelection(
   }
   const selected = await multiselect<string>({
     message: stylePromptMessage("Select Codex skills to migrate into this agent"),
-    options: skillItems.map((item) => {
-      const hint = formatMigrationSkillSelectionHint(item);
-      return {
-        value: getMigrationSkillSelectionValue(item),
-        label: formatMigrationSkillSelectionLabel(item),
-        hint: hint === undefined ? undefined : stylePromptHint(hint),
-      };
-    }),
-    initialValues: skillItems.map(getMigrationSkillSelectionValue),
+    options: [
+      {
+        value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+        label: "Toggle all on",
+      },
+      {
+        value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+        label: "Toggle all off",
+      },
+      ...skillItems.map((item) => {
+        const hint = formatMigrationSkillSelectionHint(item);
+        return {
+          value: getMigrationSkillSelectionValue(item),
+          label: formatMigrationSkillSelectionLabel(item),
+          hint: hint === undefined ? undefined : stylePromptHint(hint),
+        };
+      }),
+      {
+        value: MIGRATION_SKILL_SELECTION_SKIP,
+        label: "Skip for now",
+      },
+    ],
+    initialValues: getDefaultMigrationSkillSelectionValues(skillItems),
     required: false,
   });
   if (isCancel(selected)) {
@@ -69,8 +88,15 @@ async function promptCodexMigrationSkillSelection(
     runtime.log("Migration cancelled.");
     return null;
   }
-  const selectedPlan = applyMigrationSelectedSkillItemIds(plan, new Set(selected));
-  runtime.log(`Selected ${selected.length} of ${skillItems.length} Codex skills for migration.`);
+  const selection = resolveInteractiveMigrationSkillSelection(skillItems, selected);
+  if (selection.action === "skip") {
+    runtime.log("Codex skill migration skipped for now.");
+    return null;
+  }
+  const selectedPlan = applyMigrationSelectedSkillItemIds(plan, selection.selectedItemIds);
+  runtime.log(
+    `Selected ${selection.selectedItemIds.size} of ${skillItems.length} Codex skills for migration.`,
+  );
   return selectedPlan;
 }
 
