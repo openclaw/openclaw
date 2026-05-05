@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 import {
@@ -157,10 +158,17 @@ function resolveProviderPluginsForCatalogHooks(params: {
 }): ProviderPlugin[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir,
+    env,
+  });
   const onlyPluginIds = resolveCatalogHookProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    registry: metadataSnapshot?.index,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
   if (onlyPluginIds.length === 0) {
     return [];
@@ -834,6 +842,13 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   context: ProviderResolveSyntheticAuthContext;
 }) {
   const providerRefs = resolveProviderHookRefs(params.provider, params.context.providerConfig);
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const env = params.env ?? process.env;
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir,
+    env,
+  });
   const discoveryPluginIds = [
     ...new Set(
       providerRefs.flatMap(
@@ -841,8 +856,9 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
           resolveOwningPluginIdsForProvider({
             provider,
             config: params.config,
-            workspaceDir: params.workspaceDir,
-            env: params.env,
+            workspaceDir,
+            env,
+            manifestRegistry: metadataSnapshot?.manifestRegistry,
           }) ?? [],
       ),
     ),
@@ -851,10 +867,11 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
     discoveryPluginIds.length > 0
       ? resolvePluginDiscoveryProvidersRuntime({
           config: params.config,
-          workspaceDir: params.workspaceDir,
-          env: params.env,
+          workspaceDir,
+          env,
           onlyPluginIds: discoveryPluginIds,
           discoveryEntriesOnly: true,
+          pluginMetadataSnapshot: metadataSnapshot,
         })
       : []
   ).find((provider) => matchesAnyProviderPluginRef(provider, providerRefs));
@@ -888,8 +905,9 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
   if (providerRefs.length === 1) {
     return resolvePluginDiscoveryProvidersRuntime({
       config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
+      workspaceDir,
+      env,
+      pluginMetadataSnapshot: metadataSnapshot,
     })
       .find((provider) => matchesAnyProviderPluginRef(provider, providerRefs))
       ?.resolveSyntheticAuth?.(params.context);
@@ -905,16 +923,25 @@ export function resolveExternalAuthProfilesWithPlugins(params: {
 }): ProviderExternalAuthProfile[] {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const env = params.env ?? process.env;
+  const metadataSnapshot = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    workspaceDir,
+    env,
+  });
   const externalAuthPluginIds = resolveExternalAuthProfileProviderPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    registry: metadataSnapshot?.index,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
   const declaredPluginIds = new Set(externalAuthPluginIds);
   const fallbackPluginIds = resolveExternalAuthProfileCompatFallbackPluginIds({
     config: params.config,
     workspaceDir,
     env,
+    registry: metadataSnapshot?.index,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
     declaredPluginIds,
   });
   const pluginIds = [...new Set([...externalAuthPluginIds, ...fallbackPluginIds])].toSorted(
