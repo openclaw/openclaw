@@ -562,7 +562,10 @@ Notes:
 
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel and group-chat roots can still use the normal draft preview when native streaming is unavailable.
-- Top-level Slack DMs stay off-thread by default in normal chat mode. When `channels.slack.streaming.mode` is `progress`, OpenClaw intentionally treats the DM turn as threaded assistant UI so Slack can show native plan/task progress and keep the final reply in that same assistant thread.
+- Top-level Slack DMs stay off-thread by default in normal chat mode.
+- When `channels.slack.streaming.mode` is `progress`, the first top-level DM reply seeds Slack's native assistant thread/task card for that OpenClaw session.
+- Later top-level DM follow-ups in the same session reuse that canonical DM thread by default, so native task cards, plan updates, and transcript continuity stay in one place.
+- Use `/new` or bare `/reset` when you want the next top-level DM turn to start a fresh OpenClaw session instead of reusing the current canonical DM thread. `/reset soft` is not a new conversation; it keeps the current transcript in place.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
@@ -570,7 +573,7 @@ Notes:
 ### Progress step lifecycle
 
 When `channels.slack.streaming.mode` is `"progress"`, Slack shows a task-style progress message. These steps are Slack-specific presentation for the underlying agent and channel lifecycle events. Some line up with OpenClaw hooks, but the progress step itself is emitted by Slack channel code.
-Threaded progress uses Slack native stream task updates. For direct 1:1 chats, `progress` mode promotes the turn into Slack's assistant-thread surface from the first reply so the task plan, status, and final answer stay together.
+Threaded progress uses Slack native stream task updates. For direct 1:1 chats, `progress` mode uses Slack's native assistant-thread/task-card surface. The first top-level DM reply creates the canonical thread for that session, and later top-level follow-ups keep using it until you explicitly start fresh with `/new` or bare `/reset`.
 
 | Step                     | OpenClaw hook                                                                       | Slack progress trigger                                                                                      | When it starts                                                                                                                                     |
 | ------------------------ | ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |

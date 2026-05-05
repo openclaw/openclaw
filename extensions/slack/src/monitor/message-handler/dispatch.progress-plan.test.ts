@@ -23,6 +23,26 @@ const stopSlackChunkStreamMock = vi.fn(async () => {});
 const deliverRepliesMock = vi.fn(async () => {});
 const setSlackThreadStatusMock = vi.fn(async () => {});
 const setSlackThreadTitleMock = vi.fn(async () => {});
+let dispatchInboundMessageImpl: (params: {
+  replyOptions?: {
+    onAssistantMessageStart?: () => Promise<void> | void;
+    onModelSelected?: (modelCtx: unknown) => void;
+    onItemEvent?: (payload: {
+      itemId?: string;
+      kind?: string;
+      phase?: string;
+      status?: string;
+      title?: string;
+      name?: string;
+    }) => Promise<void> | void;
+  };
+  dispatcher: {
+    deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
+  };
+}) => Promise<{
+  queuedFinal: boolean;
+  counts: { final: number };
+}>;
 
 let dispatchPreparedSlackMessage: typeof import("./dispatch.js").dispatchPreparedSlackMessage;
 
@@ -241,18 +261,22 @@ vi.mock("../reply.runtime.js", () => ({
     markDispatchIdle: () => {},
   }),
   dispatchInboundMessage: async (params: {
-    replyOptions?: { onAssistantMessageStart?: () => Promise<void> | void };
+    replyOptions?: {
+      onAssistantMessageStart?: () => Promise<void> | void;
+      onModelSelected?: (modelCtx: unknown) => void;
+      onItemEvent?: (payload: {
+        itemId?: string;
+        kind?: string;
+        phase?: string;
+        status?: string;
+        title?: string;
+        name?: string;
+      }) => Promise<void> | void;
+    };
     dispatcher: {
       deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
     };
-  }) => {
-    await params.replyOptions?.onAssistantMessageStart?.();
-    await params.dispatcher.deliver({ text: "final answer" }, { kind: "final" });
-    return {
-      queuedFinal: false,
-      counts: { final: 1 },
-    };
-  },
+  }) => dispatchInboundMessageImpl(params),
 }));
 
 vi.mock("./preview-finalize.js", () => ({
@@ -266,6 +290,7 @@ function createPreparedSlackMessage(params?: {
   isDirectMessage?: boolean;
   replyTarget?: string;
   text?: string;
+  allowDirectMessagePlanStream?: boolean;
 }) {
   return {
     ctx: {
@@ -312,6 +337,7 @@ function createPreparedSlackMessage(params?: {
     replyTarget: params?.replyTarget ?? "channel:C123",
     ctxPayload: {
       MessageThreadId: params?.threadTs,
+      AllowDirectMessagePlanStream: params?.allowDirectMessagePlanStream ?? false,
     },
     replyToMode: params?.replyToMode ?? "all",
     isDirectMessage: params?.isDirectMessage ?? false,
@@ -323,12 +349,30 @@ function createPreparedSlackMessage(params?: {
   } as never;
 }
 
+function collectProgressTaskUpdates() {
+  return [
+    ...startSlackChunkStreamMock.mock.calls.flatMap((call) => call[0]?.chunks ?? []),
+    ...appendSlackChunkStreamMock.mock.calls.flatMap((call) => call[0]?.chunks ?? []),
+  ].filter(
+    (chunk): chunk is { type: "task_update"; id: string; title: string; status: string } =>
+      chunk?.type === "task_update",
+  );
+}
+
 describe("dispatchPreparedSlackMessage progress plan routing", () => {
   beforeAll(async () => {
     ({ dispatchPreparedSlackMessage } = await import("./dispatch.js"));
   });
 
   beforeEach(() => {
+    dispatchInboundMessageImpl = async (params) => {
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.dispatcher.deliver({ text: "final answer" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { final: 1 },
+      };
+    };
     startSlackPlanMessageMock.mockClear();
     appendSlackPlanMessageMock.mockClear();
     stopSlackPlanMessageMock.mockClear();
@@ -380,6 +424,33 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     });
   });
 
+  it("uses Slack native plan task cards for canonical direct-message threads", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        channel: "D123",
+        threadTs: "dm-thread-1",
+        replyToMode: "all",
+        isDirectMessage: true,
+        replyTarget: "user:U123",
+        allowDirectMessagePlanStream: true,
+      }),
+    );
+
+    expect(startSlackChunkStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "D123",
+        threadTs: "dm-thread-1",
+        taskDisplayMode: "plan",
+      }),
+    );
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: "dm-thread-1",
+        replyToMode: "all",
+      }),
+    );
+  });
+
   it("keeps threaded room progress on Slack's native plan stream surface", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
@@ -399,5 +470,158 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
       }),
     );
     expect(startSlackPlanMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers human-readable tool task cards once concrete tool events arrive", async () => {
+    dispatchInboundMessageImpl = async (params) => {
+      params.replyOptions?.onModelSelected?.({});
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-web-1",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+        title: "web_search",
+        name: "web_search",
+      });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-web-1",
+        kind: "tool",
+        phase: "end",
+        status: "completed",
+        title: "web_search",
+        name: "web_search",
+      });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-exec-1",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+        title: "exec",
+        name: "exec",
+      });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-exec-1",
+        kind: "tool",
+        phase: "end",
+        status: "completed",
+        title: "exec",
+        name: "exec",
+      });
+      await params.dispatcher.deliver({ text: "final answer" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { final: 1 },
+      };
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        channel: "C123",
+        threadTs: "thread-1",
+        replyToMode: "all",
+        isDirectMessage: false,
+        replyTarget: "channel:C123",
+      }),
+    );
+
+    expect(collectProgressTaskUpdates()).toEqual(
+      expect.arrayContaining([
+        {
+          type: "task_update",
+          id: "reading_message",
+          title: "Reading message",
+          status: "in_progress",
+        },
+        {
+          type: "task_update",
+          id: "tool_web_1",
+          title: "Searching the web",
+          status: "in_progress",
+        },
+        {
+          type: "task_update",
+          id: "tool_exec_1",
+          title: "Running command",
+          status: "in_progress",
+        },
+      ]),
+    );
+
+    const updates = collectProgressTaskUpdates();
+    const decisionCompleteIndex = updates.findIndex(
+      (chunk) => chunk.id === "deciding_next_steps" && chunk.status === "complete",
+    );
+    const webStartIndex = updates.findIndex(
+      (chunk) =>
+        chunk.id === "tool_web_1" &&
+        chunk.title === "Searching the web" &&
+        chunk.status === "in_progress",
+    );
+    const execStartIndex = updates.findIndex(
+      (chunk) => chunk.id === "tool_exec_1" && chunk.status === "in_progress",
+    );
+    const execCompleteIndex = updates.findIndex(
+      (chunk) => chunk.id === "tool_exec_1" && chunk.status === "complete",
+    );
+    const sendStartIndex = updates.findIndex(
+      (chunk) => chunk.id === "sending_reply" && chunk.status === "in_progress",
+    );
+
+    expect(decisionCompleteIndex).toBeGreaterThan(-1);
+    expect(webStartIndex).toBeLessThan(decisionCompleteIndex);
+    expect(execStartIndex).toBeGreaterThan(-1);
+    expect(execCompleteIndex).toBeGreaterThan(-1);
+    expect(sendStartIndex).toBeGreaterThan(execCompleteIndex);
+  });
+
+  it("marks failed tool cards as errors before sending the reply", async () => {
+    dispatchInboundMessageImpl = async (params) => {
+      params.replyOptions?.onModelSelected?.({});
+      await params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-linear-1",
+        kind: "tool",
+        phase: "start",
+        status: "running",
+        title: "linear issue search",
+        name: "linear_search",
+      });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool-linear-1",
+        kind: "tool",
+        phase: "end",
+        status: "failed",
+        title: "linear issue search",
+        name: "linear_search",
+      });
+      await params.dispatcher.deliver({ text: "final answer" }, { kind: "final" });
+      return {
+        queuedFinal: false,
+        counts: { final: 1 },
+      };
+    };
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        channel: "C123",
+        threadTs: "thread-1",
+        replyToMode: "all",
+        isDirectMessage: false,
+        replyTarget: "channel:C123",
+      }),
+    );
+
+    const updates = collectProgressTaskUpdates();
+    const linearErrorIndex = updates.findIndex(
+      (chunk) =>
+        chunk.id === "tool_linear_1" && chunk.title === "Using Linear" && chunk.status === "error",
+    );
+    const sendStartIndex = updates.findIndex(
+      (chunk) => chunk.id === "sending_reply" && chunk.status === "in_progress",
+    );
+
+    expect(linearErrorIndex).toBeGreaterThan(-1);
+    expect(sendStartIndex).toBeGreaterThan(linearErrorIndex);
   });
 });

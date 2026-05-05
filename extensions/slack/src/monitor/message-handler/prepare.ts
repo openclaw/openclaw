@@ -297,6 +297,8 @@ export async function prepareSlackMessage(params: {
     threadContext,
     threadTs,
     isThreadReply,
+    messageThreadId,
+    allowDirectMessagePlanStream,
     threadKeys,
     sessionKey,
     historyKey,
@@ -573,12 +575,12 @@ export async function prepareSlackMessage(params: {
       ? ` thread_ts: ${threadTs}${message.parent_user_id ? ` parent_user_id: ${message.parent_user_id}` : ""}`
       : "";
   const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}${threadInfo}]`;
-  const storePath = resolveStorePath(ctx.cfg.session?.store, {
+  const routeStorePath = resolveStorePath(ctx.cfg.session?.store, {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
   const previousTimestamp = readSessionUpdatedAt({
-    storePath,
+    storePath: routeStorePath,
     sessionKey,
   });
   const body = formatInboundEnvelope({
@@ -636,7 +638,7 @@ export async function prepareSlackMessage(params: {
     threadTs,
     threadStarter,
     roomLabel,
-    storePath,
+    storePath: routeStorePath,
     sessionKey,
     allowFromLower: threadContextAllowFromLower,
     allowNameMatching: ctx.allowNameMatching,
@@ -683,7 +685,7 @@ export async function prepareSlackMessage(params: {
     MessageSid: message.ts,
     ReplyToId: threadContext.replyToId,
     // Preserve thread context for routed tool notifications.
-    MessageThreadId: threadContext.messageThreadId,
+    MessageThreadId: messageThreadId,
     ParentSessionKey: threadKeys.parentSessionKey,
     // Only include thread starter body for NEW sessions (existing sessions already have it in their transcript)
     ThreadStarterBody: !threadSessionPreviousTimestamp ? threadStarterBody : undefined,
@@ -718,7 +720,7 @@ export async function prepareSlackMessage(params: {
     : null;
 
   await recordInboundSession({
-    storePath,
+    storePath: routeStorePath,
     sessionKey,
     ctx: ctxPayload,
     updateLastRoute: isDirectMessage
@@ -727,7 +729,7 @@ export async function prepareSlackMessage(params: {
           channel: "slack",
           to: `user:${message.user}`,
           accountId: route.accountId,
-          threadId: threadContext.messageThreadId,
+          threadId: messageThreadId,
           mainDmOwnerPin:
             pinnedMainDmOwner && message.user
               ? {
@@ -746,7 +748,7 @@ export async function prepareSlackMessage(params: {
       ctx.logger.warn(
         {
           error: formatErrorMessage(err),
-          storePath,
+          storePath: routeStorePath,
           sessionKey,
         },
         "failed updating session meta",
@@ -778,6 +780,9 @@ export async function prepareSlackMessage(params: {
     replyToMode,
     isDirectMessage,
     isRoomish,
+    isThreadReply,
+    messageThreadId,
+    allowDirectMessagePlanStream,
     historyKey,
     preview,
     ackReactionMessageTs,

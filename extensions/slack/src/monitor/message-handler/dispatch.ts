@@ -43,11 +43,11 @@ import type {
   SlackStreamSession,
 } from "../../streaming.js";
 import {
-  appendSlackStream,
+  SlackStreamNotDeliveredError,
   appendSlackChunkStream,
   appendSlackPlanMessage,
+  appendSlackStream,
   markSlackStreamFallbackDelivered,
-  SlackStreamNotDeliveredError,
   startSlackChunkStream,
   startSlackPlanMessage,
   startSlackStream,
@@ -130,6 +130,29 @@ const TOOL_STATUS_LABELS: Record<string, string> = {
 
 export function toolStatusLabel(toolName: string): string {
   return TOOL_STATUS_LABELS[toolName] ?? `Using ${toolName}...`;
+}
+
+function humanizeToolStatusTitle(toolName: string): string {
+  return toolStatusLabel(toolName).replace(/\.\.\.$/, "");
+}
+
+function resolveSlackProgressToolTaskTitle(params: {
+  title?: string;
+  itemId?: string;
+  name?: string;
+}): string {
+  const normalizedName = params.name?.trim();
+  if (normalizedName && TOOL_STATUS_LABELS[normalizedName]) {
+    return humanizeToolStatusTitle(normalizedName);
+  }
+  const normalizedTitle = params.title?.trim();
+  if (normalizedTitle && TOOL_STATUS_LABELS[normalizedTitle]) {
+    return humanizeToolStatusTitle(normalizedTitle);
+  }
+  return normalizeSlackProgressToolTitle({
+    title: params.title ?? params.name,
+    itemId: params.itemId,
+  });
 }
 
 export function normalizeSlackProgressToolTitle(params: {
@@ -333,13 +356,14 @@ export async function resolveSlackStreamRecipientTeamId(params: {
 function shouldUseSlackProgressPlanStream(params: {
   mode: "off" | "partial" | "block" | "progress";
   isDirectMessage: boolean;
+  allowDirectMessagePlanStream: boolean;
   threadTs?: string;
 }): boolean {
   if (params.mode !== "progress") {
     return false;
   }
   if (params.isDirectMessage) {
-    return false;
+    return params.allowDirectMessagePlanStream && typeof params.threadTs === "string";
   }
   return typeof params.threadTs === "string" && params.threadTs.length > 0;
 }
@@ -381,20 +405,22 @@ export function createSlackProgressHandoffChunks(params: {
   nextStatus?: "in_progress" | "error";
   completedToolTasks?: SlackProgressCompletedToolTask[];
 }): SlackStreamChunk[] {
-  return [
+  const nextTaskChunk = createSlackTaskUpdateChunk({
+    taskId: params.nextTaskId,
+    title: params.nextTitle,
+    status: params.nextStatus ?? "in_progress",
+  });
+  const completedToolChunks = (params.completedToolTasks ?? []).map((task) =>
     createSlackTaskUpdateChunk({
-      taskId: params.nextTaskId,
-      title: params.nextTitle,
-      status: params.nextStatus ?? "in_progress",
+      taskId: task.taskId,
+      title: task.title,
+      status: task.status,
     }),
-    ...(params.completedToolTasks ?? []).map((task) =>
-      createSlackTaskUpdateChunk({
-        taskId: task.taskId,
-        title: task.title,
-        status: task.status,
-      }),
-    ),
-  ];
+  );
+  if (params.nextTaskId === "sending_reply") {
+    return [...completedToolChunks, nextTaskChunk];
+  }
+  return [nextTaskChunk, ...completedToolChunks];
 }
 
 function hasSlackAudioInput(message: PreparedSlackMessage["message"]): boolean {
@@ -411,7 +437,9 @@ function hasSlackAudioInput(message: PreparedSlackMessage["message"]): boolean {
 
 function resolveSlackAssistantThreadTitleUpdate(params: {
   isDirectMessage: boolean;
+  isThreadReply: boolean;
   message: PreparedSlackMessage["message"];
+  messageThreadId?: string;
 }): { threadTs: string; title: string } | undefined {
   if (!params.isDirectMessage) {
     return undefined;
@@ -427,11 +455,15 @@ function resolveSlackAssistantThreadTitleUpdate(params: {
   }
   // Only title the root assistant thread message. Follow-up replies should not
   // keep overwriting the History label with the latest turn.
-  if (incomingThreadTs && incomingThreadTs !== messageTs) {
+  if (params.isThreadReply) {
+    return undefined;
+  }
+  const threadTs = params.messageThreadId ?? incomingThreadTs ?? messageTs;
+  if (threadTs !== messageTs) {
     return undefined;
   }
   return {
-    threadTs: incomingThreadTs ?? messageTs,
+    threadTs,
     title: messageText,
   };
 }
@@ -449,13 +481,27 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     isDirectMessage: prepared.isDirectMessage,
     streamingMode: slackStreaming.mode,
   });
-  const { statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
+  const threadTargets = resolveSlackThreadTargets({
     message,
     replyToMode: effectiveReplyToMode,
   });
+  const statusThreadTs =
+    prepared.messageThreadId ?? prepared.ctxPayload.MessageThreadId ?? threadTargets.statusThreadTs;
+  const isThreadReply = prepared.isThreadReply ?? threadTargets.isThreadReply;
+  const allowDirectMessagePlanStream =
+    prepared.allowDirectMessagePlanStream ??
+    Boolean(
+      (
+        prepared.ctxPayload as typeof prepared.ctxPayload & {
+          AllowDirectMessagePlanStream?: boolean;
+        }
+      ).AllowDirectMessagePlanStream,
+    );
   const assistantThreadTitleUpdate = resolveSlackAssistantThreadTitleUpdate({
     isDirectMessage: prepared.isDirectMessage,
+    isThreadReply,
     message,
+    messageThreadId: prepared.messageThreadId,
   });
   if (assistantThreadTitleUpdate) {
     await ctx.setSlackThreadTitle({
@@ -511,6 +557,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
 
   const reactionMessageTs = prepared.ackReactionMessageTs;
   const messageTs = message.ts ?? message.event_ts;
+  const deliveryMessageThreadId =
+    prepared.messageThreadId ?? prepared.ctxPayload.MessageThreadId ?? messageTs;
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
@@ -571,7 +619,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const replyPlan = createSlackReplyDeliveryPlan({
     replyToMode: effectiveReplyToMode,
     incomingThreadTs,
-    messageTs,
+    messageTs: deliveryMessageThreadId,
     hasRepliedRef,
     isThreadReply,
   });
@@ -649,7 +697,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: effectiveReplyToMode,
     incomingThreadTs,
-    messageTs,
+    messageTs: deliveryMessageThreadId,
     isThreadReply,
   });
   const previewStreamingEnabled = shouldEnableSlackPreviewStreaming({
@@ -664,6 +712,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const progressPlanStreamingEnabled = shouldUseSlackProgressPlanStream({
     mode: slackStreaming.mode,
     isDirectMessage: prepared.isDirectMessage,
+    allowDirectMessagePlanStream,
     threadTs: streamThreadHint,
   });
   const useStreaming = shouldUseStreaming({
@@ -1568,18 +1617,20 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
                 progressToolTaskIdsByItemId.set(payload.itemId, taskId);
                 progressToolTaskTitles.set(
                   taskId,
-                  normalizeSlackProgressToolTitle({
+                  resolveSlackProgressToolTaskTitle({
                     title: payload.title,
                     itemId: payload.itemId,
+                    name: payload.name,
                   }),
                 );
               }
 
               const taskTitle =
                 progressToolTaskTitles.get(taskId) ??
-                normalizeSlackProgressToolTitle({
+                resolveSlackProgressToolTaskTitle({
                   title: payload.title,
                   itemId: payload.itemId,
+                  name: payload.name,
                 });
 
               if (

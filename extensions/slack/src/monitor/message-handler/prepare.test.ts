@@ -13,6 +13,7 @@ import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
+import { updateLastRoute } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resetSlackThreadStarterCacheForTest } from "../media.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
@@ -810,6 +811,83 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.SessionKey).toContain(":thread:500.000");
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
+  });
+
+  it("reuses an existing canonical DM thread binding for later top-level DM turns", async () => {
+    const targetSessionKey = "agent:main:thread:dm-thread-1";
+    const binding: SessionBindingRecord = {
+      bindingId: "dm-thread-binding",
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "500.000",
+        parentConversationId: "user:U1",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {},
+    };
+    const resolveByConversation: SessionBindingAdapter["resolveByConversation"] = vi.fn((ref) =>
+      ref.channel === "slack" &&
+      ref.accountId === "default" &&
+      ref.conversationId === "500.000" &&
+      ref.parentConversationId === "user:U1"
+        ? binding
+        : null,
+    );
+    const touch: NonNullable<SessionBindingAdapter["touch"]> = vi.fn();
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+      touch,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const { storePath } = storeFixture.makeTmpStorePath();
+      await updateLastRoute({
+        storePath,
+        sessionKey: "agent:main:main",
+        deliveryContext: {
+          channel: "slack",
+          to: "user:U1",
+          accountId: "default",
+          threadId: "500.000",
+        },
+      });
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { store: storePath },
+          channels: { slack: { enabled: true, replyToMode: "all" } },
+        } as OpenClawConfig,
+        replyToMode: "all",
+      });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount({ replyToMode: "all" }),
+        createSlackMessage({ ts: "501.000" }),
+      );
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.route.sessionKey).toBe(targetSessionKey);
+      expect(prepared!.ctxPayload.SessionKey).toBe(targetSessionKey);
+      expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
+      expect(prepared!.allowDirectMessagePlanStream).toBe(true);
+      expect(resolveByConversation).toHaveBeenCalledWith({
+        channel: "slack",
+        accountId: "default",
+        conversationId: "500.000",
+        parentConversationId: "user:U1",
+      });
+      expect(touch).toHaveBeenCalledWith("dm-thread-binding", undefined);
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
   });
 
   it("routes Slack thread replies through runtime conversation bindings", async () => {

@@ -137,7 +137,7 @@ describe("slack turn delivery tracker", () => {
 });
 
 describe("slack progress handoff chunks", () => {
-  it("starts the next step before completing finished tool tasks", () => {
+  it("completes finished tool tasks before sending the reply", () => {
     expect(
       createSlackProgressHandoffChunks({
         nextTaskId: "sending_reply",
@@ -153,15 +153,15 @@ describe("slack progress handoff chunks", () => {
     ).toEqual([
       {
         type: "task_update",
-        id: "sending_reply",
-        title: "Sending reply",
-        status: "in_progress",
-      },
-      {
-        type: "task_update",
         id: "tool_linear_1",
         title: "Using Linear",
         status: "complete",
+      },
+      {
+        type: "task_update",
+        id: "sending_reply",
+        title: "Sending reply",
+        status: "in_progress",
       },
     ]);
   });
