@@ -342,6 +342,45 @@ describe("feishuPlugin actions", () => {
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_env", chatId: "oc_group_1" });
   });
 
+  it("passes thread-reply payload envelopes with reply target and thread mode", async () => {
+    sendOpenClawEnvelopeFeishuMock.mockResolvedValueOnce({
+      messageId: "om_thread_env",
+      chatId: "oc_group_1",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "thread-reply",
+      params: {
+        to: "oc_group_1",
+        messageId: "om_parent",
+        channel: "feishu",
+        payloads: [{ text: "thread hello" }],
+      },
+      cfg,
+      accountId: "main",
+      toolContext: {},
+    } as never);
+
+    expect(sendOpenClawEnvelopeFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      envelope: {
+        to: "oc_group_1",
+        messageId: "om_parent",
+        channel: "feishu",
+        payloads: [{ text: "thread hello" }],
+      },
+      accountId: "main",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({
+      ok: true,
+      messageId: "om_thread_env",
+      chatId: "oc_group_1",
+    });
+  });
+
   it("renders presentation messages as cards", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 

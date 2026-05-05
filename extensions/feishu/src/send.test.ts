@@ -167,6 +167,16 @@ describe("getMessageFeishu", () => {
     expect(JSON.parse(body.content)).toEqual({ text: "设置今日突破任务" });
   });
 
+  it("maps raw Feishu open IDs to open_id in OpenClaw envelopes", () => {
+    const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
+      payloads: [{ text: "hello" }],
+      to: "ou_user_1",
+    });
+
+    expect(body.receive_id).toBe("ou_user_1");
+    expect(body.receive_id_type).toBe("open_id");
+  });
+
   it("preserves explicit receive_id_type on OpenClaw envelopes", () => {
     const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
       payloads: [{ text: "hello" }],
@@ -195,6 +205,20 @@ describe("getMessageFeishu", () => {
       type: "template",
       data: { template_id: "tpl_1" },
     });
+  });
+
+  it("stringifies object-form interactive card envelope content once", () => {
+    const card = { type: "template", data: { template_id: "tpl_1" } };
+    const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
+      payloads: [{ msg_type: "interactive", content: card }],
+      to: "oc_group_1",
+    });
+
+    expect(body.msg_type).toBe("interactive");
+    expect(typeof body.content).toBe("string");
+    expect(body.content).toBe(JSON.stringify(card));
+    expect(body.content).not.toBe(JSON.stringify(JSON.stringify(card)));
+    expect(JSON.parse(body.content)).toEqual(card);
   });
 
   it("sends OpenClaw envelopes through the Feishu create API without internal-only fields", async () => {
@@ -227,6 +251,11 @@ describe("getMessageFeishu", () => {
         content: JSON.stringify({ text: "hello" }),
       },
     });
+    const createCall = create.mock.calls[0][0];
+    expect(createCall.data.receive_id).toBe("ou_user_1");
+    expect(createCall.params.receive_id_type).toBe("open_id");
+    expect(createCall.data.msg_type).toBe("text");
+    expect(createCall.data.content).toBe(JSON.stringify({ text: "hello" }));
     expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("payloads");
     expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("channel");
     expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("replyToTag");
