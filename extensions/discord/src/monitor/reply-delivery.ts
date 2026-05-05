@@ -181,7 +181,7 @@ export async function deliverDiscordReply(params: {
     return;
   }
 
-  await deliverOutboundPayloads({
+  const results = await deliverOutboundPayloads({
     cfg: params.cfg,
     channel: "discord",
     to: delivery.to,
@@ -205,4 +205,7 @@ export async function deliverDiscordReply(params: {
       requesterAccountId: params.accountId,
     }),
   });
+  if (results.length === 0) {
+    throw new Error(`discord final reply produced no delivered message for ${delivery.to}`);
+  }
 }
