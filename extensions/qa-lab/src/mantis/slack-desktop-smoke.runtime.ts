@@ -317,7 +317,7 @@ if command -v ffmpeg >/dev/null 2>&1; then
     *.*) ;;
     *) display_input="$display_input.0" ;;
   esac
-  ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size 1440x1000 -framerate 15 -i "$display_input" -t 45 -pix_fmt yuv420p "$out/slack-desktop-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t 45 -pix_fmt yuv420p "$out/slack-desktop-smoke.mp4" >"$out/ffmpeg.log" 2>&1 &
   video_pid=$!
 else
   echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"

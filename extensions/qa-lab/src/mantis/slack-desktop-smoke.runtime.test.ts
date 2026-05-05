@@ -102,6 +102,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(remoteScript).toContain("ffmpeg");
     expect(remoteScript).toContain('sudo apt-get update -y >>"$out/apt.log" 2>&1 || true');
     expect(remoteScript).toContain("slack-desktop-smoke.mp4");
+    expect(remoteScript).not.toContain("-video_size");
     expect(remoteScript).toContain("openclaw qa slack");
     expect(remoteScript).toContain("--scenario 'slack-canary'");
     expect(remoteScript).toContain("OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR");

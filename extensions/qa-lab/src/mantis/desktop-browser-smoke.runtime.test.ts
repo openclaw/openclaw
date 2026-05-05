@@ -98,6 +98,7 @@ describe("mantis desktop browser smoke runtime", () => {
     expect(remoteScript).toContain("ffmpeg");
     expect(remoteScript).toContain('sudo apt-get update -y >>"$out/apt.log" 2>&1 || true');
     expect(remoteScript).toContain("desktop-browser-smoke.mp4");
+    expect(remoteScript).not.toContain("-video_size");
     expect(remoteScript).toContain('url="file://$out/input.html"');
     expect(remoteScript).toContain('"browserBinary": "$browser_bin"');
     await expect(fs.readFile(result.screenshotPath ?? "", "utf8")).resolves.toBe("png");
