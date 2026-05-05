@@ -244,8 +244,20 @@
     "target": "添加能力（重定向）"
   },
   {
+    "source": "Adding capabilities (contributor guide)",
+    "target": "添加能力（贡献者指南）"
+  },
+  {
     "source": "Plugin internals",
     "target": "插件内部机制"
+  },
+  {
+    "source": "SDK overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建技能"
   },
   {
     "source": "Setup Wizard Reference",
