@@ -2,6 +2,7 @@ import { onAgentEvent } from "../../infra/agent-events.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 
 const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
+const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 /**
  * Embedded runs can emit transient lifecycle `error` events while auth/model
  * failover is still in progress. Give errors a short grace window so a
@@ -54,6 +55,22 @@ function pruneAgentRunCache(now = Date.now()) {
 function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
   pruneAgentRunCache(entry.ts);
   agentRunCache.set(entry.runId, entry);
+  enforceAgentRunCacheMaxEntries();
+}
+
+function enforceAgentRunCacheMaxEntries() {
+  if (agentRunCache.size <= AGENT_RUN_CACHE_MAX_ENTRIES) {
+    return;
+  }
+  const toRemove = agentRunCache.size - AGENT_RUN_CACHE_MAX_ENTRIES;
+  let removed = 0;
+  for (const runId of agentRunCache.keys()) {
+    if (removed >= toRemove) {
+      break;
+    }
+    agentRunCache.delete(runId);
+    removed += 1;
+  }
 }
 
 function clearPendingAgentRunError(runId: string) {
@@ -386,4 +403,11 @@ export const __testing = {
   resetWaiters(): void {
     agentRunWaiterCounts.clear();
   },
+  getAgentRunCacheSize(): number {
+    return agentRunCache.size;
+  },
+  resetAgentRunCache(): void {
+    agentRunCache.clear();
+  },
+  agentRunCacheMaxEntries: AGENT_RUN_CACHE_MAX_ENTRIES,
 };
