@@ -3099,7 +3099,7 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
-  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+  it("forwards non-answer progress callbacks when source replies are suppressed", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
     const dispatcher = createDispatcher();
@@ -3138,9 +3138,9 @@ describe("dispatchReplyFromConfig", () => {
       replyResolver,
     });
 
-    expect(callbacks.toolStart).not.toHaveBeenCalled();
-    expect(callbacks.itemEvent).not.toHaveBeenCalled();
-    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(callbacks.toolStart).toHaveBeenCalledTimes(1);
+    expect(callbacks.itemEvent).toHaveBeenCalledTimes(1);
+    expect(callbacks.commandOutput).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
     expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
       sessionKey: "agent:main:discord:channel:C1",
@@ -4567,7 +4567,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       if (name === "typingStart") {
         continue;
       }
-      expect(callback).not.toHaveBeenCalled();
+      if (name === "toolStart" || name === "itemEvent" || name === "planUpdate") {
+        expect(callback).toHaveBeenCalledTimes(1);
+      } else {
+        expect(callback).not.toHaveBeenCalled();
+      }
     }
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
