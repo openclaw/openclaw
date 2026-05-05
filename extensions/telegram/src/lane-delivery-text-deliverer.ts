@@ -119,7 +119,7 @@ type TryUpdatePreviewParams = {
   previewButtons?: TelegramInlineButtons;
   stopBeforeEdit?: boolean;
   updateLaneSnapshot?: boolean;
-  skipRegressive: "always" | "existingOnly";
+  skipRegressive: RegressiveSkipMode;
   context: "final" | "update";
   previewMessageId?: number;
   previewTextSnapshot?: string;
@@ -136,7 +136,7 @@ type ConsumeArchivedAnswerPreviewParams = {
 };
 
 type PreviewUpdateContext = "final" | "update";
-type RegressiveSkipMode = "always" | "existingOnly";
+type RegressiveSkipMode = "always" | "existingOnly" | "never";
 
 type ResolvePreviewTargetParams = {
   lane: DraftLaneState;
@@ -169,6 +169,9 @@ function shouldSkipRegressivePreviewUpdate(args: {
 }): boolean {
   const currentPreviewText = args.currentPreviewText;
   if (currentPreviewText === undefined) {
+    return false;
+  }
+  if (args.skipRegressive === "never") {
     return false;
   }
   return (
@@ -386,7 +389,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       text: firstChunk,
       stopBeforeEdit: true,
       updateLaneSnapshot: true,
-      skipRegressive: "existingOnly",
+      skipRegressive: "never",
       context: "final",
     });
     if (finalized === "fallback") {
