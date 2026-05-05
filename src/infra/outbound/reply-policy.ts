@@ -39,6 +39,10 @@ export function createReplyToFanout(params: {
 export function createReplyToDeliveryPolicy(params: {
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
+  /** Channels that treat replyToId as a one-shot quote bubble (e.g. signal)
+   *  consume the inherited reply on the first send even when replyToMode is
+   *  not explicitly single-use. Defaults to false. */
+  treatAsSingleUse?: boolean;
 }): {
   resolveCurrentReplyTo: (payload: ReplyPayload) => ReplyToResolution;
   applyReplyToConsumption: <T extends ReplyToOverride>(
@@ -46,12 +50,23 @@ export function createReplyToDeliveryPolicy(params: {
     options?: { consumeImplicitReply?: boolean },
   ) => T;
 } {
-  const singleUseReplyTo = params.replyToMode ? isSingleUseReplyToMode(params.replyToMode) : false;
+  const modeIsSingleUse = params.replyToMode
+    ? isSingleUseReplyToMode(params.replyToMode)
+    : false;
+  // Treat-as-single-use applies when the channel uses replyToId as one-shot
+  // quote metadata, but only when the caller has not explicitly opted into a
+  // multi-use mode like "all".
+  const singleUseReplyTo =
+    modeIsSingleUse || (params.treatAsSingleUse === true && params.replyToMode !== "all");
   let replyToConsumed = false;
 
   const resolveCurrentReplyTo = (payload: ReplyPayload): ReplyToResolution => {
-    if (payload.replyToId != null) {
-      return payload.replyToId ? { replyToId: payload.replyToId, source: "explicit" } : {};
+    // Explicit null on a payload suppresses the inherited reply for that payload only.
+    if (payload.replyToId === null) {
+      return {};
+    }
+    if (typeof payload.replyToId === "string" && payload.replyToId.length > 0) {
+      return { replyToId: payload.replyToId, source: "explicit" };
     }
     const replyToId = (params.replyToMode === "off" ? undefined : params.replyToId) ?? undefined;
     if (!replyToId) {

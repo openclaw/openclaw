@@ -255,7 +255,7 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
 export function resolveMattermostReplyRootId(params: {
   kind: ChatType;
   threadRootId?: string;
-  replyToId?: string;
+  replyToId?: string | null;
 }): string | undefined {
   if (params.kind === "direct") {
     return undefined;
@@ -271,7 +271,7 @@ export function canFinalizeMattermostPreviewInPlace(params: {
   kind: ChatType;
   previewRootId?: string;
   threadRootId?: string;
-  replyToId?: string;
+  replyToId?: string | null;
 }): boolean {
   return (
     resolveMattermostReplyRootId({

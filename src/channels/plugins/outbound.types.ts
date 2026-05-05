@@ -28,6 +28,7 @@ export type ChannelOutboundContext = {
   replyToId?: string | null;
   replyToIdSource?: "explicit" | "implicit";
   replyToMode?: ReplyToMode;
+  quoteAuthor?: string | null;
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   accountId?: string | null;

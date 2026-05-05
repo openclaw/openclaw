@@ -130,6 +130,54 @@ function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
   };
 }
 
+type SignalSendFnForTest = (
+  to: string,
+  text: string,
+  options?: { replyTo?: string; quoteAuthor?: string; mediaUrl?: string },
+) => Promise<{ messageId: string; timestamp?: number }>;
+
+const signalOutboundForTest: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkText,
+  chunkerMode: "text",
+  textChunkLimit: 4000,
+  sendText: async ({ to, text, replyToId, quoteAuthor, deps }) => {
+    const send = deps?.signal as SignalSendFnForTest | undefined;
+    const sendLegacy = deps?.sendSignal as SignalSendFnForTest | undefined;
+    const sender = send ?? sendLegacy;
+    if (!sender) {
+      throw new Error("missing signal sender");
+    }
+    const result = await sender(to, text, {
+      replyTo: typeof replyToId === "string" ? replyToId : undefined,
+      quoteAuthor: typeof quoteAuthor === "string" ? quoteAuthor : undefined,
+    });
+    return {
+      ...result,
+      channel: "signal",
+      messageId: result.messageId,
+    };
+  },
+  sendMedia: async ({ to, text, mediaUrl, replyToId, quoteAuthor, deps }) => {
+    const send = deps?.signal as SignalSendFnForTest | undefined;
+    const sendLegacy = deps?.sendSignal as SignalSendFnForTest | undefined;
+    const sender = send ?? sendLegacy;
+    if (!sender) {
+      throw new Error("missing signal sender");
+    }
+    const result = await sender(to, text, {
+      replyTo: typeof replyToId === "string" ? replyToId : undefined,
+      quoteAuthor: typeof quoteAuthor === "string" ? quoteAuthor : undefined,
+      mediaUrl,
+    });
+    return {
+      ...result,
+      channel: "signal",
+      messageId: result.messageId,
+    };
+  },
+};
+
 const matrixOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkText,
@@ -1676,6 +1724,193 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).not.toHaveBeenCalled();
   });
 
+  it("does not re-apply Signal reply metadata after partial chunk failure in bestEffort mode", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "s1", timestamp: 1 })
+      .mockRejectedValueOnce(new Error("chunk fail"))
+      .mockResolvedValueOnce({ messageId: "s3", timestamp: 3 });
+    const onError = vi.fn();
+    const cfg: OpenClawConfig = {
+      channels: { signal: { textChunkLimit: 2 } },
+    };
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "abcd" }, { text: "ef" }],
+      replyToId: "1700000000000",
+      quoteAuthor: "Tester",
+      deps: { sendSignal },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(3);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      expect.any(String),
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: "Tester" }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      expect.any(String),
+      expect.objectContaining({ replyTo: undefined, quoteAuthor: undefined }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      3,
+      "+1555",
+      expect.any(String),
+      expect.objectContaining({ replyTo: undefined, quoteAuthor: undefined }),
+    );
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([
+      { channel: "signal", messageId: "s1", timestamp: 1 },
+      { channel: "signal", messageId: "s3", timestamp: 3 },
+    ]);
+  });
+
+  it("preserves inherited Signal reply metadata after an explicit malformed replyToId is skipped", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "s1", timestamp: 1 })
+      .mockResolvedValueOnce({ messageId: "s2", timestamp: 2 });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { signal: {} } },
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "first", replyToId: "not-a-timestamp" }, { text: "second" }],
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "+1555",
+      "first",
+      expect.objectContaining({ replyTo: "not-a-timestamp", quoteAuthor: "uuid:sender-1" }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "+1555",
+      "second",
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: "uuid:sender-1" }),
+    );
+  });
+
+  it("preserves inherited Signal group reply metadata when quoteAuthor is unavailable", async () => {
+    const sendSignal = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "s1", timestamp: 1 })
+      .mockResolvedValueOnce({ messageId: "s2", timestamp: 2 });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { signal: {} } },
+      channel: "signal",
+      to: "group:test-group",
+      payloads: [{ text: "first" }, { text: "second" }],
+      replyToId: "1700000000000",
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledTimes(2);
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      1,
+      "group:test-group",
+      "first",
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: undefined }),
+    );
+    expect(sendSignal).toHaveBeenNthCalledWith(
+      2,
+      "group:test-group",
+      "second",
+      expect.objectContaining({ replyTo: "1700000000000", quoteAuthor: undefined }),
+    );
+  });
+
+  it("keeps inherited Slack thread context across all payloads", async () => {
+    const sendSlack = vi
+      .fn()
+      .mockResolvedValueOnce({ messageId: "sl1", channelId: "C123" })
+      .mockResolvedValueOnce({ messageId: "sl2", channelId: "C123" });
+    type SendSlackForTest = (
+      to: string,
+      text: string,
+      options?: { threadTs?: string },
+    ) => Promise<{ messageId: string; channelId?: string }>;
+    const slackThreadOutbound: ChannelOutboundAdapter = {
+      deliveryMode: "direct",
+      sendText: async ({ to, text, replyToId, deps }) => {
+        const send = deps?.sendSlack as SendSlackForTest | undefined;
+        if (!send) {
+          throw new Error("sendSlack test dep missing");
+        }
+        const result = await send(to, text, {
+          threadTs: typeof replyToId === "string" ? replyToId : undefined,
+        });
+        return { channel: "slack", messageId: result.messageId, channelId: result.channelId };
+      },
+      sendMedia: async ({ to, text, replyToId, deps }) => {
+        const send = deps?.sendSlack as SendSlackForTest | undefined;
+        if (!send) {
+          throw new Error("sendSlack test dep missing");
+        }
+        const result = await send(to, text, {
+          threadTs: typeof replyToId === "string" ? replyToId : undefined,
+        });
+        return { channel: "slack", messageId: result.messageId, channelId: result.channelId };
+      },
+      sendPayload: async (ctx) => {
+        const send = ctx.deps?.sendSlack as SendSlackForTest | undefined;
+        if (!send) {
+          throw new Error("sendSlack test dep missing");
+        }
+        const result = await send(ctx.to, ctx.text, {
+          threadTs: typeof ctx.replyToId === "string" ? ctx.replyToId : undefined,
+        });
+        return { channel: "slack", messageId: result.messageId, channelId: result.channelId };
+      },
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: createOutboundTestPlugin({ id: "slack", outbound: slackThreadOutbound }),
+          source: "test",
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { slack: {} } },
+      channel: "slack",
+      to: "C123",
+      payloads: [{ text: "first" }, { text: "second" }],
+      replyToId: "thread-123",
+      deps: { sendSlack },
+    });
+
+    expect(sendSlack).toHaveBeenCalledTimes(2);
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      1,
+      "C123",
+      "first",
+      expect.objectContaining({ threadTs: "thread-123" }),
+    );
+    expect(sendSlack).toHaveBeenNthCalledWith(
+      2,
+      "C123",
+      "second",
+      expect.objectContaining({ threadTs: "thread-123" }),
+    );
+  });
+
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));
     const onError = vi.fn();
@@ -2269,6 +2504,11 @@ const defaultRegistry = createTestRegistry([
   {
     pluginId: "matrix",
     plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
+    source: "test",
+  },
+  {
+    pluginId: "signal",
+    plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutboundForTest }),
     source: "test",
   },
 ]);

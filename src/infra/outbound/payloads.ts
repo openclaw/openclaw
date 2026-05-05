@@ -153,6 +153,8 @@ function createOutboundPayloadPlanEntry(
   const isSilent = parsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+  const resolvedReplyToId =
+    payload.replyToId === null ? null : (payload.replyToId ?? parsed.replyToId);
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
@@ -162,7 +164,7 @@ function createOutboundPayloadPlanEntry(
       }) ?? "",
     mediaUrls: mergedMedia.length ? mergedMedia : undefined,
     mediaUrl: resolvedMediaUrl,
-    replyToId: payload.replyToId ?? parsed.replyToId,
+    ...(resolvedReplyToId !== undefined ? { replyToId: resolvedReplyToId } : {}),
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),

@@ -193,7 +193,7 @@ export function buildEmbeddedRunPayloads(params: {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
-  replyToId?: string;
+  replyToId?: string | null;
   isError?: boolean;
   isReasoning?: boolean;
   audioAsVoice?: boolean;

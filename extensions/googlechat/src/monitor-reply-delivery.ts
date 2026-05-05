@@ -13,7 +13,7 @@ import {
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export async function deliverGoogleChatReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string };
+  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string; replyToId?: string | null };
   account: ResolvedGoogleChatAccount;
   spaceId: string;
   runtime: GoogleChatRuntimeEnv;
@@ -70,7 +70,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: payload.replyToId ?? undefined,
     });
   };
   await deliverTextOrMediaReply({
@@ -125,7 +125,7 @@ export async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: payload.replyToId ?? undefined,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],

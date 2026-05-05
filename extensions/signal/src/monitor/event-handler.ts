@@ -49,6 +49,7 @@ import {
   formatSignalSenderDisplay,
   formatSignalSenderId,
   isSignalSenderAllowed,
+  isStrictUuid,
   normalizeSignalAllowRecipient,
   resolveSignalPeerId,
   resolveSignalRecipient,
@@ -63,9 +64,11 @@ import type {
   SignalEventHandlerDeps,
   SignalReactionMessage,
   SignalReceivePayload,
+  SignalReplyTarget,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
 import { renderSignalMentions } from "./mentions.js";
+import { describeSignalReplyTarget } from "./quote-context.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -105,6 +108,78 @@ function resolveSignalInboundRoute(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
+  // Best-effort index to map (conversation, messageId) -> senderRecipient for quote-author resolution.
+  // signal-cli requires quote-author for group quotes.
+  const messageAuthorIndex = new Map<string, string>();
+  const MAX_MESSAGE_AUTHOR_INDEX = 5000;
+
+  const resolveConversationKey = (entry: {
+    isGroup: boolean;
+    groupId?: string;
+    senderPeerId: string;
+  }): string =>
+    entry.isGroup ? `group:${entry.groupId ?? "unknown"}` : `dm:${entry.senderPeerId}`;
+
+  // Strict E.164: + followed by 7–15 digits (ITU-T E.164 range).
+  const STRICT_E164_RE = /^\+\d{7,15}$/;
+
+  const normalizeCachedMessageAuthor = (raw?: string) => {
+    const trimmed = raw?.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    // Strip uuid: prefix and validate strictly.
+    const unprefixed = trimmed.toLowerCase().startsWith("uuid:")
+      ? trimmed.slice("uuid:".length).trim()
+      : undefined;
+    if (unprefixed !== undefined) {
+      return isStrictUuid(unprefixed) ? `uuid:${unprefixed}` : undefined;
+    }
+    // Bare UUID without prefix.
+    if (isStrictUuid(trimmed)) {
+      return `uuid:${trimmed}`;
+    }
+    // E.164 phone number — normalize then validate.
+    const normalized = normalizeE164(trimmed);
+    return STRICT_E164_RE.test(normalized) ? normalized : undefined;
+  };
+
+  const rememberMessageAuthor = (params: {
+    conversationKey: string;
+    messageId?: string;
+    senderRecipient?: string;
+  }) => {
+    const id = params.messageId?.trim();
+    const senderRecipient = normalizeCachedMessageAuthor(params.senderRecipient);
+    if (!id || !senderRecipient) {
+      return;
+    }
+    const key = `${params.conversationKey}:${id}`;
+    // Refresh insertion order for simple LRU-style eviction.
+    if (messageAuthorIndex.has(key)) {
+      messageAuthorIndex.delete(key);
+    }
+    messageAuthorIndex.set(key, senderRecipient);
+    while (messageAuthorIndex.size > MAX_MESSAGE_AUTHOR_INDEX) {
+      const oldest = messageAuthorIndex.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      messageAuthorIndex.delete(oldest);
+    }
+  };
+
+  const resolveQuotedAuthor = (params: {
+    conversationKey: string;
+    replyToId?: string;
+  }): string | undefined => {
+    const replyToId = params.replyToId?.trim();
+    if (!replyToId) {
+      return undefined;
+    }
+    return messageAuthorIndex.get(`${params.conversationKey}:${replyToId}`);
+  };
+
   type SignalInboundEntry = {
     senderName: string;
     senderDisplay: string;
@@ -123,9 +198,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
-    replyToBody?: string;
-    replyToSender?: string;
-    replyToIsQuote?: boolean;
+    // Quote context fields
+    quoteTarget?: SignalReplyTarget;
   };
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -152,11 +226,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       storePath,
       sessionKey: route.sessionKey,
     });
+    const quoteBlock = entry.quoteTarget
+      ? `[Quoting ${entry.quoteTarget.author ?? "unknown"}${
+          entry.quoteTarget.id ? ` id:${entry.quoteTarget.id}` : ""
+        }]\n"${entry.quoteTarget.body}"\n[/Quoting]`
+      : "";
+    const bodyWithQuote = [entry.bodyText, quoteBlock].filter(Boolean).join("\n\n");
+
     const body = formatInboundEnvelope({
       channel: "Signal",
       from: fromLabel,
       timestamp: entry.timestamp ?? undefined,
-      body: entry.bodyText,
+      body: bodyWithQuote,
       chatType: entry.isGroup ? "group" : "direct",
       sender: { name: entry.senderName, id: entry.senderDisplay },
       previousTimestamp,
@@ -217,9 +298,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       Provider: "signal" as const,
       Surface: "signal" as const,
       MessageSid: entry.messageId,
-      ReplyToBody: entry.replyToBody,
-      ReplyToSender: entry.replyToSender,
-      ReplyToIsQuote: entry.replyToIsQuote,
+      // Quote/Reply context fields
+      ReplyToId: entry.quoteTarget?.id,
+      ReplyToBody: entry.quoteTarget?.body,
+      ReplyToSender: entry.quoteTarget?.author,
+      ReplyToIsQuote: entry.quoteTarget ? true : undefined,
       Timestamp: entry.timestamp ?? undefined,
       MediaPath: entry.mediaPath,
       MediaType: entry.mediaType,
@@ -266,11 +349,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
+    const replyDeliveryState = { consumed: false };
+
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
       deliver: async (payload) => {
+        const conversationKey = resolveConversationKey(entry);
         await deps.deliverReplies({
           cfg: deps.cfg,
           replies: [payload],
@@ -281,6 +367,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           runtime: deps.runtime,
           maxBytes: deps.mediaMaxBytes,
           textLimit: deps.textLimit,
+          inheritedReplyToId: entry.messageId,
+          replyDeliveryState,
+          resolveQuoteAuthor: (replyToId) => {
+            const resolvedAuthor = resolveQuotedAuthor({ conversationKey, replyToId });
+            if (resolvedAuthor) {
+              return resolvedAuthor;
+            }
+            // Don't pin explicit reply IDs to the current sender. Only fall back to the
+            // inbound sender when we're still replying to the current Signal message.
+            return replyToId === entry.messageId
+              ? normalizeCachedMessageAuthor(entry.senderRecipient)
+              : undefined;
+          },
         });
       },
       onError: (err, info) => {
@@ -404,6 +503,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       if (!combinedText.trim()) {
         return;
       }
+      // Preserve quoteTarget from the latest entry that has one so the reply
+      // target matches the newest text in the merged body.
+      const latestQuoteTarget = entries
+        .toReversed()
+        .find((entry) => entry.quoteTarget)?.quoteTarget;
       await handleSignalInboundMessage({
         ...last,
         bodyText: combinedText,
@@ -411,6 +515,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         mediaType: undefined,
         mediaPaths: undefined,
         mediaTypes: undefined,
+        quoteTarget: latestQuoteTarget ?? last.quoteTarget,
       });
     },
     onError: (err) => {
@@ -552,9 +657,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const rawMessage = dataMessage?.message ?? "";
     const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
     const messageText = normalizedMessage.trim();
+    const senderPeerId = resolveSignalPeerId(sender);
     const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
+    const groupName = dataMessage?.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-
+    const conversationKey = resolveConversationKey({
+      isGroup,
+      groupId,
+      senderPeerId,
+    });
+    // NOTE: Full group-quote author resolution currently depends on the patched
+    // signal-cli install at /opt/signal-cli-0.14.1-patched/, which removes the
+    // quote.getAuthor().isValid() filter. Once upstream ships lib v140 on JitPack,
+    // the stock signal-cli build should provide the same quote metadata.
+    const quoteTarget = dataMessage
+      ? (describeSignalReplyTarget(dataMessage, {
+          resolveAuthor: resolveQuotedAuthor,
+          conversationKey,
+        }) ?? undefined)
+      : undefined;
     const senderDisplay = formatSignalSenderDisplay(sender);
     const {
       resolveAccessDecision,
@@ -572,21 +693,26 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupId,
     });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
-    const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
-      resolveSignalQuoteContext({
-        cfg: deps.cfg,
-        accountId: deps.accountId,
-        isGroup,
-        dataMessage,
-        effectiveGroupAllow,
-      });
+    const {
+      contextVisibilityMode,
+      decision: quoteVisibility,
+      quoteSenderAllowed,
+      visibleQuoteText,
+    } = resolveSignalQuoteContext({
+      cfg: deps.cfg,
+      accountId: deps.accountId,
+      isGroup,
+      dataMessage,
+      effectiveGroupAllow,
+    });
+    const visibleQuoteTarget = quoteVisibility.include ? quoteTarget : undefined;
     if (quoteText && !visibleQuoteText && isGroup) {
       logVerbose(
         `signal: drop quote context (mode=${contextVisibilityMode}, sender_allowed=${quoteSenderAllowed ? "yes" : "no"})`,
       );
     }
     const hasBodyContent =
-      Boolean(messageText || visibleQuoteText) ||
+      Boolean(messageText || visibleQuoteTarget?.body) ||
       Boolean(!reaction && dataMessage?.attachments?.length);
 
     if (
@@ -607,13 +733,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     }
 
     const senderRecipient = resolveSignalRecipient(sender);
-    const senderPeerId = resolveSignalPeerId(sender);
     const senderAllowId = formatSignalSenderId(sender);
     if (!senderRecipient) {
       return;
     }
     const senderIdLine = formatSignalPairingIdLine(sender);
-    const groupName = dataMessage.groupInfo?.groupName ?? undefined;
 
     if (!isGroup) {
       const allowedDirectMessage = await handleSignalDirectMessageAccess({
@@ -739,7 +863,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         const pendingKind = kindFromMime(firstContentType ?? undefined);
         return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
       })();
-      const pendingBodyText = messageText || pendingPlaceholder || visibleQuoteText;
+      const pendingBodyText = messageText || pendingPlaceholder || visibleQuoteTarget?.body || "";
       const historyKey = groupId ?? "unknown";
       recordPendingHistoryEntryIfEnabled({
         historyMap: deps.groupHistories,
@@ -794,6 +918,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           "signal: mention-skip message hook failed",
         );
       }
+      // Index the message author even when skipping due to no mention
+      rememberMessageAuthor({
+        conversationKey,
+        messageId: typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
+        senderRecipient: senderRecipient,
+      });
       return;
     }
 
@@ -844,11 +974,18 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    const bodyText = messageText || placeholder || visibleQuoteText || "";
-    if (!bodyText) {
+    // Build body text - don't use quote text as fallback, preserve it for context
+    const bodyText =
+      messageText ||
+      placeholder ||
+      (isGroup && contextVisibilityMode === "allowlist_quote"
+        ? (visibleQuoteTarget?.body ?? "")
+        : "");
+
+    // Continue if we have either body text OR quote context (quote-only messages are valid)
+    if (!bodyText && !visibleQuoteTarget) {
       return;
     }
-
     const receiptTimestamp =
       typeof envelope.timestamp === "number"
         ? envelope.timestamp
@@ -878,6 +1015,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderName = envelope.sourceName ?? senderDisplay;
     const messageId =
       typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined;
+
+    // Record (conversation, messageId) -> senderRecipient so later explicit reply tags
+    // ([[reply_to:<id>]]) can resolve a correct quote-author.
+    // SECURITY: Only cache from actual envelope senders — never from quote metadata,
+    // which is attacker-controlled and could poison the author cache.
+    rememberMessageAuthor({
+      conversationKey,
+      messageId,
+      senderRecipient,
+    });
+
     await inboundDebouncer.enqueue({
       senderName,
       senderDisplay,
@@ -896,9 +1044,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
-      replyToBody: visibleQuoteText || undefined,
-      replyToSender: visibleQuoteSender,
-      replyToIsQuote: visibleQuoteText ? true : undefined,
+      quoteTarget: visibleQuoteTarget,
     });
   };
 }
