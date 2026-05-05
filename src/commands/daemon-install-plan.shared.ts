@@ -44,10 +44,26 @@ export async function emitDaemonInstallRuntimeWarning(params: {
   });
 }
 
+function resolveVitePlusCompanionBinDir(nodePath: string): string | undefined {
+  const normalized = nodePath.replaceAll("\\", "/");
+  const marker = "/.vite-plus/js_runtime/node/";
+  const markerIndex = normalized.indexOf(marker);
+  if (markerIndex < 0) {
+    return undefined;
+  }
+  const vitePlusRoot = `${normalized.slice(0, markerIndex)}/.vite-plus`;
+  return path.normalize(path.join(vitePlusRoot, "bin"));
+}
+
 export function resolveDaemonNodeBinDir(nodePath?: string): string[] | undefined {
   const trimmed = nodePath?.trim();
   if (!trimmed || !path.isAbsolute(trimmed)) {
     return undefined;
   }
-  return [path.dirname(trimmed)];
+  const dirs = [path.dirname(trimmed)];
+  const vitePlusBinDir = resolveVitePlusCompanionBinDir(trimmed);
+  if (vitePlusBinDir && !dirs.includes(vitePlusBinDir)) {
+    dirs.push(vitePlusBinDir);
+  }
+  return dirs;
 }
