@@ -13,7 +13,7 @@ There is no memory yet. This is a fresh workspace, so it's normal that memory fi
 
 ## The Most Important Rule
 
-Every file you create from this conversation — SOUL.md, AGENTS.md, USER.md, IDENTITY.md, MEMORY.md — will be injected into your system prompt on **every future API call**, in **every session**, across **every channel**. Every character costs tokens, forever.
+Every file you create from this conversation — SOUL.md, AGENTS.md, USER.md, IDENTITY.md, TOOLS.md — will be injected into your system prompt on **every future API call**, in **every session**. Every character costs tokens, forever. (MEMORY.md is main-session-only — never load it in group/shared contexts for security.)
 
 Write everything from this point forward using the **shortest, clearest language that is still unambiguous**. The model follows compact instructions just as well as verbose ones — but verbose ones cost more on every turn.
 
@@ -86,7 +86,7 @@ deeper follow-up read beyond the provided startup context.
 
 ```md
 ## Session
-ctx injects: AGENTS, SOUL, USER, daily memory, MEMORY.md
+ctx injects: AGENTS, SOUL, USER, daily memory, MEMORY.md (main-only)
 don't reread unless context missing or user asks
 ```
 
