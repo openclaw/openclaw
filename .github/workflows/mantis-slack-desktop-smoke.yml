@@ -30,6 +30,10 @@ on:
         options:
           - aws
           - hetzner
+      crabbox_lease_id:
+        description: Optional existing Crabbox desktop/browser lease id or slug to reuse
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -50,7 +54,7 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Require maintainer-level repository access
         uses: actions/github-script@v8
@@ -74,7 +78,7 @@ jobs:
   validate_ref:
     name: Validate candidate ref
     needs: authorize_actor
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
@@ -128,7 +132,7 @@ jobs:
   run_slack_desktop:
     name: Run Slack desktop smoke
     needs: validate_ref
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     environment: qa-live-shared
     steps:
@@ -194,6 +198,7 @@ jobs:
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_LEASE_ID: ${{ inputs.crabbox_lease_id }}
           CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
           KEEP_VM: ${{ inputs.keep_vm }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
@@ -222,6 +227,10 @@ jobs:
           output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
           root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
+          lease_args=()
+          if [[ -n "${CRABBOX_LEASE_ID:-}" ]]; then
+            lease_args=(--lease-id "$CRABBOX_LEASE_ID")
+          fi
           keep_args=()
           if [[ "$KEEP_VM" == "true" ]]; then
             keep_args=(--keep-lease)
@@ -245,7 +254,8 @@ jobs:
             --alt-model openai/gpt-5.4 \
             --fast \
             --scenario "$SCENARIO_ID" \
-            "${keep_args[@]}"
+            "${keep_args[@]}" \
+            "${lease_args[@]}"
           mantis_exit=$?
           set -e
 
