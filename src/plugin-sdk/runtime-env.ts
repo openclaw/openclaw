@@ -33,3 +33,4 @@ export {
   registerUnhandledRejectionHandler,
 } from "../infra/unhandled-rejections.js";
 export { isWSL2Sync } from "../infra/wsl.js";
+export { isWSLEnv } from "../infra/wsl.js";

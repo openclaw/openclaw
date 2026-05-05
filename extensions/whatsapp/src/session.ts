@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
+import { isWSLEnv } from "openclaw/plugin-sdk/runtime-env";
 import { ensureDir, resolveUserPath } from "openclaw/plugin-sdk/text-runtime";
 import {
   readCredsJsonRaw,
@@ -119,6 +120,12 @@ async function safeSaveCreds(
 }
 
 async function printTerminalQr(qr: string): Promise<void> {
+  if (isWSLEnv()) {
+    process.stdout.write(
+      "\nNote: If using WSL and the QR code cannot be scanned successfully, " +
+        "please change the WSL terminal font to MS Gothic and try again.\n\n",
+    );
+  }
   const output = await renderQrTerminal(qr, { small: true });
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }

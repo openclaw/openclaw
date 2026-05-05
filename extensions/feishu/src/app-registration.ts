@@ -6,6 +6,7 @@
  * the openclaw WizardPrompter surface.
  */
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isWSLEnv } from "openclaw/plugin-sdk/runtime-env";
 import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -252,6 +253,12 @@ export async function pollAppRegistration(params: {
  * otherwise the pattern is corrupted and cannot be scanned.
  */
 export async function printQrCode(url: string): Promise<void> {
+  if (isWSLEnv()) {
+    process.stdout.write(
+      "\nNote: If using WSL and the QR code cannot be scanned successfully, " +
+        "please change the WSL terminal font to MS Gothic and try again.\n\n",
+    );
+  }
   const output = await renderQrTerminal(url, { small: true });
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
