@@ -48,6 +48,7 @@ type TelegramQaScenarioId =
   | "telegram-whoami-command"
   | "telegram-context-command"
   | "telegram-current-session-status-tool"
+  | "telegram-long-final-three-chunks"
   | "telegram-long-final-reuses-preview"
   | "telegram-mentioned-message-reply"
   | "telegram-mention-gating";
@@ -311,6 +312,24 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       expectedTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN"],
       expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
       expectedSutMessageCount: 2,
+      settleMs: 4_000,
+    }),
+  },
+  {
+    id: "telegram-long-final-three-chunks",
+    title: "Telegram three-chunk final keeps only final chunks",
+    defaultEnabled: false,
+    timeoutMs: 60_000,
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Telegram long final three chunk QA check. Use the scripted three chunk final response.`,
+      expectedTextIncludes: ["TELEGRAM-LONG-FINAL-3CHUNK-BEGIN"],
+      expectedJoinedSutTextIncludes: [
+        "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+        "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      ],
+      expectedSutMessageCount: 3,
       settleMs: 4_000,
     }),
   },

@@ -233,6 +233,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-whoami-command`
 - `telegram-context-command`
 - `telegram-long-final-reuses-preview`
+- `telegram-long-final-three-chunks`
 
 Output artifacts:
 

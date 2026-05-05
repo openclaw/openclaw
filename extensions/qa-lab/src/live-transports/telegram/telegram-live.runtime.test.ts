@@ -334,6 +334,7 @@ describe("telegram live qa runtime", () => {
       "telegram-current-session-status-tool",
       "telegram-mentioned-message-reply",
       "telegram-long-final-reuses-preview",
+      "telegram-long-final-three-chunks",
       "telegram-mention-gating",
     ]);
     expect(scenarios.map((scenario) => scenario.id)).toEqual([
@@ -345,6 +346,7 @@ describe("telegram live qa runtime", () => {
       "telegram-current-session-status-tool",
       "telegram-mentioned-message-reply",
       "telegram-long-final-reuses-preview",
+      "telegram-long-final-three-chunks",
       "telegram-mention-gating",
     ]);
     expect(
@@ -364,6 +366,17 @@ describe("telegram live qa runtime", () => {
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
       expectedSutMessageCount: 2,
+    });
+    expect(
+      scenarios
+        .find((scenario) => scenario.id === "telegram-long-final-three-chunks")
+        ?.buildRun("sut_bot"),
+    ).toMatchObject({
+      expectedJoinedSutTextIncludes: [
+        "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+        "TELEGRAM-LONG-FINAL-3CHUNK-END",
+      ],
+      expectedSutMessageCount: 3,
     });
   });
 
@@ -485,6 +498,65 @@ describe("telegram live qa runtime", () => {
         ],
       }),
     ).toThrow("expected 2 SUT message(s), observed 3");
+  });
+
+  it("accepts legitimate three-chunk Telegram final replies", () => {
+    expect(() =>
+      __testing.assertTelegramScenarioMessageSet({
+        expectedJoinedSutTextIncludes: [
+          "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+          "TELEGRAM-LONG-FINAL-3CHUNK-END",
+        ],
+        expectedSutMessageCount: 3,
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-three-chunks",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-three-chunks",
+            scenarioTitle: "Telegram three-chunk final keeps only final chunks",
+            matchedScenario: true,
+            text: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN part one ",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 2,
+            messageId: 11,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-three-chunks",
+            scenarioTitle: "Telegram three-chunk final keeps only final chunks",
+            matchedScenario: true,
+            text: "part two ",
+            timestamp: 1_700_000_001_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 3,
+            messageId: 12,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-three-chunks",
+            scenarioTitle: "Telegram three-chunk final keeps only final chunks",
+            matchedScenario: true,
+            text: "part three TELEGRAM-LONG-FINAL-3CHUNK-END",
+            timestamp: 1_700_000_002_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).not.toThrow();
   });
 
   it("matches scenario replies by thread or exact marker", () => {

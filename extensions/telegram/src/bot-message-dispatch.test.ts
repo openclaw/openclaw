@@ -1618,6 +1618,48 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("uses the active preview as the first chunk for three-chunk long text finals", async () => {
+    const answerDraftStream = createSequencedDraftStream(1001);
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    const finalText = `${"A".repeat(70)}${"B".repeat(70)}${"C".repeat(70)}`;
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Working preview" });
+        await dispatcherOptions.deliver({ text: finalText, replyToId: "456" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "partial",
+      textLimit: 80,
+    });
+
+    const editedText = editMessageTelegram.mock.calls[0]?.[2] as string;
+    const followUpReplies =
+      (deliverReplies.mock.calls[0]?.[0] as { replies?: Array<{ text?: string }> })?.replies ?? [];
+    const followUpText = followUpReplies.map((reply) => reply.text ?? "").join("");
+
+    expect(editMessageTelegram).toHaveBeenCalledTimes(1);
+    expect(editedText.length).toBeLessThanOrEqual(80);
+    expect(followUpReplies).toHaveLength(1);
+    expect(followUpText.length).toBeGreaterThan(80);
+    expect(`${editedText}${followUpText}`).toBe(finalText);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.not.objectContaining({ replyToId: expect.any(String) })],
+      }),
+    );
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+  });
+
   it("does not force new message on first assistant message start", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
