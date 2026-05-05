@@ -17,6 +17,7 @@ import {
   buildAssistantMessage,
   parseNdjsonStream,
   resolveOllamaBaseUrlForRun,
+  sanitizeOllamaToolParameters,
 } from "./stream.js";
 
 type GuardedFetchCall = {
@@ -30,6 +31,49 @@ type GuardedFetchCall = {
 
 afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
+});
+
+
+describe("sanitizeOllamaToolParameters", () => {
+  it("removes approval-routing exec properties from Ollama tool schemas", () => {
+    const result = sanitizeOllamaToolParameters("exec", {
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        workdir: { type: "string" },
+        timeout: { type: "number" },
+        host: { type: "string" },
+        node: { type: "string" },
+        elevated: { type: "boolean" },
+        security: { type: "string" },
+        ask: { type: "string" },
+      },
+      required: ["command", "host", "node"],
+    });
+
+    expect(result).toEqual({
+      type: "object",
+      properties: {
+        command: { type: "string" },
+        workdir: { type: "string" },
+        timeout: { type: "number" },
+      },
+      required: ["command"],
+    });
+  });
+
+  it("leaves non-exec tool schemas unchanged", () => {
+    const parameters = {
+      type: "object",
+      properties: {
+        host: { type: "string" },
+        query: { type: "string" },
+      },
+      required: ["query"],
+    };
+
+    expect(sanitizeOllamaToolParameters("search", parameters)).toBe(parameters);
+  });
 });
 
 describe("buildOllamaChatRequest", () => {
@@ -1789,6 +1833,76 @@ describe("createOllamaStreamFn", () => {
           hostnameAllowlist: ["127.0.0.1"],
           allowPrivateNetwork: true,
         });
+      },
+    );
+  });
+
+  it("sanitizes exec tool schemas before sending them to Ollama", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const stream = await Promise.resolve(
+          streamFn(
+            {
+              id: "qwen3:32b",
+              api: "ollama",
+              provider: "custom-ollama",
+              contextWindow: 131072,
+            } as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "exec",
+                  description: "Run a command",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      command: { type: "string" },
+                      workdir: { type: "string" },
+                      timeout: { type: "number" },
+                      host: { type: "string" },
+                      node: { type: "string" },
+                      elevated: { type: "boolean" },
+                      security: { type: "string" },
+                      ask: { type: "string" },
+                    },
+                    required: ["command", "host"],
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{
+            function: { parameters: { properties?: Record<string, unknown>; required?: string[] } };
+          }>;
+        };
+        const execParameters = requestBody.tools?.[0]?.function.parameters;
+        expect(execParameters?.properties).toMatchObject({
+          command: { type: "string" },
+          workdir: { type: "string" },
+          timeout: { type: "number" },
+        });
+        expect(execParameters?.properties).not.toHaveProperty("host");
+        expect(execParameters?.properties).not.toHaveProperty("node");
+        expect(execParameters?.properties).not.toHaveProperty("elevated");
+        expect(execParameters?.properties).not.toHaveProperty("security");
+        expect(execParameters?.properties).not.toHaveProperty("ask");
+        expect(execParameters?.required).toEqual(["command"]);
       },
     );
   });

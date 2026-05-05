@@ -740,6 +740,14 @@ function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefi
   return undefined;
 }
 
+const OLLAMA_EXEC_SCHEMA_BLOCKED_PROPERTIES = new Set([
+  "host",
+  "node",
+  "elevated",
+  "security",
+  "ask",
+]);
+
 function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<string, unknown> {
   if (!isRecord(schema)) {
     return {
@@ -784,6 +792,36 @@ function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<stri
     normalized.properties = {};
   }
   return normalized;
+}
+
+export function sanitizeOllamaToolParameters(
+  toolName: string,
+  parameters: Record<string, unknown>,
+): Record<string, unknown> {
+  if (toolName !== "exec") {
+    return parameters;
+  }
+
+  const sanitized = { ...parameters };
+  const properties = isRecord(parameters.properties)
+    ? { ...(parameters.properties as Record<string, unknown>) }
+    : undefined;
+
+  if (properties) {
+    for (const propertyName of OLLAMA_EXEC_SCHEMA_BLOCKED_PROPERTIES) {
+      delete properties[propertyName];
+    }
+    sanitized.properties = properties;
+  }
+
+  if (Array.isArray(parameters.required)) {
+    sanitized.required = parameters.required.filter(
+      (value): value is string =>
+        typeof value === "string" && !OLLAMA_EXEC_SCHEMA_BLOCKED_PROPERTIES.has(value),
+    );
+  }
+
+  return sanitized;
 }
 
 type OllamaToolCallNameOptions = {
@@ -925,7 +963,10 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
       function: {
         name: tool.name,
         description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
+        parameters: sanitizeOllamaToolParameters(
+          tool.name,
+          normalizeOllamaToolSchema(tool.parameters, true),
+        ),
       },
     });
   }
