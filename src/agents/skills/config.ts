@@ -86,10 +86,11 @@ export function shouldIncludeSkill(params: {
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
+  const persist = skillConfig?.persist === true || entry.metadata?.persist === true;
   return evaluateRuntimeEligibility({
     os: entry.metadata?.os,
     remotePlatforms: eligibility?.remote?.platforms,
-    always: entry.metadata?.always,
+    always: entry.metadata?.always || persist,
     requires: entry.metadata?.requires,
     hasBin: hasBinary,
     hasRemoteBin: eligibility?.remote?.hasBin,

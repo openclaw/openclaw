@@ -18,6 +18,8 @@ export type SkillInstallSpec = {
 
 export type OpenClawSkillMetadata = {
   always?: boolean;
+  /** When true, always include this skill even when bin/env/config checks are unmet. OS-platform mismatches are still enforced. */
+  persist?: boolean;
   skillKey?: string;
   primaryEnv?: string;
   emoji?: string;
