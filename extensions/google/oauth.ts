@@ -1,3 +1,4 @@
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { clearCredentialsCache, extractGeminiCliCredentials } from "./oauth.credentials.js";
 import {
   buildAuthUrl,
@@ -93,6 +94,11 @@ async function manualFlow(
 
 export async function refreshGeminiCliOAuthToken(
   credentials: Pick<GeminiCliOAuthCredentials, "refresh" | "email" | "projectId">,
-): Promise<GeminiCliOAuthCredentials> {
-  return await refreshTokensForGeminiCli(credentials);
+): Promise<OAuthCredential> {
+  const refreshed = await refreshTokensForGeminiCli(credentials);
+  return {
+    type: "oauth",
+    provider: "google-gemini-cli",
+    ...refreshed,
+  };
 }
