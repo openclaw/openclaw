@@ -91,6 +91,23 @@ describe("handleHandoffCommand", () => {
     expect(content).toContain("Source session: agent:telegram:telegram:direct:7215741815");
     expect(content).toContain("Token risk: 158k: handoff recommended");
     expect(content).toContain("/new alone starts fresh");
+    expect(content).toContain("token risk is advisory and never a precondition");
+  });
+
+  it("saves handoff even when token pressure is normal", async () => {
+    const params = buildTelegramParams("/handoff continue this topic", {
+      totalTokens: 12_000,
+    });
+    const result = await handleHandoffCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Handoff saved.");
+    expect(result?.reply?.text).toContain("12k: normal");
+
+    const content = await readLatestHandoff();
+    expect(content).toContain("Token risk: 12k: normal");
+    expect(content).toContain("continue this topic");
+    expect(content).toContain("token risk is advisory and never a precondition");
   });
 
   it("awaits session transcript loaders when a session file is available", async () => {

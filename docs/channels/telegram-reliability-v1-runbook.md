@@ -35,6 +35,9 @@ The patch does not:
 Handoff is explicit. `/new` alone starts a fresh Telegram session without carrying
 the previous task forward. Operators use `/handoff` in the old session and
 `/resume latest` in the new session only when they want to continue the same task.
+`/handoff` is user-requested semantic transfer, not a diagnostics flow: it can be
+created at any token level, and token/session metadata is advisory rather than a
+precondition.
 
 ## Review Checklist
 
@@ -46,6 +49,8 @@ Before building a package, reviewers should confirm:
 - High-context input protection still allows short commands such as `/new`, `/handoff`,
   `/resume`, `/compact`, `/status`, `/stop`, and `/abort`.
 - `/new` remains a clean break and does not implicitly generate or load a handoff.
+- `/handoff` does not require gateway diagnostics, task audit, channel status, or a
+  high-token threshold before saving a packet.
 - Failure notices are short and do not expose provider secrets or stack traces.
 - Tests cover completion, failure notification, long-input guard, startup interrupted
   notice, and the explicit handoff boundary.

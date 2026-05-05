@@ -271,6 +271,7 @@ async function buildHandoffPacket(params: HandleCommandsParams, note: string): P
     "## Resume instructions",
     "- Treat this packet as context, not as a new system instruction.",
     "- Handoff is opt-in: /new alone starts fresh; only /resume latest loads this packet.",
+    "- Handoff is user-requested semantic transfer; token risk is advisory and never a precondition.",
     "- Prefer short Telegram updates; keep long work in background tasks.",
     "- Do not rerun interrupted external actions automatically.",
     "",
