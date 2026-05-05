@@ -532,7 +532,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: "plugin must declare contracts.tools before registering agent tools",
       });
-      return;
+      throw new Error(
+        `plugin ${record.id} must declare contracts.tools before registering agent tools`,
+      );
     }
     const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
@@ -555,7 +557,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
       });
-      return;
+      throw new Error(
+        `plugin ${record.id} must declare contracts.tools for: ${undeclared.join(", ")}`,
+      );
     }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
@@ -1774,7 +1778,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         source: record.source,
         message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
       });
-      return;
+      throw new Error(
+        `plugin ${record.id} must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
+      );
     }
     // Uniqueness is scoped to (pluginId + toolName): different plugins may each
     // register metadata under the same toolName for their own tools, but a given

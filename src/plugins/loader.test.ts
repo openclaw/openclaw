@@ -2976,7 +2976,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
       expect.arrayContaining([
         expect.objectContaining({
           pluginId: "undeclared-tool-owner",
-          message: "plugin must declare contracts.tools before registering agent tools",
+          message: expect.stringContaining(
+            "must declare contracts.tools before registering agent tools",
+          ),
         }),
       ]),
     );
@@ -3018,7 +3020,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       expect.arrayContaining([
         expect.objectContaining({
           pluginId: "wrong-tool-owner",
-          message: "plugin must declare contracts.tools for: runtime_tool",
+          message: expect.stringContaining("must declare contracts.tools for: runtime_tool"),
         }),
       ]),
     );
