@@ -29,7 +29,10 @@ installMinimaxProviderHttpMockCleanup();
 
 describe("minimax video generation provider", () => {
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildMinimaxVideoGenerationProvider());
+    const provider = buildMinimaxVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.generate?.resolutions).toEqual(["768P", "1080P"]);
+    expect(provider.capabilities.imageToVideo?.resolutions).toEqual(["768P", "1080P"]);
   });
 
   it("creates a task, polls status, and downloads the generated video", async () => {

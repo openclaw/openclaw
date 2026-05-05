@@ -40,7 +40,11 @@ describe("google video generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildGoogleVideoGenerationProvider());
+    const provider = buildGoogleVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.generate?.supportsAudio).toBe(false);
+    expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);
+    expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
   });
 
   it("submits generation and returns inline video bytes", async () => {
@@ -89,6 +93,7 @@ describe("google video generation provider", () => {
         }),
       }),
     );
+    expect(request?.config).not.toHaveProperty("generateAudio");
     expect(request?.config).not.toHaveProperty("numberOfVideos");
     expect(request?.config).not.toHaveProperty("generateAudio");
     expect(result.videos).toHaveLength(1);

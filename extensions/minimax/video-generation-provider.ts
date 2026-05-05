@@ -19,8 +19,9 @@ import type {
 const DEFAULT_MINIMAX_VIDEO_BASE_URL = "https://api.minimax.io";
 const DEFAULT_MINIMAX_VIDEO_MODEL = "MiniMax-Hailuo-2.3";
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_OPERATION_TIMEOUT_MS = 1_200_000;
 const POLL_INTERVAL_MS = 10_000;
-const MAX_POLL_ATTEMPTS = 90;
+const MAX_POLL_ATTEMPTS = 120;
 const MINIMAX_MODEL_ALLOWED_DURATIONS: Readonly<Record<string, readonly number[]>> = {
   "MiniMax-Hailuo-2.3": [6, 10],
   "MiniMax-Hailuo-02": [6, 10],
@@ -323,7 +324,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
 
       const fetchFn = fetch;
       const deadline = createProviderOperationDeadline({
-        timeoutMs: req.timeoutMs,
+        timeoutMs: req.timeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
         label: "MiniMax video generation",
       });
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -387,7 +388,7 @@ function buildMinimaxVideoProvider(providerId: string): VideoGenerationProvider 
           headers,
           timeoutMs: resolveProviderOperationTimeoutMs({
             deadline,
-            defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+            defaultTimeoutMs: DEFAULT_OPERATION_TIMEOUT_MS,
           }),
           baseUrl,
           fetchFn,
