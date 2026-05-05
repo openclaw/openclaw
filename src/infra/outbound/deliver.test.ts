@@ -988,6 +988,7 @@ describe("deliverOutboundPayloads", () => {
         to: "U123",
         text: "photo",
         mediaUrl: "file:///tmp/f.png",
+        agentId: "work",
         mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
       }),
     );

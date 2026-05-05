@@ -750,6 +750,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 mediaUrl,
                 accountId: ctx.accountId ?? undefined,
                 mediaLocalRoots: ctx.mediaLocalRoots,
+                mediaReadFile: ctx.mediaReadFile,
                 replyToId: replyToMessageId,
                 ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
               });

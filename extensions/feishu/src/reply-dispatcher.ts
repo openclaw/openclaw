@@ -12,6 +12,10 @@ import {
 import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import {
+  normalizePossibleLocalFilePath,
+  resolvePossibleLocalFileReplyParts,
+} from "./local-file-reply.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -21,6 +25,7 @@ import {
   type OutboundIdentity,
   type ReplyPayload,
   type RuntimeEnv,
+  getAgentScopedMediaLocalRootsForSources,
 } from "./reply-dispatcher-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
@@ -418,6 +423,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     flushStreamingCardUpdate(buildCombinedStreamText(reasoningText, streamText));
   };
 
+  const replaceStreamingTextForAttachmentReply = (text?: string) => {
+    if (!streaming?.isActive() && !streamingStartPromise) {
+      return;
+    }
+    reasoningText = "";
+    statusLine = "";
+    snapshotBaseText = "";
+    streamText = text?.trim() || "Attachment";
+    lastSnapshotTextLength = streamText.length;
+    flushStreamingCardUpdate(streamText);
+  };
+
   const sendChunkedTextReply = async (params: {
     text: string;
     useCard: boolean;
@@ -444,6 +461,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
   const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+    const effectiveMediaLocalRoots = getAgentScopedMediaLocalRootsForSources({
+      cfg,
+      agentId,
+      mediaSources: mediaUrls,
+    });
     let sentFallbackText = false;
     await sendMediaWithLeadingCaption({
       mediaUrls,
@@ -456,6 +478,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           accountId,
+          mediaLocalRoots: effectiveMediaLocalRoots,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
         if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
@@ -559,6 +582,55 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         }
 
         if (shouldDeliverText) {
+          const localFilePath =
+            info?.kind === "block" ? null : normalizePossibleLocalFilePath(text);
+          if (localFilePath) {
+            try {
+              replaceStreamingTextForAttachmentReply();
+              await sendMediaReplies({ ...payload, text: undefined, mediaUrl: localFilePath });
+              return;
+            } catch (err) {
+              params.runtime.error?.(
+                `feishu[${account.accountId}] local file path auto-send failed: ${String(err)}`,
+              );
+            }
+          }
+          const localFileReply =
+            info?.kind === "block" ? null : resolvePossibleLocalFileReplyParts(text);
+          if (localFileReply) {
+            try {
+              replaceStreamingTextForAttachmentReply(localFileReply.text);
+              if (localFileReply.text) {
+                await sendChunkedTextReply({
+                  text: localFileReply.text,
+                  useCard: false,
+                  infoKind: info?.kind,
+                  sendChunk: async ({ chunk, isFirst }) => {
+                    await sendMessageFeishu({
+                      cfg,
+                      to: chatId,
+                      text: chunk,
+                      replyToMessageId: sendReplyToMessageId,
+                      replyInThread: effectiveReplyInThread,
+                      mentions: isFirst ? mentionTargets : undefined,
+                      accountId,
+                    });
+                  },
+                });
+              }
+              await sendMediaReplies({
+                ...payload,
+                text: undefined,
+                mediaUrl: localFileReply.filePath,
+              });
+              return;
+            } catch (err) {
+              params.runtime.error?.(
+                `feishu[${account.accountId}] embedded local file path auto-send failed: ${String(err)}`,
+              );
+            }
+          }
+
           if (info?.kind === "block") {
             // Drop internal block chunks unless we can safely consume them as
             // streaming-card fallback content.
@@ -592,7 +664,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
-              await sendMediaReplies(payload);
+              await sendMediaReplies(payload, undefined);
             }
             return;
           }
