@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
+  createPluginCacheKey,
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
@@ -22,6 +23,9 @@ import type {
 } from "./types.js";
 
 const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
+
+// Cache for resolveProviderPluginsForHooks results to avoid repeated provider discovery
+const providerPluginsForHooksCache: ConfigScopedRuntimeCache<ProviderPlugin[]> = new WeakMap();
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -107,6 +111,40 @@ export function resolveProviderPluginsForHooks(params: {
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+
+  // Compute cache key
+  const cacheKey = createPluginCacheKey([
+    params.providerRefs?.slice().sort() ?? [],
+    params.onlyPluginIds?.slice().sort() ?? [],
+    resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env,
+      workspaceDir,
+    }),
+    workspaceDir ?? "",
+    params.applyAutoEnable ?? false,
+    params.bundledProviderAllowlistCompat ?? true,
+    params.bundledProviderVitestCompat ?? true,
+  ]);
+
+  // Use config-scoped cache when possible (falls back to uncached when no config)
+  if (params.config) {
+    return resolveConfigScopedRuntimeCacheValue({
+      cache: providerPluginsForHooksCache,
+      config: params.config,
+      key: cacheKey,
+      load: () => resolveProviderPluginsForHooksUncached(params, env, workspaceDir),
+    });
+  }
+
+  return resolveProviderPluginsForHooksUncached(params, env, workspaceDir);
+}
+
+function resolveProviderPluginsForHooksUncached(
+  params: Parameters<typeof resolveProviderPluginsForHooks>[0],
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string | undefined,
+): ProviderPlugin[] {
   if (
     isPluginProvidersLoadInFlight({
       ...params,
