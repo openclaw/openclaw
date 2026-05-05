@@ -834,7 +834,10 @@ export async function runCodexAppServerAttempt(
     turnTerminalIdleTimer.unref?.();
   }
 
-  const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
+  const touchTurnCompletionActivity = (
+    reason: string,
+    options?: { arm?: boolean; skipCompletionWatch?: boolean },
+  ) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
     emitTrustedDiagnosticEvent({
@@ -847,7 +850,9 @@ export async function runCodexAppServerAttempt(
     if (options?.arm) {
       turnCompletionIdleWatchArmed = true;
     }
-    scheduleTurnCompletionIdleWatch();
+    if (!options?.skipCompletionWatch) {
+      scheduleTurnCompletionIdleWatch();
+    }
     scheduleTurnTerminalIdleWatch();
   };
 
@@ -875,7 +880,15 @@ export async function runCodexAppServerAttempt(
   };
 
   const handleNotification = async (notification: CodexServerNotification) => {
-    touchTurnCompletionActivity(`notification:${notification.method}`);
+    // rawResponseItem/completed is mid-turn assistant text, not a post-tool-call
+    // idle boundary. Resetting the 60s completion-idle watch here causes false
+    // timeouts when the model emits a status sentence then computes silently
+    // for >60s before its next tool call. The terminal-idle watch (30 min) still
+    // covers genuine hangs. (#77984)
+    const isRawResponseProgress = notification.method === "rawResponseItem/completed";
+    touchTurnCompletionActivity(`notification:${notification.method}`, {
+      skipCompletionWatch: isRawResponseProgress,
+    });
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
