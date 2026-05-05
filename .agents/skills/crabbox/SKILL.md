@@ -266,6 +266,18 @@ It should include `broker.url`, `broker.token`, and usually `provider: aws`
 for owned-cloud lanes. Do not let that config override the OpenClaw default
 when Blacksmith proof is requested; pass `--provider blacksmith-testbox`.
 
+### Interactive Desktop / WebVNC
+
+For human WebVNC demos, keep the remote desktop visible and windowed. Do not
+fullscreen the remote browser or hide the XFCE panel/window chrome unless the
+explicit goal is video/capture output. After launch, verify a screenshot shows
+the desktop panel plus browser title bar. If Chrome is fullscreen, toggle it
+back with:
+
+```sh
+crabbox run --id <lease> --shell -- 'DISPLAY=:99 xdotool search --onlyvisible --class google-chrome windowactivate key F11'
+```
+
 ## Diagnostics
 
 ```sh

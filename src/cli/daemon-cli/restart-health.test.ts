@@ -414,6 +414,10 @@ describe("inspectGatewayRestart", () => {
       server: { version: "2026.4.24", connId: "new" },
     });
     const service = makeGatewayService({ status: "running", pid: 8000 });
+    const serviceEnv = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: "/tmp/openclaw-restart-service-state",
+    } as NodeJS.ProcessEnv;
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
@@ -427,6 +431,7 @@ describe("inspectGatewayRestart", () => {
       port: 18789,
       expectedVersion: "2026.4.24",
       attempts: 1,
+      env: serviceEnv,
     });
 
     expect(snapshot).toMatchObject({
@@ -443,6 +448,7 @@ describe("inspectGatewayRestart", () => {
     expect(probeGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         auth: { token: "probe-token", password: undefined },
+        env: serviceEnv,
       }),
     );
   });

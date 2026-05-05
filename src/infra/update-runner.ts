@@ -737,11 +737,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       steps,
       durationMs: Date.now() - startedAt,
     });
-    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
-      const checkoutStep = await runStep(step(name, argv, gitRoot));
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
-        return buildGitErrorResult("checkout-failed");
+    const runRequiredGitStep = async (name: string, argv: string[], reason: string) => {
+      const gitStep = await runStep(step(name, argv, gitRoot));
+      steps.push(gitStep);
+      if (gitStep.exitCode !== 0) {
+        return buildGitErrorResult(reason);
       }
       return null;
     };
@@ -770,22 +770,24 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          DEV_BRANCH,
-        ]);
+        const failure = await runRequiredGitStep(
+          `git checkout ${DEV_BRANCH}`,
+          ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
+          "checkout-failed",
+        );
         if (failure) {
           return failure;
         }
       }
 
-      const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+      const fetchFailure = await runRequiredGitStep(
+        "git fetch",
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        "fetch-failed",
       );
-      steps.push(fetchStep);
+      if (fetchFailure) {
+        return fetchFailure;
+      }
       let preflightBaseSha: string | null = null;
       let candidates: string[] = [];
       if (devTargetRef) {
@@ -1091,14 +1093,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${selectedSha}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          "--detach",
-          selectedSha,
-        ]);
+        const failure = await runRequiredGitStep(
+          `git checkout ${selectedSha}`,
+          ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
+          "checkout-failed",
+        );
         if (failure) {
           return failure;
         }
@@ -1133,20 +1132,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
     } else {
-      const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+      const fetchFailure = await runRequiredGitStep(
+        "git fetch",
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        "fetch-failed",
       );
-      steps.push(fetchStep);
-      if (fetchStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "fetch-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      if (fetchFailure) {
+        return fetchFailure;
       }
 
       const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
@@ -1162,14 +1154,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
-        "git",
-        "-C",
-        gitRoot,
-        "checkout",
-        "--detach",
-        tag,
-      ]);
+      const failure = await runRequiredGitStep(
+        `git checkout ${tag}`,
+        ["git", "-C", gitRoot, "checkout", "--detach", tag],
+        "checkout-failed",
+      );
       if (failure) {
         return failure;
       }
