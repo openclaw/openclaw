@@ -176,6 +176,12 @@ const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktr
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
+  OPENCLAW_LOCAL_CHECK: "1",
+  OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+  OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
+};
+const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -566,8 +572,16 @@ function mergeCommandEnvironments(
   };
 }
 
-function shouldRunDevPreflightLint(): boolean {
-  return process.platform !== "win32";
+function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[DEV_PREFLIGHT_LINT_OPT_IN_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+function resolveDevPreflightLintEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...DEV_PREFLIGHT_LINT_ENV,
+  };
 }
 
 function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRunResult["reason"]> {
@@ -1042,7 +1056,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
                 `preflight lint (${shortSha})`,
                 managerScriptArgs(manager.manager, "lint"),
                 worktreeDir,
-                manager.env,
+                resolveDevPreflightLintEnv(manager.env),
               ),
             );
             steps.push(lintStep);
