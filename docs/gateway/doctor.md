@@ -108,6 +108,7 @@ cat ~/.openclaw/openclaw.json
     - Gateway runtime checks (service installed but not running; cached launchd label).
     - Channel status warnings (probed from the running gateway).
     - WhatsApp responsiveness checks for degraded Gateway event-loop health with local TUI clients still running; `--fix` stops only verified local TUI clients.
+    - Codex route repair for legacy `openai-codex/*` primary model refs; `--fix` rewrites them to `openai/*` with `agentRuntime.id: "auto"` so Codex claims the turn when available and PI remains the fallback.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
@@ -260,17 +261,16 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="2e. Codex OAuth provider overrides">
     If you previously added legacy OpenAI transport settings under `models.providers.openai-codex`, they can shadow the built-in Codex OAuth provider path that newer releases use automatically. Doctor warns when it sees those old transport settings alongside Codex OAuth so you can remove or rewrite the stale transport override and get the built-in routing/fallback behavior back. Custom proxies and header-only overrides are still supported and do not trigger this warning.
   </Accordion>
-  <Accordion title="2f. Codex plugin route warnings">
-    When the bundled Codex plugin is enabled, doctor also checks whether `openai-codex/*` primary model refs still resolve through the default PI runner. That combination is valid when you want Codex OAuth/subscription auth through PI, but it is easy to confuse with the native Codex app-server harness. Doctor warns and points to the explicit app-server shape: `openai/*` plus `agentRuntime.id: "codex"` or `OPENCLAW_AGENT_RUNTIME=codex`.
+  <Accordion title="2f. Codex route repair">
+    Doctor checks for legacy `openai-codex/*` primary model refs. Native Codex harness routing now uses canonical `openai/*` model refs plus `agentRuntime.id: "auto"` so a configured Codex harness can claim the turn and OpenClaw PI remains the fallback when Codex is not installed or enabled.
 
-    Doctor does not repair this automatically because both routes are valid:
+    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent primary refs:
 
-    - `openai-codex/*` + PI means "use Codex OAuth/subscription auth through the normal OpenClaw runner."
-    - `openai/*` + `agentRuntime.id: "codex"` means "run the embedded turn through native Codex app-server."
+    - `openai-codex/gpt-*` becomes `openai/gpt-*`.
+    - The matching agent runtime becomes `agentRuntime.id: "auto"`.
+    - Existing model fallback lists and copied per-model settings are preserved.
     - `/codex ...` means "control or bind a native Codex conversation from chat."
     - `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
-
-    If the warning appears, choose the route you intended and edit config manually. Keep the warning as-is when PI Codex OAuth is intentional.
 
   </Accordion>
   <Accordion title="2g. Session route cleanup">

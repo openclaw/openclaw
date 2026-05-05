@@ -221,6 +221,24 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
+async function runCodexRouteHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairCodexRoutes } =
+    await import("../commands/doctor/shared/codex-route-warnings.js");
+  const { note } = await import("../terminal/note.js");
+  const result = maybeRepairCodexRoutes({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n\n"), "Codex route");
+  }
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  ctx.cfg = result.cfg;
+}
+
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
@@ -639,6 +657,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:claude-cli",
       label: "Claude CLI",
       run: runClaudeCliHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:codex-route",
+      label: "Codex route",
+      run: runCodexRouteHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-auth",
