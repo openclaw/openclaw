@@ -1,9 +1,11 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
+import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
+import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -13,6 +15,12 @@ type GatewayRuntimeServiceLogger = {
   };
   error: (message: string) => void;
 };
+type GatewayPostReadyLogger = {
+  warn: (message: string) => void;
+};
+export type GatewayMaintenanceHandles = NonNullable<
+  Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
+>;
 
 export type GatewayChannelManager = Parameters<
   typeof startChannelHealthMonitor
@@ -50,6 +58,99 @@ export function startGatewayCronWithLogging(params: {
   logCron: { error: (message: string) => void };
 }): void {
   void params.cron.start().catch((err) => params.logCron.error(`failed to start: ${String(err)}`));
+}
+
+function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles | null): void {
+  if (!maintenance) {
+    return;
+  }
+  clearInterval(maintenance.tickInterval);
+  clearInterval(maintenance.healthInterval);
+  clearInterval(maintenance.dedupeCleanup);
+  if (maintenance.mediaCleanup) {
+    clearInterval(maintenance.mediaCleanup);
+  }
+}
+
+export async function runGatewayPostReadyMaintenance(params: {
+  startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
+  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
+  shouldStartCron: () => boolean;
+  markCronStartHandled: () => void;
+  cron: { start: () => Promise<void> };
+  logCron: { error: (message: string) => void };
+  log: GatewayPostReadyLogger;
+  recordPostReadyMemory: () => void;
+}): Promise<void> {
+  try {
+    const maintenance = await params.startMaintenance();
+    if (maintenance) {
+      params.applyMaintenance(maintenance);
+    }
+  } catch (err) {
+    params.log.warn(`gateway post-ready maintenance startup failed: ${String(err)}`);
+  }
+  if (params.shouldStartCron()) {
+    params.markCronStartHandled();
+    startGatewayCronWithLogging({
+      cron: params.cron,
+      logCron: params.logCron,
+    });
+  }
+  params.recordPostReadyMemory();
+}
+
+export function scheduleGatewayPostReadyMaintenance(params: {
+  delayMs: number;
+  isClosing: () => boolean;
+  onStarted?: () => void;
+  startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
+  applyMaintenance: (maintenance: GatewayMaintenanceHandles) => void;
+  shouldStartCron: () => boolean;
+  markCronStartHandled: () => void;
+  cron: { start: () => Promise<void> };
+  logCron: { error: (message: string) => void };
+  log: GatewayPostReadyLogger;
+  recordPostReadyMemory: () => void;
+}): ReturnType<typeof setTimeout> {
+  const timer = setTimeout(() => {
+    params.onStarted?.();
+    if (params.isClosing()) {
+      return;
+    }
+    void runGatewayPostReadyMaintenance({
+      startMaintenance: async () => {
+        if (params.isClosing()) {
+          return null;
+        }
+        const maintenance = await params.startMaintenance();
+        if (params.isClosing()) {
+          clearGatewayMaintenanceHandles(maintenance);
+          return null;
+        }
+        return maintenance;
+      },
+      applyMaintenance: (maintenance) => {
+        if (params.isClosing()) {
+          clearGatewayMaintenanceHandles(maintenance);
+          return;
+        }
+        params.applyMaintenance(maintenance);
+      },
+      shouldStartCron: () => !params.isClosing() && params.shouldStartCron(),
+      markCronStartHandled: params.markCronStartHandled,
+      cron: params.cron,
+      logCron: params.logCron,
+      log: params.log,
+      recordPostReadyMemory: () => {
+        if (!params.isClosing()) {
+          params.recordPostReadyMemory();
+        }
+      },
+    });
+  }, params.delayMs);
+  timer.unref?.();
+  return timer;
 }
 
 function recoverPendingOutboundDeliveries(params: {
@@ -90,9 +191,12 @@ function recoverPendingSessionDeliveries(params: {
 
 function startGatewayModelPricingRefreshOnDemand(params: {
   config: OpenClawConfig;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  pluginLookUpTable?: PluginMetadataRegistryView;
   log: GatewayRuntimeServiceLogger;
 }): () => void {
+  if (!isGatewayModelPricingEnabled(params.config)) {
+    return () => {};
+  }
   let stopped = false;
   let stopRefresh: (() => void) | undefined;
   void (async () => {
@@ -121,7 +225,6 @@ export function startGatewayRuntimeServices(params: {
   cfgAtStart: OpenClawConfig;
   channelManager: GatewayChannelManager;
   log: GatewayRuntimeServiceLogger;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
 }): {
   heartbeatRunner: HeartbeatRunner;
   channelHealthMonitor: ChannelHealthMonitor | null;
@@ -135,14 +238,7 @@ export function startGatewayRuntimeServices(params: {
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,
-    stopModelPricingRefresh:
-      !params.minimalTestGateway && !isVitestRuntimeEnv()
-        ? startGatewayModelPricingRefreshOnDemand({
-            config: params.cfgAtStart,
-            ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
-            log: params.log,
-          })
-        : () => {},
+    stopModelPricingRefresh: () => {},
   };
 }
 
@@ -152,17 +248,21 @@ export function activateGatewayScheduledServices(params: {
   deps: import("../cli/deps.types.js").CliDeps;
   sessionDeliveryRecoveryMaxEnqueuedAt: number;
   cron: { start: () => Promise<void> };
+  startCron?: boolean;
   logCron: { error: (message: string) => void };
   log: GatewayRuntimeServiceLogger;
-}): { heartbeatRunner: HeartbeatRunner } {
+  pluginLookUpTable?: PluginMetadataRegistryView;
+}): { heartbeatRunner: HeartbeatRunner; stopModelPricingRefresh: () => void } {
   if (params.minimalTestGateway) {
-    return { heartbeatRunner: createNoopHeartbeatRunner() };
+    return { heartbeatRunner: createNoopHeartbeatRunner(), stopModelPricingRefresh: () => {} };
   }
   const heartbeatRunner = startHeartbeatRunner({ cfg: params.cfgAtStart });
-  startGatewayCronWithLogging({
-    cron: params.cron,
-    logCron: params.logCron,
-  });
+  if (params.startCron !== false) {
+    startGatewayCronWithLogging({
+      cron: params.cron,
+      logCron: params.logCron,
+    });
+  }
   recoverPendingOutboundDeliveries({
     cfg: params.cfgAtStart,
     log: params.log,
@@ -172,5 +272,12 @@ export function activateGatewayScheduledServices(params: {
     log: params.log,
     maxEnqueuedAt: params.sessionDeliveryRecoveryMaxEnqueuedAt,
   });
-  return { heartbeatRunner };
+  const stopModelPricingRefresh = !isVitestRuntimeEnv()
+    ? startGatewayModelPricingRefreshOnDemand({
+        config: params.cfgAtStart,
+        ...(params.pluginLookUpTable ? { pluginLookUpTable: params.pluginLookUpTable } : {}),
+        log: params.log,
+      })
+    : () => {};
+  return { heartbeatRunner, stopModelPricingRefresh };
 }

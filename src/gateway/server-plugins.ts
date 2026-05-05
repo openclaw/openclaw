@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { clearActivatedPluginRuntimeState, loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
+import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -16,7 +17,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { ADMIN_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
 import type { ErrorShape } from "./protocol/index.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { PROTOCOL_VERSION } from "./protocol/version.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -44,17 +45,40 @@ const getFallbackGatewayContextState = () =>
     resolveContext: undefined,
   }));
 
-export function setFallbackGatewayContext(ctx: GatewayRequestContext): void {
+export function setFallbackGatewayContext(ctx: GatewayRequestContext): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
   fallbackGatewayContextState.context = ctx;
   fallbackGatewayContextState.resolveContext = undefined;
+  return () => {
+    const currentFallbackGatewayContextState = getFallbackGatewayContextState();
+    if (
+      currentFallbackGatewayContextState.context === ctx &&
+      currentFallbackGatewayContextState.resolveContext === undefined
+    ) {
+      currentFallbackGatewayContextState.context = undefined;
+    }
+  };
 }
 
 export function setFallbackGatewayContextResolver(
   resolveContext: () => GatewayRequestContext | undefined,
-): void {
+): () => void {
   const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
   fallbackGatewayContextState.resolveContext = resolveContext;
+  return () => {
+    const currentFallbackGatewayContextState = getFallbackGatewayContextState();
+    if (currentFallbackGatewayContextState.resolveContext === resolveContext) {
+      currentFallbackGatewayContextState.context = undefined;
+      currentFallbackGatewayContextState.resolveContext = undefined;
+    }
+  };
+}
+
+export function clearFallbackGatewayContext(): void {
+  const fallbackGatewayContextState = getFallbackGatewayContextState();
+  fallbackGatewayContextState.context = undefined;
+  fallbackGatewayContextState.resolveContext = undefined;
 }
 
 function getFallbackGatewayContext(): GatewayRequestContext | undefined {
@@ -508,10 +532,13 @@ export function loadGatewayPlugins(params: {
   pluginLookUpTable?: PluginLookUpTable;
   preferSetupRuntimeForChannelPlugins?: boolean;
   suppressPluginInfoLogs?: boolean;
-  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  startupTrace?: {
+    detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+  };
 }) {
+  const started = performance.now();
   const activationAutoEnabled =
-    params.activationSourceConfig !== undefined
+    params.activationSourceConfig !== undefined && params.autoEnabledReasons === undefined
       ? applyPluginAutoEnable({
           config: params.activationSourceConfig,
           env: process.env,
@@ -520,6 +547,7 @@ export function loadGatewayPlugins(params: {
             : {}),
         })
       : undefined;
+  const autoEnableMs = performance.now() - started;
   const autoEnabled =
     params.activationSourceConfig !== undefined
       ? {
@@ -541,6 +569,7 @@ export function loadGatewayPlugins(params: {
               ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
               : {}),
           });
+  const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
   const pluginIds = params.pluginIds ?? [
     ...(
@@ -553,14 +582,25 @@ export function loadGatewayPlugins(params: {
       })
     ).startup.pluginIds,
   ];
+  const pluginIdsMs = performance.now() - started;
   if (pluginIds.length === 0) {
+    clearActivatedPluginRuntimeState();
     const pluginRegistry = createEmptyPluginRegistry();
     setActivePluginRegistry(pluginRegistry, undefined, "gateway-bindable", params.workspaceDir);
+    params.startupTrace?.detail("plugins.gateway-load", [
+      ["autoEnableMs", autoEnableMs],
+      ["resolvedConfigMs", resolvedConfigMs],
+      ["pluginIdsMs", pluginIdsMs],
+      ["loadMs", 0],
+      ["pluginIds", "0"],
+    ]);
     return {
       pluginRegistry,
       gatewayMethods: [...params.baseMethods],
     };
   }
+  const beforeLoad = performance.now();
+  const loaderStatsBefore = getPluginModuleLoaderStats();
   const pluginRegistry = loadOpenClawPlugins({
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
@@ -580,12 +620,40 @@ export function loadGatewayPlugins(params: {
       allowGatewaySubagentBinding: true,
     },
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
-    bundledRuntimeDepsInstaller: params.bundledRuntimeDepsInstaller,
+    preferBuiltPluginArtifacts: true,
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
   });
+  const loadMs = performance.now() - beforeLoad;
+  const loaderStatsAfter = getPluginModuleLoaderStats();
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
+  params.startupTrace?.detail("plugins.gateway-load", [
+    ["autoEnableMs", autoEnableMs],
+    ["resolvedConfigMs", resolvedConfigMs],
+    ["pluginIdsMs", pluginIdsMs],
+    ["loadMs", loadMs],
+    ["pluginIds", String(pluginIds.length)],
+    ["gatewayHandlers", String(pluginMethods.length)],
+    ["loaderCallsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
+    ["loaderNativeHitsCount", loaderStatsAfter.nativeHits - loaderStatsBefore.nativeHits],
+    ["loaderNativeMissesCount", loaderStatsAfter.nativeMisses - loaderStatsBefore.nativeMisses],
+    [
+      "loaderSourceTransformForcedCount",
+      loaderStatsAfter.sourceTransformForced - loaderStatsBefore.sourceTransformForced,
+    ],
+    [
+      "loaderSourceTransformFallbacksCount",
+      loaderStatsAfter.sourceTransformFallbacks - loaderStatsBefore.sourceTransformFallbacks,
+    ],
+    [
+      "loaderTopSourceTransformTargets",
+      loaderStatsAfter.topSourceTransformTargets
+        .slice(0, 3)
+        .map((entry) => `${entry.count}:${entry.target}`)
+        .join(","),
+    ],
+  ]);
   return { pluginRegistry, gatewayMethods };
 }

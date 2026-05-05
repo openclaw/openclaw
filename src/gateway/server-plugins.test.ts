@@ -7,6 +7,7 @@ import type { PluginDiagnostic } from "../plugins/types.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 
 const loadOpenClawPlugins = vi.hoisted(() => vi.fn());
+const clearActivatedPluginRuntimeState = vi.hoisted(() => vi.fn());
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn(() => ({
     startup: {
@@ -34,6 +35,7 @@ const handleGatewayRequest = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/loader.js", () => ({
+  clearActivatedPluginRuntimeState,
   loadOpenClawPlugins,
 }));
 
@@ -307,6 +309,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  clearActivatedPluginRuntimeState.mockClear();
   loadOpenClawPlugins.mockReset();
   loadPluginLookUpTable.mockReset().mockReturnValue({
     startup: {
@@ -344,6 +347,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  serverPluginsModule.clearFallbackGatewayContext();
   runtimeModule.clearGatewaySubagentRuntime();
   runtimeRegistryModule.resetPluginRuntimeStateForTest();
 });
@@ -384,6 +388,7 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["discord", "telegram"],
+        preferBuiltPluginArtifacts: true,
       }),
     );
   });
@@ -628,6 +633,7 @@ describe("loadGatewayPlugins", () => {
       baseMethods: ["sessions.get"],
     });
 
+    expect(clearActivatedPluginRuntimeState).toHaveBeenCalledTimes(1);
     expect(loadOpenClawPlugins).not.toHaveBeenCalled();
     expect(result.pluginRegistry.plugins).toEqual([]);
     expect(result.gatewayMethods).toEqual(["sessions.get"]);
@@ -1387,5 +1393,53 @@ describe("loadGatewayPlugins", () => {
 
     await runtime.run({ sessionKey: "s-5", message: "prefer resolver" });
     expect(getLastDispatchedContext()).toBe(freshContext);
+  });
+
+  test("clears fallback context snapshots when a resolver is registered", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const staleContext = createTestContext("stale-snapshot");
+
+    serverPlugins.setFallbackGatewayContext(staleContext);
+    serverPlugins.setFallbackGatewayContextResolver(() => undefined);
+
+    await expect(runtime.run({ sessionKey: "s-6", message: "stale fallback" })).rejects.toThrow(
+      "No scope set and no fallback context available",
+    );
+  });
+
+  test("clears fallback context and resolver state", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const context = createTestContext("clear-context");
+
+    serverPlugins.setFallbackGatewayContextResolver(() => context);
+    await runtime.run({ sessionKey: "s-7", message: "before clear" });
+    expect(getLastDispatchedContext()).toBe(context);
+
+    serverPlugins.clearFallbackGatewayContext();
+
+    await expect(runtime.run({ sessionKey: "s-7", message: "after clear" })).rejects.toThrow(
+      "No scope set and no fallback context available",
+    );
+  });
+
+  test("resolver cleanup only clears the resolver it registered", async () => {
+    const serverPlugins = serverPluginsModule;
+    const runtime = await createSubagentRuntime(serverPlugins);
+    const firstContext = createTestContext("first-owner");
+    const secondContext = createTestContext("second-owner");
+
+    const clearFirst = serverPlugins.setFallbackGatewayContextResolver(() => firstContext);
+    const clearSecond = serverPlugins.setFallbackGatewayContextResolver(() => secondContext);
+
+    clearFirst();
+    await runtime.run({ sessionKey: "s-8", message: "after first cleanup" });
+    expect(getLastDispatchedContext()).toBe(secondContext);
+
+    clearSecond();
+    await expect(
+      runtime.run({ sessionKey: "s-8", message: "after second cleanup" }),
+    ).rejects.toThrow("No scope set and no fallback context available");
   });
 });

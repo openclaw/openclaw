@@ -21,7 +21,6 @@ Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
 Sources/Gateway/GatewayServiceResolver.swift
 Sources/Gateway/GatewaySettingsStore.swift
-Sources/Gateway/GatewaySetupCode.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
 Sources/Gateway/KeychainStore.swift
 Sources/Gateway/TCPProbe.swift
@@ -42,6 +41,7 @@ Sources/Onboarding/OnboardingWizardView.swift
 Sources/Onboarding/QRScannerView.swift
 Sources/OpenClawApp.swift
 Sources/Push/ExecApprovalNotificationBridge.swift
+Sources/Push/BackgroundAliveBeacon.swift
 Sources/Push/PushBuildConfig.swift
 Sources/Push/PushRegistrationManager.swift
 Sources/Push/PushRelayClient.swift
@@ -115,4 +115,4 @@ WatchExtension/Sources/WatchInboxView.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/StoragePaths.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/SystemCommands.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/TalkDirective.swift
-../../Swabble/Sources/SwabbleKit/WakeWordGate.swift
+../swabble/Sources/SwabbleKit/WakeWordGate.swift

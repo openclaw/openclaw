@@ -679,6 +679,23 @@ describe("connectGateway", () => {
     expect(host.chatStream).toBeNull();
   });
 
+  it("sends queued session-scoped chat aborts after reconnect", async () => {
+    const host = createHost();
+    host.pendingAbort = { sessionKey: "main" };
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitHello();
+    await Promise.resolve();
+
+    expect(client.request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: "main",
+    });
+    expect(host.pendingAbort).toBeNull();
+  });
+
   it("logs and drops stale queued chat abort failures after reconnect", async () => {
     const host = createHost();
     host.pendingAbort = { runId: "run-stale", sessionKey: "main" };
@@ -975,6 +992,47 @@ describe("connectGateway", () => {
     expect(host.chatRunId).toBeNull();
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("keeps deferred session.message reload pending across unowned terminal events", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-unowned";
+    host.chatStream = "still streaming";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        sessionKey: "main",
+        state: "final",
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+    expect(host.chatRunId).toBe("main-run-unowned");
+    expect(host.chatStream).toBe("still streaming");
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-unowned",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Done" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
   it("clears tracked BTW terminal runs after reconnect hello", () => {

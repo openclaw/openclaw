@@ -93,14 +93,12 @@ Maintainers can audit the current migration queue with
 compact counts, `--owner <id>` for one plugin or compatibility owner, and
 `pnpm plugins:boundary-report:ci` when a CI gate should fail on due
 compatibility records, cross-owner reserved SDK imports, or unused reserved SDK
-subpaths without a dormant classification. The report groups deprecated
+subpaths. The report groups deprecated
 compatibility records by removal date, counts local code/docs references,
-surfaces cross-owner reserved SDK imports, classifies dormant reserved SDK
-subpaths with owner/replacement/remove-after metadata, and summarizes the
-private memory-host SDK bridge so compatibility cleanup stays explicit instead
-of relying on ad hoc searches. Dormant reserved SDK subpaths are package exports
-with no tracked repo imports; keep them until their recorded removal date unless
-a separate compatibility review proves the external import never shipped.
+surfaces cross-owner reserved SDK imports, and summarizes the private
+memory-host SDK bridge so compatibility cleanup stays explicit instead of
+relying on ad hoc searches. Reserved SDK subpaths must have tracked owner usage;
+unused reserved helper exports should be removed from the public SDK.
 
 If a manifest field is still accepted, plugin authors can keep using it until
 the docs and diagnostics say otherwise. New code should prefer the documented
@@ -388,8 +386,8 @@ releases.
   | `plugin-sdk/account-helpers` | Narrow account helpers | Account list/account-action helpers |
   | `plugin-sdk/channel-setup` | Setup wizard adapters | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
   | `plugin-sdk/channel-pairing` | DM pairing primitives | `createChannelPairingController` |
-  | `plugin-sdk/channel-reply-pipeline` | Reply prefix + typing wiring | `createChannelReplyPipeline` |
-  | `plugin-sdk/channel-config-helpers` | Config adapter factories | `createHybridChannelConfigAdapter` |
+  | `plugin-sdk/channel-reply-pipeline` | Reply prefix, typing, and source-delivery wiring | `createChannelReplyPipeline`, `resolveChannelSourceReplyDeliveryMode` |
+  | `plugin-sdk/channel-config-helpers` | Config adapter factories and DM access helpers | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
   | `plugin-sdk/channel-config-schema` | Config schema builders | Shared channel config schema primitives and the generic builder only |
   | `plugin-sdk/bundled-channel-config-schema` | Bundled config schemas | OpenClaw-maintained bundled plugins only; new plugins must define plugin-local schemas |
   | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Compatibility alias only; use `plugin-sdk/bundled-channel-config-schema` for maintained bundled plugins |
@@ -414,7 +412,7 @@ releases.
   | `plugin-sdk/lazy-runtime` | Lazy runtime helpers | `createLazyRuntimeModule`, `createLazyRuntimeMethod`, `createLazyRuntimeMethodBinder`, `createLazyRuntimeNamedExport`, `createLazyRuntimeSurface` |
   | `plugin-sdk/process-runtime` | Process helpers | Shared exec helpers |
   | `plugin-sdk/cli-runtime` | CLI runtime helpers | Command formatting, waits, version helpers |
-  | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client and channel-status patch helpers |
+  | `plugin-sdk/gateway-runtime` | Gateway helpers | Gateway client, event-loop-ready start helper, and channel-status patch helpers |
   | `plugin-sdk/config-runtime` | Deprecated config compatibility shim | Prefer `config-types`, `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation` |
   | `plugin-sdk/telegram-command-config` | Telegram command helpers | Fallback-stable Telegram command validation helpers when the bundled Telegram contract surface is unavailable |
   | `plugin-sdk/approval-runtime` | Approval prompt helpers | Exec/plugin approval payload, approval capability/profile helpers, native approval routing/runtime helpers, and structured approval display path formatting |
@@ -440,7 +438,7 @@ releases.
   | `plugin-sdk/collection-runtime` | Bounded cache helpers | `pruneMapToMaxSize` |
   | `plugin-sdk/diagnostic-runtime` | Diagnostic gating helpers | `isDiagnosticFlagEnabled`, `isDiagnosticsEnabled` |
   | `plugin-sdk/error-runtime` | Error formatting helpers | `formatUncaughtError`, `isApprovalNotFoundError`, error graph helpers |
-  | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers |
+  | `plugin-sdk/fetch-runtime` | Wrapped fetch/proxy helpers | `resolveFetch`, proxy helpers, EnvHttpProxyAgent option helpers |
   | `plugin-sdk/host-runtime` | Host normalization helpers | `normalizeHostname`, `normalizeScpRemoteHost` |
   | `plugin-sdk/retry-runtime` | Retry helpers | `RetryConfig`, `retryAsync`, policy runners |
   | `plugin-sdk/allow-from` | Allowlist formatting | `formatAllowFromLowercase` |
@@ -479,7 +477,7 @@ releases.
   | `plugin-sdk/provider-selection-runtime` | Provider selection helpers | Configured-or-auto provider selection and raw provider config merging |
   | `plugin-sdk/provider-env-vars` | Provider env-var helpers | Provider auth env-var lookup helpers |
   | `plugin-sdk/provider-model-shared` | Shared provider model/replay helpers | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers |
-  | `plugin-sdk/provider-catalog-shared` | Shared provider catalog helpers | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
+  | `plugin-sdk/provider-catalog-shared` | Shared provider catalog helpers | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
   | `plugin-sdk/provider-onboard` | Provider onboarding patches | Onboarding config helpers |
   | `plugin-sdk/provider-http` | Provider HTTP helpers | Generic provider HTTP/endpoint capability helpers, including audio transcription multipart form helpers |
   | `plugin-sdk/provider-web-fetch` | Provider web-fetch helpers | Web-fetch provider registration/cache helpers |
@@ -491,7 +489,7 @@ releases.
   | `plugin-sdk/provider-stream` | Provider stream wrapper helpers | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/DeepSeek V4/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
   | `plugin-sdk/provider-transport-runtime` | Provider transport helpers | Native provider transport helpers such as guarded fetch, transport message transforms, and writable transport event streams |
   | `plugin-sdk/keyed-async-queue` | Ordered async queue | `KeyedAsyncQueue` |
-  | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers plus media payload builders |
+  | `plugin-sdk/media-runtime` | Shared media helpers | Media fetch/transform/store helpers, ffprobe-backed video dimension probing, and media payload builders |
   | `plugin-sdk/media-generation-runtime` | Shared media-generation helpers | Shared failover helpers, candidate selection, and missing-model messaging for image/video/music generation |
   | `plugin-sdk/media-understanding` | Media-understanding helpers | Media understanding provider types plus provider-facing image/audio helper exports |
   | `plugin-sdk/text-runtime` | Shared text helpers | Assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, safe-text utilities, and related text/logging helpers |
@@ -539,7 +537,6 @@ releases.
   | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
   | `plugin-sdk/memory-host-status` | Memory host status alias | Vendor-neutral alias for memory host status helpers |
-  | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helpers | Memory-lancedb helper surface |
   | `plugin-sdk/testing` | Test utilities | Legacy broad compatibility barrel; prefer focused test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 
@@ -547,35 +544,17 @@ This table is intentionally the common migration subset, not the full SDK
 surface. The full list of 200+ entrypoints lives in
 `scripts/lib/plugin-sdk-entrypoints.json`.
 
-That list still includes some bundled-plugin helper seams such as
-`plugin-sdk/feishu`, `plugin-sdk/feishu-setup`, `plugin-sdk/zalo`,
-`plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those remain exported for
-bundled-plugin maintenance and compatibility, but they are intentionally
-omitted from the common migration table and are not the recommended target for
-new plugin code.
-
-The same rule applies to other bundled-helper families such as:
-
-- browser support helpers: `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support`
-- Matrix: `plugin-sdk/matrix*`
-- LINE: `plugin-sdk/line*`
-- IRC: `plugin-sdk/irc*`
-- bundled helper/plugin surfaces like `plugin-sdk/googlechat`,
-  `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles*`,
-  `plugin-sdk/mattermost*`, `plugin-sdk/msteams`,
-  `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`,
-  `plugin-sdk/twitch`,
-  `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`,
-  `plugin-sdk/diagnostics-otel`, `plugin-sdk/diagnostics-prometheus`,
-  `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`,
-  and `plugin-sdk/voice-call`
-
-`plugin-sdk/github-copilot-token` currently exposes the narrow token-helper
-surface `DEFAULT_COPILOT_API_BASE_URL`,
-`deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken`.
+Reserved bundled-plugin helper seams have been retired from the public SDK
+export map except for explicitly documented compatibility facades such as the
+deprecated `plugin-sdk/discord` shim retained for the published
+`@openclaw/discord@2026.3.13` package. Owner-specific helpers live inside the
+owning plugin package; shared host behavior should move through generic SDK
+contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`,
+and `plugin-sdk/plugin-config-runtime`.
 
 Use the narrowest import that matches the job. If you cannot find an export,
-check the source at `src/plugin-sdk/` or ask in Discord.
+check the source at `src/plugin-sdk/` or ask maintainers which generic contract
+should own it.
 
 ## Active deprecations
 
@@ -668,8 +647,8 @@ canonical replacement.
     | `ProviderPluginDiscovery` | `ProviderPluginCatalog`   |
 
     Plus the legacy `ProviderCapabilities` static bag — provider plugins
-    should attach capability facts through the provider runtime contract
-    rather than a static object.
+    should use explicit provider hooks such as `buildReplayPolicy`,
+    `normalizeToolSchemas`, and `wrapStreamFn` rather than a static object.
 
   </Accordion>
 
@@ -748,18 +727,18 @@ canonical replacement.
 
   </Accordion>
 
-  <Accordion title="runtime.tasks.flow → runtime.tasks.flows">
+  <Accordion title="runtime.tasks.flow → runtime.tasks.managedFlows">
     **Old**: `runtime.tasks.flow` (singular) returned a live task-flow accessor.
 
-    **New**: `runtime.tasks.flows` (plural) returns DTO-based TaskFlow access,
-    which is import-safe and does not require the full task runtime to be
-    loaded.
+    **New**: `runtime.tasks.managedFlows` keeps the managed TaskFlow mutation
+    runtime for plugins that create, update, cancel, or run child tasks from a
+    flow. Use `runtime.tasks.flows` when the plugin only needs DTO-based reads.
 
     ```typescript
     // Before
-    const flow = api.runtime.tasks.flow(ctx);
+    const flow = api.runtime.tasks.flow.fromToolContext(ctx);
     // After
-    const flows = api.runtime.tasks.flows(ctx);
+    const flow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
     ```
 
   </Accordion>

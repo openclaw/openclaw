@@ -4,26 +4,34 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isValueToken } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import { isMainModule } from "../infra/is-main.js";
+import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import {
+  isReservedNonPluginCommandRoot,
   shouldRegisterPrimaryCommandOnly,
   shouldSkipPluginCommandRegistration,
 } from "./command-registration-policy.js";
 import { maybeRunCliInContainer, parseCliContainerArgs } from "./container-target.js";
+import {
+  consumeGatewayFastPathRootOptionToken,
+  consumeGatewayRunOptionToken,
+} from "./gateway-run-argv.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
+import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
+import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
@@ -34,36 +42,12 @@ export {
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
   shouldStartCrestodianForModernOnboard,
+  shouldStartProxyForCli,
   shouldUseBrowserHelpFastPath,
   shouldUseRootHelpFastPath,
 } from "./run-main-policy.js";
 
 type Awaitable<T> = T | Promise<T>;
-
-const GATEWAY_RUN_VALUE_FLAGS = new Set([
-  "--port",
-  "--bind",
-  "--token",
-  "--auth",
-  "--password",
-  "--password-file",
-  "--tailscale",
-  "--ws-log",
-  "--raw-stream-path",
-]);
-
-const GATEWAY_RUN_BOOLEAN_FLAGS = new Set([
-  "--tailscale-reset-on-exit",
-  "--allow-unconfigured",
-  "--dev",
-  "--reset",
-  "--force",
-  "--verbose",
-  "--cli-backend-logs",
-  "--claude-cli-logs",
-  "--compact",
-  "--raw-stream",
-]);
 
 const CLI_PROXY_ENV_KEYS = [
   "HTTP_PROXY",
@@ -210,15 +194,16 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function closeCliMemoryManagers(): Promise<void> {
-  const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
-  if (!hasMemoryRuntime()) {
-    return;
-  }
   try {
+    const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
+    if (!hasMemoryRuntime()) {
+      return;
+    }
     const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
     await closeActiveMemorySearchManagers();
   } catch {
-    // Best-effort teardown for short-lived CLI processes.
+    // Best-effort teardown for short-lived CLI processes. Package updates can
+    // replace hashed chunks before this finalizer runs.
   }
 }
 
@@ -268,42 +253,6 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function consumeGatewayRunOptionToken(args: ReadonlyArray<string>, index: number): number {
-  const arg = args[index];
-  if (!arg || arg === "--" || !arg.startsWith("-")) {
-    return 0;
-  }
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (GATEWAY_RUN_BOOLEAN_FLAGS.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-  if (!GATEWAY_RUN_VALUE_FLAGS.has(flag)) {
-    return 0;
-  }
-  if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
-  }
-  return isValueToken(args[index + 1]) ? 2 : 0;
-}
-
-function consumeGatewayFastPathRootOptionToken(args: ReadonlyArray<string>, index: number): number {
-  const arg = args[index];
-  if (!arg || arg === "--") {
-    return 0;
-  }
-  if (arg === "--no-color") {
-    return 1;
-  }
-  if (arg.startsWith("--profile=")) {
-    return arg.slice("--profile=".length).trim() ? 1 : 0;
-  }
-  if (arg === "--profile") {
-    return isValueToken(args[index + 1]) ? 2 : 0;
-  }
-  return 0;
-}
-
 function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
   if (
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
@@ -317,8 +266,55 @@ function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.
   });
 }
 
+function isKnownBuiltInCommandRoot(primary: string): boolean {
+  return (
+    getCoreCliCommandNames().includes(primary) ||
+    getSubCliEntries().some((entry) => entry.name === primary)
+  );
+}
+
+async function isPluginCliRoot(params: {
+  primary: string;
+  config: OpenClawConfig;
+}): Promise<boolean | null> {
+  try {
+    const { resolvePluginCliRootOwnerIds } = await import("../plugins/cli-registry-loader.js");
+    const ownerIds = await resolvePluginCliRootOwnerIds({
+      cfg: params.config,
+      env: process.env,
+      primaryCommand: params.primary,
+    });
+    return ownerIds === null ? null : ownerIds.length > 0;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveUnownedCliPrimary(params: {
+  argv: string[];
+  config: OpenClawConfig;
+}): Promise<string | null> {
+  const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(params.argv));
+  const { primary } = invocation;
+  if (
+    invocation.hasHelpOrVersion ||
+    !primary ||
+    primary === "help" ||
+    isReservedNonPluginCommandRoot(primary) ||
+    isKnownBuiltInCommandRoot(primary)
+  ) {
+    return null;
+  }
+  const pluginRoot = await isPluginCliRoot({ primary, config: params.config });
+  if (pluginRoot !== false) {
+    return null;
+  }
+  return primary;
+}
+
 async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayCliMainStartupTrace>,
+  options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
   const [
     { initializeDebugProxyCapture, finalizeDebugProxyCapture },
@@ -330,7 +326,9 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   process.once("exit", () => {
     finalizeDebugProxyCapture();
   });
-  await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
+  if (options.ensureDispatcher !== false) {
+    await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
+  }
   maybeWarnAboutDebugProxyCoverage();
 }
 
@@ -377,6 +375,67 @@ export async function runCli(argv: string[] = process.argv) {
 
   // Enforce the minimum supported runtime before doing any work.
   assertSupportedRuntime();
+
+  // Activate operator-managed proxy routing for network-capable commands.
+  // Local Gateway/control-plane commands keep direct loopback access while
+  // runtime, provider, plugin, update, and manifest/metadata-owned plugin commands route egress.
+  let proxyHandle: ProxyHandle | null = null;
+  let bestEffortConfigPromise: Promise<OpenClawConfig> | null = null;
+  const readBestEffortCliConfig = async (): Promise<OpenClawConfig> => {
+    if (!bestEffortConfigPromise) {
+      bestEffortConfigPromise = import("../config/io.js").then(({ readBestEffortConfig }) =>
+        readBestEffortConfig(),
+      );
+    }
+    return await bestEffortConfigPromise;
+  };
+  const stopStartedProxy = async () => {
+    const handle = proxyHandle;
+    proxyHandle = null;
+    if (handle) {
+      const { stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+      await stopProxy(handle);
+    }
+  };
+  const killStartedProxy = () => {
+    const handle = proxyHandle;
+    proxyHandle = null;
+    handle?.kill("SIGTERM");
+  };
+  if (shouldStartProxyForCli(normalizedArgv)) {
+    const config = await readBestEffortCliConfig();
+    const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+    if (unownedPrimary) {
+      throw new Error(
+        `Unknown command: openclaw ${unownedPrimary}. No built-in command or plugin CLI metadata owns "${unownedPrimary}".`,
+      );
+    }
+    const { startProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    proxyHandle = await startProxy(config?.proxy ?? undefined);
+  }
+
+  let onSigterm: (() => void) | null = null;
+  let onSigint: (() => void) | null = null;
+  let onExit: (() => void) | null = null;
+  if (proxyHandle) {
+    const shutdown = (exitCode: number) => {
+      if (onSigterm) {
+        process.off("SIGTERM", onSigterm);
+      }
+      if (onSigint) {
+        process.off("SIGINT", onSigint);
+      }
+      void stopStartedProxy().finally(() => {
+        process.exit(exitCode);
+      });
+    };
+    onSigterm = () => shutdown(143);
+    onSigint = () => shutdown(130);
+    onExit = () => killStartedProxy();
+    process.once("SIGTERM", onSigterm);
+    process.once("SIGINT", onSigint);
+    process.once("exit", onExit);
+  }
 
   try {
     if (shouldUseRootHelpFastPath(normalizedArgv)) {
@@ -445,7 +504,9 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const bootstrapProxyBeforeFastPath = shouldBootstrapCliProxyBeforeFastPath();
+    const shouldUseCliEnvProxy = shouldStartProxyForCli(normalizedArgv);
+    const bootstrapProxyBeforeFastPath =
+      shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
     if (
       !bootstrapProxyBeforeFastPath &&
       (await tryRunGatewayRunFastPath(normalizedArgv, startupTrace))
@@ -453,7 +514,9 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    await bootstrapCliProxyCaptureAndDispatcher(startupTrace);
+    await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
+      ensureDispatcher: shouldUseCliEnvProxy,
+    });
 
     if (
       bootstrapProxyBeforeFastPath &&
@@ -606,6 +669,16 @@ export async function runCli(argv: string[] = process.argv) {
       stopStartupProgress();
     }
   } finally {
+    if (onSigterm) {
+      process.off("SIGTERM", onSigterm);
+    }
+    if (onSigint) {
+      process.off("SIGINT", onSigint);
+    }
+    if (onExit) {
+      process.off("exit", onExit);
+    }
+    await stopStartedProxy();
     await closeCliMemoryManagers();
   }
 }

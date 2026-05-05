@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createSlackBoltApp,
+  createSlackSocketModeLogger,
   resolveSlackBoltInterop,
   shouldSkipOpenClawSlackSelfEvent,
 } from "./provider-support.js";
@@ -158,6 +159,11 @@ describe("createSlackBoltApp", () => {
     expect((receiver as unknown as FakeSocketModeReceiver).args).toEqual({
       appToken: "xapp-test",
       autoReconnectEnabled: false,
+      clientPingTimeout: 15_000,
+      logger: expect.objectContaining({
+        error: expect.any(Function),
+        warn: expect.any(Function),
+      }),
       installerOptions: {
         clientOptions,
       },
@@ -171,6 +177,42 @@ describe("createSlackBoltApp", () => {
       tokenVerificationEnabled: false,
     });
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
+  });
+
+  it("passes Socket Mode ping/pong options through Slack's public receiver API", () => {
+    const clientOptions = { teamId: "T1" };
+    const { receiver } = createSlackBoltApp({
+      interop: {
+        App: FakeApp as never,
+        HTTPReceiver: FakeHTTPReceiver as never,
+        SocketModeReceiver: FakeSocketModeReceiver as never,
+      },
+      slackMode: "socket",
+      botToken: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions,
+      socketMode: {
+        clientPingTimeout: 20_000,
+        serverPingTimeout: 45_000,
+        pingPongLoggingEnabled: true,
+      },
+    });
+
+    expect((receiver as unknown as FakeSocketModeReceiver).args).toEqual({
+      appToken: "xapp-test",
+      autoReconnectEnabled: false,
+      clientPingTimeout: 20_000,
+      serverPingTimeout: 45_000,
+      pingPongLoggingEnabled: true,
+      logger: expect.objectContaining({
+        error: expect.any(Function),
+        warn: expect.any(Function),
+      }),
+      installerOptions: {
+        clientOptions,
+      },
+    });
   });
 
   it("uses HTTPReceiver for webhook mode", () => {
@@ -229,6 +271,23 @@ describe("createSlackBoltApp", () => {
     });
 
     expect(eagerAuthTestCalls).toBe(0);
+  });
+
+  it("suppresses Slack's redundant pong timeout warning while forwarding other SDK warnings", () => {
+    const warnCalls: unknown[][] = [];
+    const logger = createSlackSocketModeLogger({
+      debug: () => {},
+      info: () => {},
+      warn: (...args: unknown[]) => warnCalls.push(args),
+      error: () => {},
+    });
+
+    logger.setName("SlackWebSocket:1");
+    logger.warn("A pong wasn't received from the server before the timeout of 15000ms!");
+    logger.warn("The logLevel given to Socket Mode was ignored as you also gave logger");
+    logger.warn("another socket warning");
+
+    expect(warnCalls).toEqual([["socket-mode:SlackWebSocket:1", "another socket warning"]]);
   });
 
   it("keeps Bolt self filtering except assistant message_changed events", () => {

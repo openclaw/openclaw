@@ -14,6 +14,20 @@ type CatalogEntryMeta = {
   aliases?: string[];
 };
 
+function createCatalogFixtureEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ...overrides,
+  };
+}
+
+function createCatalogFallbackOnlyEnv(): NodeJS.ProcessEnv {
+  return createCatalogFixtureEnv({
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+  });
+}
+
 export function describeChannelCatalogEntryContract(params: {
   channelId: string;
   npmSpec: string;
@@ -44,13 +58,13 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
 }) {
   describe(`${params.pluginId} bundled metadata-only channel catalog contract`, () => {
     it("includes the bundled metadata-only channel entry when the runtime entrypoint is omitted", () => {
-      const packageRoot = fs.mkdtempSync(
+      const workspaceDir = fs.mkdtempSync(
         path.join(resolvePreferredOpenClawTmpDir(), "openclaw-bundled-catalog-"),
       );
-      const bundledDir = path.join(packageRoot, "dist", "extensions", params.pluginId);
+      const bundledDir = path.join(workspaceDir, ".openclaw", "extensions", params.pluginId);
       fs.mkdirSync(bundledDir, { recursive: true });
       fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
+        path.join(workspaceDir, "package.json"),
         JSON.stringify({ name: "openclaw" }),
         "utf8",
       );
@@ -77,10 +91,8 @@ export function describeBundledMetadataOnlyChannelCatalogContract(params: {
       );
 
       const entry = listChannelPluginCatalogEntries({
-        env: {
-          ...process.env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(packageRoot, "dist", "extensions"),
-        },
+        workspaceDir,
+        env: createCatalogFixtureEnv({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }),
       }).find((item) => item.id === params.meta.id);
 
       expect(entry?.install.npmSpec).toBe(params.npmSpec);
@@ -123,15 +135,13 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       );
 
       const entry = listChannelPluginCatalogEntries({
-        env: {
-          ...process.env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-        },
+        env: createCatalogFallbackOnlyEnv(),
         officialCatalogPaths: [catalogPath],
       }).find((item) => item.id === params.channelId);
 
       expect(entry?.install.npmSpec).toBe(params.npmSpec);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBe(true);
     });
 
     it("lets external catalogs override shipped fallback channel metadata", () => {
@@ -202,15 +212,13 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       const entry = listChannelPluginCatalogEntries({
         catalogPaths: [externalCatalogPath],
         officialCatalogPaths: [officialCatalogPath],
-        env: {
-          ...process.env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(dir, "dist", "extensions"),
-        },
+        env: createCatalogFallbackOnlyEnv(),
       }).find((item) => item.id === params.channelId);
 
       expect(entry?.install.npmSpec).toBe(params.externalNpmSpec);
       expect(entry?.meta.label).toBe(params.externalLabel);
       expect(entry?.pluginId).toBeUndefined();
+      expect(entry?.trustedSourceLinkedOfficialInstall).toBeUndefined();
     });
 
     it("surfaces package-name drift in external channel catalog install metadata", () => {
@@ -240,10 +248,7 @@ export function describeOfficialFallbackChannelCatalogContract(params: {
       const entry = listChannelPluginCatalogEntries({
         catalogPaths: [catalogPath],
         officialCatalogPaths: [],
-        env: {
-          ...process.env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-        },
+        env: createCatalogFallbackOnlyEnv(),
       }).find((item) => item.id === params.channelId);
 
       expect(entry?.installSource?.npm).toMatchObject({

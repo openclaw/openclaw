@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   extractContentFromMessage,
   extractTextFromMessage,
@@ -40,6 +41,17 @@ describe("extractTextFromMessage", () => {
     expect(text).toContain("HTTP 429");
     expect(text).toContain("rate_limit_error");
     expect(text).toContain("This request would exceed your account's rate limit.");
+  });
+
+  it("renders malformed streaming fragment errors with friendly text", () => {
+    const text = extractTextFromMessage({
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(text).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 
   it("falls back to a generic message when errorMessage is missing", () => {
@@ -275,6 +287,16 @@ describe("extractContentFromMessage", () => {
 
     expect(text).toContain("HTTP 429");
   });
+
+  it("formats malformed streaming fragment errors when content is not an array", () => {
+    const text = extractContentFromMessage({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+    });
+
+    expect(text).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
 });
 
 describe("isCommandMessage", () => {
@@ -355,5 +377,134 @@ describe("sanitizeRenderableText", () => {
     const sanitized = sanitizeRenderableText(input);
 
     expect(sanitized).toBe(input);
+  });
+
+  it("preserves long camelCase identifiers wrapped in inline code spans (#48432)", () => {
+    const input = "- `requireConfirmationForMutatingActions: false`";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long hyphenated package names in inline code spans (#48432)", () => {
+    const input = "Install `ubuntu-budgie-desktop-environment` to fix it.";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves dotted entity IDs in inline code spans (#39505)", () => {
+    const input = "See `binary_sensor.sense_energy_monitor_power` for the live reading.";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves bare hyphenated package names in prose", () => {
+    const input = "Run apt install ubuntu-budgie-desktop-environment after enabling the PPA.";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves bare dotted entity IDs in prose", () => {
+    const input = "Watch binary_sensor.sense_energy_monitor_power.daily_energy after midnight.";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves backtick-fenced code blocks verbatim", () => {
+    const input = [
+      "Run this:",
+      "```bash",
+      "sudo cp -a /var/lib/machines/fc41/etc/systemd/network/. \\",
+      "           /var/lib/machines/fc43/etc/systemd/network/",
+      "```",
+      "Done.",
+    ].join("\n");
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves tilde-fenced code blocks verbatim", () => {
+    const input = [
+      "Example:",
+      "~~~typescript",
+      "const requireConfirmationForMutatingActions = false;",
+      "~~~",
+    ].join("\n");
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("preserves long base64-like blobs inside inline code spans", () => {
+    const input = "token: `e3b19c3b87bcf364b23eebb2c276e96ec478956ba1d84c93deadbeef`"; // pragma: allowlist secret
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("still chunks long unbroken prose tokens outside code spans", () => {
+    const input = `prefix ${"x".repeat(120)} suffix`;
+    const sanitized = sanitizeRenderableText(input);
+
+    const longestSegment = Math.max(...sanitized.split(/\s+/).map((s) => s.length));
+    expect(longestSegment).toBeLessThanOrEqual(32);
+  });
+
+  it("preserves prose around code blocks while chunking long prose tokens", () => {
+    const input = [
+      `before ${"x".repeat(120)}`,
+      "```",
+      "code line preserved verbatim",
+      "```",
+      `after ${"y".repeat(80)}`,
+    ].join("\n");
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toContain("code line preserved verbatim");
+    expect(sanitized).not.toContain("x".repeat(33));
+    expect(sanitized).not.toContain("y".repeat(33));
+  });
+
+  it("does not chunk box-drawing horizontal rules used in tables", () => {
+    const input = "─".repeat(60);
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe(input);
+  });
+
+  it("does not insert spaces before backslash line-continuations in fenced code", () => {
+    const longContinuation = `cmd ${"a".repeat(40)} \\`;
+    const input = ["```bash", longContinuation, "  next", "```"].join("\n");
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toContain(longContinuation);
+    expect(sanitized).not.toContain("\\ ");
+  });
+
+  it("strips ANSI escapes inside fenced code blocks (sanitization runs before segmentation)", () => {
+    const input = "Hello\n```\nlet x = 1;[31m injected[0m\n```\nbye";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).not.toContain("");
+    expect(sanitized).toContain("let x = 1;");
+  });
+
+  it("strips control chars inside inline code spans (sanitization runs before segmentation)", () => {
+    const input = "Hello `safe\x00content` world";
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toBe("Hello `safecontent` world");
+  });
+
+  it("redacts heavily corrupted lines even inside fenced code blocks", () => {
+    const input = `Header\n\`\`\`\n${"�".repeat(40)}\n\`\`\`\nFooter`;
+    const sanitized = sanitizeRenderableText(input);
+
+    expect(sanitized).toContain("[binary data omitted]");
   });
 });

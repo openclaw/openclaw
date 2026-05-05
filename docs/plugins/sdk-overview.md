@@ -1,7 +1,7 @@
 ---
 summary: "Import map, registration API reference, and SDK architecture"
 title: "Plugin SDK overview"
-sidebarTitle: "SDK overview"
+sidebarTitle: "Plugin SDK overview"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
@@ -11,14 +11,17 @@ read_when:
 The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
 
-<Tip>
-  Looking for a how-to guide instead?
+<Note>
+  This page is for plugin authors using `openclaw/plugin-sdk/*` inside
+  OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
+  that want to run agents through the Gateway, use the
+  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
+  instead.
+</Note>
 
-- First plugin? Start with [Building plugins](/plugins/building-plugins).
-- Channel plugin? See [Channel plugins](/plugins/sdk-channel-plugins).
-- Provider plugin? See [Provider plugins](/plugins/sdk-provider-plugins).
-- Tool or lifecycle hook plugin? See [Plugin hooks](/plugins/hooks).
-  </Tip>
+<Tip>
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+</Tip>
 
 ## Import convention
 
@@ -51,10 +54,15 @@ pattern for new plugins.
   barrels or add a narrow generic SDK contract when a need is truly
   cross-channel.
 
-A small set of bundled-plugin helper seams (`plugin-sdk/feishu`,
-`plugin-sdk/zalo`, `plugin-sdk/matrix*`, and similar) still appear in the
-generated export map. They exist for bundled-plugin maintenance only and are
-not recommended import paths for new third-party plugins.
+A small set of bundled-plugin helper seams still appear in the generated export
+map when they have tracked owner usage. They exist for bundled-plugin
+maintenance only and are not recommended import paths for new third-party
+plugins.
+
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
+also kept as deprecated compatibility facades for tracked owner usage. Do not
+copy those import paths into new plugins; use injected runtime helpers and
+generic channel SDK subpaths instead.
 </Warning>
 
 ## Subpath reference
@@ -123,18 +131,18 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                   | Contract it owns                                                                  |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
-| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions    |
-| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session    |
-| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params      |
-| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation            |
-| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`             |
-| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces  |
-| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths |
-| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                     |
-| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                    |
-| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup             |
+| Method                                                                   | Contract it owns                                                                                                                  |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerSessionExtension(...)`                                      | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
+| `api.enqueueNextTurnInjection(...)`                                      | Durable exactly-once context injected into the next agent turn for one session                                                    |
+| `api.registerTrustedToolPolicy(...)`                                     | Bundled/trusted pre-plugin tool policy that can block or rewrite tool params                                                      |
+| `api.registerToolMetadata(...)`                                          | Tool catalog display metadata without changing the tool implementation                                                            |
+| `api.registerCommand(...)`                                               | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
+| `api.registerControlUiDescriptor(...)`                                   | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
+| `api.registerRuntimeLifecycle(...)`                                      | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
+| `api.registerAgentEventSubscription(...)`                                | Sanitized event subscriptions for workflow state and monitors                                                                     |
+| `api.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)` | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
+| `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
 
 The contracts intentionally split authority:
 
@@ -249,6 +257,9 @@ AI CLI backend such as `codex-cli`.
   plugin default before running the CLI.
 - Use `normalizeConfig` when a backend needs compatibility rewrites after merge
   (for example normalizing old flag shapes).
+- Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
+  the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
+  flag.
 
 ### Exclusive slots
 
@@ -273,6 +284,9 @@ AI CLI backend such as `codex-cli`.
   memory plugin's private layout.
 - `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
   `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+- `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
+  reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
+  chain.
 - `registerMemoryEmbeddingProvider` lets the active memory plugin register one
   or more embedding adapter ids (for example `openai`, `gemini`, or a custom
   plugin-defined id).
@@ -302,6 +316,7 @@ semantics.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
 - `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. Use `event.job?.state?.nextRunAtMs` and `ctx.getCron?.()` when syncing external wake schedulers, and keep OpenClaw as the source of truth for due checks and execution.
 
 ### API object fields
 
@@ -342,9 +357,9 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 `index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
-Packaged bundled plugin facades should be loaded through the OpenClaw SDK
-facade loaders; direct imports from `dist/extensions/...` bypass staged runtime
-dependency mirrors that packaged installs use for plugin-owned dependencies.
+Packaged bundled plugin facades should be loaded through OpenClaw's plugin
+facade loaders; direct imports from `dist/extensions/...` bypass the manifest
+and runtime sidecar checks that packaged installs use for plugin-owned code.
 
 Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK

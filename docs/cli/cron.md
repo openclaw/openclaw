@@ -24,6 +24,7 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
     - `isolated` creates a fresh transcript and session id for each run.
     - `current` binds to the active session at creation time.
     - `session:<id>` pins to an explicit persistent session key.
+
   </Accordion>
   <Accordion title="Isolated session semantics">
     Isolated runs reset ambient conversation context. Channel and group routing, send/queue policy, elevation, origin, and ACP runtime binding are reset for the new run. Safe preferences and explicit user-selected model or auth overrides can carry across runs.
@@ -33,6 +34,8 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
 ## Delivery
 
 `openclaw cron list` and `openclaw cron show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+
+Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel; `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
 <Note>
 Isolated `cron add` jobs default to `--announce` delivery. Use `--no-deliver` to keep output internal. `--deliver` remains as a deprecated alias for `--announce`.
@@ -182,6 +185,12 @@ Announce to a specific channel:
 openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
 ```
 
+Announce to a Telegram forum topic:
+
+```bash
+openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
+```
+
 Create an isolated job with lightweight bootstrap context:
 
 ```bash
@@ -218,6 +227,8 @@ openclaw cron edit <job-id> --clear-agent
 openclaw cron edit <job-id> --session current
 openclaw cron edit <job-id> --session "session:daily-brief"
 ```
+
+`openclaw cron add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
 
 Delivery tweaks:
 

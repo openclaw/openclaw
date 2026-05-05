@@ -5,11 +5,15 @@ import {
   createCodexAppServerToolResultExtensionRunner,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  type EmbeddedRunAttemptParams,
   isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
+  normalizeHeartbeatToolResponse,
   runAgentHarnessAfterToolCallHook,
   type AnyAgentTool,
+  type HeartbeatToolResponse,
   type MessagingToolSend,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -21,14 +25,28 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+type CodexDynamicToolHookContext = {
+  agentId?: string;
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
+
 export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
-  handleToolCall: (params: CodexDynamicToolCallParams) => Promise<CodexDynamicToolCallResponse>;
+  handleToolCall: (
+    params: CodexDynamicToolCallParams,
+    options?: { signal?: AbortSignal },
+  ) => Promise<CodexDynamicToolCallResponse>;
   telemetry: {
     didSendViaMessagingTool: boolean;
     messagingToolSentTexts: string[];
     messagingToolSentMediaUrls: string[];
     messagingToolSentTargets: MessagingToolSend[];
+    heartbeatToolResponse?: HeartbeatToolResponse;
     toolMediaUrls: string[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
@@ -38,13 +56,9 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   signal: AbortSignal;
-  hookContext?: {
-    agentId?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    runId?: string;
-  };
+  hookContext?: CodexDynamicToolHookContext;
 }): CodexDynamicToolBridge {
+  const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const tools = params.tools.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
       ? tool
@@ -61,11 +75,10 @@ export function createCodexDynamicToolBridge(params: {
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
     runtime: "codex",
-    ...params.hookContext,
+    ...toolResultHookContext,
   });
-  const legacyExtensionRunner = createCodexAppServerToolResultExtensionRunner(
-    params.hookContext ?? {},
-  );
+  const legacyExtensionRunner =
+    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
 
   return {
     specs: tools.map((tool) => ({
@@ -74,7 +87,7 @@ export function createCodexDynamicToolBridge(params: {
       inputSchema: toJsonValue(tool.parameters),
     })),
     telemetry,
-    handleToolCall: async (call) => {
+    handleToolCall: async (call, options) => {
       const tool = toolMap.get(call.tool);
       if (!tool) {
         return {
@@ -84,9 +97,10 @@ export function createCodexDynamicToolBridge(params: {
       }
       const args = jsonObjectToRecord(call.arguments);
       const startedAt = Date.now();
+      const signal = composeAbortSignals(params.signal, options?.signal);
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
-        const rawResult = await tool.execute(call.callId, preparedArgs, params.signal);
+        const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isToolResultError(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
           threadId: call.threadId,
@@ -105,28 +119,29 @@ export function createCodexDynamicToolBridge(params: {
           args,
           result: middlewareResult,
         });
+        const resultIsError = rawIsError || isToolResultError(result);
         collectToolTelemetry({
           toolName: tool.name,
           args,
           result,
           mediaTrustResult: rawResult,
           telemetry,
-          isError: rawIsError || isToolResultError(result),
+          isError: resultIsError,
         });
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
           toolCallId: call.callId,
-          runId: params.hookContext?.runId,
-          agentId: params.hookContext?.agentId,
-          sessionId: params.hookContext?.sessionId,
-          sessionKey: params.hookContext?.sessionKey,
+          runId: toolResultHookContext.runId,
+          agentId: toolResultHookContext.agentId,
+          sessionId: toolResultHookContext.sessionId,
+          sessionKey: toolResultHookContext.sessionKey,
           startArgs: args,
           result,
           startedAt,
         });
         return {
           contentItems: result.content.flatMap(convertToolContent),
-          success: true,
+          success: !resultIsError,
         };
       } catch (error) {
         collectToolTelemetry({
@@ -139,10 +154,10 @@ export function createCodexDynamicToolBridge(params: {
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
           toolCallId: call.callId,
-          runId: params.hookContext?.runId,
-          agentId: params.hookContext?.agentId,
-          sessionId: params.hookContext?.sessionId,
-          sessionKey: params.hookContext?.sessionKey,
+          runId: toolResultHookContext.runId,
+          agentId: toolResultHookContext.agentId,
+          sessionId: toolResultHookContext.sessionId,
+          sessionKey: toolResultHookContext.sessionKey,
           startArgs: args,
           error: error instanceof Error ? error.message : String(error),
           startedAt,
@@ -161,6 +176,29 @@ export function createCodexDynamicToolBridge(params: {
   };
 }
 
+function toToolResultHookContext(
+  ctx: CodexDynamicToolHookContext | undefined,
+): CodexToolResultHookContext {
+  const { agentId, sessionId, sessionKey, runId } = ctx ?? {};
+  return {
+    ...(agentId && { agentId }),
+    ...(sessionId && { sessionId }),
+    ...(sessionKey && { sessionKey }),
+    ...(runId && { runId }),
+  };
+}
+
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return new AbortController().signal;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  return AbortSignal.any(activeSignals);
+}
+
 function collectToolTelemetry(params: {
   toolName: string;
   args: Record<string, unknown>;
@@ -174,6 +212,12 @@ function collectToolTelemetry(params: {
   }
   if (!params.isError && params.toolName === "cron" && isCronAddAction(params.args)) {
     params.telemetry.successfulCronAdds = (params.telemetry.successfulCronAdds ?? 0) + 1;
+  }
+  if (!params.isError && params.toolName === HEARTBEAT_RESPONSE_TOOL_NAME) {
+    const response = normalizeHeartbeatToolResponse(params.result?.details);
+    if (response) {
+      params.telemetry.heartbeatToolResponse = response;
+    }
   }
   if (!params.isError && params.result) {
     const media = extractToolResultMediaArtifact(params.result);
@@ -206,13 +250,16 @@ function collectToolTelemetry(params: {
   if (text) {
     params.telemetry.messagingToolSentTexts.push(text);
   }
-  params.telemetry.messagingToolSentMediaUrls.push(...collectMediaUrls(params.args));
+  const mediaUrls = collectMediaUrls(params.args);
+  params.telemetry.messagingToolSentMediaUrls.push(...mediaUrls);
   params.telemetry.messagingToolSentTargets.push({
     tool: params.toolName,
     provider: readFirstString(params.args, ["provider", "channel"]) ?? params.toolName,
     accountId: readFirstString(params.args, ["accountId", "account_id"]),
     to: readFirstString(params.args, ["to", "target", "recipient"]),
     threadId: readFirstString(params.args, ["threadId", "thread_id", "messageThreadId"]),
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
   });
 }
 
@@ -241,6 +288,7 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "ok" &&
     status !== "success" &&
     status !== "completed" &&
+    status !== "recorded" &&
     status !== "running"
   );
 }

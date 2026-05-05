@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 
+const PNG_1X1_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+yf7kAAAAASUVORK5CYII=";
+
 const mocks = vi.hoisted(() => ({
   runtime: {
     log: vi.fn(),
@@ -185,10 +188,6 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
 }));
 
-vi.mock("../commands/models/list.js", () => ({
-  modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
-}));
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand:
     mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,
@@ -419,6 +418,117 @@ describe("capability cli", () => {
     );
   });
 
+  it("passes image files to local model probes", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "describe this",
+        "--file",
+        tempInput,
+        "--json",
+      ],
+    });
+
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: {
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: [
+                { type: "text", text: "describe this" },
+                { type: "image", data: PNG_1X1_BASE64, mimeType: "image/png" },
+              ],
+            }),
+          ],
+        },
+      }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputs: [
+          expect.objectContaining({
+            path: tempInput,
+            mimeType: "image/png",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("passes image files to gateway model probes as attachments", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-model-run-gateway-image-${Date.now()}.png`);
+    await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "describe this",
+        "--file",
+        tempInput,
+        "--gateway",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          message: "describe this",
+          attachments: [
+            {
+              type: "image",
+              fileName: path.basename(tempInput),
+              mimeType: "image/png",
+              content: PNG_1X1_BASE64,
+            },
+          ],
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
+  it("rejects non-image files for model probes", async () => {
+    const tempInput = path.join(os.tmpdir(), `openclaw-model-run-audio-${Date.now()}.mp3`);
+    await fs.writeFile(tempInput, Buffer.from("not really audio"));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "model",
+          "run",
+          "--prompt",
+          "transcribe this",
+          "--file",
+          tempInput,
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Only image files are supported"),
+    );
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
   it("fails local model probes when the provider returns no text output", async () => {
     mocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
       content: [],
@@ -437,6 +547,68 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("rejects local Codex provider probes before simple-completion dispatch", async () => {
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "codex",
+        modelId: "gpt-5.4",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "codex",
+        id: "gpt-5.4",
+        api: "openai-codex-responses",
+      },
+      auth: {
+        apiKey: "codex-app-server",
+        source: "codex-app-server",
+        mode: "token",
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "model",
+          "run",
+          "--model",
+          "codex/gpt-5.4",
+          "--prompt",
+          "hello",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Codex app-server agent runtime"),
+    );
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   ", "\n\t"])(
+    "rejects empty model run prompts before local dispatch (%j)",
+    async (prompt) => {
+      await expect(
+        runRegisteredCli({
+          register: registerCapabilityCli as (program: Command) => void,
+          argv: ["capability", "model", "run", "--prompt", prompt, "--json"],
+        }),
+      ).rejects.toThrow("exit 1");
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--prompt cannot be empty or whitespace-only."),
+      );
+      expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
+
   it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -453,6 +625,94 @@ describe("capability cli", () => {
         }),
       }),
     );
+  });
+
+  it("surfaces gateway model fallback attempts in model probe JSON", async () => {
+    mocks.callGateway.mockResolvedValueOnce({
+      result: {
+        payloads: [{ text: "gateway fallback reply" }],
+        meta: {
+          agentMeta: {
+            provider: "openai",
+            model: "gpt-4.1-mini",
+            fallbackAttempts: [
+              {
+                provider: "openrouter",
+                model: "openrouter/auto",
+                error: "model unavailable",
+                reason: "model_not_found",
+              },
+            ],
+          },
+        },
+      },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
+    });
+
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        attempts: [
+          expect.objectContaining({
+            provider: "openrouter",
+            model: "openrouter/auto",
+            reason: "model_not_found",
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("requests admin scope for gateway model probes with provider/model overrides", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--model",
+        "anthropic/claude-haiku-4-5",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientName: "gateway-client",
+        method: "agent",
+        mode: "backend",
+        scopes: ["operator.admin"],
+        params: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
+  it("rejects empty model run prompts before gateway dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "model", "run", "--prompt", " ", "--gateway", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("--prompt cannot be empty or whitespace-only."),
+    );
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("defaults tts status to gateway transport", async () => {
@@ -486,6 +746,32 @@ describe("capability cli", () => {
     );
   });
 
+  it("passes image describe prompts through media understanding", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "photo.jpg",
+        "--prompt",
+        "Read the menu text",
+        "--timeout-ms",
+        "90000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.describeImageFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: expect.stringMatching(/photo\.jpg$/),
+        prompt: "Read the menu text",
+        timeoutMs: 90000,
+      }),
+    );
+  });
+
   it("uses the explicit media-understanding provider for image describe model overrides", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -497,6 +783,10 @@ describe("capability cli", () => {
         "photo.jpg",
         "--model",
         "ollama/qwen2.5vl:7b",
+        "--prompt",
+        "Count visible buttons",
+        "--timeout-ms",
+        "120000",
         "--json",
       ],
     });
@@ -506,6 +796,8 @@ describe("capability cli", () => {
         filePath: expect.stringMatching(/photo\.jpg$/),
         provider: "ollama",
         model: "qwen2.5vl:7b",
+        prompt: "Count visible buttons",
+        timeoutMs: 120000,
       }),
     );
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
@@ -513,6 +805,44 @@ describe("capability cli", () => {
       expect.objectContaining({
         provider: "ollama",
         model: "gpt-4.1-mini",
+      }),
+    );
+  });
+
+  it("passes describe-many prompts to each image", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe-many",
+        "--file",
+        "a.jpg",
+        "--file",
+        "b.jpg",
+        "--prompt",
+        "Extract all visible labels",
+        "--timeout-ms",
+        "45000",
+        "--json",
+      ],
+    });
+
+    expect(mocks.describeImageFile).toHaveBeenCalledTimes(2);
+    expect(mocks.describeImageFile).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        filePath: expect.stringMatching(/a\.jpg$/),
+        prompt: "Extract all visible labels",
+        timeoutMs: 45000,
+      }),
+    );
+    expect(mocks.describeImageFile).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        filePath: expect.stringMatching(/b\.jpg$/),
+        prompt: "Extract all visible labels",
+        timeoutMs: 45000,
       }),
     );
   });
@@ -532,6 +862,51 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No description returned for image/),
+    );
+  });
+
+  it("reports missing image understanding configuration for image describe", async () => {
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "image",
+        outcome: "skipped",
+        attachments: [{ attachmentIndex: 0, attempts: [] }],
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No image understanding provider is configured or ready"),
+    );
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("agents.defaults.imageModel.primary"),
+    );
+  });
+
+  it("reports missing image understanding configuration for image describe-many", async () => {
+    mocks.describeImageFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "image",
+        outcome: "skipped",
+        attachments: [{ attachmentIndex: 0, attempts: [] }],
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "describe-many", "--file", "photo.jpg", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No image understanding provider is configured or ready"),
     );
   });
 
@@ -1028,6 +1403,30 @@ describe("capability cli", () => {
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/No transcript returned for audio/),
+    );
+  });
+
+  it("reports missing audio transcription configuration for audio transcribe", async () => {
+    mocks.transcribeAudioFile.mockResolvedValueOnce({
+      text: undefined,
+      decision: {
+        capability: "audio",
+        outcome: "skipped",
+        attachments: [{ attachmentIndex: 0, attempts: [] }],
+      },
+    } as never);
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "audio", "transcribe", "--file", "memo.m4a", "--json"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("No audio transcription provider is configured or ready"),
+    );
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("tools.media.audio.models"),
     );
   });
 

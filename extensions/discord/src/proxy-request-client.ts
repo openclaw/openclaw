@@ -1,38 +1,8 @@
-import { RequestClient, type RequestClientOptions } from "@buape/carbon";
-import { FormData as UndiciFormData } from "undici";
+import { RequestClient, type RequestClientOptions } from "./internal/discord.js";
 
-export type ProxyRequestClientOptions = RequestClientOptions;
+type ProxyRequestClientOptions = RequestClientOptions;
 
-function toUndiciFormData(body: FormData): UndiciFormData {
-  const converted = new UndiciFormData();
-  for (const [key, value] of body.entries()) {
-    if (typeof value === "string") {
-      converted.append(key, value);
-      continue;
-    }
-    const filename = (value as Blob & { name?: unknown }).name;
-    if (typeof filename === "string" && filename.length > 0) {
-      converted.append(key, value, filename);
-      continue;
-    }
-    converted.append(key, value);
-  }
-  return converted;
-}
-
-function wrapDiscordFetch(fetchImpl: NonNullable<RequestClientOptions["fetch"]>) {
-  return (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-    if (init?.body instanceof FormData) {
-      // Carbon builds global FormData; undici-backed proxy fetch needs undici's
-      // FormData class to preserve multipart boundaries.
-      return fetchImpl(input, {
-        ...init,
-        body: toUndiciFormData(init.body) as unknown as BodyInit,
-      });
-    }
-    return fetchImpl(input, init);
-  };
-}
+export const DISCORD_REST_TIMEOUT_MS = 15_000;
 
 export function createDiscordRequestClient(
   token: string,
@@ -44,7 +14,8 @@ export function createDiscordRequestClient(
   return new RequestClient(token, {
     runtimeProfile: "persistent",
     maxQueueSize: 1000,
+    timeout: DISCORD_REST_TIMEOUT_MS,
     ...options,
-    fetch: wrapDiscordFetch(options.fetch),
+    fetch: options.fetch,
   });
 }

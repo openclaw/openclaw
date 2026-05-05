@@ -62,6 +62,7 @@ const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
 type CapabilityProviderCandidate = {
   id: string;
+  aliases?: readonly string[];
   defaultModel?: string | null;
   isConfigured?: (ctx: { cfg?: OpenClawConfig; agentDir?: string }) => boolean;
 };
@@ -122,7 +123,7 @@ function resolveAutoCapabilityFallbackRefs(params: {
   agentDir?: string;
   listProviders: (cfg?: OpenClawConfig) => CapabilityProviderCandidate[];
 }): string[] {
-  const providerDefaults = new Map<string, string>();
+  const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
   for (const provider of params.listProviders(params.cfg)) {
     const providerId = normalizeOptionalString(provider.id);
     const modelId = normalizeOptionalString(provider.defaultModel);
@@ -138,19 +139,26 @@ function resolveAutoCapabilityFallbackRefs(params: {
     ) {
       continue;
     }
-    providerDefaults.set(providerId, `${providerId}/${modelId}`);
+    const aliases = (provider.aliases ?? []).flatMap((alias) => {
+      const normalized = normalizeOptionalString(alias);
+      return normalized ? [normalized] : [];
+    });
+    providerDefaults.set(providerId, { ref: `${providerId}/${modelId}`, aliases });
   }
 
   const defaultProvider = resolveCurrentDefaultProviderId(params.cfg);
+  const providerIds = [...providerDefaults.keys()].toSorted();
+  const matchesDefaultProvider = (providerId: string): boolean => {
+    const entry = providerDefaults.get(providerId);
+    return providerId === defaultProvider || (entry?.aliases ?? []).includes(defaultProvider);
+  };
   const orderedProviders = [
-    defaultProvider,
-    ...[...providerDefaults.keys()]
-      .filter((providerId) => providerId !== defaultProvider)
-      .toSorted(),
+    ...providerIds.filter(matchesDefaultProvider),
+    ...providerIds.filter((providerId) => !matchesDefaultProvider(providerId)),
   ];
   return orderedProviders.flatMap((providerId) => {
-    const ref = providerDefaults.get(providerId);
-    return ref ? [ref] : [];
+    const entry = providerDefaults.get(providerId);
+    return entry ? [entry.ref] : [];
   });
 }
 
@@ -485,17 +493,50 @@ export function throwCapabilityGenerationFailure(params: {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
-  const summary =
-    params.attempts.length > 0
-      ? params.attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
-      : "unknown";
+  const summary = formatCapabilityFailureAttempts(params.attempts);
   throw new Error(
     `All ${params.capabilityLabel} models failed (${params.attempts.length}): ${summary}`,
     {
       cause: params.lastError instanceof Error ? params.lastError : undefined,
     },
+  );
+}
+
+function formatCapabilityFailureAttempts(attempts: FallbackAttempt[]): string {
+  if (attempts.length === 0) {
+    return "unknown";
+  }
+
+  const abortedAttempts = attempts.filter(isAbortLikeFallbackAttempt);
+  if (abortedAttempts.length === 0) {
+    return attempts.map(formatCapabilityFailureAttempt).join(" | ");
+  }
+  if (abortedAttempts.length === attempts.length) {
+    return `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`;
+  }
+
+  const primaryFailures = attempts.filter((attempt) => !isAbortLikeFallbackAttempt(attempt));
+  return [
+    primaryFailures.map(formatCapabilityFailureAttempt).join(" | "),
+    `${abortedAttempts.length} fallback(s) aborted after the request was cancelled or timed out: ${abortedAttempts.map(formatCapabilityAttemptRef).join(", ")}`,
+  ].join(" | ");
+}
+
+function formatCapabilityFailureAttempt(attempt: FallbackAttempt): string {
+  return `${formatCapabilityAttemptRef(attempt)}: ${attempt.error}`;
+}
+
+function formatCapabilityAttemptRef(attempt: FallbackAttempt): string {
+  return `${attempt.provider}/${attempt.model}`;
+}
+
+function isAbortLikeFallbackAttempt(attempt: FallbackAttempt): boolean {
+  const message = attempt.error.trim().toLowerCase();
+  return (
+    message === "this operation was aborted" ||
+    message === "operation was aborted" ||
+    message.includes("operation was aborted") ||
+    message.includes("request was aborted")
   );
 }
 

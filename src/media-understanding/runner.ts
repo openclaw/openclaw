@@ -270,8 +270,15 @@ export function resolveMediaAttachmentLocalRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): readonly string[] {
+  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
+  // inbound attachments were staged into a sandbox workspace. The paths in
+  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
+  // container can read them), and the workspace dir is carried separately so
+  // host-side media-understanding can still resolve them via this root list.
+  const workspaceDir = params.ctx.MediaWorkspaceDir;
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
+    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }
@@ -742,16 +749,24 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
-  const model =
-    params.capability === "image"
-      ? await resolveAutoImageModelId({
-          cfg: params.cfg,
-          providerId,
-          providerRegistry: params.providerRegistry,
-          explicitModel: params.activeModel?.model,
-        })
-      : params.activeModel?.model;
-  if (params.capability === "image" && !model) {
+  let model: string | undefined;
+  if (params.capability === "image") {
+    model = await resolveAutoImageModelId({
+      cfg: params.cfg,
+      providerId,
+      providerRegistry: params.providerRegistry,
+      explicitModel: params.activeModel?.model,
+    });
+  } else if (params.capability === "audio") {
+    model = resolveDefaultMediaModelFromRegistry({
+      providerId,
+      capability: "audio",
+      providerRegistry: params.providerRegistry,
+    });
+  } else {
+    model = params.activeModel?.model;
+  }
+  if ((params.capability === "image" || params.capability === "audio") && !model) {
     return null;
   }
   return {

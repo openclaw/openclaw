@@ -432,6 +432,18 @@ describe("QmdMemoryManager", () => {
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
+    const [, watchOptions] = watchMock.mock.calls[0] as unknown as [
+      string[],
+      { ignored?: (watchPath: string) => boolean },
+    ];
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
+      true,
+    );
+    expect(watchOptions.ignored?.(path.join(workspaceDir, ".cache", "qmd", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "vendor", "pkg", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
 
     watcher.emit("change", path.join(workspaceDir, "notes.md"));
     expect(manager.status().dirty).toBe(true);
@@ -4760,6 +4772,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
+      semanticAvailable: false,
       loadError: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
     });
     await manager.close();
@@ -4793,6 +4806,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: true,
+      semanticAvailable: true,
       loadError: undefined,
     });
     await manager.close();
@@ -4851,6 +4865,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
+      semanticAvailable: false,
       loadError: "Could not determine QMD vector status from `qmd status`",
     });
     await manager.close();
@@ -4877,6 +4892,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: false,
       available: false,
+      semanticAvailable: false,
       loadError: undefined,
     });
     await manager.close();

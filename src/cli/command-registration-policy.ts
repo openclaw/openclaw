@@ -1,6 +1,12 @@
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 
+const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["auth", "tool", "tools"]);
+
+export function isReservedNonPluginCommandRoot(primary: string | null | undefined): boolean {
+  return typeof primary === "string" && RESERVED_NON_PLUGIN_COMMAND_ROOTS.has(primary);
+}
+
 export function shouldRegisterPrimaryCommandOnly(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
   return invocation.primary !== null || !invocation.hasHelpOrVersion;
@@ -20,6 +26,9 @@ export function shouldSkipPluginCommandRegistration(params: {
   }
   if (!params.primary) {
     return invocation.hasHelpOrVersion;
+  }
+  if (isReservedNonPluginCommandRoot(params.primary)) {
+    return true;
   }
   return false;
 }

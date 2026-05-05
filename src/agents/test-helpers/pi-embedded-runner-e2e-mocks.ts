@@ -55,7 +55,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
       supports: vi.fn(() => ({ supported: false })),
       runAttempt: vi.fn(),
     })),
-    runAgentHarnessAttemptWithFallback: (params: unknown) => options.runEmbeddedAttempt(params),
+    runAgentHarnessAttempt: (params: unknown) => options.runEmbeddedAttempt(params),
   }));
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
@@ -132,7 +132,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     applyProviderResolvedTransportWithPlugin: vi.fn(() => undefined),
     buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
     buildProviderUnknownModelHintWithPlugin: vi.fn(() => undefined),
-    clearProviderRuntimeHookCache: vi.fn(),
     normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
     normalizeProviderTransportWithPlugin: vi.fn(() => undefined),
     prepareProviderDynamicModel: vi.fn(async () => undefined),

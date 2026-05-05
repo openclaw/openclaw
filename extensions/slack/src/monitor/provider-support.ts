@@ -5,6 +5,18 @@ import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-po
 type SlackAppConstructor = typeof import("@slack/bolt").App;
 type SlackHttpReceiverConstructor = typeof import("@slack/bolt").HTTPReceiver;
 type SlackSocketModeReceiverConstructor = typeof import("@slack/bolt").SocketModeReceiver;
+type SlackSocketModeReceiverOptions = ConstructorParameters<SlackSocketModeReceiverConstructor>[0];
+type SlackSocketModeConfig = Pick<
+  SlackSocketModeReceiverOptions,
+  "clientPingTimeout" | "serverPingTimeout" | "pingPongLoggingEnabled"
+>;
+type SlackSdkLogger = NonNullable<SlackSocketModeReceiverOptions["logger"]>;
+type SlackSdkLogLevel = ReturnType<SlackSdkLogger["getLevel"]>;
+
+const OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS = 15_000;
+const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from the server";
+const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
+  /^The logLevel given to .+ was ignored as you also gave logger$/;
 
 export type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
@@ -126,6 +138,42 @@ export function publishSlackDisconnectedStatus(
   });
 }
 
+function isSlackSocketPongTimeoutWarning(args: readonly unknown[]) {
+  return (
+    typeof args[0] === "string" && args[0].startsWith(SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX)
+  );
+}
+
+function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
+  return typeof args[0] === "string" && SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(args[0]);
+}
+
+export function createSlackSocketModeLogger(
+  sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
+): SlackSdkLogger {
+  let level = "info" as SlackSdkLogLevel;
+  let name = "socket-mode";
+  const prefix = () => `socket-mode:${name}`;
+  return {
+    debug: () => {},
+    info: () => {},
+    warn: (...args: unknown[]) => {
+      if (isSlackSocketPongTimeoutWarning(args) || isSlackSocketSelfInflictedLoggerWarning(args)) {
+        return;
+      }
+      sink.warn(prefix(), ...args);
+    },
+    error: (...args: unknown[]) => sink.error(prefix(), ...args),
+    setLevel: (nextLevel) => {
+      level = nextLevel;
+    },
+    getLevel: () => level,
+    setName: (nextName) => {
+      name = nextName;
+    },
+  };
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -167,16 +215,28 @@ export function createSlackBoltApp(params: {
   signingSecret?: string;
   slackWebhookPath: string;
   clientOptions: Record<string, unknown>;
+  socketMode?: SlackSocketModeConfig;
 }) {
+  const socketModeReceiverOptions: SlackSocketModeReceiverOptions = {
+    appToken: params.appToken ?? "",
+    autoReconnectEnabled: false,
+    clientPingTimeout:
+      params.socketMode?.clientPingTimeout ?? OPENCLAW_SLACK_CLIENT_PING_TIMEOUT_MS,
+    logger: createSlackSocketModeLogger(),
+    installerOptions: {
+      clientOptions: params.clientOptions,
+    },
+  };
+  if (params.socketMode?.serverPingTimeout !== undefined) {
+    socketModeReceiverOptions.serverPingTimeout = params.socketMode.serverPingTimeout;
+  }
+  if (params.socketMode?.pingPongLoggingEnabled !== undefined) {
+    socketModeReceiverOptions.pingPongLoggingEnabled = params.socketMode.pingPongLoggingEnabled;
+  }
+
   const receiver =
     params.slackMode === "socket"
-      ? new params.interop.SocketModeReceiver({
-          appToken: params.appToken ?? "",
-          autoReconnectEnabled: false,
-          installerOptions: {
-            clientOptions: params.clientOptions,
-          },
-        })
+      ? new params.interop.SocketModeReceiver(socketModeReceiverOptions)
       : new params.interop.HTTPReceiver({
           signingSecret: params.signingSecret ?? "",
           endpoints: params.slackWebhookPath,

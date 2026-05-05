@@ -458,8 +458,22 @@ describe("plugin-sdk root alias", () => {
   });
 
   it("loads legacy root exports through the merged root wrapper", { timeout: 240_000 }, () => {
+    expect(typeof rootSdk.emptyPluginConfigSchema).toBe("function");
+    expect(typeof rootSdk.registerContextEngine).toBe("function");
+    expect(typeof rootSdk.buildMemorySystemPromptAddition).toBe("function");
+    expect(typeof rootSdk.delegateCompactionToRuntime).toBe("function");
     expect(typeof rootSdk.resolveControlCommandGate).toBe("function");
     expect(typeof rootSdk.onDiagnosticEvent).toBe("function");
+    expect(typeof rootSdk.optionalStringEnum).toBe("function");
+    expect(typeof rootSdk.stringEnum).toBe("function");
+    expect(typeof rootSdk.buildChannelConfigSchema).toBe("function");
+    expect(typeof rootSdk.normalizeAccountId).toBe("function");
+    expect(typeof rootSdk.createReplyPrefixContext).toBe("function");
+    expect(typeof rootSdk.createReplyPrefixOptions).toBe("function");
+    expect(typeof rootSdk.createTypingCallbacks).toBe("function");
+    expect(typeof rootSdk.createChannelReplyPipeline).toBe("function");
+    expect(typeof rootSdk.resolveChannelSourceReplyDeliveryMode).toBe("function");
+    expect(typeof rootSdk.resolvePreferredOpenClawTmpDir).toBe("function");
     expect(typeof rootSdk.default).toBe("object");
     expect(rootSdk.default).toBe(rootSdk);
     expect(rootSdk.__esModule).toBe(true);

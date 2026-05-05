@@ -7,7 +7,10 @@ import {
   buildAuthHealthSummary,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  externalCliDiscoveryForConfigStatus,
+} from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
@@ -20,9 +23,6 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-
-/** The `ts` sentinel the UI uses to distinguish "never loaded" from "load failed". */
-export const MODEL_AUTH_STATUS_NEVER_LOADED = 0;
 
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
@@ -292,7 +292,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
     try {
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveOpenClawAgentDir();
-      const store = ensureAuthProfileStore(agentDir);
+      const store = ensureAuthProfileStore(agentDir, {
+        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
+      });
       const configured = resolveConfiguredProviders(cfg);
       const authHealth: AuthHealthSummary = buildAuthHealthSummary({
         store,

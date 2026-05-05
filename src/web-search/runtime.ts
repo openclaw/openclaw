@@ -5,12 +5,15 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
+import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry-contributions.js";
 import type {
   PluginWebSearchProviderEntry,
   WebSearchProviderToolDefinition,
-} from "../plugins/web-provider-types.js";
-import { resolvePluginWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
-import { resolveRuntimeWebSearchProviders } from "../plugins/web-search-providers.runtime.js";
+} from "../plugins/types.js";
+import {
+  resolvePluginWebSearchProviders,
+  resolveRuntimeWebSearchProviders,
+} from "../plugins/web-search-providers.runtime.js";
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
@@ -74,6 +77,7 @@ function hasEntryCredential(
     | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
+    | "getConfiguredCredentialFallback"
     | "getCredentialValue"
     | "requiresCredential"
   >,
@@ -86,6 +90,8 @@ function hasEntryCredential(
     toolConfig: search as Record<string, unknown> | undefined,
     resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
       currentProvider.getConfiguredCredentialValue?.(currentConfig),
+    resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),
@@ -99,6 +105,7 @@ export function isWebSearchProviderConfigured(params: {
     | "id"
     | "envVars"
     | "getConfiguredCredentialValue"
+    | "getConfiguredCredentialFallback"
     | "getCredentialValue"
     | "requiresCredential"
   >;
@@ -179,22 +186,92 @@ export function resolveWebSearchProviderId(params: {
   return providers[0]?.id ?? "";
 }
 
+function resolveExplicitWebSearchProviderId(params: {
+  search?: WebSearchConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+  providerId?: string;
+  includeRuntimeSelection?: boolean;
+}): string | undefined {
+  const callerProviderId = normalizeOptionalLowercaseString(params.providerId);
+  if (callerProviderId) {
+    return callerProviderId;
+  }
+
+  if (params.includeRuntimeSelection && params.runtimeWebSearch?.providerSource === "configured") {
+    const runtimeProviderId = normalizeOptionalLowercaseString(
+      params.runtimeWebSearch.selectedProvider ?? params.runtimeWebSearch.providerConfigured,
+    );
+    if (runtimeProviderId) {
+      return runtimeProviderId;
+    }
+  }
+
+  const configuredProviderId =
+    params.search && "provider" in params.search
+      ? normalizeOptionalLowercaseString(params.search.provider)
+      : undefined;
+  if (configuredProviderId) {
+    return configuredProviderId;
+  }
+  return undefined;
+}
+
+function resolveExplicitWebSearchProviderPluginIds(params: {
+  config?: OpenClawConfig;
+  search?: WebSearchConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+  providerId?: string;
+  includeRuntimeSelection?: boolean;
+}): readonly string[] | undefined {
+  const providerId = resolveExplicitWebSearchProviderId(params);
+  if (!providerId) {
+    return undefined;
+  }
+  const ownerPluginId = resolveManifestContractOwnerPluginId({
+    config: params.config,
+    contract: "webSearchProviders",
+    value: providerId,
+    origin: "bundled",
+  });
+  return ownerPluginId ? [ownerPluginId] : undefined;
+}
+
+function resolveWebSearchProviderLoadScope(params: {
+  config?: OpenClawConfig;
+  search?: WebSearchConfig;
+  runtimeWebSearch?: RuntimeWebSearchMetadata;
+  providerId?: string;
+  includeRuntimeSelection?: boolean;
+}): { onlyPluginIds?: readonly string[] } {
+  const onlyPluginIds = resolveExplicitWebSearchProviderPluginIds(params);
+  return onlyPluginIds ? { onlyPluginIds } : {};
+}
+
 export function resolveWebSearchDefinition(
   options?: ResolveWebSearchDefinitionParams,
 ): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
   const config = resolveWebSearchRuntimeConfig(options?.config);
   const search = resolveSearchConfig(config);
   const runtimeWebSearch = options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
+  const loadScope = resolveWebSearchProviderLoadScope({
+    config,
+    search,
+    runtimeWebSearch,
+    providerId: options?.providerId,
+    includeRuntimeSelection: Boolean(options?.preferRuntimeProviders),
+  });
   const providers = sortWebSearchProvidersForAutoDetect(
     options?.preferRuntimeProviders
       ? resolveRuntimeWebSearchProviders({
           config,
           bundledAllowlistCompat: true,
+          ...loadScope,
         })
       : resolvePluginWebSearchProviders({
           config,
           bundledAllowlistCompat: true,
           origin: "bundled",
+          ...loadScope,
         }),
   );
   return resolveWebProviderDefinition({
@@ -239,17 +316,26 @@ function resolveWebSearchCandidates(
   if (!resolveWebSearchEnabled({ search, sandboxed: options?.sandboxed })) {
     return [];
   }
+  const loadScope = resolveWebSearchProviderLoadScope({
+    config,
+    search,
+    runtimeWebSearch,
+    providerId: options?.providerId,
+    includeRuntimeSelection: Boolean(options?.preferRuntimeProviders),
+  });
 
   const providers = sortWebSearchProvidersForAutoDetect(
     options?.preferRuntimeProviders
       ? resolveRuntimeWebSearchProviders({
           config,
           bundledAllowlistCompat: true,
+          ...loadScope,
         })
       : resolvePluginWebSearchProviders({
           config,
           bundledAllowlistCompat: true,
           origin: "bundled",
+          ...loadScope,
         }),
   ).filter(Boolean);
   if (providers.length === 0) {
@@ -311,6 +397,14 @@ function hasExplicitWebSearchSelection(params: {
   return false;
 }
 
+function isStructuredAvailabilityError(result: unknown): result is { error: string } {
+  if (!result || typeof result !== "object" || !("error" in result)) {
+    return false;
+  }
+  const error = (result as { error?: unknown }).error;
+  return typeof error === "string" && /^missing_[a-z0-9_]*api_key$/i.test(error);
+}
+
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
   const config = resolveWebSearchRuntimeConfig(params.config);
   const search = resolveSearchConfig(config);
@@ -347,9 +441,14 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         sawUnavailableProvider = true;
         continue;
       }
+      const executed = await definition.execute(params.args, { signal: params.signal });
+      if (allowFallback && isStructuredAvailabilityError(executed)) {
+        lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
+        continue;
+      }
       return {
         provider: candidate.id,
-        result: await definition.execute(params.args),
+        result: executed,
       };
     } catch (error) {
       lastError = error;
@@ -370,5 +469,7 @@ export const __testing = {
   resolveSearchProvider: resolveWebSearchProviderId,
   resolveWebSearchProviderId,
   resolveWebSearchCandidates,
+  resolveExplicitWebSearchProviderId,
+  resolveExplicitWebSearchProviderPluginIds,
   hasExplicitWebSearchSelection,
 };

@@ -27,6 +27,7 @@ import {
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
@@ -122,6 +123,8 @@ export type TtsSynthesisResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -138,6 +141,8 @@ export type TtsTelephonyResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -235,41 +240,14 @@ function _resolveRegistryDefaultSpeechProviderId(cfg?: OpenClawConfig): TtsProvi
   return sortSpeechProvidersForAutoSelection(cfg)[0]?.id ?? "";
 }
 
-function stableConfigStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableConfigStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableConfigStringify(record[key])}`)
-    .join(",")}}`;
-}
-
-function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): boolean {
-  if (left === right) {
-    return true;
-  }
-  try {
-    return stableConfigStringify(left) === stableConfigStringify(right);
-  } catch {
-    return false;
-  }
-}
-
 function resolveTtsRuntimeConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const runtimeConfig = getRuntimeConfigSnapshot();
-  if (!runtimeConfig || cfg === runtimeConfig) {
-    return cfg;
-  }
-  const sourceConfig = getRuntimeConfigSourceSnapshot();
-  if (!sourceConfig || configSnapshotsMatch(cfg, sourceConfig)) {
-    return runtimeConfig;
-  }
-  return cfg;
+  return (
+    selectApplicableRuntimeConfig({
+      inputConfig: cfg,
+      runtimeConfig: getRuntimeConfigSnapshot(),
+      runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
+    }) ?? cfg
+  );
 }
 
 function asProviderConfig(value: unknown): SpeechProviderConfig {
@@ -1090,6 +1068,36 @@ function resolveTtsRequestSetup(params: {
   };
 }
 
+function readTtsResultString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveTtsResultModel(
+  providerConfig: SpeechProviderConfig,
+  providerOverrides?: SpeechProviderOverrides,
+): string | undefined {
+  return (
+    readTtsResultString(providerOverrides?.modelId) ??
+    readTtsResultString(providerOverrides?.model) ??
+    readTtsResultString(providerConfig.modelId) ??
+    readTtsResultString(providerConfig.model)
+  );
+}
+
+function resolveTtsResultVoice(
+  providerConfig: SpeechProviderConfig,
+  providerOverrides?: SpeechProviderOverrides,
+): string | undefined {
+  return (
+    readTtsResultString(providerOverrides?.voiceId) ??
+    readTtsResultString(providerOverrides?.voiceName) ??
+    readTtsResultString(providerOverrides?.voice) ??
+    readTtsResultString(providerConfig.voiceId) ??
+    readTtsResultString(providerConfig.voiceName) ??
+    readTtsResultString(providerConfig.voice)
+  );
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1297,6 +1305,8 @@ export async function synthesizeSpeech(params: {
         audioBuffer: synthesis.audioBuffer,
         latencyMs,
         provider,
+        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
+        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
         persona: persona?.id,
         fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
         attemptedProviders,
@@ -1344,11 +1354,13 @@ export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  overrides?: TtsDirectiveOverrides;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
+    providerOverride: params.overrides?.provider,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -1397,6 +1409,7 @@ export async function textToSpeechTelephony(params: {
         text: params.text,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
+        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: "telephony",
@@ -1406,6 +1419,7 @@ export async function textToSpeechTelephony(params: {
         text: prepared.text,
         cfg,
         providerConfig: prepared.providerConfig,
+        providerOverrides: prepared.providerOverrides,
         timeoutMs: config.timeoutMs,
       });
       const latencyMs = Date.now() - providerStart;
@@ -1423,6 +1437,8 @@ export async function textToSpeechTelephony(params: {
         audioBuffer: synthesis.audioBuffer,
         latencyMs,
         provider,
+        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
+        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
         persona: persona?.id,
         fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
         attemptedProviders,
@@ -1549,7 +1565,8 @@ export async function maybeApplyTtsToPayload(params: {
   const cleanedText = directives.cleanedText;
   const trimmedCleaned = cleanedText.trim();
   const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
-  const ttsText = directives.ttsText?.trim() || visibleText;
+  const explicitTtsText = directives.ttsText?.trim() || "";
+  const ttsText = explicitTtsText || visibleText;
 
   const nextPayload =
     visibleText === text.trim()
@@ -1580,7 +1597,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  if (ttsText.trim().length < 10) {
+  if (!explicitTtsText && ttsText.trim().length < 10) {
     return nextPayload;
   }
 
@@ -1620,7 +1637,10 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim();
-  if (textForAudio.length < 10) {
+  if (!textForAudio) {
+    return nextPayload;
+  }
+  if (!explicitTtsText && textForAudio.length < 10) {
     return nextPayload;
   }
 

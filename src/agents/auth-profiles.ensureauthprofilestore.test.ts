@@ -487,7 +487,7 @@ describe("ensureAuthProfileStore", () => {
 
       const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
 
-      expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
+      expect(store.order?.["openai-codex"]).toEqual([freshProfileId, defaultProfileId]);
       expect(store.profiles[defaultProfileId]).toMatchObject({
         type: "oauth",
         provider: "openai-codex",
@@ -567,6 +567,94 @@ describe("ensureAuthProfileStore", () => {
       });
       expect(store.order?.["openai-codex"]).toEqual([staleProfileId]);
       expect(store.lastGood?.["openai-codex"]).toBe(staleProfileId);
+    } finally {
+      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rewrites invalidated per-agent Codex order to the main agent's healthy relogin profile", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-codex-relogin-"));
+    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    try {
+      const mainDir = path.join(root, "main-agent");
+      const agentDir = path.join(root, "agent-x");
+      fs.mkdirSync(mainDir, { recursive: true });
+      fs.mkdirSync(agentDir, { recursive: true });
+
+      process.env.OPENCLAW_AGENT_DIR = mainDir;
+      process.env.PI_CODING_AGENT_DIR = mainDir;
+
+      const now = Date.now();
+      const healthyProfileId = "openai-codex:bunsthedev@gmail.com";
+      const staleProfileId = "openai-codex:val@viewdue.ai";
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [healthyProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "healthy-access",
+              refresh: "healthy-refresh",
+              expires: now + 60 * 60 * 1000,
+              email: "bunsthedev@gmail.com",
+            },
+          },
+          order: {
+            "openai-codex": [healthyProfileId],
+          },
+          lastGood: {
+            "openai-codex": healthyProfileId,
+          },
+        },
+        mainDir,
+      );
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [staleProfileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "stale-access",
+              refresh: "stale-refresh",
+              expires: now + 30 * 60 * 1000,
+              email: "val@viewdue.ai",
+            },
+          },
+          order: {
+            "openai-codex": [staleProfileId],
+          },
+          lastGood: {
+            "openai-codex": staleProfileId,
+          },
+          usageStats: {
+            [staleProfileId]: {
+              cooldownUntil: now + 60_000,
+              cooldownReason: "auth",
+              failureCounts: { auth: 1 },
+              errorCount: 1,
+              lastFailureAt: now - 1_000,
+            },
+          },
+        },
+        agentDir,
+      );
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = loadAuthProfileStoreForRuntime(agentDir, { readOnly: true });
+
+      expect(store.profiles[healthyProfileId]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "healthy-access",
+      });
+      expect(store.profiles[staleProfileId]).toBeUndefined();
+      expect(store.order?.["openai-codex"]).toEqual([healthyProfileId]);
+      expect(store.lastGood?.["openai-codex"]).toBe(healthyProfileId);
+      expect(store.usageStats?.[staleProfileId]).toBeUndefined();
     } finally {
       restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
       fs.rmSync(root, { recursive: true, force: true });
@@ -671,6 +759,27 @@ describe("ensureAuthProfileStore", () => {
         key: "sk-ant-legacy",
       });
     });
+  });
+
+  it("does not load legacy flat auth-profiles.json entries at runtime", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-flat-profiles-"));
+    try {
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      const legacyFlatStore = {
+        "ollama-windows": {
+          apiKey: "ollama-local",
+          baseUrl: "http://10.0.2.2:11434/v1",
+        },
+      };
+      fs.writeFileSync(authPath, `${JSON.stringify(legacyFlatStore)}\n`, "utf8");
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles["ollama-windows:default"]).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(authPath, "utf8"))).toEqual(legacyFlatStore);
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 
   it("merges legacy oauth.json into auth-profiles.json", () => {
@@ -809,6 +918,53 @@ describe("ensureAuthProfileStore", () => {
       expect(store.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         provider: "openai",
+      });
+      expect(fs.existsSync(workerStorePath)).toBe(false);
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not clone inherited auth stores during normal agent reads", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-read-through-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const stateDir = path.join(root, ".openclaw");
+      const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+      const workerAgentDir = path.join(stateDir, "agents", "worker", "agent");
+      const workerStorePath = path.join(workerAgentDir, "auth-profiles.json");
+      fs.mkdirSync(mainAgentDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                access: "main-access",
+                refresh: "main-refresh",
+                expires: Date.now() + 60_000,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      clearRuntimeAuthProfileStoreSnapshots();
+
+      const store = ensureAuthProfileStore(workerAgentDir);
+
+      expect(store.profiles["openai-codex:default"]).toMatchObject({
+        type: "oauth",
+        provider: "openai-codex",
+        access: "main-access",
       });
       expect(fs.existsSync(workerStorePath)).toBe(false);
     } finally {

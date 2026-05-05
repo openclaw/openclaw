@@ -1,7 +1,8 @@
 import { html, nothing } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import { refreshChat } from "./app-chat.ts";
+import { hasAbortableSessionRun, refreshChat } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM } from "./app-defaults.ts";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import {
@@ -10,8 +11,11 @@ import {
   renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
+  resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
+  createChatSession,
+  dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
@@ -40,6 +44,7 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
+  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigFormValue,
   removeConfigFormValue,
@@ -113,17 +118,25 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
-import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
-import "./components/dashboard-header.ts";
+import {
+  normalizeBasePath,
+  TAB_GROUPS,
+  subtitleForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
+import "./components/dashboard-header.ts";
 import {
   buildAgentMainSessionKey,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
+import { loadLocalAssistantIdentity } from "./storage.ts";
 import { normalizeOptionalString } from "./string-coerce.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 import { agentLogoUrl } from "./views/agents-utils.ts";
@@ -634,30 +647,47 @@ export function renderApp(state: AppViewState) {
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
+  const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const localAssistantAvatarOverride =
+    normalizeOptionalString(loadLocalAssistantIdentity().avatar) ?? null;
   const assistantAvatarUrl = resolveAssistantAvatarUrl(state);
-  const chatAssistantAvatarStatus = state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null;
-  const chatAssistantAvatarReason = state.chatAvatarReason ?? state.assistantAvatarReason ?? null;
+  const chatAssistantAvatarStatus = localAssistantAvatarOverride
+    ? "data"
+    : (state.chatAvatarStatus ?? state.assistantAvatarStatus ?? null);
+  const chatAssistantAvatarReason = localAssistantAvatarOverride
+    ? null
+    : (state.chatAvatarReason ?? state.assistantAvatarReason ?? null);
   const chatAssistantAvatarMissing =
     chatAssistantAvatarStatus === "none" && chatAssistantAvatarReason === "missing";
-  const effectiveAssistantAvatar = chatAssistantAvatarMissing ? null : state.assistantAvatar;
+  const effectiveAssistantAvatar =
+    localAssistantAvatarOverride ?? (chatAssistantAvatarMissing ? null : state.assistantAvatar);
   const chatAvatarUrl =
-    state.chatAvatarUrl ?? (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
-  const configAssistantAvatarStatus = state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null;
-  const configAssistantAvatarReason = state.assistantAvatarReason ?? state.chatAvatarReason ?? null;
-  const configAssistantAvatarSource = state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
+    localAssistantAvatarOverride ??
+    state.chatAvatarUrl ??
+    (chatAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null));
+  const configAssistantAvatarStatus = localAssistantAvatarOverride
+    ? "data"
+    : (state.assistantAvatarStatus ?? state.chatAvatarStatus ?? null);
+  const configAssistantAvatarReason = localAssistantAvatarOverride
+    ? null
+    : (state.assistantAvatarReason ?? state.chatAvatarReason ?? null);
+  const configAssistantAvatarSource =
+    localAssistantAvatarOverride ?? state.assistantAvatarSource ?? state.chatAvatarSource ?? null;
   const configAssistantAvatarMissing =
     configAssistantAvatarStatus === "none" && configAssistantAvatarReason === "missing";
   const configAssistantAvatar =
-    configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
+    localAssistantAvatarOverride ??
+    (configAssistantAvatarMissing || configAssistantAvatarStatus === "local"
       ? null
-      : state.assistantAvatar;
+      : state.assistantAvatar);
   const configAssistantAvatarUrl =
-    configAssistantAvatarStatus === "local" && state.assistantAgentId
+    localAssistantAvatarOverride ??
+    (configAssistantAvatarStatus === "local" && state.assistantAgentId
       ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
       : (state.chatAvatarUrl ??
-        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null)));
+        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
@@ -812,10 +842,11 @@ export function renderApp(state: AppViewState) {
         ...resolveConfiguredCronModelSuggestions(configValue),
         ...state.cronJobs
           .map((job) => {
-            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+            const payload = getCronJobPayload(job);
+            if (payload?.kind !== "agentTurn" || typeof payload.model !== "string") {
               return "";
             }
-            return job.payload.model.trim();
+            return payload.model.trim();
           })
           .filter(Boolean),
       ].filter(Boolean),
@@ -955,7 +986,8 @@ export function renderApp(state: AppViewState) {
         // Quick Settings mode — opinionated card layout
         if (state.configSettingsMode === "quick") {
           const configObj = state.configForm ?? state.configSnapshot?.config ?? {};
-          const assistantAvatarOverride = resolveAssistantAvatarOverride(configObj);
+          const assistantAvatarOverride =
+            localAssistantAvatarOverride ?? resolveAssistantAvatarOverride(configObj);
           const agentsDefaults = ((configObj.agents as Record<string, unknown> | undefined)
             ?.defaults ?? {}) as Record<string, unknown>;
           const activeSession = resolveQuickSettingsSessionRow(state);
@@ -1068,6 +1100,7 @@ export function renderApp(state: AppViewState) {
               state.chatAvatarStatus = null;
               state.chatAvatarReason = null;
               state.assistantAvatarUploadError = null;
+              void state.loadAssistantIdentity?.().finally(() => requestHostUpdate?.());
               requestHostUpdate?.();
             },
             basePath: state.basePath ?? "",
@@ -1302,6 +1335,9 @@ export function renderApp(state: AppViewState) {
         : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen
         ? "shell--nav-drawer-open"
         : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      style=${styleMap(
+        state.chatMessageMaxWidth ? { "--chat-message-max-width": state.chatMessageMaxWidth } : {},
+      )}
     >
       <button
         type="button"
@@ -1315,7 +1351,7 @@ export function renderApp(state: AppViewState) {
         <div class="topnav-shell">
           <button
             type="button"
-            class="topbar-nav-toggle"
+            class="sidebar-menu-trigger topbar-nav-toggle"
             @click=${() => {
               state.navDrawerOpen = !navDrawerOpen;
             }}
@@ -1326,7 +1362,14 @@ export function renderApp(state: AppViewState) {
             <span class="nav-collapse-toggle__icon" aria-hidden="true">${icons.menu}</span>
           </button>
           <div class="topnav-shell__content">
-            <dashboard-header .tab=${state.tab}></dashboard-header>
+            <dashboard-header
+              .tab=${state.tab}
+              .basePath=${state.basePath}
+              .agentLabel=${dashboardHeaderContext.agentLabel}
+              @navigate=${(event: CustomEvent<Tab>) => {
+                state.setTab(event.detail);
+              }}
+            ></dashboard-header>
           </div>
           <div class="topnav-shell__actions">
             <button
@@ -1334,8 +1377,8 @@ export function renderApp(state: AppViewState) {
               @click=${() => {
                 state.paletteOpen = !state.paletteOpen;
               }}
-              title="Search or jump to… (⌘K)"
-              aria-label="Open command palette"
+              title=${t("chat.commandPaletteTitle")}
+              aria-label=${t("chat.openCommandPalette")}
             >
               <span class="topbar-search__label">${t("common.search")}</span>
               <kbd class="topbar-search__kbd">⌘K</kbd>
@@ -1429,7 +1472,7 @@ export function renderApp(state: AppViewState) {
                   href="https://docs.openclaw.ai"
                   target=${EXTERNAL_LINK_TARGET}
                   rel=${buildExternalLinkRel()}
-                  title="${t("common.docs")} (opens in new tab)"
+                  title=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
                 >
                   <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
                   ${!navCollapsed
@@ -1471,20 +1514,20 @@ export function renderApp(state: AppViewState) {
         state.updateAvailable.latestVersion !== state.updateAvailable.currentVersion &&
         !isUpdateBannerDismissed(state.updateAvailable)
           ? html`<div class="update-banner callout danger" role="alert">
-              <strong>Update available:</strong> v${state.updateAvailable.latestVersion} (running
-              v${state.updateAvailable.currentVersion}).
+              <strong>${t("chat.updateAvailable")}</strong> v${state.updateAvailable.latestVersion}
+              (${t("chat.runningVersion", { version: state.updateAvailable.currentVersion })}).
               <button
                 class="btn btn--sm update-banner__btn"
                 ?disabled=${state.updateRunning || !state.connected}
                 @click=${() => runUpdate(state)}
               >
-                ${state.updateRunning ? "Updating…" : "Update now"}
+                ${state.updateRunning ? t("chat.updating") : t("chat.updateNow")}
               </button>
               <button
                 class="update-banner__close"
                 type="button"
-                title="Dismiss"
-                aria-label="Dismiss update banner"
+                title=${t("common.dismiss")}
+                aria-label=${t("chat.dismissUpdateBanner")}
                 @click=${() => {
                   dismissUpdateBanner(state.updateAvailable);
                   state.updateAvailable = null;
@@ -1496,7 +1539,13 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "config"
           ? nothing
-          : html`<section class="content-header">
+          : html`<section
+              class=${isChat && state.chatHeaderControlsHidden
+                ? "content-header content-header--chat-hidden"
+                : "content-header"}
+              ?inert=${isChat && state.chatHeaderControlsHidden}
+              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
+            >
               <div>
                 ${isChat
                   ? renderChatSessionSelect(state)
@@ -1565,20 +1614,7 @@ export function renderApp(state: AppViewState) {
               onSettingsChange: (next) => state.applySettings(next),
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
-                state.sessionKey = next;
-                state.chatMessage = "";
-                state.resetChatInputHistoryNavigation();
-                state.chatMessages = [];
-                state.chatToolMessages = [];
-                state.chatStream = null;
-                state.chatRunId = null;
-                state.chatQueue = [];
-                state.resetToolStream();
-                state.applySettings({
-                  ...state.settings,
-                  sessionKey: next,
-                  lastActiveSessionKey: next,
-                });
+                switchChatSession(state, next);
               },
               onToggleGatewayTokenVisibility: () => {
                 state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
@@ -1651,6 +1687,8 @@ export function renderApp(state: AppViewState) {
                 limit: state.sessionsFilterLimit,
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
+                showArchived: state.sessionsShowArchived,
+                filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
                 agentIdentityById: state.agentIdentityById,
@@ -1669,6 +1707,36 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = next.limit;
                   state.sessionsIncludeGlobal = next.includeGlobal;
                   state.sessionsIncludeUnknown = next.includeUnknown;
+                  state.sessionsShowArchived = next.showArchived;
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: Number(next.activeMinutes) || 0,
+                    limit: Number(next.limit) || 0,
+                    includeGlobal: next.includeGlobal,
+                    includeUnknown: next.includeUnknown,
+                    showArchived: next.showArchived,
+                  });
+                },
+                onToggleFiltersCollapsed: () => {
+                  state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
+                },
+                onClearFilters: () => {
+                  state.sessionsFilterActive = "";
+                  state.sessionsFilterLimit = "";
+                  state.sessionsIncludeGlobal = true;
+                  state.sessionsIncludeUnknown = true;
+                  state.sessionsShowArchived = true;
+                  state.sessionsSearchQuery = "";
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: 0,
+                    limit: 0,
+                    includeGlobal: true,
+                    includeUnknown: true,
+                    showArchived: true,
+                  });
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;
@@ -1769,6 +1837,7 @@ export function renderApp(state: AppViewState) {
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
+                cronFormCollapsed: state.cronFormCollapsed,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -1799,9 +1868,18 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
-                onEdit: (job) => startCronEdit(state, job),
-                onClone: (job) => startCronClone(state, job),
+                onEdit: (job) => {
+                  state.cronFormCollapsed = false;
+                  startCronEdit(state, job);
+                },
+                onClone: (job) => {
+                  state.cronFormCollapsed = false;
+                  startCronClone(state, job);
+                },
                 onCancelEdit: () => cancelCronEdit(state),
+                onToggleFormCollapsed: (collapsed) => {
+                  state.cronFormCollapsed = collapsed;
+                },
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
                 onRemove: (job) => removeCronJob(state, job),
@@ -2161,10 +2239,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePath, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  if (!configValue) {
-                    return;
-                  }
-                  updateConfigFormValue(state, ["agents", "defaultId"], agentId);
+                  stageDefaultAgentConfigEntry(state, agentId);
                 },
               }),
             )
@@ -2323,6 +2398,7 @@ export function renderApp(state: AppViewState) {
               canSend: state.connected,
               disabledReason: chatDisabledReason,
               error: state.lastError,
+              onDismissError: () => dismissChatError(state),
               sessions: state.sessionsResult,
               focusMode: chatFocus,
               autoExpandToolCalls: false,
@@ -2349,15 +2425,25 @@ export function renderApp(state: AppViewState) {
               onAttachmentsChange: (next) => (state.chatAttachments = next),
               onSend: () => state.handleSendChat(),
               onCompact: () => state.handleSendChat("/compact", { restoreDraft: true }),
+              onOpenSessionCheckpoints: () => {
+                state.sessionsExpandedCheckpointKey = state.sessionKey;
+                state.setTab("sessions" as import("./navigation.ts").Tab);
+                void loadSessions(state, {
+                  activeMinutes: 0,
+                  limit: 0,
+                  includeGlobal: true,
+                  includeUnknown: true,
+                });
+              },
               onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),
-              canAbort: Boolean(state.chatRunId),
+              canAbort: hasAbortableSessionRun(state),
               onAbort: () => void state.handleAbortChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
               onDismissSideResult: () => {
                 state.chatSideResult = null;
               },
-              onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+              onNewSession: () => void createChatSession(state),
               onClearHistory: async () => {
                 if (!state.client || !state.connected) {
                   return;

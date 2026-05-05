@@ -28,6 +28,8 @@ function getReservedCommands(): Set<string> {
     "help",
     "commands",
     "status",
+    "diagnostics",
+    "codex",
     "whoami",
     "context",
     "btw",
@@ -114,6 +116,14 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
+  if (command.ownership === "reserved") {
+    if (!opts?.allowReservedCommandNames) {
+      return "Reserved command ownership is only available to bundled reserved commands";
+    }
+    if (!isReservedCommandName(command.name)) {
+      return `Reserved command ownership requires a reserved command name: ${normalizeOptionalLowercaseString(command.name) ?? ""}`;
+    }
+  }
   if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
     return "Agent prompt guidance must be an array of strings";
   }
@@ -138,6 +148,19 @@ export function validatePluginCommandDefinition(
         : "Command requiredScopes contains unknown operator scope";
     }
   }
+  if (command.channels !== undefined) {
+    if (!Array.isArray(command.channels)) {
+      return "Command channels must be an array of channel ids";
+    }
+    for (const [index, channel] of (command.channels as readonly unknown[]).entries()) {
+      if (typeof channel !== "string") {
+        return `Command channel ${index + 1} must be a string`;
+      }
+      if (!channel.trim()) {
+        return `Command channel ${index + 1} cannot be empty`;
+      }
+    }
+  }
   const nameError = validateCommandName(command.name.trim(), opts);
   if (nameError) {
     return nameError;
@@ -157,6 +180,14 @@ export function validatePluginCommandDefinition(
     }
     if (!message.trim()) {
       return `Native progress message "${label}" cannot be empty`;
+    }
+  }
+  for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
+    if (typeof description !== "string") {
+      return `Description localization "${locale}" must be a string`;
+    }
+    if (!description.trim()) {
+      return `Description localization "${locale}" cannot be empty`;
     }
   }
   return null;
@@ -182,6 +213,19 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
   return [...keys];
 }
 
+export function pluginCommandSupportsChannel(
+  command: OpenClawPluginCommandDefinition,
+  channel?: string,
+): boolean {
+  if (!command.channels || command.channels.length === 0 || !channel) {
+    return true;
+  }
+  const normalizedChannel = normalizeLowercaseStringOrEmpty(channel);
+  return command.channels.some(
+    (entry) => normalizeLowercaseStringOrEmpty(entry) === normalizedChannel,
+  );
+}
+
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
@@ -191,6 +235,12 @@ export function registerPluginCommand(
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
+  if (command.ownership === "reserved") {
+    return {
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    };
+  }
 
   const definitionError = validatePluginCommandDefinition(command, opts);
   if (definitionError) {
@@ -198,17 +248,21 @@ export function registerPluginCommand(
   }
 
   const name = command.name.trim();
+  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
     name,
     description,
+    ...(command.channels
+      ? { channels: command.channels.map((channel) => normalizeLowercaseStringOrEmpty(channel)) }
+      : {}),
     ...(command.agentPromptGuidance
       ? { agentPromptGuidance: command.agentPromptGuidance.map((line) => line.trim()) }
       : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
+  const key = `/${normalizedName}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {

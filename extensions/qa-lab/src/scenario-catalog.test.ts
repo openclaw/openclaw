@@ -53,7 +53,6 @@ describe("qa scenario catalog", () => {
     const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
       | {
           harnessRuntime?: string;
-          harnessFallback?: string;
           expectedReply?: string;
           forbiddenReplySubstrings?: string[];
         }
@@ -73,7 +72,6 @@ describe("qa scenario catalog", () => {
     );
     expect(codexLeak.title).toBe("Codex harness no meta leak");
     expect(codexLeakConfig?.harnessRuntime).toBe("codex");
-    expect(codexLeakConfig?.harnessFallback).toBe("none");
     expect(JSON.stringify(codexLeak.execution.flow)).toContain("agentRuntime");
     expect(JSON.stringify(codexLeak.execution.flow)).not.toContain("embeddedHarness");
     expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");
@@ -176,6 +174,54 @@ describe("qa scenario catalog", () => {
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "confirms live OpenAI GPT-5.5 web search auto mode",
       "searches official OpenAI News through the live model",
+    ]);
+  });
+
+  it("includes the Kitchen Sink live OpenAI plugin gauntlet", () => {
+    const scenario = readQaScenarioById("kitchen-sink-live-openai");
+    const config = readQaScenarioExecutionConfig("kitchen-sink-live-openai") as
+      | {
+          requiredProviderMode?: string;
+          requiredProvider?: string;
+          pluginSpec?: string;
+          pluginId?: string;
+          pluginPersonality?: string;
+          adversarialPersonality?: string;
+          expectedSurfaceIds?: Record<string, string[]>;
+          expectedAdversarialDiagnostics?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/plugins/kitchen-sink-live-openai.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
+    expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
+    expect(config?.pluginPersonality).toBe("conformance");
+    expect(config?.adversarialPersonality).toBe("adversarial");
+    expect(config?.expectedSurfaceIds?.webSearchProviderIds).toContain(
+      "kitchen-sink-web-search-provider",
+    );
+    expect(config?.expectedSurfaceIds?.realtimeVoiceProviderIds).toContain(
+      "kitchen-sink-realtime-voice-provider",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "only bundled plugins can register agent tool result middleware",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "control UI descriptor registration requires id, surface, label, and valid optional fields",
+    );
+    expect(
+      config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
+    ).toBe(true);
+    expect(JSON.stringify(scenario.execution.flow)).toContain("--runtime");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "installs and inspects the Kitchen Sink plugin",
+      "restarts gateway with Kitchen Sink configured",
+      "exercises command inventory and MCP tool surfaces",
+      "runs live OpenAI turn with Kitchen Sink loaded",
+      "records gateway CPU RSS and log anomaly evidence",
+      "verifies adversarial diagnostics personality",
     ]);
   });
 
