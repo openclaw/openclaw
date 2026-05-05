@@ -383,6 +383,24 @@ const tryOutputBrowserHelp = () => {
   return true;
 };
 
+const flushWritableStream = async (stream) => {
+  if (!stream?.writable || stream.destroyed || stream.writableEnded) {
+    return;
+  }
+  await new Promise((resolve) => {
+    const timeout = setTimeout(resolve, 1000);
+    timeout.unref?.();
+    stream.write("", () => {
+      clearTimeout(timeout);
+      resolve();
+    });
+  });
+};
+
+const flushProcessOutput = async () => {
+  await Promise.all([flushWritableStream(process.stdout), flushWritableStream(process.stderr)]);
+};
+
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
@@ -398,4 +416,9 @@ if (!waitingForCompileCacheRespawn) {
       throw new Error(await buildMissingEntryErrorMessage());
     }
   }
+
+  // Explicitly exit to prevent CLI processes from hanging on Windows.
+  // The CLI sets process.exitCode as needed; default to 0 for success.
+  await flushProcessOutput();
+  process.exit(process.exitCode ?? 0);
 }

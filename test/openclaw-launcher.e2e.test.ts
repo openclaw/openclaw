@@ -36,6 +36,14 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
   );
 }
 
+async function addCliStartupMetadata(fixtureRoot: string, metadata: Record<string, string>) {
+  await fs.writeFile(
+    path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+    `${JSON.stringify(metadata)}\n`,
+    "utf8",
+  );
+}
+
 async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -139,6 +147,22 @@ describe("openclaw launcher", () => {
     expect(result.stderr).toContain("unbuilt source tree or GitHub source archive");
     expect(result.stderr).toContain("pnpm install && pnpm build");
     expect(result.stderr).toContain("github:openclaw/openclaw#<ref>");
+  });
+
+  it("flushes precomputed help output before the launcher exits", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const helpText = `${"OpenClaw launcher help\n".repeat(8192)}done\n`;
+    await addCliStartupMetadata(fixtureRoot, { rootHelpText: helpText });
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs"), "--help"], {
+      cwd: fixtureRoot,
+      env: launcherEnv(),
+      encoding: "utf8",
+      maxBuffer: helpText.length * 2,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(helpText);
   });
 
   it("keeps compile cache off for source-checkout launchers", async () => {

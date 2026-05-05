@@ -1,7 +1,7 @@
 import { isRootVersionInvocation } from "./cli/argv.js";
 import { resolveCliContainerTarget } from "./cli/container-target.js";
 
-export function tryHandleRootVersionFastPath(
+export async function tryHandleRootVersionFastPath(
   argv: string[],
   deps: {
     env?: NodeJS.ProcessEnv;
@@ -14,7 +14,7 @@ export function tryHandleRootVersionFastPath(
       resolveCommitHash: (params: { moduleUrl: string }) => string | null;
     }>;
   } = {},
-): boolean {
+): Promise<boolean> {
   if (resolveCliContainerTarget(argv, deps.env)) {
     return false;
   }
@@ -42,12 +42,13 @@ export function tryHandleRootVersionFastPath(
       return { VERSION, resolveCommitHash };
     });
 
-  resolveVersion()
-    .then(({ VERSION, resolveCommitHash }) => {
-      const commit = resolveCommitHash({ moduleUrl: deps.moduleUrl ?? import.meta.url });
-      output(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
-      exit(0);
-    })
-    .catch(onError);
+  try {
+    const { VERSION, resolveCommitHash } = await resolveVersion();
+    const commit = resolveCommitHash({ moduleUrl: deps.moduleUrl ?? import.meta.url });
+    output(commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`);
+    exit(0);
+  } catch (error) {
+    onError(error);
+  }
   return true;
 }
