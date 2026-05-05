@@ -18,6 +18,9 @@ vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
   PROVIDER_ENV_API_KEY_CANDIDATES: { openai: ["OPENAI_API_KEY"] },
   resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
+  resolveProviderEnvAuthEvidence: () => ({}),
+  listProviderEnvAuthLookupKeys: () => ["openai"],
+  resolveProviderEnvAuthLookupKeys: () => ["openai"],
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -256,4 +259,56 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     await ensureOpenClawModelsJson(cfgTwo, agentDir);
     expect(resolveImplicitProvidersCallCount).toBe(2);
   });
+
+  it("invalidates the cache when auth-profiles.json transitions to oversize (Aisle/Codex P2 fail-closed on #73260)", async () => {
+    // Regression for the size-only sentinel bypass: previously an
+    // oversized auth-profiles.json yielded a deterministic
+    // `oversize:${size}` hash, so a same-size content swap would
+    // preserve the cache hit.  After the follow-up,
+    // `safeHashRegularFile` returns null on oversize — transitioning
+    // to oversize must therefore change the fingerprint and force a
+    // re-plan.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Start with a small, hashable profile so the first call lands
+    // a cached entry keyed by a content-derived fingerprint.
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "sk-ant-small", // pragma: allowlist secret
+        },
+      },
+    });
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    const firstCount = resolveImplicitProvidersCallCount;
+    expect(firstCount).toBe(1);
+
+    // Now grow auth-profiles.json past the 8 MiB cap.  The previous
+    // implementation would still produce a deterministic
+    // `oversize:<size>` hash; the follow-up fix returns null,
+    // changing the fingerprint and forcing a re-plan.
+    const target = path.join(agentDir, "auth-profiles.json");
+    const padding = "x".repeat(10 * 1024 * 1024); // 10 MiB > MAX_AUTH_PROFILES_BYTES (8 MiB)
+    await fs.writeFile(
+      target,
+      JSON.stringify({
+        version: 1,
+        padding,
+        profiles: {
+          "anthropic:default": {
+            type: "token",
+            provider: "anthropic",
+            token: "sk-ant-small", // pragma: allowlist secret
+          },
+        },
+      }),
+    );
+
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(firstCount + 1);
+  }, 20_000);
 });

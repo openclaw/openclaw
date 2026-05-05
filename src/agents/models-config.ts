@@ -92,7 +92,14 @@ const DANGEROUS_PROTO_KEYS: ReadonlySet<string> = new Set([
  *    and non-regular files via lstat before opening.  Uses O_NOFOLLOW
  *    where supported so a symlink swap-in between lstat and open also
  *    fails closed.
- *  - Returns null on any abnormality so callers force a re-plan.
+ *  - Aisle medium / Codex P2 followup on #73260: oversized files now
+ *    return null (fail closed, CWE-345).  The previous size-only
+ *    sentinel `oversize:${size}` let an attacker swap the contents of
+ *    an oversized file without changing its byte length and still hit
+ *    the cache; returning null forces the caller's re-plan path so the
+ *    cache cannot be evaded by a same-size content swap.  This is
+ *    consistent with the "return null forces re-plan" contract used
+ *    everywhere else in this helper.
  *
  * The streaming reader is destroyed if accumulated bytes exceed maxBytes,
  * so an attacker cannot grow the file between lstat and read past the
@@ -101,7 +108,7 @@ const DANGEROUS_PROTO_KEYS: ReadonlySet<string> = new Set([
 async function safeHashRegularFile(
   pathname: string,
   maxBytes: number,
-): Promise<{ hash: string; raw: Buffer | null } | null> {
+): Promise<{ hash: string; raw: Buffer } | null> {
   // lstat + isFile() + isSymbolicLink() rejects symlinks and any
   // non-regular file (directory, socket, FIFO, device).
   const lst = await fs.lstat(pathname).catch(() => null);
@@ -109,10 +116,11 @@ async function safeHashRegularFile(
     return null;
   }
   if (lst.size > maxBytes) {
-    // File too large at lstat time — don't even open it.  Caller forces
-    // re-plan.  We return a deterministic sentinel hash for size-
-    // exceeded so size changes still invalidate the cache.
-    return { hash: `oversize:${lst.size}`, raw: null };
+    // Oversize at lstat time — fail closed.  Returning null forces the
+    // caller to treat this file as unhashable, so the readyCache cannot
+    // grant a cache hit based on a size-derived sentinel that ignores
+    // content.  See the JSDoc above for the threat model.
+    return null;
   }
   // Open with O_NOFOLLOW (where the platform supports it) to close a
   // narrow TOCTOU window between lstat and open: if a symlink is
@@ -140,6 +148,9 @@ async function safeHashRegularFile(
       stream.on("data", (chunk: Buffer) => {
         seen += chunk.length;
         if (seen > maxBytes) {
+          // File grew past the cap mid-read.  Destroy with an error so
+          // the surrounding try/catch returns null (fail closed) —
+          // matching the lstat-time oversize check above.
           stream.destroy(new Error("file grew past cap during read"));
           return;
         }
@@ -161,17 +172,16 @@ async function safeHashRegularFile(
  * Compute a content-based fingerprint for auth-profiles.json that is
  * stable across OAuth token rotations.  Returns null if the file does
  * not exist or fails the safe-read checks (symlink, non-regular,
- * oversize).  Falls back to a raw-content hash if JSON parsing fails
- * (so structural changes still register, just without canonicalization).
+ * oversize, or any I/O error).  Oversize files fail closed (return
+ * null) rather than producing a size-derived sentinel — see the
+ * `safeHashRegularFile` JSDoc for the threat model.  Falls back to a
+ * raw-content hash if JSON parsing fails (so structural changes still
+ * register, just without canonicalization).
  */
 async function readAuthProfilesStableHash(pathname: string): Promise<string | null> {
   const safe = await safeHashRegularFile(pathname, MAX_AUTH_PROFILES_BYTES);
   if (!safe) {
     return null;
-  }
-  if (safe.raw === null) {
-    // Oversize sentinel — caller invalidates cache by mismatch.
-    return safe.hash;
   }
   let parsed: unknown;
   try {
