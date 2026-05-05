@@ -554,7 +554,9 @@ export function extractMessagingToolSend(
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     const threadId = normalizeOptionalString(args.threadId);
-    return to ? { tool: toolName, provider, accountId, to, threadId } : undefined;
+    return to
+      ? { tool: toolName, provider, accountId, to, ...(threadId ? { threadId } : {}) }
+      : undefined;
   }
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
