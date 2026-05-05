@@ -20,12 +20,12 @@ const globalToolOnlyReplyConfig = {
 } as const satisfies OpenClawConfig;
 
 describe("resolveSourceReplyDeliveryMode", () => {
-  it("defaults groups and channels to message-tool-only delivery", () => {
+  it("defaults groups and channels to automatic delivery", () => {
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "channel" } })).toBe(
-      "message_tool_only",
+      "automatic",
     );
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "group" } })).toBe(
-      "message_tool_only",
+      "automatic",
     );
     expect(resolveSourceReplyDeliveryMode({ cfg: emptyConfig, ctx: { ChatType: "direct" } })).toBe(
       "automatic",
@@ -100,7 +100,7 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     });
   });
 
-  it("suppresses automatic source delivery for default group turns without suppressing typing", () => {
+  it("allows automatic source delivery for default group turns without suppressing typing", () => {
     expect(
       resolveSourceReplyVisibilityPolicy({
         cfg: emptyConfig,
@@ -108,14 +108,14 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
         sendPolicy: "allow",
       }),
     ).toMatchObject({
-      sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplyDeliveryMode: "automatic",
       sendPolicyDenied: false,
-      suppressAutomaticSourceDelivery: true,
-      suppressDelivery: true,
-      suppressHookUserDelivery: true,
+      suppressAutomaticSourceDelivery: false,
+      suppressDelivery: false,
+      suppressHookUserDelivery: false,
       suppressHookReplyLifecycle: false,
       suppressTyping: false,
-      deliverySuppressionReason: "sourceReplyDeliveryMode: message_tool_only",
+      deliverySuppressionReason: "",
     });
   });
 

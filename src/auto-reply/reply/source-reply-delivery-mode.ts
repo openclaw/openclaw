@@ -23,7 +23,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   if (chatType === "group" || chatType === "channel") {
     const configuredMode =
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
-    return configuredMode === "automatic" ? "automatic" : "message_tool_only";
+    return configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   }
   return params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
 }
