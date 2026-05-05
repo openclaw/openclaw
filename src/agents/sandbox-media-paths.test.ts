@@ -141,7 +141,7 @@ describe("resolveSandboxedBridgeMediaPath media:// URIs", () => {
     });
   });
 
-  it("enforces workspace boundary on media:// fallback when workspaceOnly is true", async () => {
+  it("enforces workspace boundary on valid media:// fallback when workspaceOnly is true", async () => {
     assertSandboxPath.mockRejectedValueOnce(new Error("path escapes sandbox root"));
     const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
       relativePath: filePath,
@@ -157,7 +157,7 @@ describe("resolveSandboxedBridgeMediaPath media:// URIs", () => {
           workspaceOnly: true,
           bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
         },
-        mediaPath: "media://inbound/../../../etc/passwd",
+        mediaPath: "media://inbound/test.png",
         inboundFallbackDir: "media/inbound",
       }),
     ).rejects.toThrow("path escapes sandbox root");
@@ -169,6 +169,60 @@ describe("resolveSandboxedBridgeMediaPath media:// URIs", () => {
         root: "/workspace",
       }),
     );
+  });
+
+  it("returns raw unsupported media:// URI without probing fallback", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://other/test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "media://other/test.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("returns raw nested media://inbound URI without probing fallback", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/nested/test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "media://inbound/nested/test.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("returns raw encoded path separator media://inbound URI without probing fallback", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/nested%2Ftest.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "media://inbound/nested%2Ftest.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).not.toHaveBeenCalled();
   });
 
   it("skips workspace boundary on media:// fallback when workspaceOnly is falsy", async () => {
