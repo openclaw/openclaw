@@ -105,6 +105,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Inspect durable background task state",
     hasSubcommands: true,
   },
+  {
+    name: "worker",
+    description: "Run bounded local worker control-plane commands",
+    hasSubcommands: true,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
