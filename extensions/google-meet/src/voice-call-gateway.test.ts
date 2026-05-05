@@ -10,6 +10,7 @@ const gatewayMocks = vi.hoisted(() => ({
   request: vi.fn(),
   stopAndWait: vi.fn(async () => {}),
   startGatewayClientWhenEventLoopReady: vi.fn(async () => ({ ready: true, aborted: false })),
+  dispatchPluginGatewayRequest: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
@@ -23,13 +24,19 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
   startGatewayClientWhenEventLoopReady: gatewayMocks.startGatewayClientWhenEventLoopReady,
 }));
 
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  dispatchPluginGatewayRequest: gatewayMocks.dispatchPluginGatewayRequest,
+}));
+
 describe("Google Meet voice-call gateway", () => {
   beforeEach(() => {
     vi.useRealTimers();
     gatewayMocks.request.mockReset();
-    gatewayMocks.request.mockResolvedValue({ callId: "call-1" });
+    gatewayMocks.request.mockResolvedValue({ success: true });
     gatewayMocks.stopAndWait.mockClear();
     gatewayMocks.startGatewayClientWhenEventLoopReady.mockClear();
+    gatewayMocks.dispatchPluginGatewayRequest.mockReset();
+    gatewayMocks.dispatchPluginGatewayRequest.mockResolvedValue({ callId: "call-1" });
   });
 
   afterEach(() => {
@@ -62,8 +69,7 @@ describe("Google Meet voice-call gateway", () => {
 
     await join;
 
-    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
-      1,
+    expect(gatewayMocks.dispatchPluginGatewayRequest).toHaveBeenCalledWith(
       "voicecall.start",
       {
         to: "+15551234567",
@@ -72,8 +78,9 @@ describe("Google Meet voice-call gateway", () => {
         requesterSessionKey: "agent:main:discord:channel:general",
         sessionKey: "voice:google-meet:meet-1",
       },
-      { timeoutMs: 30_000 },
+      { pluginRuntimeOwnerId: "google-meet" },
     );
+    expect(gatewayMocks.dispatchPluginGatewayRequest).toHaveBeenCalledTimes(1);
     expect(gatewayMocks.request).toHaveBeenNthCalledWith(
       2,
       "voicecall.speak",
@@ -103,8 +110,7 @@ describe("Google Meet voice-call gateway", () => {
       sessionKey: "agent:slack-u123:google-meet:meet_42",
     });
 
-    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
-      1,
+    expect(gatewayMocks.dispatchPluginGatewayRequest).toHaveBeenCalledWith(
       "voicecall.start",
       {
         to: "+15551234567",
@@ -112,7 +118,7 @@ describe("Google Meet voice-call gateway", () => {
         agentId: "slack-u123",
         sessionKey: "agent:slack-u123:google-meet:meet_42",
       },
-      { timeoutMs: 30_000 },
+      { pluginRuntimeOwnerId: "google-meet" },
     );
   });
 
@@ -130,18 +136,18 @@ describe("Google Meet voice-call gateway", () => {
       dialInNumber: "+15551234567",
     });
 
-    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
-      1,
+    expect(gatewayMocks.dispatchPluginGatewayRequest).toHaveBeenCalledWith(
       "voicecall.start",
       {
         to: "+15551234567",
         mode: "conversation",
       },
-      { timeoutMs: 30_000 },
+      { pluginRuntimeOwnerId: "google-meet" },
     );
   });
 
   it("skips the intro without failing when the realtime bridge is not ready", async () => {
+    gatewayMocks.dispatchPluginGatewayRequest.mockResolvedValueOnce({ callId: "call-1" });
     gatewayMocks.request
       .mockResolvedValueOnce({ callId: "call-1" })
       .mockResolvedValueOnce({ success: false, error: "No active realtime bridge for call" });
