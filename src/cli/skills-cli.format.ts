@@ -123,11 +123,14 @@ function resolveSkillByName(
   }
 
   const lower = raw.toLowerCase();
-  const caseInsensitive = report.skills.find(
+  const caseInsensitiveMatches = report.skills.filter(
     (s) => s.name.toLowerCase() === lower || s.skillKey.toLowerCase() === lower,
   );
-  if (caseInsensitive) {
-    return caseInsensitive;
+  if (caseInsensitiveMatches.length === 1) {
+    return caseInsensitiveMatches[0] ?? null;
+  }
+  if (caseInsensitiveMatches.length > 1) {
+    return null;
   }
 
   const normalized = normalizeSkillLookupToken(raw);
