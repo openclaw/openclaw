@@ -12,6 +12,7 @@ import {
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -542,6 +543,61 @@ async function readInputFiles(files: string[]): Promise<Array<{ path: string; bu
   );
 }
 
+// Canonicalize a user-supplied `--model` ref against the catalog before
+// dispatch (#73715). The catalog lookup is case-insensitive, but the returned
+// id keeps the catalog's canonical casing — so genuinely mixed-case canonical
+// ids (e.g. `deepseek/DeepSeek-R1`) survive untouched while case-only
+// mismatches (e.g. `anthropic/CLAUDE-OPUS-4-7`) get rewritten to the canonical
+// `anthropic/claude-opus-4-7` form. Refs that don't match any catalog entry
+// (custom configured models, dynamic plugin models) are returned verbatim and
+// the downstream resolver decides what to do.
+//
+// Auth profile suffixes (`<ref>@<profile>`) are case-sensitive — profile keys
+// are looked up by exact match — so the suffix is split out, never modified,
+// and reattached to the canonicalized ref.
+async function canonicalizeCliModelRef(raw: string | undefined): Promise<string | undefined> {
+  const trimmed = raw?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const { model, profile } = splitTrailingAuthProfile(trimmed);
+  if (!model) {
+    return trimmed;
+  }
+  const slash = model.indexOf("/");
+  if (slash <= 0 || slash === model.length - 1) {
+    return trimmed;
+  }
+  const providerInput = model.slice(0, slash);
+  const modelInput = model.slice(slash + 1);
+  const providerKey = providerInput.toLowerCase();
+  const modelKeyLower = modelInput.toLowerCase();
+
+  let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  try {
+    catalog = await loadModelCatalog();
+  } catch {
+    return trimmed;
+  }
+
+  // Strict match wins: preserves intentionally mixed-case canonical ids.
+  const exact = catalog.find(
+    (entry) => entry.provider.toLowerCase() === providerKey && entry.id === modelInput,
+  );
+  if (exact) {
+    return trimmed;
+  }
+  const ciMatch = catalog.find(
+    (entry) =>
+      entry.provider.toLowerCase() === providerKey && entry.id.toLowerCase() === modelKeyLower,
+  );
+  if (!ciMatch) {
+    return trimmed;
+  }
+  const canonical = `${providerInput}/${ciMatch.id}`;
+  return profile ? `${canonical}@${profile}` : canonical;
+}
+
 function resolveModelRefOverride(raw: string | undefined): { provider?: string; model?: string } {
   const trimmed = raw?.trim();
   if (!trimmed) {
@@ -631,6 +687,14 @@ async function runModelRun(params: {
 }) {
   const cfg = getRuntimeConfig();
   const agentId = resolveDefaultAgentId(cfg);
+  // Canonicalize the user-supplied --model against the model catalog before
+  // any provider call (#73715). The catalog lookup preserves intentionally
+  // mixed-case canonical ids (e.g. `deepseek/DeepSeek-R1`,
+  // `openrouter/qwen/Qwen3-30B-A3B-6bit`) when the typed ref is an exact
+  // match, and rewrites case-only mismatches (e.g. `anthropic/CLAUDE-OPUS-4-7`
+  // → `anthropic/claude-opus-4-7`) so both the local and gateway transports
+  // dispatch the canonical id. Auth profile suffixes are not lowercased.
+  const modelRef = await canonicalizeCliModelRef(params.model);
   const imageFiles = await readModelRunImageFiles(params.files);
   const messageContent =
     imageFiles.length > 0
@@ -647,7 +711,7 @@ async function runModelRun(params: {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef: params.model,
+      modelRef,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipPiDiscovery: true,
     });
@@ -709,7 +773,7 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model } = resolveModelRefOverride(modelRef);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);

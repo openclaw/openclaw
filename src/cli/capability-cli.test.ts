@@ -589,6 +589,133 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes case-mismatched model ref against the catalog before local dispatch (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "anthropic/CLAUDE-OPUS-4-7",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "anthropic/claude-opus-4-7" }),
+    );
+  });
+
+  it("preserves intentionally mixed-case catalog model ids (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "DeepSeek-R1", provider: "deepseek", name: "DeepSeek R1" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "deepseek/DeepSeek-R1",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledTimes(1);
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "deepseek/DeepSeek-R1" }),
+    );
+  });
+
+  it("preserves auth profile suffix casing while canonicalizing model id (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "anthropic/CLAUDE-OPUS-4-7@Work",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "anthropic/claude-opus-4-7@Work" }),
+    );
+  });
+
+  it("forwards canonicalized model ref to gateway dispatch (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { id: "claude-opus-4-7", provider: "anthropic", name: "Claude Opus 4.7" },
+    ] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "anthropic/CLAUDE-OPUS-4-7",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        }),
+      }),
+    );
+  });
+
+  it("returns ref verbatim when no catalog match exists (#73715)", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "custom/MyCustomModel",
+        "--prompt",
+        "hello",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ modelRef: "custom/MyCustomModel" }),
+    );
+  });
+
   it.each(["", "   ", "\n\t"])(
     "rejects empty model run prompts before local dispatch (%j)",
     async (prompt) => {
