@@ -1,3 +1,4 @@
+import { open, type FileHandle } from "node:fs/promises";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -321,6 +322,121 @@ export async function persistCliTurnTranscript(params: {
       usage: params.result.meta.agentMeta?.usage,
     },
   });
+}
+
+async function readLastTranscriptLine(transcriptPath: string): Promise<string | undefined> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(transcriptPath, "r");
+    const stat = await handle.stat();
+    if (stat.size === 0) {
+      return undefined;
+    }
+    for (let readSize = 4096; readSize <= stat.size + 4096; readSize *= 4) {
+      const actualRead = Math.min(readSize, stat.size);
+      const offset = stat.size - actualRead;
+      const buf = Buffer.alloc(actualRead);
+      await handle.read(buf, 0, actualRead, offset);
+      const text = buf.toString("utf8");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length === 0) {
+        continue;
+      }
+      const lastLine = lines[lines.length - 1];
+      try {
+        JSON.parse(lastLine);
+        return lastLine;
+      } catch {
+        if (actualRead >= stat.size) {
+          return undefined;
+        }
+        continue;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function lastLineIsAssistant(line: string | undefined): boolean {
+  if (!line) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(line) as {
+      type?: string;
+      message?: { role?: string };
+    };
+    return parsed.type === "message" && parsed.message?.role === "assistant";
+  } catch {
+    return false;
+  }
+}
+
+export async function persistEmbeddedTurnTranscript(params: {
+  result: EmbeddedPiRunResult;
+  sessionId: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry | undefined;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  sessionAgentId: string;
+  threadId?: string | number;
+  sessionCwd: string;
+  config: OpenClawConfig;
+}): Promise<SessionEntry | undefined> {
+  const replyText = resolveCliTranscriptReplyText(params.result);
+  if (!replyText) return params.sessionEntry;
+
+  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
+    sessionStore: params.sessionStore,
+    storePath: params.storePath,
+    agentId: params.sessionAgentId,
+    threadId: params.threadId,
+  });
+
+  const lastLine = await readLastTranscriptLine(sessionFile);
+  if (lastLineIsAssistant(lastLine)) {
+    return sessionEntry;
+  }
+
+  const provider = params.result.meta.agentMeta?.provider?.trim() ?? "embedded";
+  const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+
+  const lock = await acquireSessionWriteLock({
+    sessionFile,
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    allowReentrant: true,
+  });
+  try {
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      sessionId: params.sessionId,
+      cwd: params.sessionCwd,
+      config: params.config,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: replyText }],
+        api: "embedded",
+        provider,
+        model,
+        usage: resolveTranscriptUsage(params.result.meta.agentMeta?.usage),
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    });
+  } finally {
+    await lock.release();
+  }
+
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
+  return sessionEntry;
 }
 
 export function runAgentAttempt(params: {

@@ -1196,7 +1196,8 @@ async function agentCommandInternal(
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
 
-    if (result.meta.executionTrace?.runner === "cli") {
+    const runner = result.meta.executionTrace?.runner;
+    if (runner === "cli") {
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
@@ -1236,6 +1237,25 @@ async function agentCommandInternal(
       } catch (error) {
         log.warn(
           `CLI transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } else if (runner === "embedded") {
+      try {
+        sessionEntry = await attemptExecutionRuntime.persistEmbeddedTurnTranscript({
+          result,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          threadId: opts.threadId,
+          sessionCwd: workspaceDir,
+          config: cfg,
+        });
+      } catch (error) {
+        log.warn(
+          `Embedded transcript repair failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
