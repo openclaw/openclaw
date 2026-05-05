@@ -4,6 +4,8 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+- Gateway/performance: cache repeated session, node pairing, and cron list/preview lookups with short-lived invalidation so Control UI refreshes avoid duplicate Gateway scans while staying fresh after writes. Thanks @NikolaFC.
+
 ### Highlights
 
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.

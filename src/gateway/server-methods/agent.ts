@@ -117,6 +117,7 @@ import {
   resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { invalidateSessionsListResultCache } from "../sessions-list-result-cache.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -304,6 +305,7 @@ function emitSessionsChanged(
   >,
   payload: { sessionKey?: string; reason: string },
 ) {
+  invalidateSessionsListResultCache();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;
