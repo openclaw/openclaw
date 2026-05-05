@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Auto-reply: add `typingTtlSeconds` config for session and agent defaults, and raise the typing keepalive default to 300 seconds. (#72009) Thanks @suntp.
+- Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
@@ -69,6 +70,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
+- Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.
 - Video generation: wait up to 20 minutes for slow fal/MiniMax queue-backed jobs, stop forwarding unsupported Google Veo generated-audio options, and normalize MiniMax `720P` requests to its supported `768P` resolution with the usual override warning/details instead of failing fallback.
 - Video generation: accept provider-specific aspect-ratio and resolution hints at the tool boundary, normalize `720P` to MiniMax's supported `768P`, and stop sending Google `generateAudio` on Gemini video requests so provider fallback can recover from model-specific parameter differences. Thanks @vincentkoc.
 - OpenAI/Google Meet: fail realtime voice connection attempts when the socket closes before `session.updated`, avoiding stuck Meet joins waiting on a bridge that never became ready. Thanks @vincentkoc.
@@ -312,6 +315,8 @@ Docs: https://docs.openclaw.ai
 - Agents/session-file-repair: drop `type: "message"` entries with a missing, `null`, or blank role during the on-disk repair pass so sessions that accumulated null-role JSONL corruption (such as the 935+ corrupt entries in #77228) get fully cleaned up rather than carried forward into the repaired file. Refs #77228. (#77288) Thanks @openperf.
 - Doctor/device pairing: stop suggesting `openclaw devices rotate --role <role>` for stale local cached device auth when that role is no longer approved by the gateway pairing record, so doctor no longer points users at a command that must be denied. (#77688) Thanks @Conan-Scott.
 - Ollama/thinking: expose the lightweight Ollama provider thinking profile through the public provider-policy artifact too, so reasoning-capable Ollama models such as `ollama/deepseek-v4-pro:cloud` keep `/think max` available even before the full plugin runtime activates. (#77617, fixes #77612) Thanks @rriggs and @yfge.
+- Codex/app-server: stabilize transcript mirror dedupe across re-mirrored turns so reordered snapshots no longer drop reasoning entries or duplicate the assistant reply. Refs #77012. (#77046) Thanks @openperf.
+- Agents/auth-profiles: do not record request-shape (`format`) rejections as auth-profile health failures, so a single per-session transcript-shape error (such as a prefill-strict 400 "conversation must end with a user message") no longer triggers a profile-wide cooldown that blocks every other healthy session sharing the same auth profile. Refs #77228. (#77280) Thanks @openperf.
 
 ## 2026.5.3-1
 
@@ -615,8 +620,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/update: keep externalized bundled npm bridge updates on the normal plugin security scanner path instead of granting source-linked official trust without artifact provenance. (#76765) Thanks @Lucenx9.
 - Agents/reply context: label replied-to messages as the current user message target in model-visible metadata, so short replies are grounded to their explicit reply target instead of nearby chat history. (#76817) Thanks @obviyus.
 - Doctor/plugins: install configured missing official plugins such as Discord and Brave during doctor/update repair, auto-enable repaired provider plugins, preserve config when a download fails, and stop auto-enable from inventing plugin entries when no manifest declares a configured channel. Fixes #76872. Thanks @jack-stormentswe.
-- Codex/app-server: stabilize transcript mirror dedupe across re-mirrored turns so reordered snapshots no longer drop reasoning entries or duplicate the assistant reply. Refs #77012. (#77046) Thanks @openperf.
-- Agents/auth-profiles: do not record request-shape (`format`) rejections as auth-profile health failures, so a single per-session transcript-shape error (such as a prefill-strict 400 "conversation must end with a user message") no longer triggers a profile-wide cooldown that blocks every other healthy session sharing the same auth profile. Refs #77228. (#77280) Thanks @openperf.
 
 ## 2026.5.2
 

@@ -34,7 +34,7 @@ openclaw doctor --generate-gateway-token
 - `--force`: apply aggressive repairs, including overwriting custom service config when needed
 - `--non-interactive`: run without prompts; safe migrations and non-service repairs only
 - `--generate-gateway-token`: generate and configure a gateway token
-- `--deep`: scan system services for extra gateway installs
+- `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 
 Notes:
 
