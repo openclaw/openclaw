@@ -477,6 +477,10 @@ prompt and passes the same list to the embedded sub-agent. If none of the
 configured tools are available, or the memory sub-agent fails, Active Memory
 skips recall for that turn and the main reply continues without memory context.
 
+Breaking default-behavior note: Active Memory no longer includes
+`memory_recall` in the default allowlist. Existing `memory-lancedb` setups need
+`toolsAllow: ["memory_recall"]`.
+
 ### Built-in memory-core
 
 The default setup does not need an explicit `toolsAllow`:
