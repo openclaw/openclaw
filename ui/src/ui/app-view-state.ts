@@ -441,7 +441,10 @@ export type AppViewState = {
     handleNostrProfileSave: () => Promise<void>;
     handleNostrProfileImport: () => Promise<void>;
     handleNostrProfileToggleAdvanced: () => void;
-    handleExecApprovalDecision: (decision: "allow-once" | "allow-always" | "deny") => Promise<void>;
+    handleExecApprovalDecision: (
+      decision: "allow-once" | "allow-always" | "deny",
+      approvalId?: string,
+    ) => Promise<void>;
     handleGatewayUrlConfirm: () => void;
     handleGatewayUrlCancel: () => void;
     handleConfigLoad: () => Promise<void>;
