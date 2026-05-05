@@ -1,0 +1,10 @@
+{
+  "input": ".artifacts/qa-e2e/mantis/discord-status-reactions/baseline/discord-status-reactions-tool-only-desktop.mp4",
+  "output": ".artifacts/qa-e2e/mantis/discord-status-reactions/baseline/discord-status-reactions-tool-only-desktop-preview.gif",
+  "trimmedVideoOutput": ".artifacts/qa-e2e/mantis/discord-status-reactions/baseline/discord-status-reactions-tool-only-desktop-change.mp4",
+  "sourceDurationSeconds": 10,
+  "previewStartSeconds": 0,
+  "previewDurationSeconds": 1.5,
+  "trimmedStaticEdges": true,
+  "detectedFreezeIntervals": 1
+}
