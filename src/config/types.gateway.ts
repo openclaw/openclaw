@@ -288,6 +288,16 @@ export type GatewayHttpResponsesConfig = {
   files?: GatewayHttpResponsesFilesConfig;
   /** Image inputs (input_image). */
   images?: GatewayHttpResponsesImagesConfig;
+  /**
+   * If true, append a `function_call` output item for each built-in tool the
+   * agent invokes during the run (bash, edit, find, grep, ls, read, write,
+   * apply_patch, plus bundled plugin tools). Default: false.
+   *
+   * Caller-provided tools already surface as `function_call` items via the
+   * existing `pendingToolCalls` path; this flag exposes the agent's internal
+   * tool trace so callers can audit what the model actually did.
+   */
+  exposeBuiltInToolCalls?: boolean;
 };
 
 export type GatewayHttpResponsesFilesConfig = {

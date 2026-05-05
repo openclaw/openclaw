@@ -1427,4 +1427,279 @@ describe("OpenResponses HTTP API (e2e)", () => {
       );
     },
   );
+
+  it("does not surface built-in tool calls when exposeBuiltInToolCalls is unset", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId;
+      if (runId) {
+        emitAgentEvent({
+          runId,
+          stream: "tool",
+          data: { phase: "start", name: "bash", toolCallId: "tc_1", args: { command: "ls" } },
+        });
+      }
+      return { payloads: [{ text: "all done" }] };
+    }) as never);
+
+    const res = await postResponses(port, { model: "openclaw", input: "hi" });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { output?: Array<{ type: string; name?: string }> };
+    expect(body.output?.some((item) => item.type === "function_call")).toBe(false);
+  });
+
+  it("surfaces built-in tool calls as function_call items when exposeBuiltInToolCalls is true", async () => {
+    await writeGatewayConfig({
+      gateway: {
+        http: {
+          endpoints: {
+            responses: { enabled: true, exposeBuiltInToolCalls: true },
+          },
+        },
+      },
+    });
+
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId;
+        if (runId) {
+          emitAgentEvent({
+            runId,
+            stream: "tool",
+            data: { phase: "start", name: "bash", toolCallId: "tc_1", args: { command: "ls" } },
+          });
+          emitAgentEvent({
+            runId,
+            stream: "tool",
+            data: { phase: "start", name: "read", toolCallId: "tc_2", args: { path: "x" } },
+          });
+        }
+        return { payloads: [{ text: "all done" }] };
+      }) as never);
+
+      const res = await postResponses(port, { model: "openclaw", input: "hi" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        output?: Array<{ type: string; name?: string; arguments?: string }>;
+      };
+      // Order matches streaming: assistant message at index 0, audit items 1+.
+      expect((body.output ?? []).map((item) => item.type)).toEqual([
+        "message",
+        "function_call",
+        "function_call",
+      ]);
+      const functionCalls = (body.output ?? []).filter((item) => item.type === "function_call");
+      expect(functionCalls.map((c) => c.name)).toEqual(["bash", "read"]);
+      expect(JSON.parse(functionCalls[0]?.arguments ?? "{}")).toEqual({ command: "ls" });
+    } finally {
+      await server.close({ reason: "expose builtin tools test done" });
+      await writeGatewayConfig({});
+    }
+  });
+
+  it("emits SSE function_call items for built-in tools while streaming", async () => {
+    await writeGatewayConfig({
+      gateway: {
+        http: {
+          endpoints: {
+            responses: { enabled: true, exposeBuiltInToolCalls: true },
+          },
+        },
+      },
+    });
+
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const typed = opts as { runId?: string } | undefined;
+        const runId = typed?.runId;
+        if (runId) {
+          emitAgentEvent({
+            runId,
+            stream: "tool",
+            data: { phase: "start", name: "bash", toolCallId: "tc_s1", args: { command: "ls" } },
+          });
+        }
+        return buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["he", "llo"],
+          text: "hello",
+        });
+      }) as never);
+
+      const res = await postResponses(port, {
+        stream: true,
+        model: "openclaw",
+        input: "hi",
+      });
+      expect(res.status).toBe(200);
+      const events = parseSseEvents(await res.text());
+
+      const addedFunctionCalls = events
+        .filter((e) => e.event === "response.output_item.added")
+        .map((e) => JSON.parse(e.data) as { item?: { type?: string; name?: string } })
+        .filter((p) => p.item?.type === "function_call");
+      expect(addedFunctionCalls.map((p) => p.item?.name)).toContain("bash");
+
+      const completed = events.find((e) => e.event === "response.completed");
+      const completedOutput = (
+        JSON.parse(completed?.data ?? "{}") as {
+          response?: { output?: Array<Record<string, unknown>> };
+        }
+      ).response?.output;
+      expect(completedOutput?.some((item) => item.type === "function_call")).toBe(true);
+    } finally {
+      await server.close({ reason: "expose builtin tools streaming test done" });
+      await writeGatewayConfig({});
+    }
+  });
+
+  it("does not duplicate the audit function_call when the tool name matches a caller-provided client tool", async () => {
+    await writeGatewayConfig({
+      gateway: {
+        http: {
+          endpoints: {
+            responses: { enabled: true, exposeBuiltInToolCalls: true },
+          },
+        },
+      },
+    });
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId;
+        if (runId) {
+          // Agent fires a `tool/start` event for the caller-registered
+          // `get_weather` client tool. Audit capture must skip it so the
+          // same call does not appear as both an audit item AND a delegate
+          // function_call.
+          emitAgentEvent({
+            runId,
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "get_weather",
+              toolCallId: "tc_dupe",
+              args: { city: "Taipei" },
+            },
+          });
+        }
+        return {
+          payloads: [{ text: "Let me check that." }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              {
+                id: "call_delegate",
+                name: "get_weather",
+                arguments: '{"city":"Taipei"}',
+              },
+            ],
+          },
+        };
+      }) as never);
+
+      const res = await postResponses(port, {
+        model: "openclaw",
+        input: "check the weather",
+        tools: WEATHER_TOOL,
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        status?: string;
+        output?: Array<Record<string, unknown>>;
+      };
+      expect(body.status).toBe("incomplete");
+      // Only the delegate function_call is emitted; the audit capture is skipped.
+      expect((body.output ?? []).map((item) => item.type)).toEqual(["message", "function_call"]);
+      const delegate = body.output?.[1];
+      expect(delegate?.name).toBe("get_weather");
+      expect(delegate?.call_id).toBe("call_delegate");
+    } finally {
+      await server.close({ reason: "expose builtin tools dedupe test done" });
+      await writeGatewayConfig({});
+    }
+  });
+
+  it("dedupes the audit function_call against client tool names that differ only by normalization (case)", async () => {
+    // Regression: tool-start events are emitted post-normalize (lowercased
+    // + alias-mapped) by the runtime, so the dedupe set must store names
+    // normalized the same way. A caller registering `Get_Weather` (mixed
+    // case) used to miss the dedupe and surface the same call twice.
+    await writeGatewayConfig({
+      gateway: {
+        http: {
+          endpoints: {
+            responses: { enabled: true, exposeBuiltInToolCalls: true },
+          },
+        },
+      },
+    });
+    const port = await getFreePort();
+    const server = await startServer(port, { openResponsesEnabled: true });
+    try {
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId;
+        if (runId) {
+          emitAgentEvent({
+            runId,
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: "get_weather",
+              toolCallId: "tc_norm",
+              args: { city: "Taipei" },
+            },
+          });
+        }
+        return {
+          payloads: [{ text: "Let me check that." }],
+          meta: {
+            stopReason: "tool_calls",
+            pendingToolCalls: [
+              {
+                id: "call_delegate",
+                name: "Get_Weather",
+                arguments: '{"city":"Taipei"}',
+              },
+            ],
+          },
+        };
+      }) as never);
+
+      const res = await postResponses(port, {
+        model: "openclaw",
+        input: "check the weather",
+        tools: [
+          {
+            type: "function",
+            name: "Get_Weather",
+            description: "Get weather (mixed case)",
+          },
+        ],
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        status?: string;
+        output?: Array<Record<string, unknown>>;
+      };
+      expect(body.status).toBe("incomplete");
+      expect((body.output ?? []).map((item) => item.type)).toEqual(["message", "function_call"]);
+      const delegate = body.output?.[1];
+      expect(delegate?.call_id).toBe("call_delegate");
+    } finally {
+      await server.close({ reason: "expose builtin tools normalized dedupe test done" });
+      await writeGatewayConfig({});
+    }
+  });
 });
