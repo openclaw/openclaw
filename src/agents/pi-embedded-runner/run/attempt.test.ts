@@ -10,7 +10,6 @@ import {
   buildAfterTurnRuntimeContextFromUsage,
   composeSystemPromptWithHookContext,
   decodeHtmlEntitiesInObject,
-  applyEmbeddedAttemptToolsAllow,
   isPrimaryBootstrapRun,
   mergeOrphanedTrailingUserPrompt,
   normalizeMessagesForLlmBoundary,
@@ -21,8 +20,6 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
-  shouldCreateBundleMcpRuntimeForAttempt,
-  shouldBuildCoreCodingToolsForAllowlist,
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -65,33 +62,6 @@ async function invokeWrappedTestStream(
   const wrappedFn = wrap(baseFn);
   return await Promise.resolve(wrappedFn({} as never, {} as never, {} as never));
 }
-
-describe("applyEmbeddedAttemptToolsAllow", () => {
-  it("keeps explicit toolsAllow authoritative after force-added tools are built", () => {
-    const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
-
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["exec", "read"]).map((tool) => tool.name),
-    ).toEqual(["exec", "read"]);
-  });
-
-  it("normalizes explicit toolsAllow entries before filtering", () => {
-    const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
-
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
-    ).toEqual(["cron", "read"]);
-  });
-
-  it("keeps plugin-only allowlists on the shared tool policy path", () => {
-    const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
-
-    expect(shouldBuildCoreCodingToolsForAllowlist(["memory_search"])).toBe(false);
-    expect(
-      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
-    ).toEqual(["memory_search"]);
-  });
-});
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
   it("carries runtime toolsAllow into coding tool construction", () => {
@@ -178,40 +148,6 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(output).toEqual(
       expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
     );
-  });
-});
-
-describe("shouldCreateBundleMcpRuntimeForAttempt", () => {
-  it("skips bundle MCP when tools are disabled or unavailable", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: false })).toBe(false);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, disableTools: true })).toBe(
-      false,
-    );
-  });
-
-  it("creates bundle MCP only when the allowlist can reach bundle MCP tool names", () => {
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })).toBe(true);
-    expect(shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true, toolsAllow: [] })).toBe(
-      true,
-    );
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["memory_search", "memory_get"],
-      }),
-    ).toBe(false);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["bundle-mcp"],
-      }),
-    ).toBe(true);
-    expect(
-      shouldCreateBundleMcpRuntimeForAttempt({
-        toolsEnabled: true,
-        toolsAllow: ["strict__strict_probe"],
-      }),
-    ).toBe(true);
   });
 });
 

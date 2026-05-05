@@ -379,7 +379,10 @@ runs only the release-only plugin child, `release-checks` runs every release
 box, and the narrower release groups are `install-smoke`, `cross-os`,
 `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram`.
 Focused `npm-telegram` reruns require `npm_telegram_package_spec`; full/all runs
-with `release_profile=full` use the release-checks package artifact.
+with `release_profile=full` use the release-checks package artifact. Focused
+cross-OS reruns can add `cross_os_suite_filter=windows/packaged-upgrade` or
+another OS/suite filter. QA release-check failures are advisory; a QA-only
+failure does not block release validation.
 
 ### Vitest
 

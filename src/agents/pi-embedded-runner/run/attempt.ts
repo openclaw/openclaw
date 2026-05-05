@@ -88,7 +88,6 @@ import { supportsModelTools } from "../../model-tool-support.js";
 import { releaseWsSession } from "../../openai-ws-stream.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
-import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
@@ -162,7 +161,6 @@ import {
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
-import { normalizeToolName } from "../../tool-policy.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -234,6 +232,12 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+  shouldCreateBundleLspRuntimeForAttempt,
+  shouldCreateBundleMcpRuntimeForAttempt,
+} from "./attempt-tool-construction-plan.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -483,65 +487,6 @@ function summarizeSessionContext(messages: AgentMessage[]): {
   };
 }
 
-export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
-  tools: T[],
-  toolsAllow?: string[],
-): T[] {
-  if (!toolsAllow || toolsAllow.length === 0) {
-    return tools;
-  }
-  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
-  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
-}
-
-const CORE_CODING_TOOL_ALLOWLIST_NAMES = new Set([
-  "agents_list",
-  "apply_patch",
-  "bash",
-  "canvas",
-  "cron",
-  "edit",
-  "exec",
-  "gateway",
-  "heartbeat_response",
-  "image",
-  "image_generate",
-  "message",
-  "music_generate",
-  "nodes",
-  "pdf",
-  "read",
-  "session_status",
-  "sessions_history",
-  "sessions_list",
-  "sessions_send",
-  "sessions_spawn",
-  "sessions_yield",
-  "subagents",
-  "tts",
-  "update_plan",
-  "video_generate",
-  "web_fetch",
-  "web_search",
-  "write",
-]);
-
-export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
-  if (!toolsAllow || toolsAllow.length === 0) {
-    return true;
-  }
-  return toolsAllow.some((toolName) => {
-    const normalized = normalizeToolName(toolName);
-    return (
-      normalized === "*" ||
-      normalized.startsWith("group:") ||
-      normalized === "bundle-mcp" ||
-      normalized.includes(TOOL_NAME_SEPARATOR) ||
-      CORE_CODING_TOOL_ALLOWLIST_NAMES.has(normalized)
-    );
-  });
-}
-
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
   return stripHistoricalRuntimeContextCustomMessages(normalized);
@@ -596,22 +541,6 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
   }
   mutableSessionManager.leafId = lastEntry.parentId ?? null;
   mutableSessionManager._rewriteFile();
-}
-
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
-  if (!params.toolsEnabled || params.disableTools === true) {
-    return false;
-  }
-  if (!params.toolsAllow || params.toolsAllow.length === 0) {
-    return true;
-  }
-  return params.toolsAllow.some(
-    (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
-  );
 }
 
 export function resolveAttemptToolPolicyMessageProvider(params: {
@@ -857,90 +786,98 @@ export async function runEmbeddedAttempt(
       });
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
-    const toolsRaw =
-      params.disableTools || isRawModelRun
-        ? []
-        : (() => {
-            const allTools = createOpenClawCodingTools({
-              agentId: sessionAgentId,
-              ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
-              exec: {
-                ...params.execOverrides,
-                elevated: params.bashElevated,
-              },
+    const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
+      disableTools: params.disableTools,
+      isRawModelRun,
+      toolsAllow: params.toolsAllow,
+    });
+    const toolsRaw = !toolConstructionPlan.constructTools
+      ? []
+      : (() => {
+          const allTools = createOpenClawCodingTools({
+            agentId: sessionAgentId,
+            ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
+            exec: {
+              ...params.execOverrides,
+              elevated: params.bashElevated,
+            },
+            sandbox,
+            messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+            agentAccountId: params.agentAccountId,
+            messageTo: params.messageTo,
+            messageThreadId: params.messageThreadId,
+            groupId: params.groupId,
+            groupChannel: params.groupChannel,
+            groupSpace: params.groupSpace,
+            memberRoleIds: params.memberRoleIds,
+            spawnedBy: params.spawnedBy,
+            senderId: params.senderId,
+            senderName: params.senderName,
+            senderUsername: params.senderUsername,
+            senderE164: params.senderE164,
+            senderIsOwner: params.senderIsOwner,
+            ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
+            allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
+            sessionKey: sandboxSessionKey,
+            // When sandboxSessionKey differs from the real run session key (e.g. Telegram
+            // direct peer key vs agent:main:main), pass the live key so session_status
+            // "current" resolves to the active run session, not the stale sandbox key.
+            runSessionKey:
+              params.sessionKey && params.sessionKey !== sandboxSessionKey
+                ? params.sessionKey
+                : undefined,
+            sessionId: params.sessionId,
+            runId: params.runId,
+            agentDir,
+            workspaceDir: effectiveWorkspace,
+            // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
+            // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
+            spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
               sandbox,
-              messageProvider: resolveAttemptToolPolicyMessageProvider(params),
-              agentAccountId: params.agentAccountId,
-              messageTo: params.messageTo,
-              messageThreadId: params.messageThreadId,
-              groupId: params.groupId,
-              groupChannel: params.groupChannel,
-              groupSpace: params.groupSpace,
-              memberRoleIds: params.memberRoleIds,
-              spawnedBy: params.spawnedBy,
-              senderId: params.senderId,
-              senderName: params.senderName,
-              senderUsername: params.senderUsername,
-              senderE164: params.senderE164,
-              senderIsOwner: params.senderIsOwner,
-              ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
-              allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-              sessionKey: sandboxSessionKey,
-              // When sandboxSessionKey differs from the real run session key (e.g. Telegram
-              // direct peer key vs agent:main:main), pass the live key so session_status
-              // "current" resolves to the active run session, not the stale sandbox key.
-              runSessionKey:
-                params.sessionKey && params.sessionKey !== sandboxSessionKey
-                  ? params.sessionKey
-                  : undefined,
-              sessionId: params.sessionId,
-              runId: params.runId,
-              agentDir,
+              resolvedWorkspace,
+            }),
+            config: params.config,
+            abortSignal: runAbortController.signal,
+            modelProvider: params.provider,
+            modelId: params.modelId,
+            modelCompat: extractModelCompat(params.model),
+            modelApi: params.model.api,
+            modelContextWindowTokens: params.model.contextWindow,
+            modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
               workspaceDir: effectiveWorkspace,
-              // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
-              // at the sandbox copy. Spawned subagents should inherit the real workspace instead.
-              spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
-                sandbox,
-                resolvedWorkspace,
-              }),
-              config: params.config,
-              abortSignal: runAbortController.signal,
-              modelProvider: params.provider,
-              modelId: params.modelId,
-              modelCompat: extractModelCompat(params.model),
-              modelApi: params.model.api,
-              modelContextWindowTokens: params.model.contextWindow,
-              modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
-                workspaceDir: effectiveWorkspace,
-              }),
-              currentChannelId: params.currentChannelId,
-              currentThreadTs: params.currentThreadTs,
-              currentMessageId: params.currentMessageId,
-              includeCoreTools: shouldBuildCoreCodingToolsForAllowlist(params.toolsAllow),
-              replyToMode: params.replyToMode,
-              hasRepliedRef: params.hasRepliedRef,
-              modelHasVision: params.model.input?.includes("image") ?? false,
-              requireExplicitMessageTarget:
-                params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-              disableMessageTool: params.disableMessageTool,
-              forceMessageTool: params.forceMessageTool,
-              enableHeartbeatTool: params.enableHeartbeatTool,
-              forceHeartbeatTool: params.forceHeartbeatTool,
-              authProfileStore: params.authProfileStore,
-              recordToolPrepStage: (name) => corePluginToolStages.mark(name),
-              onYield: (message) => {
-                yieldDetected = true;
-                yieldMessage = message;
-                queueYieldInterruptForSession?.();
-                runAbortController.abort("sessions_yield");
-                abortSessionForYield?.();
-              },
-            });
-            corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
-            const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
-            corePluginToolStages.mark("attempt:tools-allow");
-            return filteredTools;
-          })();
+            }),
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
+            includeCoreTools: toolConstructionPlan.includeCoreTools,
+            toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
+            replyToMode: params.replyToMode,
+            hasRepliedRef: params.hasRepliedRef,
+            modelHasVision: params.model.input?.includes("image") ?? false,
+            requireExplicitMessageTarget:
+              params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            disableMessageTool: params.disableMessageTool,
+            forceMessageTool: params.forceMessageTool,
+            enableHeartbeatTool: params.enableHeartbeatTool,
+            forceHeartbeatTool: params.forceHeartbeatTool,
+            authProfileStore: params.authProfileStore,
+            recordToolPrepStage: (name) => corePluginToolStages.mark(name),
+            onToolOutcome: params.onToolOutcome,
+            onYield: (message) => {
+              yieldDetected = true;
+              yieldMessage = message;
+              queueYieldInterruptForSession?.();
+              runAbortController.abort("sessions_yield");
+              abortSessionForYield?.();
+            },
+          });
+          corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
+          const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+            toolMeta: (tool) => getPluginToolMeta(tool),
+          });
+          corePluginToolStages.mark("attempt:tools-allow");
+          return filteredTools;
+        })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const toolsEnabled = supportsModelTools(params.model);
@@ -1103,18 +1040,22 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
-    const bundleLspRuntime =
-      toolsEnabled && !isRawModelRun
-        ? await createBundleLspToolRuntime({
-            workspaceDir: effectiveWorkspace,
-            cfg: params.config,
-            reservedToolNames: [
-              ...tools.map((tool) => tool.name),
-              ...(clientTools?.map((tool) => tool.function.name) ?? []),
-              ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
-            ],
-          })
-        : undefined;
+    const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.disableTools || isRawModelRun,
+      toolsAllow: params.toolsAllow,
+    });
+    const bundleLspRuntime = bundleLspEnabled
+      ? await createBundleLspToolRuntime({
+          workspaceDir: effectiveWorkspace,
+          cfg: params.config,
+          reservedToolNames: [
+            ...tools.map((tool) => tool.name),
+            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
+          ],
+        })
+      : undefined;
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...(bundleMcpRuntime?.tools ?? []), ...(bundleLspRuntime?.tools ?? [])],
       config: params.config,
@@ -1650,6 +1591,7 @@ export async function runEmbeddedAttempt(
               sessionId: params.sessionId,
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
+              onToolOutcome: params.onToolOutcome,
             },
           )
         : [];

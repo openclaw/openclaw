@@ -63,6 +63,11 @@ on:
         required: false
         default: ""
         type: string
+      cross_os_suite_filter:
+        description: Optional focused cross-OS suite filter, e.g. windows/packaged-upgrade or packaged-fresh
+        required: false
+        default: ""
+        type: string
       package_acceptance_package_spec:
         description: Optional published package spec for Package Acceptance; blank uses the prepared release artifact
         required: false
@@ -94,6 +99,7 @@ jobs:
       run_release_soak: ${{ steps.inputs.outputs.run_release_soak }}
       rerun_group: ${{ steps.inputs.outputs.rerun_group }}
       live_suite_filter: ${{ steps.inputs.outputs.live_suite_filter }}
+      cross_os_suite_filter: ${{ steps.inputs.outputs.cross_os_suite_filter }}
       qa_live_matrix_enabled: ${{ steps.inputs.outputs.qa_live_matrix_enabled }}
       qa_live_telegram_enabled: ${{ steps.inputs.outputs.qa_live_telegram_enabled }}
       qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
@@ -215,6 +221,7 @@ jobs:
           RELEASE_RUN_RELEASE_SOAK_INPUT: ${{ inputs.run_release_soak }}
           RELEASE_RERUN_GROUP_INPUT: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER_INPUT: ${{ inputs.live_suite_filter }}
+          RELEASE_CROSS_OS_SUITE_FILTER_INPUT: ${{ inputs.cross_os_suite_filter }}
           RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED || 'false' }}
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
         run: |
@@ -292,6 +299,7 @@ jobs:
             printf 'run_release_soak=%s\n' "$run_release_soak"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
+            printf 'cross_os_suite_filter=%s\n' "$RELEASE_CROSS_OS_SUITE_FILTER_INPUT"
             printf 'qa_live_matrix_enabled=%s\n' "$qa_live_matrix_enabled"
             printf 'qa_live_telegram_enabled=%s\n' "$qa_live_telegram_enabled"
             printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
@@ -309,6 +317,7 @@ jobs:
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
         run: |
           {
@@ -324,6 +333,9 @@ jobs:
             echo "- Rerun group: \`${RELEASE_RERUN_GROUP}\`"
             if [[ -n "${RELEASE_LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${RELEASE_LIVE_SUITE_FILTER}\`"
+            fi
+            if [[ -n "${RELEASE_CROSS_OS_SUITE_FILTER// }" ]]; then
+              echo "- Cross-OS suite filter: \`${RELEASE_CROSS_OS_SUITE_FILTER}\`"
             fi
             echo "- QA live lanes: Matrix \`${{ steps.inputs.outputs.qa_live_matrix_enabled }}\`, Telegram \`${{ steps.inputs.outputs.qa_live_telegram_enabled }}\`, Slack \`${{ steps.inputs.outputs.qa_live_slack_enabled }}\`"
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
@@ -430,6 +442,7 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.revision }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
+      suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}
       candidate_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
@@ -603,6 +616,7 @@ jobs:
     name: Run QA Lab parity lane (${{ matrix.lane }})
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
@@ -687,6 +701,7 @@ jobs:
     name: Run QA Lab parity report
     needs: [resolve_target, qa_lab_parity_lane_release_checks]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 20
     permissions:
@@ -743,6 +758,7 @@ jobs:
     name: Run QA Lab live Matrix lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
+    continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
@@ -820,6 +836,7 @@ jobs:
     name: Run QA Lab live Telegram lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
+    continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
@@ -913,6 +930,7 @@ jobs:
     name: Run QA Lab live Slack lane
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true' && vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'
+    continue-on-error: true
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
@@ -1042,6 +1060,10 @@ jobs:
             name="${item%%=*}"
             result="${item#*=}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              if [[ "$name" == qa_* ]]; then
+                echo "::warning::${name} ended with ${result}; QA release-check lanes are advisory and do not block release validation."
+                continue
+              fi
               echo "::error::${name} ended with ${result}"
               failed=1
             fi

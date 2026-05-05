@@ -9,7 +9,7 @@ overrides:
   hono: 4.12.14
   '@hono/node-server': 1.19.14
   '@aws-sdk/client-bedrock-runtime': 3.1024.0
-  axios: 1.15.0
+  axios: 1.16.0
   follow-redirects: 1.16.0
   defu: 6.1.5
   fast-xml-parser: 5.7.0
@@ -4718,8 +4718,8 @@ packages:
     resolution: {integrity: sha512-zJAaP9zxTcvTHRlejau3ZOY4V7SRpiByf3/dxx2uyKxxor19tpmpV2QRsTKikckwhaPmr2dVpxxMr7jOCYVp5g==}
     engines: {node: '>=6.0.0'}
 
-  axios@1.15.0:
-    resolution: {integrity: sha512-wWyJDlAatxk30ZJer+GeCWS209sA42X+N5jU2jy6oHTp7ufw8uzUTVFBX9+wTfAlhiJXGS0Bq7X6efruWjuK9Q==}
+  axios@1.16.0:
+    resolution: {integrity: sha512-6hp5CwvTPlN2A31g5dxnwAX0orzM7pmCRDLnZSX772mv8WDqICwFjowHuPs04Mc8deIld1+ejhtaMn5vp6b+1w==}
 
   b4a@1.8.1:
     resolution: {integrity: sha512-aiqre1Nr0B/6DgE2N5vwTc+2/oQZ4Wh1t4NznYY4E00y8LCt6NqdRv81so00oo27D8MVKTpUa/MwUUtBLXCoDw==}
@@ -9539,7 +9539,7 @@ snapshots:
 
   '@larksuiteoapi/node-sdk@1.62.1':
     dependencies:
-      axios: 1.15.0
+      axios: 1.16.0
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
@@ -9779,7 +9779,7 @@ snapshots:
       '@microsoft/teams.api': 2.0.9
       '@microsoft/teams.common': 2.0.9
       '@microsoft/teams.graph': 2.0.9
-      axios: 1.15.0
+      axios: 1.16.0
       cors: 2.8.6
       express: 5.2.1
       jsonwebtoken: 9.0.3
@@ -9793,7 +9793,7 @@ snapshots:
 
   '@microsoft/teams.common@2.0.9':
     dependencies:
-      axios: 1.15.0
+      axios: 1.16.0
     transitivePeerDependencies:
       - debug
 
@@ -10522,7 +10522,7 @@ snapshots:
       '@slack/types': 2.21.0
       '@slack/web-api': 7.15.2
       '@types/express': 5.0.6
-      axios: 1.15.0
+      axios: 1.16.0
       express: 5.2.1
       path-to-regexp: 8.4.0
       raw-body: 3.0.2
@@ -10568,7 +10568,7 @@ snapshots:
       '@slack/types': 2.21.0
       '@types/node': 25.6.0
       '@types/retry': 0.12.0
-      axios: 1.15.0
+      axios: 1.16.0
       eventemitter3: 5.0.4
       form-data: 2.5.4
       is-electron: 2.2.2
@@ -11573,7 +11573,7 @@ snapshots:
 
   await-to-js@3.0.0: {}
 
-  axios@1.15.0:
+  axios@1.16.0:
     dependencies:
       follow-redirects: 1.16.0
       form-data: 2.5.4

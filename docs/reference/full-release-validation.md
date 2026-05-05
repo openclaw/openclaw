@@ -158,6 +158,17 @@ Valid filter ids are defined in the reusable live/E2E workflow, including
 The `live-gateway-advisory-docker` handle is an aggregate rerun handle for its
 three provider shards, so it still fans out to all advisory Docker gateway jobs.
 
+Use `cross_os_suite_filter` with `rerun_group=cross-os` when one cross-OS lane
+failed. The filter accepts an OS id, a suite id, or an OS/suite pair, for
+example `windows/packaged-upgrade`, `windows`, or `packaged-fresh`. Cross-OS
+summaries include per-phase timings for packaged upgrade lanes, and long-running
+commands print heartbeat lines so a stuck Windows update is visible before the
+job timeout.
+
+QA release-check lanes are advisory. A QA-only failure is reported as a warning
+and does not block the release-check verifier; rerun `rerun_group=qa`,
+`qa-parity`, or `qa-live` when you need fresh QA evidence.
+
 ## Evidence to keep
 
 Keep the `Full Release Validation` summary as the release-level index. It links

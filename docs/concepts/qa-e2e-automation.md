@@ -325,6 +325,8 @@ The lane needs two distinct Slack apps in one workspace, plus a channel both bot
 
 Prefer a Slack workspace dedicated to QA over reusing a production workspace.
 
+The SUT manifest below mirrors the bundled Slack plugin's production install (`extensions/slack/src/setup-shared.ts:10`). For the production-channel setup as users see it, see [Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT pair is intentionally separate because the lane needs two distinct bot user ids in one workspace.
+
 **1. Create the Driver app**
 
 Go to [api.slack.com/apps](https://api.slack.com/apps) → _Create New App_ → _From a manifest_ → pick the QA workspace, paste the following manifest, then _Install to Workspace_:

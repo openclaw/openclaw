@@ -14,8 +14,9 @@ MiniMax, and workflow-configured ComfyUI today.
 
 For session-backed agent runs, OpenClaw starts music generation as a
 background task, tracks it in the task ledger, then wakes the agent again
-when the track is ready so the agent can post the finished audio back into
-the original channel.
+when the track is ready so the agent can tell the user and attach the
+finished audio. In group/channel chats that use message-tool-only visible
+delivery, the agent relays the result through the message tool.
 
 <Note>
 The built-in shared tool only appears when at least one music-generation

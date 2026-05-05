@@ -466,6 +466,8 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     ~/.openclaw/agents/<agentId>/agent/auth-profiles.json
     ```
 
+    To inspect saved profiles without dumping secrets, run `openclaw models auth list` (optionally `--provider <id>` or `--json`). See [Models CLI](/cli/models#openclaw-models-auth-list) for details.
+
   </Accordion>
 
   <Accordion title="What are typical profile IDs?">
