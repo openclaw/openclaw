@@ -396,7 +396,8 @@ function splitShellPipeline(command: string): string[] {
   let quote: "'" | '"' | null = null;
   let escaped = false;
 
-  for (const char of command) {
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
     if (escaped) {
       current += char;
       escaped = false;
@@ -422,6 +423,9 @@ function splitShellPipeline(command: string): string[] {
     if (char === "|") {
       segments.push(current);
       current = "";
+      if (command[index + 1] === "&") {
+        index += 1;
+      }
       continue;
     }
     current += char;
@@ -810,10 +814,9 @@ async function walkDirWithLimit(
   maxFiles: number,
   excludeTestFiles: boolean,
 ): Promise<string[]> {
-  const skillBudget = maxFiles > 1 ? 1 : 0;
   const skillFiles = await walkDirMatchingLimit(
     dirPath,
-    skillBudget,
+    maxFiles,
     excludeTestFiles,
     isSkillMarkdown,
   );
