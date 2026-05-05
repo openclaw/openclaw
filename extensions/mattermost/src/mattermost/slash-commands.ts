@@ -17,6 +17,8 @@ import type { MattermostClient } from "./client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+export const MATTERMOST_SLASH_POST_METHOD = "P";
+
 export type MattermostSlashCommandConfig = {
   /** Enable native slash commands. "auto" resolves to false for now (opt-in). */
   native: boolean | "auto";
@@ -45,6 +47,7 @@ export type MattermostRegisteredCommand = {
   trigger: string;
   teamId: string;
   token: string;
+  url: string;
   /** True when this process created the command and should delete it on shutdown. */
   managed: boolean;
 };
@@ -84,7 +87,7 @@ export type MattermostSlashCommandResponse = {
 type MattermostCommandCreate = {
   team_id: string;
   trigger: string;
-  method: "P" | "G";
+  method: typeof MATTERMOST_SLASH_POST_METHOD | "G";
   url: string;
   description?: string;
   auto_complete: boolean;
@@ -98,7 +101,7 @@ type MattermostCommandUpdate = {
   id: string;
   team_id: string;
   trigger: string;
-  method: "P" | "G";
+  method: typeof MATTERMOST_SLASH_POST_METHOD | "G";
   url: string;
   description?: string;
   auto_complete: boolean;
@@ -106,7 +109,7 @@ type MattermostCommandUpdate = {
   auto_complete_hint?: string;
 };
 
-type MattermostCommandResponse = {
+export type MattermostCommandResponse = {
   id: string;
   token: string;
   team_id: string;
@@ -192,16 +195,32 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
 export async function listMattermostCommands(
   client: MattermostClient,
   teamId: string,
+  init?: Pick<RequestInit, "signal">,
 ): Promise<MattermostCommandResponse[]> {
   return await client.request<MattermostCommandResponse[]>(
     `/commands?team_id=${encodeURIComponent(teamId)}&custom_only=true`,
+    init,
+  );
+}
+
+/**
+ * Get a custom slash command by id.
+ */
+export async function getMattermostCommand(
+  client: MattermostClient,
+  commandId: string,
+  init?: Pick<RequestInit, "signal">,
+): Promise<MattermostCommandResponse> {
+  return await client.request<MattermostCommandResponse>(
+    `/commands/${encodeURIComponent(commandId)}`,
+    init,
   );
 }
 
 /**
  * Create a custom slash command on a Mattermost team.
  */
-export async function createMattermostCommand(
+async function createMattermostCommand(
   client: MattermostClient,
   params: MattermostCommandCreate,
 ): Promise<MattermostCommandResponse> {
@@ -214,10 +233,7 @@ export async function createMattermostCommand(
 /**
  * Delete a custom slash command.
  */
-export async function deleteMattermostCommand(
-  client: MattermostClient,
-  commandId: string,
-): Promise<void> {
+async function deleteMattermostCommand(client: MattermostClient, commandId: string): Promise<void> {
   await client.request<Record<string, unknown>>(`/commands/${encodeURIComponent(commandId)}`, {
     method: "DELETE",
   });
@@ -226,7 +242,7 @@ export async function deleteMattermostCommand(
 /**
  * Update an existing custom slash command.
  */
-export async function updateMattermostCommand(
+async function updateMattermostCommand(
   client: MattermostClient,
   params: MattermostCommandUpdate,
 ): Promise<MattermostCommandResponse> {
@@ -303,31 +319,36 @@ export async function registerSlashCommands(params: {
 
     const existingCmd = ownedCommands[0];
 
-    // Already registered with the correct callback URL
-    if (existingCmd && existingCmd.url === callbackUrl) {
+    const existingNeedsUpdate = existingCmd
+      ? existingCmd.url !== callbackUrl || existingCmd.method !== MATTERMOST_SLASH_POST_METHOD
+      : false;
+
+    // Already registered with the correct callback URL and method.
+    if (existingCmd && !existingNeedsUpdate) {
       log?.(`mattermost: command /${spec.trigger} already registered (id=${existingCmd.id})`);
       registered.push({
         id: existingCmd.id,
         trigger: spec.trigger,
         teamId,
         token: existingCmd.token,
+        url: callbackUrl,
         managed: false,
       });
       continue;
     }
 
-    // Exists but points to a different URL: attempt to reconcile by updating
-    // (useful during callback URL migrations).
-    if (existingCmd && existingCmd.url !== callbackUrl) {
+    // Exists but has drifted critical callback fields: attempt to reconcile by
+    // updating (useful during callback URL migrations or method drift).
+    if (existingCmd && existingNeedsUpdate) {
       log?.(
-        `mattermost: command /${spec.trigger} exists with different callback URL; updating (id=${existingCmd.id})`,
+        `mattermost: command /${spec.trigger} exists with different callback settings; updating (id=${existingCmd.id})`,
       );
       try {
         const updated = await updateMattermostCommand(client, {
           id: existingCmd.id,
           team_id: teamId,
           trigger: spec.trigger,
-          method: "P",
+          method: MATTERMOST_SLASH_POST_METHOD,
           url: callbackUrl,
           description: spec.description,
           auto_complete: spec.autoComplete,
@@ -339,6 +360,7 @@ export async function registerSlashCommands(params: {
           trigger: spec.trigger,
           teamId,
           token: updated.token,
+          url: callbackUrl,
           managed: false,
         });
         continue;
@@ -365,7 +387,7 @@ export async function registerSlashCommands(params: {
       const created = await createMattermostCommand(client, {
         team_id: teamId,
         trigger: spec.trigger,
-        method: "P",
+        method: MATTERMOST_SLASH_POST_METHOD,
         url: callbackUrl,
         description: spec.description,
         auto_complete: spec.autoComplete,
@@ -378,6 +400,7 @@ export async function registerSlashCommands(params: {
         trigger: spec.trigger,
         teamId,
         token: created.token,
+        url: callbackUrl,
         managed: true,
       });
     } catch (err) {
@@ -497,6 +520,10 @@ export function resolveCommandText(
     triggerMap?.get(trigger) ?? (trigger.startsWith("oc_") ? trigger.slice(3) : trigger);
   const args = text.trim();
   return args ? `/${commandName} ${args}` : `/${commandName}`;
+}
+
+export function normalizeSlashCommandTrigger(command: string): string {
+  return command.replace(/^\//, "").trim();
 }
 
 // ─── Config resolution ───────────────────────────────────────────────────────

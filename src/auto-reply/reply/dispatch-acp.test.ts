@@ -74,6 +74,10 @@ const mediaUnderstandingMocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
 }));
 
+const diagnosticMocks = vi.hoisted(() => ({
+  markDiagnosticSessionProgress: vi.fn(),
+}));
+
 const sessionMetaMocks = vi.hoisted(() => ({
   readAcpSessionEntry: vi.fn<
     (params: { sessionKey: string; cfg?: OpenClawConfig }) => AcpSessionStoreEntry | null
@@ -166,6 +170,10 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
     sessionMetaMocks.readAcpSessionEntry(params),
+}));
+
+vi.mock("../../logging/diagnostic.js", () => ({
+  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
 }));
 
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
@@ -374,6 +382,7 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
+    diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     transcriptMocks.persistAcpDispatchTranscript.mockClear();
@@ -462,6 +471,31 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
+  it("keeps same-provider tool-only ACP final replies private when an origin route exists", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("hidden final");
+    const onReplyStart = vi.fn();
+    const { dispatcher } = createDispatcher();
+
+    const result = await runDispatch({
+      bodyForAgent: "reply via message tool if needed",
+      dispatcher,
+      onReplyStart,
+      suppressUserDelivery: true,
+      suppressReplyLifecycle: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      shouldRouteToOriginating: true,
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    });
+
+    expect(result?.queuedFinal).toBe(false);
+    expect(onReplyStart).toHaveBeenCalledTimes(1);
+    expect(routeMocks.routeReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
@@ -543,6 +577,18 @@ describe("tryDispatchAcpReply", () => {
     await dispatchVisibleTurn(onReplyStart);
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not mark ACP diagnostic progress when diagnostics are disabled", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn();
+
+    await runDispatch({
+      bodyForAgent: "visible",
+      cfg: createAcpTestConfig({ diagnostics: { enabled: false } }),
+    });
+
+    expect(diagnosticMocks.markDiagnosticSessionProgress).not.toHaveBeenCalled();
   });
 
   it("does not start reply lifecycle for empty ACP prompt", async () => {

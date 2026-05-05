@@ -29,14 +29,14 @@ function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebo
   };
 }
 
-export type BlueBubblesDebouncer = {
+type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
   flushKey: (key: string) => Promise<boolean>;
   flushAll: () => Promise<number>;
   unregister: () => void;
 };
 
-export type BlueBubblesDebounceRegistry = {
+type BlueBubblesDebounceRegistry = {
   getOrCreateDebouncer: (target: WebhookTarget) => BlueBubblesDebouncer;
   removeDebouncer: (target: WebhookTarget) => void;
 };

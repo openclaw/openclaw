@@ -109,6 +109,7 @@ async function buildExpectedGatewayServicePlan(params: {
     runtime: params.runtime,
     nodePath: params.nodePath,
     existingEnvironment: params.command.environment,
+    existingEnvironmentValueSources: params.command.environmentValueSources,
     warn: (message, title) => note(message, title),
     config: params.cfg,
   });
@@ -509,19 +510,32 @@ export async function maybeRepairGatewayServiceConfig(
     return;
   }
 
-  const repair = needsAggressive
-    ? await prompter.confirmAggressiveAutoFix({
-        message: "Overwrite gateway service config with current defaults now?",
-        initialValue: prompter.shouldForce,
-      })
-    : await prompter.confirmAutoFix({
-        message: "Update gateway service config to the recommended defaults now?",
-        initialValue: true,
+  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
+  const repairMessage = needsAggressive
+    ? "Overwrite gateway service config with current defaults now?"
+    : "Update gateway service config to the recommended defaults now?";
+  const repair = updateRepairMode
+    ? needsAggressive
+      ? await prompter.confirmAggressiveAutoFix({
+          message: repairMessage,
+          initialValue: prompter.shouldForce,
+        })
+      : await prompter.confirmAutoFix({
+          message: repairMessage,
+          initialValue: true,
+        })
+    : await prompter.confirmRuntimeRepair({
+        message: repairMessage,
+        initialValue: needsAggressive ? prompter.shouldForce : true,
+        requiresInteractiveConfirmation: true,
       });
   if (!repair) {
+    note(
+      "Run `openclaw gateway install --force` when you want to replace the gateway service definition.",
+      "Gateway service config",
+    );
     return;
   }
-  const updateRepairMode = isDoctorUpdateRepairMode(prompter.repairMode);
   const serviceEmbeddedToken = readEmbeddedGatewayToken(command);
   const gatewayTokenForRepair = expectedGatewayToken ?? serviceEmbeddedToken;
   const configuredGatewayToken =
@@ -580,6 +594,7 @@ export async function maybeRepairGatewayServiceConfig(
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
+      environmentValueSources: updatedPlan.environmentValueSources,
     });
   } catch (err) {
     runtime.error(`Gateway service update failed: ${String(err)}`);

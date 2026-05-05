@@ -2,13 +2,14 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { withBundledPluginVitestCompat } from "./bundled-compat.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   isActivatedManifestOwner,
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import { type PluginManifestRecord, type PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -106,7 +107,7 @@ function resolveEffectiveRegistryPluginActivation(params: {
     origin: params.plugin.origin,
     config: params.normalizedConfig,
     rootConfig: params.rootConfig,
-    enabledByDefault: params.plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin),
   });
 }
 
@@ -114,7 +115,7 @@ function toManifestOwnerRecord(plugin: PluginRegistryRecord) {
   return {
     id: plugin.pluginId,
     origin: plugin.origin,
-    enabledByDefault: plugin.enabledByDefault,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
   };
 }
 
@@ -131,7 +132,20 @@ export function resolveBundledProviderCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
+  if (params.manifestRegistry) {
+    const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
+    return params.manifestRegistry.plugins
+      .filter(
+        (plugin) =>
+          plugin.origin === "bundled" &&
+          plugin.providers.length > 0 &&
+          (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+  }
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   return listRegistryPluginIds(
@@ -241,6 +255,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(registry, (plugin) => {
     if (
@@ -254,6 +269,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
     return isProviderPluginEligibleForSetupDiscovery({
       plugin,
       shouldFilterUntrustedWorkspacePlugins,
+      shouldFilterBundledByAllowlist,
       normalizedConfig,
       rootConfig: params.config,
     });
@@ -263,10 +279,15 @@ export function resolveDiscoveredProviderPluginIds(params: {
 function isProviderPluginEligibleForSetupDiscovery(params: {
   plugin: PluginRegistryRecord;
   shouldFilterUntrustedWorkspacePlugins: boolean;
+  shouldFilterBundledByAllowlist: boolean;
   normalizedConfig: NormalizedPluginsConfig;
   rootConfig?: PluginLoadOptions["config"];
 }): boolean {
-  if (!params.shouldFilterUntrustedWorkspacePlugins || params.plugin.origin !== "workspace") {
+  if (params.plugin.origin === "workspace") {
+    if (!params.shouldFilterUntrustedWorkspacePlugins) {
+      return true;
+    }
+  } else if (!params.shouldFilterBundledByAllowlist) {
     return true;
   }
   if (
@@ -276,6 +297,9 @@ function isProviderPluginEligibleForSetupDiscovery(params: {
     })
   ) {
     return false;
+  }
+  if (params.plugin.origin === "bundled") {
+    return true;
   }
   return isActivatedManifestOwner({
     plugin: toManifestOwnerRecord(params.plugin),
@@ -292,12 +316,14 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   return resolveProviderOwnerPluginIds({
     ...params,
     isEligible: (plugin, normalizedConfig) =>
       isProviderPluginEligibleForSetupDiscovery({
         plugin,
         shouldFilterUntrustedWorkspacePlugins,
+        shouldFilterBundledByAllowlist,
         normalizedConfig,
         rootConfig: params.config,
       }),
