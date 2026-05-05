@@ -1,5 +1,4 @@
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
 
 type PlatformVariant = { readonly pkg: string; readonly file: string };
 
@@ -20,8 +19,8 @@ export function resolveSqliteVecPlatformVariant():
   }
   try {
     const require_ = createRequire(import.meta.url);
-    const manifest = require_.resolve(`${entry.pkg}/package.json`);
-    return { pkg: entry.pkg, extensionPath: join(dirname(manifest), entry.file) };
+    const extensionPath = require_.resolve(`${entry.pkg}/${entry.file}`);
+    return { pkg: entry.pkg, extensionPath };
   } catch {
     return undefined;
   }
