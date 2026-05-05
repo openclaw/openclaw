@@ -253,6 +253,13 @@ does not import plugin runtime code, run a package manager, or repair missing
 dependencies.
 </Note>
 
+If startup logs `plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`,
+use `plugins list --enabled --verbose` (or `plugins inspect <id>`) to confirm
+the plugin ids and copy them into `plugins.allow` in `openclaw.json`. The
+warning prints a ready-to-paste snippet that already includes the discovered
+ids; the same hint applies when a plugin loads
+`without install/load-path provenance`.
+
 `plugins search` is a remote ClawHub catalog lookup. It does not inspect local
 state, mutate config, install packages, or load plugin runtime code. Search
 results include the ClawHub package name, family, channel, version, summary, and

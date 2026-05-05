@@ -283,6 +283,17 @@ restrictive allowlist configs with `"compat"` during migration so upgrades keep
 legacy bundled provider behavior until the operator opts into the stricter mode.
 An empty `plugins.allow` is still treated as unset/open.
 
+When `plugins.allow` is unset and a non-bundled plugin is auto-discovered from
+the workspace or `~/.openclaw/extensions/`, OpenClaw warns
+`plugins.allow is empty; discovered non-bundled plugins may auto-load: ...` and
+suggests a minimal `plugins.allow` snippet that already includes the discovered
+plugin ids. The same warning fires for plugins that load without install or
+load-path provenance. To resolve it, run [`openclaw plugins list --enabled --verbose`](/cli/plugins#list)
+or [`openclaw plugins inspect <id>`](/cli/plugins#inspect) to confirm the plugin
+ids, then copy them into `plugins.allow` in `openclaw.json`. Channel ids such as
+`feishu` are not plugin ids; the underlying plugin id (for example
+`openclaw-lark`) is what `plugins.allow` expects.
+
 Config changes made through `/plugins enable` or `/plugins disable` trigger an
 in-process Gateway plugin reload. New agent turns rebuild their tool list from
 the refreshed plugin registry. Source-changing operations such as install,
