@@ -733,7 +733,6 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       return;
     }
 
-    state.lastBlockReplyText = chunk;
     pushAssistantText(chunk);
     if (!params.onBlockReply) {
       return;
@@ -754,6 +753,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       return;
     }
+    state.lastBlockReplyText = chunk;
     emitBlockReply(
       {
         text: cleanedText,
