@@ -62,6 +62,19 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
+/**
+ * Drop the per-workspace version entry for `workspaceDir`. Callers should
+ * invoke this when the workspace's watcher is torn down so the
+ * `workspaceVersions` map does not retain entries for the gateway lifetime.
+ *
+ * Removal is safe: subsequent `getSkillsSnapshotVersion` reads fall back to
+ * `globalVersion`, and `shouldRefreshSnapshotForVersion(cached, 0)` forces a
+ * refresh whenever a consumer was holding a non-zero cached version.
+ */
+export function clearSkillsSnapshotVersionForWorkspace(workspaceDir: string): void {
+  workspaceVersions.delete(workspaceDir);
+}
+
 export function shouldRefreshSnapshotForVersion(
   cachedVersion?: number,
   nextVersion?: number,
