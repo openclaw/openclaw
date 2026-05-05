@@ -197,6 +197,11 @@ export function reconcileInteractiveMigrationSkillToggleValues(
   activatedValue: string | undefined,
   selectableValues: readonly string[],
 ): string[] {
+  if (activatedValue === MIGRATION_SKILL_SELECTION_SKIP) {
+    return selectedValues.includes(MIGRATION_SKILL_SELECTION_SKIP)
+      ? [MIGRATION_SKILL_SELECTION_SKIP]
+      : [];
+  }
   if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON) {
     return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
   }
@@ -207,7 +212,8 @@ export function reconcileInteractiveMigrationSkillToggleValues(
     return selectedValues.filter(
       (value) =>
         value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON &&
-        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF &&
+        value !== MIGRATION_SKILL_SELECTION_SKIP,
     );
   }
   return selectedValues.filter(

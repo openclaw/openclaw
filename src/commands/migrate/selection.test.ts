@@ -218,6 +218,27 @@ describe("applyMigrationSkillSelection", () => {
         selectable,
       ),
     ).toEqual(["skill:alpha"]);
+
+    expect(
+      reconcileInteractiveMigrationSkillToggleValues(
+        [
+          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+          "skill:alpha",
+          "skill:beta",
+          MIGRATION_SKILL_SELECTION_SKIP,
+        ],
+        MIGRATION_SKILL_SELECTION_SKIP,
+        selectable,
+      ),
+    ).toEqual([MIGRATION_SKILL_SELECTION_SKIP]);
+
+    expect(
+      reconcileInteractiveMigrationSkillToggleValues(
+        [MIGRATION_SKILL_SELECTION_SKIP, "skill:alpha"],
+        "skill:alpha",
+        selectable,
+      ),
+    ).toEqual(["skill:alpha"]);
   });
 
   it("rejects unknown explicit skill selectors with available choices", () => {
