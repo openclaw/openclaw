@@ -4,6 +4,7 @@ import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-ru
 const DEFAULT_INWORLD_BASE_URL = "https://api.inworld.ai";
 export const DEFAULT_INWORLD_VOICE_ID = "Sarah";
 export const DEFAULT_INWORLD_MODEL_ID = "inworld-tts-2";
+const INWORLD_USER_AGENT = "openclaw";
 
 export const INWORLD_TTS_MODELS = [
   "inworld-tts-2",
@@ -80,6 +81,7 @@ export async function inworldTTS(params: {
         // credential. Do not Base64-encode it here, and do not normalize
         // bearer-style tokens.
         Authorization: `Basic ${params.apiKey}`,
+        "X-User-Agent": INWORLD_USER_AGENT,
       },
       body: requestBody,
     },
@@ -150,6 +152,7 @@ export async function listInworldVoices(params: {
       method: "GET",
       headers: {
         Authorization: `Basic ${params.apiKey}`,
+        "X-User-Agent": INWORLD_USER_AGENT,
       },
     },
     timeoutMs: params.timeoutMs,
