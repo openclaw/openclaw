@@ -1074,9 +1074,12 @@ describe("active-memory plugin", () => {
       "Your job is to search memory and return only the most relevant memory context for that model.",
     );
     expect(runParams?.prompt).toContain(
-      "You receive conversation context, including the user's latest message.",
+      "You receive a bounded search query plus conversation context, including the user's latest message.",
     );
     expect(runParams?.prompt).toContain("Use only the available memory tools.");
+    expect(runParams?.prompt).toContain(
+      "Use the bounded search query as the memory_search or memory_recall query.",
+    );
     expect(runParams?.prompt).toContain("Prefer memory_recall when available.");
     expect(runParams?.prompt).toContain(
       "If memory_recall is unavailable, use memory_search and memory_get.",
@@ -2753,6 +2756,33 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("skips colon-containing session-store channels for embedded recall (#77396)", async () => {
+    hoisted.sessionStore["agent:main:qqbot:direct:12345"] = {
+      sessionId: "session-a",
+      updatedAt: 25,
+      channel: "c2c:10D4F7C2",
+      origin: {
+        provider: "qqbot",
+      },
+    };
+
+    await hooks.before_prompt_build(
+      { prompt: "what wings should i order? scoped stored channel", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:qqbot:direct:12345",
+        messageProvider: "qqbot",
+        channelId: "qqbot",
+      },
+    );
+
+    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]).toMatchObject({
+      messageChannel: "qqbot",
+      messageProvider: "qqbot",
+    });
+  });
+
   it("preserves an explicit real channel hint over a stale stored wrapper channel", async () => {
     hoisted.sessionStore["agent:main:telegram:direct:12345"] = {
       sessionId: "session-a",
@@ -2867,8 +2897,52 @@ describe("active-memory plugin", () => {
     );
 
     const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain("Bounded memory search query:\nwhat should i grab on the way?");
     expect(prompt).toContain("Conversation context:\nwhat should i grab on the way?");
     expect(prompt).not.toContain("Recent conversation tail:");
+  });
+
+  it("sends a bounded latest-message query instead of channel metadata to memory search", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      queryMode: "recent",
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: [
+          "Conversation info:",
+          "Sender: discord:user-123",
+          "Untrusted Discord message body",
+          "---",
+          "do you remember my flight preferences?",
+        ].join("\n"),
+        messages: [
+          { role: "user", content: "i have a flight tomorrow" },
+          { role: "assistant", content: "got it" },
+        ],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.prompt;
+    expect(prompt).toContain(
+      "Bounded memory search query:\ndo you remember my flight preferences?",
+    );
+    expect(prompt).toContain(
+      "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
+    );
+    expect(prompt).toContain("Conversation context:");
+    expect(prompt).toContain("Conversation info:");
+    expect(prompt).not.toContain("Bounded memory search query:\nConversation info:");
+    expect(prompt).not.toContain("Bounded memory search query:\nSender:");
+    expect(prompt).not.toContain("Bounded memory search query:\nUntrusted Discord message body");
   });
 
   it("supports full mode by sending the whole conversation", async () => {
@@ -3209,7 +3283,6 @@ describe("active-memory plugin", () => {
         `^${escapeRegExp(expectedDir)}${escapeRegExp(path.sep)}active-memory-[a-z0-9]+-[a-f0-9]{8}\\.jsonl$`,
       ),
     );
-    expect(rmSpy).not.toHaveBeenCalled();
     expect(
       vi
         .mocked(api.logger.info)
@@ -3217,6 +3290,7 @@ describe("active-memory plugin", () => {
           String(call[0]).includes(`transcript=${expectedDir}${path.sep}`),
         ),
     ).toBe(true);
+    expect(rmSpy.mock.calls.some(([target]) => String(target).startsWith(expectedDir))).toBe(false);
   });
 
   it("falls back to the default transcript directory when transcriptDir is unsafe", async () => {
