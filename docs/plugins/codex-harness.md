@@ -1094,6 +1094,15 @@ turn for that agent must be a Codex-supported OpenAI model.
 the gateway to clear stale native hook registrations. If `computer-use.list_apps`
 times out, restart Codex Computer Use or Codex Desktop and retry.
 
+**Codex backends fail with `401 token_revoked` or `refresh_token_reused`:**
+multiple isolated `CODEX_HOME` directories are sharing one OAuth token set and
+refreshing independently, so one backend's refresh invalidates the others. See
+the [App-server connection and policy](#app-server-connection-and-policy)
+section above for the OAuth ownership boundary, and the
+[isolated-OAuth ownership note in the OpenAI provider docs](/providers/openai#getting-started)
+for the safe setups: one `codex login` per isolated home, or one
+OpenClaw-managed shared profile that mirrors fresh credentials.
+
 ## Related
 
 - [Agent harness plugins](/plugins/sdk-agent-harness)

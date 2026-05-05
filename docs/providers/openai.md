@@ -220,6 +220,31 @@ Choose your preferred auth method and follow the setup steps.
     that owns refresh and mirrors the fresh credentials.
     </Note>
 
+    The shared-profile setup looks like this in practice — one OpenClaw
+    `openai-codex` auth profile owns refresh, and every isolated agent reuses
+    that same profile id. OpenClaw refreshes the token once per rotation
+    window and then mirrors the fresh credentials into each isolated
+    `CODEX_HOME` deliberately, so no two agent homes race to refresh:
+
+    ```json5
+    {
+      // Sign in once: openclaw models auth login --provider openai-codex
+      // OpenClaw owns refresh for this single profile.
+      plugins: { entries: { codex: { enabled: true } } },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          agentRuntime: { id: "codex" },
+          // Every agent points at the same OpenClaw-managed profile.
+          // OpenClaw mirrors the latest refreshed credentials into the
+          // isolated CODEX_HOME for each launch instead of letting the
+          // app-server backends refresh independently.
+          auth: { profile: "openai-codex:default" },
+        },
+      },
+    }
+    ```
+
     ### Route summary
 
     | Model ref | Runtime config | Route | Auth |
