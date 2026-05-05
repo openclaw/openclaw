@@ -3,7 +3,7 @@ export {
   resolveSafeInstallDir,
   safeDirName,
   safePathSegmentHashed,
-} from "@openclaw/fs-safe/install-path";
+} from "@openclaw/fs-safe/advanced";
 
 export function unscopedPackageName(name: string): string {
   const trimmed = name.trim();

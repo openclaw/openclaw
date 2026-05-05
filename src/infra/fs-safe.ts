@@ -8,19 +8,16 @@ export {
   type AbsolutePathSymlinkPolicy,
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
-} from "@openclaw/fs-safe/absolute-path";
+} from "@openclaw/fs-safe/advanced";
 export { isPathInside } from "@openclaw/fs-safe/path";
-export { pathExists, pathExistsSync } from "@openclaw/fs-safe/fs";
-export {
-  readLocalFileFromRoots,
-  resolveLocalPathFromRootsSync,
-} from "@openclaw/fs-safe/local-roots";
+export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   readPrivateJson,
   readPrivateJsonSync,
   readPrivateText,
   readPrivateTextSync,
-} from "@openclaw/fs-safe/private-file-store";
+} from "@openclaw/fs-safe/store";
 export {
   appendRegularFile,
   appendRegularFileSync,
@@ -37,7 +34,7 @@ export {
   type OpenResult,
   type ReadResult,
 } from "@openclaw/fs-safe/root";
-export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/filename";
+export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export {
   readSecureFile,
   type SecureFileReadOptions,
@@ -50,4 +47,4 @@ export {
   type WalkDirectoryOptions,
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
-export { withTimeout } from "@openclaw/fs-safe/timing";
+export { withTimeout } from "@openclaw/fs-safe/advanced";

@@ -1,1 +1,1 @@
-export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/filename";
+export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";

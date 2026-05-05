@@ -1,4 +1,4 @@
-import { pathExists } from "@openclaw/fs-safe/fs";
+import { pathExists } from "@openclaw/fs-safe/advanced";
 import { tryReadJson, tryReadJsonSync, writeJson, writeJsonSync } from "@openclaw/fs-safe/json";
 
 /** Read small JSON blobs synchronously for token/state caches. */

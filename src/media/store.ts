@@ -5,7 +5,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { fileStore } from "@openclaw/fs-safe";
+import { fileStore } from "@openclaw/fs-safe/store";
 import { sanitizeUntrustedFileName } from "../infra/filename.js";
 import { isPathInside } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";

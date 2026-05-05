@@ -8,4 +8,4 @@ export {
   writePrivateSecretFileAtomic,
   type SecretFileReadOptions,
   type SecretFileReadResult,
-} from "@openclaw/fs-safe/secret-file";
+} from "@openclaw/fs-safe/secret";

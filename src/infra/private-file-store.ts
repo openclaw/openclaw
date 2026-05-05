@@ -9,4 +9,4 @@ export {
   writePrivateTextAtomic,
   writePrivateTextAtomicSync,
   type PrivateFileStore,
-} from "@openclaw/fs-safe/private-file-store";
+} from "@openclaw/fs-safe/store";

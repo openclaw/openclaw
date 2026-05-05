@@ -8,4 +8,4 @@ export {
   type RootFileOpenFailure,
   type RootFileOpenFailureReason,
   type RootFileOpenResult,
-} from "@openclaw/fs-safe/root-file";
+} from "@openclaw/fs-safe/advanced";

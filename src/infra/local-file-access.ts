@@ -5,4 +5,4 @@ export {
   isWindowsNetworkPath,
   safeFileURLToPath,
   trySafeFileURLToPath,
-} from "@openclaw/fs-safe/local-file-access";
+} from "@openclaw/fs-safe/advanced";

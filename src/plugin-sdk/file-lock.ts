@@ -1,4 +1,4 @@
-import { createSidecarLockManager } from "@openclaw/fs-safe/sidecar-lock";
+import { createSidecarLockManager } from "@openclaw/fs-safe/advanced";
 import { isPidAlive } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
