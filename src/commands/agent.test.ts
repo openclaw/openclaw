@@ -411,6 +411,7 @@ describe("agentCommand", () => {
       expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
       const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
         .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
       expect(persistArgs?.body).toBe("hello from user");
       expect(persistArgs?.result.meta?.executionTrace?.runner).toBe("embedded");
     });

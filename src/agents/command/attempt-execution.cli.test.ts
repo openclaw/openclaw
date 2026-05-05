@@ -418,6 +418,63 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("embedded assistant gap-fill skips user mirror and dedupes identical assistant tails", async () => {
+    const sessionKey = "agent:main:subagent:embedded-gap-fill";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-embedded-gap-fill",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const result = makeCliResult("already mirrored");
+    result.meta.executionTrace = {
+      winnerProvider: "anthropic",
+      winnerModel: "claude-opus-4-6",
+      fallbackUsed: false,
+      runner: "embedded",
+    };
+
+    const updatedFirst = await persistCliTurnTranscript({
+      body: "ignored for gap fill",
+      transcriptBody: "also ignored",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    let messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "already mirrored" }],
+    });
+
+    await persistCliTurnTranscript({
+      body: "still ignored",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: updatedFirst,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
+    expect(messages).toHaveLength(1);
+  });
+
   it("persists the transcript body instead of runtime-only CLI prompt context", async () => {
     const sessionKey = "agent:main:subagent:cli-transcript-clean";
     const sessionEntry: SessionEntry = {

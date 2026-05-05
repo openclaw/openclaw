@@ -1212,6 +1212,7 @@ async function agentCommandInternal(
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
           config: cfg,
+          embeddedAssistantGapFill: transcriptPersistenceRunner === "embedded",
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()

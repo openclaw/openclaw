@@ -69,7 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/sessions: persist embedded-runtime assistant replies to session transcript JSONL (same path as CLI turns), fixing missing assistant text after tool calls for webchat/Feishu-style embedded sessions. Fixes #77823.
+- Agents/sessions: after embedded Pi runs, append assistant-visible reply text to session JSONL only when Pi did not already persist an equivalent tail assistant entry (embedded assistant gap-fill), without re-mirroring the user prompt Pi owns. Fixes #77823.
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.
