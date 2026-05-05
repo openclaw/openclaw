@@ -140,7 +140,7 @@ describe("resolveGatewayConnection", () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
     await expect(resolveGatewayConnection({ url: "wss://override.example/ws" })).rejects.toThrow(
-      "explicit credentials",
+      /remove --url/i,
     );
   });
 
