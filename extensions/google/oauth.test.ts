@@ -876,4 +876,29 @@ describe("loginGeminiCliOAuth", () => {
     expect(result.projectId).toBeUndefined();
     expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
   });
+
+  it("refreshes Gemini CLI OAuth tokens without loadCodeAssist in personal OAuth mode", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const { requests } = installGeminiOAuthFetchMock(() => undefined);
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const result = await refreshTokensForGeminiCli({ refresh: "refresh-token" });
+
+    expect(result).toMatchObject({
+      access: "access-token",
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+      projectId: undefined,
+    });
+    expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
+  });
 });
