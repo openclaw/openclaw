@@ -5,6 +5,11 @@ import {
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
 import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
+import {
+  buildCatalogDisplayLookup,
+  buildQualifiedChatModelValue,
+  formatCatalogEntryDisplay,
+} from "../chat-model-ref.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
@@ -640,13 +645,44 @@ type ConfiguredModelOption = {
   label: string;
 };
 
+function buildQualifiedModelValue(entry: ModelCatalogEntry): string {
+  return buildQualifiedChatModelValue(entry.id, entry.provider);
+}
+
+function isAliasCoveredByCatalogLabel(
+  alias: string,
+  value: string,
+  entry: ModelCatalogEntry,
+  catalogLabel: string,
+) {
+  const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
+  if (!normalizedAlias) {
+    return true;
+  }
+  if (
+    normalizedAlias === normalizeLowercaseStringOrEmpty(value) ||
+    normalizedAlias === normalizeLowercaseStringOrEmpty(entry.id) ||
+    normalizedAlias === normalizeLowercaseStringOrEmpty(entry.alias ?? "")
+  ) {
+    return true;
+  }
+  const labelWords = new Set(catalogLabel.toLowerCase().split(/[^a-z0-9.]+/));
+  return labelWords.has(normalizedAlias);
+}
+
 function resolveConfiguredModels(
   configForm: Record<string, unknown> | null,
+  catalog?: ModelCatalogEntry[],
 ): ConfiguredModelOption[] {
   const cfg = configForm as ConfigSnapshot | null;
   const models = cfg?.agents?.defaults?.models;
   if (!models || typeof models !== "object") {
     return [];
+  }
+  const displayLookup = buildCatalogDisplayLookup(catalog ?? []);
+  const catalogByValue = new Map<string, ModelCatalogEntry>();
+  for (const entry of catalog ?? []) {
+    catalogByValue.set(normalizeLowercaseStringOrEmpty(buildQualifiedModelValue(entry)), entry);
   }
   const options: ConfiguredModelOption[] = [];
   for (const [modelId, modelRaw] of Object.entries(models)) {
@@ -660,7 +696,17 @@ function resolveConfiguredModels(
           ? (modelRaw as { alias?: string }).alias?.trim()
           : undefined
         : undefined;
-    const label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
+    const catalogEntry = catalogByValue.get(normalizeLowercaseStringOrEmpty(trimmed));
+    let label = alias && alias !== trimmed ? `${alias} (${trimmed})` : trimmed;
+    if (catalogEntry) {
+      const catalogLabel = formatCatalogEntryDisplay(catalogEntry, displayLookup);
+      label =
+        alias &&
+        alias !== trimmed &&
+        !isAliasCoveredByCatalogLabel(alias, trimmed, catalogEntry, catalogLabel)
+          ? `${alias} (${catalogLabel})`
+          : catalogLabel;
+    }
     options.push({ value: trimmed, label });
   }
   return options;
@@ -684,16 +730,14 @@ export function buildModelOptions(
     options.push({ value, label });
   };
 
-  for (const opt of resolveConfiguredModels(configForm)) {
+  for (const opt of resolveConfiguredModels(configForm, catalog)) {
     addOption(opt.value, opt.label);
   }
 
   if (catalog) {
+    const displayLookup = buildCatalogDisplayLookup(catalog);
     for (const entry of catalog) {
-      const provider = entry.provider?.trim();
-      const value = provider ? `${provider}/${entry.id}` : entry.id;
-      const label = provider ? `${entry.id} · ${provider}` : entry.id;
-      addOption(value, label);
+      addOption(buildQualifiedModelValue(entry), formatCatalogEntryDisplay(entry, displayLookup));
     }
   }
 
