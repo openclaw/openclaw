@@ -1651,8 +1651,12 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   const debug = extractActiveMemorySearchDebugFromSessionRecord(value);
   const results = Array.isArray(details?.results) ? details.results : undefined;
   const disabled = details?.disabled === true;
-  const unavailable =
-    disabled || Boolean(debug?.warning) || Boolean(debug?.error) || Boolean(details?.error);
+  // A warning alone is not a hard failure: it indicates a degraded but
+  // operational state (e.g. embedding provider slow, fallback mode active).
+  // Including Boolean(debug?.warning) here caused every search with any
+  // advisory warning to abort the sub-agent immediately with status=empty
+  // (#77864). Only treat the search as unavailable for explicit hard failures.
+  const unavailable = disabled || Boolean(debug?.error) || Boolean(details?.error);
   const debugHits =
     typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined;
   const zeroHitSearch = results !== undefined ? results.length === 0 : debugHits === 0;
