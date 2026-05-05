@@ -866,6 +866,94 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("propagates unreadable phase-signal store errors without overwriting existing signals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier cadence",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      const key = ranked[0]?.key;
+      expect(key).toBeTruthy();
+      if (!key) {
+        throw new Error("expected ranked candidate key");
+      }
+
+      const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const existingRaw = `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-01T10:00:00.000Z",
+          entries: {
+            [key]: {
+              key,
+              lightHits: 2,
+              remHits: 1,
+              lastLightAt: "2026-04-01T10:00:00.000Z",
+              lastRemAt: "2026-04-02T10:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(phaseStorePath, existingRaw, "utf-8");
+
+      const realReadFile = fs.readFile.bind(fs);
+      const readSpy = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+        const targetPath =
+          typeof target === "string"
+            ? target
+            : Buffer.isBuffer(target)
+              ? target.toString("utf-8")
+              : target instanceof URL
+                ? target.pathname
+                : "";
+        if (targetPath === phaseStorePath) {
+          const err = new Error("permission denied") as NodeJS.ErrnoException;
+          err.code = "EACCES";
+          throw err;
+        }
+        return realReadFile(target, options as never) as never;
+      });
+
+      try {
+        await expect(
+          recordDreamingPhaseSignals({
+            workspaceDir,
+            phase: "rem",
+            keys: [key],
+            nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+          }),
+        ).rejects.toMatchObject({
+          code: "EACCES",
+        });
+      } finally {
+        readSpy.mockRestore();
+      }
+
+      expect(await fs.readFile(phaseStorePath, "utf-8")).toBe(existingRaw);
+    });
+  });
+
   it("reconciles existing promotion markers instead of appending duplicates", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
