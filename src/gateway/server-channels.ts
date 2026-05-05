@@ -13,6 +13,7 @@ import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/bac
 import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
+import { isTerminalChannelError } from "../infra/terminal-channel-error.js";
 import {
   createSubsystemLogger,
   runtimeForLogger,
@@ -216,6 +217,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const restartAttempts = new Map<string, number>();
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
+  // Tracks accounts that exited with a terminal (non-recoverable) error.
+  const terminalErrors = new Set<string>();
 
   const restartKey = (channelId: ChannelId, accountId: string) => `${channelId}:${accountId}`;
   const ensureChannelLog = (channelId: ChannelId): SubsystemLogger => {
@@ -461,6 +464,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!preserveManualStop) {
             manuallyStopped.delete(rKey);
           }
+          terminalErrors.delete(rKey);
 
           if (abort.signal.aborted || manuallyStopped.has(rKey)) {
             setRuntime(channelId, id, {
@@ -535,6 +539,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
+              if (isTerminalChannelError(err)) {
+                terminalErrors.add(rKey);
+              }
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
@@ -545,7 +552,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               });
             })
             .then(async () => {
-              if (manuallyStopped.has(rKey)) {
+              if (manuallyStopped.has(rKey) || terminalErrors.has(rKey)) {
                 return;
               }
               const attempt = (restartAttempts.get(rKey) ?? 0) + 1;
