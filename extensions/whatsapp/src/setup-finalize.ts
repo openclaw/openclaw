@@ -180,7 +180,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
       if (!raw) {
         return "Required";
       }
-      const normalized = normalizeE164(raw);
+      const normalized = normalizeWhatsAppAllowFromEntry(raw);
       if (!normalized) {
         return `Invalid number: ${raw}`;
       }
