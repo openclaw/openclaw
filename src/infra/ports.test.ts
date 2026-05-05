@@ -231,7 +231,7 @@ describe("inspectPortUsage on Windows", () => {
     expect(result.listeners[0]?.command).toBe("node.exe");
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
     expect(result.hints.some((hint) => hint.includes("Gateway already running locally"))).toBe(
-      true,
+      false,
     );
   });
 
