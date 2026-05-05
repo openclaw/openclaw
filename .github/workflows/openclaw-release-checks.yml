@@ -232,9 +232,6 @@ jobs:
           set -euo pipefail
           qa_live_matrix_enabled=true
           qa_live_telegram_enabled=true
-          qa_live_discord_enabled=false
-          qa_live_whatsapp_enabled=false
-          qa_live_slack_enabled=false
           qa_live_discord_ci_enabled="$(printf '%s' "$RELEASE_QA_DISCORD_LIVE_CI_ENABLED" | tr '[:upper:]' '[:lower:]')"
           if [[ "$qa_live_discord_ci_enabled" != "true" && "$qa_live_discord_ci_enabled" != "1" && "$qa_live_discord_ci_enabled" != "yes" ]]; then
             qa_live_discord_ci_enabled=false
@@ -253,6 +250,9 @@ jobs:
           else
             qa_live_slack_ci_enabled=true
           fi
+          qa_live_discord_enabled="$qa_live_discord_ci_enabled"
+          qa_live_whatsapp_enabled="$qa_live_whatsapp_ci_enabled"
+          qa_live_slack_enabled="$qa_live_slack_ci_enabled"
           run_release_soak="$(printf '%s' "$RELEASE_RUN_RELEASE_SOAK_INPUT" | tr '[:upper:]' '[:lower:]')"
           if [[ "$run_release_soak" != "true" && "$run_release_soak" != "1" && "$run_release_soak" != "yes" ]]; then
             run_release_soak=false
@@ -283,11 +283,16 @@ jobs:
                   qa_filter_seen=true
                   matrix_selected=true
                   telegram_selected=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
+                  slack_selected="$qa_live_slack_ci_enabled"
                   ;;
                 qa-live-non-slack|qa-non-slack|non-slack|no-slack|without-slack)
                   qa_filter_seen=true
                   matrix_selected=true
                   telegram_selected=true
+                  discord_selected="$qa_live_discord_ci_enabled"
+                  whatsapp_selected="$qa_live_whatsapp_ci_enabled"
                   ;;
                 qa-live-matrix|qa-matrix|matrix)
                   qa_filter_seen=true
