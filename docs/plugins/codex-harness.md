@@ -423,6 +423,39 @@ OpenClaw session and the Codex harness creates or resumes its sidecar app-server
 thread as needed. `/reset` clears the OpenClaw session binding for that thread
 and lets the next turn resolve the harness from current config again.
 
+### OAuth refresh ownership rule
+
+Local app-server launches give each agent an isolated `CODEX_HOME` and `HOME`
+under that agent's OpenClaw state. Codex OAuth refresh tokens rotate on every
+use, so each isolated Codex home must have exactly one refresh owner. If the
+same Codex OAuth token set is copied into multiple isolated homes and each
+backend refreshes independently, the surviving session invalidates the others
+and reads:
+
+```text
+401 token_revoked
+refresh_token_reused
+```
+
+Pick one of these setups per isolated agent:
+
+- **Per-agent Codex sign-in**: run `codex login` (or the OpenClaw onboarding
+  flow) once inside each agent's `CODEX_HOME`. Each backend then refreshes its
+  own token set without racing the others.
+- **Single canonical OpenClaw auth profile**: point the agents at one shared
+  OpenClaw `openai-codex` auth profile. OpenClaw refreshes it through a single
+  locked owner and mirrors valid credentials to each agent.
+
+Do not manually copy one Codex OAuth token set into multiple isolated agent
+homes and let each backend refresh on its own. If a refresh-token reuse error
+has already fired, re-authenticate the affected agents and switch to one of the
+safe setups above.
+
+For the matching provider-side route table that distinguishes
+`openai/gpt-5.5` + `agentRuntime.id: "codex"` from the direct
+`openai-codex/gpt-*` PI route, see
+[OpenAI provider OAuth ownership](/providers/openai#oauth-ownership-for-isolated-agents).
+
 ## Model discovery
 
 By default, the Codex plugin asks the app-server for available models. If
