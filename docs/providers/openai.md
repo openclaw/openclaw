@@ -73,19 +73,38 @@ through PI, `openclaw doctor` warns and leaves the route unchanged.
 
 ## OpenClaw feature coverage
 
-| OpenAI capability         | OpenClaw surface                                           | Status                                                 |
-| ------------------------- | ---------------------------------------------------------- | ------------------------------------------------------ |
-| Chat / Responses          | `openai/<model>` model provider                            | Yes                                                    |
-| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth           | Yes                                                    |
-| Codex app-server harness  | `openai/<model>` with `agentRuntime.id: codex`             | Yes                                                    |
-| Server-side web search    | Native OpenAI Responses tool                               | Yes, when web search is enabled and no provider pinned |
-| Images                    | `image_generate`                                           | Yes                                                    |
-| Videos                    | `video_generate`                                           | Yes                                                    |
-| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                  | Yes                                                    |
-| Batch speech-to-text      | `tools.media.audio` / media understanding                  | Yes                                                    |
-| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                  | Yes                                                    |
-| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes                                                    |
-| Embeddings                | memory embedding provider                                  | Yes                                                    |
+| OpenAI capability         | OpenClaw surface                                           | Status                                                                     |
+| ------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Chat / Responses          | `openai/<model>` model provider                            | Yes                                                                        |
+| Codex subscription models | `openai-codex/<model>` with `openai-codex` OAuth           | Yes                                                                        |
+| Codex app-server harness  | `openai/<model>` with `agentRuntime.id: codex`             | Yes                                                                        |
+| Server-side web search    | Native OpenAI Responses tool                               | Yes, when web search is enabled and no provider pinned                     |
+| Images                    | `image_generate`                                           | Yes                                                                        |
+| Videos                    | `video_generate`                                           | Yes                                                                        |
+| Text-to-speech            | `messages.tts.provider: "openai"` / `tts`                  | Yes                                                                        |
+| Batch speech-to-text      | `tools.media.audio` / media understanding                  | Yes                                                                        |
+| Streaming speech-to-text  | Voice Call `streaming.provider: "openai"`                  | Yes                                                                        |
+| Realtime voice            | Voice Call `realtime.provider: "openai"` / Control UI Talk | Yes (requires OpenAI Platform API credits, not Codex/ChatGPT subscription) |
+| Embeddings                | memory embedding provider                                  | Yes                                                                        |
+
+<Note>
+  OpenAI Realtime voice (used by Voice Call's `realtime.provider: "openai"` and
+  Control UI Talk with `talk.provider: "openai"`) goes through the public
+  **OpenAI Platform Realtime API** — it requires an `OPENAI_API_KEY` whose
+  organization has funded Platform credits. Codex/ChatGPT subscription quota
+  does **not** apply: an account with healthy Codex OAuth that runs
+  `openai-codex/*` chat models without issue can still hit
+  `insufficient_quota` / "You exceeded your current quota" on the first
+  Realtime turn if the same OpenAI organization has no Platform billing set
+  up. The `openai-codex` provider is not registered as a realtime voice
+  provider for the same reason.
+
+Fix: top up Platform credits at
+[platform.openai.com/account/billing](https://platform.openai.com/account/billing)
+and configure `OPENAI_API_KEY` (or `talk.providers.openai.apiKey` for Control UI Talk, or `plugins.entries.voice-call.config.realtime.providers.openai.apiKey` for Voice Call) with a key from that organization. For chat
+turns you can still use `openai-codex/*` against the same OpenClaw install —
+Realtime is the one route that needs Platform billing.
+</Note>
 
 ## Memory embeddings
 
