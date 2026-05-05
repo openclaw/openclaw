@@ -1,9 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import { readPrivateJson, writePrivateJsonAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   deriveConceptTags,
@@ -758,9 +759,13 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
   const storePath = resolveStorePath(workspaceDir);
   try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    return normalizeStore(parsed, nowIso);
+    return normalizeStore(
+      await readPrivateJson<unknown>({
+        rootDir: workspaceDir,
+        filePath: storePath,
+      }),
+      nowIso,
+    );
   } catch (err) {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
       return emptyStore(nowIso);
@@ -830,13 +835,14 @@ async function readPhaseSignalStore(
 ): Promise<ShortTermPhaseSignalStore> {
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   try {
-    const raw = await fs.readFile(phaseSignalPath, "utf-8");
-    return normalizePhaseSignalStore(JSON.parse(raw) as unknown, nowIso);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
-      return emptyPhaseSignalStore(nowIso);
-    }
+    return normalizePhaseSignalStore(
+      await readPrivateJson<unknown>({
+        rootDir: workspaceDir,
+        filePath: phaseSignalPath,
+      }),
+      nowIso,
+    );
+  } catch {
     return emptyPhaseSignalStore(nowIso);
   }
 }
@@ -847,17 +853,23 @@ async function writePhaseSignalStore(
 ): Promise<void> {
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  const tmpPath = `${phaseSignalPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, phaseSignalPath);
+  await writePrivateJsonAtomic({
+    rootDir: workspaceDir,
+    filePath: phaseSignalPath,
+    value: store,
+    trailingNewline: true,
+  });
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, storePath);
+  await writePrivateJsonAtomic({
+    rootDir: workspaceDir,
+    filePath: storePath,
+    value: store,
+    trailingNewline: true,
+  });
 }
 
 export function isShortTermMemoryPath(filePath: string): boolean {

@@ -17,9 +17,21 @@ export {
 export * from "../security/external-content.js";
 export * from "../security/safe-regex.js";
 export {
-  SafeOpenError,
-  openFileWithinRoot,
-  writeFileFromPathWithinRoot,
+  appendRegularFile,
+  appendRegularFileSync,
+  FsSafeError,
+  pathExists,
+  pathExistsSync,
+  readPrivateJson,
+  readPrivateJsonSync,
+  readPrivateText,
+  readPrivateTextSync,
+  resolveLocalPathFromRootsSync,
+  readRegularFileSync,
+  resolveRegularFileAppendFlags,
+  root,
+  statRegularFileSync,
+  withTimeout,
 } from "../infra/fs-safe.js";
 export { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
@@ -34,8 +46,59 @@ export {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 export { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+export {
+  assertAbsolutePathInput,
+  canonicalPathFromExistingAncestor,
+  findExistingAncestor,
+  resolveAbsolutePathForRead,
+  resolveAbsolutePathForWrite,
+  type AbsolutePathSymlinkPolicy,
+  type ResolvedAbsolutePath,
+  type ResolvedWritableAbsolutePath,
+} from "../infra/fs-safe.js";
+export { sanitizeUntrustedFileName } from "../infra/filename.js";
+export {
+  privateFileStore,
+  writePrivateJsonAtomic,
+  writePrivateJsonAtomicSync,
+  writePrivateTextAtomic,
+  writePrivateTextAtomicSync,
+  type PrivateFileStore,
+} from "../infra/private-file-store.js";
+export {
+  replaceFileAtomic,
+  replaceFileAtomicSync,
+  type ReplaceFileAtomicFileSystem,
+  type ReplaceFileAtomicOptions,
+  type ReplaceFileAtomicResult,
+  type ReplaceFileAtomicSyncFileSystem,
+  type ReplaceFileAtomicSyncOptions,
+} from "../infra/replace-file.js";
+export {
+  movePathWithCopyFallback,
+  type MovePathWithCopyFallbackOptions,
+} from "../infra/move-path.js";
+export {
+  writeSiblingTempFile,
+  type WriteSiblingTempFileOptions,
+  type WriteSiblingTempFileResult,
+} from "../infra/sibling-temp-file.js";
+export {
+  assertNoSymlinkParents,
+  assertNoSymlinkParentsSync,
+  type AssertNoSymlinkParentsOptions,
+} from "../infra/symlink-parents.js";
 export { ensurePortAvailable } from "../infra/ports.js";
 export { generateSecureToken } from "../infra/secure-random.js";
+export {
+  resolveExistingPathsWithinRoot,
+  pathScope,
+  resolvePathsWithinRoot,
+  resolvePathWithinRoot,
+  resolveStrictExistingPathsWithinRoot,
+  resolveWritablePathWithinRoot,
+} from "../infra/root-paths.js";
+export { writeViaSiblingTempPath } from "../infra/sibling-temp-write.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { redactSensitiveText } from "../logging/redact.js";
 export { safeEqualSecret } from "../security/secret-equal.js";

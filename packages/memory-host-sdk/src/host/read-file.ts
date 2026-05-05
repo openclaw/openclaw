@@ -6,7 +6,7 @@ import {
   resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "./config-utils.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
+import { isFileMissingError, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import {
   buildMemoryReadResult,
@@ -68,7 +68,7 @@ export async function readMemoryFile(params: {
   }
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
   } catch (err) {
     if (isFileMissingError(err)) {
       return { text: "", path: relPath };

@@ -3,12 +3,12 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { openVerifiedFileSync } from "./safe-open-sync.js";
+import { openPinnedFileSync } from "./safe-open-sync.js";
 
-type SafeOpenSyncFs = NonNullable<Parameters<typeof openVerifiedFileSync>[0]["ioFs"]>;
-type SafeOpenSyncLstatSync = SafeOpenSyncFs["lstatSync"];
-type SafeOpenSyncRealpathSync = SafeOpenSyncFs["realpathSync"];
-type SafeOpenSyncFstatSync = SafeOpenSyncFs["fstatSync"];
+type PinnedOpenSyncFs = NonNullable<Parameters<typeof openPinnedFileSync>[0]["ioFs"]>;
+type PinnedOpenSyncLstatSync = PinnedOpenSyncFs["lstatSync"];
+type PinnedOpenSyncRealpathSync = PinnedOpenSyncFs["realpathSync"];
+type PinnedOpenSyncFstatSync = PinnedOpenSyncFs["fstatSync"];
 
 function mockStat(params: {
   isFile?: boolean;
@@ -29,26 +29,26 @@ function mockStat(params: {
   } as unknown as fs.Stats;
 }
 
-function mockRealpathSync(result: string): SafeOpenSyncRealpathSync {
-  const resolvePath = ((_: fs.PathLike) => result) as SafeOpenSyncRealpathSync;
+function mockRealpathSync(result: string): PinnedOpenSyncRealpathSync {
+  const resolvePath = ((_: fs.PathLike) => result) as PinnedOpenSyncRealpathSync;
   resolvePath.native = ((_: fs.PathLike) => result) as typeof resolvePath.native;
   return resolvePath;
 }
 
-function mockLstatSync(read: (filePath: fs.PathLike) => fs.Stats): SafeOpenSyncLstatSync {
-  return ((filePath: fs.PathLike) => read(filePath)) as unknown as SafeOpenSyncLstatSync;
+function mockLstatSync(read: (filePath: fs.PathLike) => fs.Stats): PinnedOpenSyncLstatSync {
+  return ((filePath: fs.PathLike) => read(filePath)) as unknown as PinnedOpenSyncLstatSync;
 }
 
-function mockFstatSync(stat: fs.Stats): SafeOpenSyncFstatSync {
-  return ((_: number) => stat) as unknown as SafeOpenSyncFstatSync;
+function mockFstatSync(stat: fs.Stats): PinnedOpenSyncFstatSync {
+  return ((_: number) => stat) as unknown as PinnedOpenSyncFstatSync;
 }
 
 async function expectOpenFailure(params: {
-  setup: (root: string) => Promise<Parameters<typeof openVerifiedFileSync>[0]>;
+  setup: (root: string) => Promise<Parameters<typeof openPinnedFileSync>[0]>;
   expectedReason: "path" | "validation" | "io";
 }): Promise<void> {
   await withTempDir({ prefix: "openclaw-safe-open-" }, async (root) => {
-    const opened = openVerifiedFileSync(await params.setup(root));
+    const opened = openPinnedFileSync(await params.setup(root));
     expect(opened.ok).toBe(false);
     if (!opened.ok) {
       expect(opened.reason).toBe(params.expectedReason);
@@ -57,7 +57,7 @@ async function expectOpenFailure(params: {
 }
 
 function expectOpenReason(
-  opened: ReturnType<typeof openVerifiedFileSync>,
+  opened: ReturnType<typeof openPinnedFileSync>,
   expectedReason: "path" | "validation" | "io",
 ): void {
   expect(opened.ok).toBe(false);
@@ -67,7 +67,7 @@ function expectOpenReason(
   expect(opened.reason).toBe(expectedReason);
 }
 
-describe("openVerifiedFileSync", () => {
+describe("openPinnedFileSync", () => {
   it.each([
     {
       name: "missing files",
@@ -118,7 +118,7 @@ describe("openVerifiedFileSync", () => {
       const targetDir = path.join(root, "nested");
       await fsp.mkdir(targetDir, { recursive: true });
 
-      const opened = openVerifiedFileSync({
+      const opened = openPinnedFileSync({
         filePath: targetDir,
         allowedType: "directory",
         rejectHardlinks: true,
@@ -137,7 +137,7 @@ describe("openVerifiedFileSync", () => {
       closed.push(fd);
     };
     const closed: number[] = [];
-    const ioFs: SafeOpenSyncFs = {
+    const ioFs: PinnedOpenSyncFs = {
       constants: fs.constants,
       lstatSync: mockLstatSync((filePath) =>
         String(filePath) === "/real/file.txt"
@@ -150,7 +150,7 @@ describe("openVerifiedFileSync", () => {
       closeSync,
     };
 
-    const opened = openVerifiedFileSync({
+    const opened = openPinnedFileSync({
       filePath: "/input/file.txt",
       ioFs,
     });
@@ -159,7 +159,7 @@ describe("openVerifiedFileSync", () => {
   });
 
   it("reports non-path filesystem failures as io errors", () => {
-    const ioFs: SafeOpenSyncFs = {
+    const ioFs: PinnedOpenSyncFs = {
       constants: fs.constants,
       lstatSync: () => {
         const err = new Error("permission denied") as NodeJS.ErrnoException;
@@ -172,7 +172,7 @@ describe("openVerifiedFileSync", () => {
       closeSync: () => {},
     };
 
-    const opened = openVerifiedFileSync({
+    const opened = openPinnedFileSync({
       filePath: "/input/file.txt",
       rejectPathSymlink: true,
       ioFs,

@@ -5,6 +5,7 @@ import {
   parseRealtimeVoiceAgentConsultArgs,
   type RealtimeVoiceAgentConsultResult,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import type { VoiceCallRealtimeFastContextConfig } from "./config.js";
 
 type Logger = {
@@ -74,22 +75,6 @@ function buildMissText(query: string): string {
   ].join("\n\n");
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new RealtimeFastContextTimeoutError(timeoutMs)), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
-}
-
 async function lookupFastContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -138,6 +123,7 @@ export async function resolveRealtimeFastContextConsult(params: {
         query,
       }),
       params.config.timeoutMs,
+      { createError: () => new RealtimeFastContextTimeoutError(params.config.timeoutMs) },
     );
     if (lookup.status === "unavailable") {
       params.logger.debug?.(`[voice-call] realtime fast context unavailable: ${lookup.error}`);

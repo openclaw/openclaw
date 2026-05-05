@@ -5,7 +5,7 @@ import path from "node:path";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
-import { isFileMissingError } from "./fs-utils.js";
+import { isFileMissingError, readRegularFile, statRegularFile } from "./fs-utils.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -148,8 +148,8 @@ export async function listMemoryFiles(
 
   const addMarkdownFile = async (absPath: string) => {
     try {
-      const stat = await fs.lstat(absPath);
-      if (stat.isSymbolicLink() || !stat.isFile()) {
+      const stat = await statRegularFile(absPath);
+      if (stat.missing) {
         return;
       }
       if (!absPath.endsWith(".md")) {
@@ -215,15 +215,11 @@ export async function buildFileEntry(
   workspaceDir: string,
   multimodal?: MemoryMultimodalSettings,
 ): Promise<MemoryFileEntry | null> {
-  let stat;
-  try {
-    stat = await fs.stat(absPath);
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
+  const regularFile = await statRegularFile(absPath);
+  if (regularFile.missing) {
+    return null;
   }
+  const stat = regularFile.stat;
   const normalizedPath = path.relative(workspaceDir, absPath).replace(/\\/g, "/");
   const multimodalSettings = multimodal ?? DISABLED_MULTIMODAL_SETTINGS;
   const modality = classifyMemoryMultimodalPath(absPath, multimodalSettings);
@@ -233,7 +229,12 @@ export async function buildFileEntry(
     }
     let buffer: Buffer;
     try {
-      buffer = await fs.readFile(absPath);
+      buffer = (
+        await readRegularFile({
+          filePath: absPath,
+          maxBytes: multimodalSettings.maxFileBytes,
+        })
+      ).buffer;
     } catch (err) {
       if (isFileMissingError(err)) {
         return null;
@@ -269,7 +270,7 @@ export async function buildFileEntry(
   }
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;
@@ -296,21 +297,17 @@ async function loadMultimodalEmbeddingInput(
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
     return null;
   }
-  let stat;
-  try {
-    stat = await fs.stat(entry.absPath);
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return null;
-    }
-    throw err;
+  const regularFile = await statRegularFile(entry.absPath);
+  if (regularFile.missing) {
+    return null;
   }
+  const stat = regularFile.stat;
   if (stat.size !== entry.size) {
     return null;
   }
   let buffer: Buffer;
   try {
-    buffer = await fs.readFile(entry.absPath);
+    buffer = (await readRegularFile({ filePath: entry.absPath, maxBytes: entry.size })).buffer;
   } catch (err) {
     if (isFileMissingError(err)) {
       return null;

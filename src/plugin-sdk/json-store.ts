@@ -1,7 +1,7 @@
-import fs from "node:fs";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
-import { writeJsonAtomic } from "../infra/json-files.js";
-import { safeParseJson } from "../utils.js";
+import path from "node:path";
+import { pathExists } from "../infra/fs-safe.js";
+import { loadJsonFile, readJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { writePrivateJsonAtomic } from "../infra/private-file-store.js";
 
 /** Read small JSON blobs synchronously for token/state caches. */
 export { loadJsonFile };
@@ -14,27 +14,19 @@ export async function readJsonFileWithFallback<T>(
   filePath: string,
   fallback: T,
 ): Promise<{ value: T; exists: boolean }> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf-8");
-    const parsed = safeParseJson<T>(raw);
-    if (parsed == null) {
-      return { value: fallback, exists: true };
-    }
+  const parsed = await readJsonFile<T>(filePath);
+  if (parsed != null) {
     return { value: parsed, exists: true };
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return { value: fallback, exists: false };
-    }
-    return { value: fallback, exists: false };
   }
+  return { value: fallback, exists: await pathExists(filePath) };
 }
 
 /** Write JSON with secure file permissions and atomic replacement semantics. */
 export async function writeJsonFileAtomically(filePath: string, value: unknown): Promise<void> {
-  await writeJsonAtomic(filePath, value, {
-    mode: 0o600,
+  await writePrivateJsonAtomic({
+    rootDir: path.dirname(filePath),
+    filePath,
+    value,
     trailingNewline: true,
-    ensureDirMode: 0o700,
   });
 }

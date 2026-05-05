@@ -7,6 +7,7 @@ import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
+  withPrivateTempWorkspace,
   withTempDownloadPath,
 } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -747,45 +748,42 @@ async function transcodeToFeishuVoiceOpus(params: {
   fileName: string;
   contentType?: string;
 }): Promise<{ buffer: Buffer; fileName: string; contentType: string }> {
-  const tempRoot = resolvePreferredOpenClawTmpDir();
-  await fs.promises.mkdir(tempRoot, { recursive: true, mode: 0o700 });
-  const tempDir = await fs.promises.mkdtemp(path.join(tempRoot, "feishu-voice-"));
-  try {
-    const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
-    const inputExt = ext && ext.length <= 12 ? ext : ".audio";
-    const inputPath = path.join(tempDir, `input${inputExt}`);
-    const outputPath = path.join(tempDir, FEISHU_VOICE_FILE_NAME);
-    await fs.promises.writeFile(inputPath, params.buffer, { mode: 0o600 });
-    await runFfmpeg([
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-y",
-      "-i",
-      inputPath,
-      "-vn",
-      "-sn",
-      "-dn",
-      "-t",
-      String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
-      "-ar",
-      String(FEISHU_VOICE_SAMPLE_RATE_HZ),
-      "-ac",
-      "1",
-      "-c:a",
-      "libopus",
-      "-b:a",
-      FEISHU_VOICE_BITRATE,
-      outputPath,
-    ]);
-    return {
-      buffer: await fs.promises.readFile(outputPath),
-      fileName: FEISHU_VOICE_FILE_NAME,
-      contentType: "audio/ogg",
-    };
-  } finally {
-    await fs.promises.rm(tempDir, { recursive: true, force: true });
-  }
+  return await withPrivateTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "feishu-voice-" },
+    async (workspace) => {
+      const ext = normalizeLowercaseStringOrEmpty(path.extname(params.fileName));
+      const inputExt = ext && ext.length <= 12 ? ext : ".audio";
+      const inputPath = await workspace.writePrivate(`input${inputExt}`, params.buffer);
+      const outputPath = workspace.path(FEISHU_VOICE_FILE_NAME);
+      await runFfmpeg([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        inputPath,
+        "-vn",
+        "-sn",
+        "-dn",
+        "-t",
+        String(MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS),
+        "-ar",
+        String(FEISHU_VOICE_SAMPLE_RATE_HZ),
+        "-ac",
+        "1",
+        "-c:a",
+        "libopus",
+        "-b:a",
+        FEISHU_VOICE_BITRATE,
+        outputPath,
+      ]);
+      return {
+        buffer: await workspace.read(FEISHU_VOICE_FILE_NAME),
+        fileName: FEISHU_VOICE_FILE_NAME,
+        contentType: "audio/ogg",
+      };
+    },
+  );
 }
 
 async function prepareFeishuVoiceMedia(params: {

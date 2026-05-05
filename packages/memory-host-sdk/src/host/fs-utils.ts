@@ -1,7 +1,4 @@
-import type { Stats } from "node:fs";
-import fs from "node:fs/promises";
-
-export type RegularFileStatResult = { missing: true } | { missing: false; stat: Stats };
+export { readRegularFile, statRegularFile, type RegularFileStatResult } from "@openclaw/fs-safe";
 
 export function isFileMissingError(
   err: unknown,
@@ -12,20 +9,4 @@ export function isFileMissingError(
     "code" in err &&
     (err as Partial<NodeJS.ErrnoException>).code === "ENOENT",
   );
-}
-
-export async function statRegularFile(absPath: string): Promise<RegularFileStatResult> {
-  let stat: Stats;
-  try {
-    stat = await fs.lstat(absPath);
-  } catch (err) {
-    if (isFileMissingError(err)) {
-      return { missing: true };
-    }
-    throw err;
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    throw new Error("path required");
-  }
-  return { missing: false, stat };
 }

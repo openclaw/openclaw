@@ -1,14 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function exists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return await pathExists(filePath);
 }
 
 export async function isDirectory(filePath: string | undefined): Promise<boolean> {

@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __setFsSafeTestHooksForTest } from "../infra/fs-safe.js";
+import { __setFsSafeTestHooksForTest } from "../infra/fs-safe-test-hooks.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { __testing, createExecTool } from "./bash-tools.exec.js";
 

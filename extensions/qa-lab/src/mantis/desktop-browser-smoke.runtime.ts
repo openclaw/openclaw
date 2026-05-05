@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
 
 export type MantisDesktopBrowserSmokeOptions = {
@@ -144,15 +145,6 @@ async function defaultCommandRunner(
       reject(new Error(`${command} ${args.join(" ")} failed with ${detail}`));
     });
   });
-}
-
-async function pathExists(filePath: string) {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function resolveCrabboxBin(params: {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { openVerifiedFileSync } from "../../infra/safe-open-sync.js";
+import { openPinnedFileSync } from "../../infra/safe-open-sync.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import type { ParsedSkillFrontmatter } from "./types.js";
@@ -23,7 +23,7 @@ function readSkillFileSync(params: {
   filePath: string;
   maxBytes?: number;
 }): string | null {
-  const opened = openVerifiedFileSync({
+  const opened = openPinnedFileSync({
     filePath: params.filePath,
     rejectPathSymlink: true,
     maxBytes: params.maxBytes,

@@ -1,5 +1,6 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { writePrivateJsonAtomicSync } from "openclaw/plugin-sdk/security-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
 import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
@@ -158,9 +159,11 @@ export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
 
 export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
   const tokenPath = resolveDelegatedTokenPath();
-  const dir = dirname(tokenPath);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(tokenPath, JSON.stringify(tokens, null, 2), "utf8");
+  writePrivateJsonAtomicSync({
+    rootDir: dirname(tokenPath),
+    filePath: tokenPath,
+    value: tokens,
+  });
 }
 
 export async function resolveDelegatedAccessToken(params: {

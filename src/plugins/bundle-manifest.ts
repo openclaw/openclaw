@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -98,7 +98,7 @@ function loadBundleManifestFile(params: {
   allowMissing?: boolean;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: params.rootDir,
     ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
@@ -106,7 +106,7 @@ function loadBundleManifestFile(params: {
     rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+    return matchRootFileOpenFailure(opened, {
       path: () => {
         if (params.allowMissing) {
           return { ok: true, raw: {}, manifestPath };

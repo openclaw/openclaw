@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ReplyToMode } from "../../config/types.js";
+import { replaceFileAtomic } from "../replace-file.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { OutboundIdentity } from "./identity.js";
@@ -101,12 +102,12 @@ async function unlinkBestEffort(filePath: string): Promise<void> {
 }
 
 async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise<void> {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
+  await replaceFileAtomic({
+    filePath,
+    content: JSON.stringify(entry, null, 2),
+    fileMode: 0o600,
+    tempPrefix: ".delivery-queue",
   });
-  await fs.promises.rename(tmp, filePath);
 }
 
 async function readQueueEntry(filePath: string): Promise<QueuedDelivery> {

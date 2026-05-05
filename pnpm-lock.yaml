@@ -103,6 +103,9 @@ importers:
       '@mozilla/readability':
         specifier: ^0.6.0
         version: 0.6.0
+      '@openclaw/fs-safe':
+        specifier: link:../fs-safe
+        version: link:../fs-safe
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)

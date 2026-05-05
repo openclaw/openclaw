@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { FsSafeError, resolveAbsolutePathForRead } from "openclaw/plugin-sdk/security-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
 
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
@@ -54,6 +55,17 @@ function clampMaxEntries(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): DirListErrCode {
+  if (err instanceof FsSafeError) {
+    if (err.code === "not-found") {
+      return "NOT_FOUND";
+    }
+    if (err.code === "symlink") {
+      return "SYMLINK_REDIRECT";
+    }
+    if (err.code === "invalid-path") {
+      return "INVALID_PATH";
+    }
+  }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
     return "NOT_FOUND";
@@ -86,22 +98,31 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
 
   let canonical: string;
   try {
-    canonical = await fs.realpath(requestedPath);
+    canonical = (
+      await resolveAbsolutePathForRead(requestedPath, {
+        symlinks: followSymlinks ? "follow" : "reject",
+      })
+    ).canonicalPath;
   } catch (err) {
     const code = classifyFsError(err);
+    const canonicalPath =
+      err instanceof FsSafeError &&
+      err.cause &&
+      typeof err.cause === "object" &&
+      "canonicalPath" in err.cause &&
+      typeof err.cause.canonicalPath === "string"
+        ? err.cause.canonicalPath
+        : undefined;
     return {
       ok: false,
       code,
-      message: code === "NOT_FOUND" ? "path not found" : `realpath failed: ${String(err)}`,
-    };
-  }
-
-  if (!followSymlinks && canonical !== requestedPath) {
-    return {
-      ok: false,
-      code: "SYMLINK_REDIRECT",
-      message: `path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)`,
-      canonicalPath: canonical,
+      message:
+        code === "NOT_FOUND"
+          ? "path not found"
+          : code === "SYMLINK_REDIRECT"
+            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
+            : `realpath failed: ${String(err)}`,
+      ...(canonicalPath ? { canonicalPath } : {}),
     };
   }
 

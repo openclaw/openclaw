@@ -3369,10 +3369,8 @@ describe("active-memory plugin", () => {
   });
 
   it("keeps subagent transcripts off disk by default by using a temp session file", async () => {
-    const mkdtempSpy = vi
-      .spyOn(fs, "mkdtemp")
-      .mockResolvedValue("/tmp/openclaw-active-memory-temp");
-    const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
+    const mkdtempSpy = vi.spyOn(fs, "mkdtemp");
+    const rmSpy = vi.spyOn(fs, "rm");
 
     await hooks.before_prompt_build(
       { prompt: "what wings should i order? temp transcript path", messages: [] },
@@ -3385,10 +3383,9 @@ describe("active-memory plugin", () => {
     );
 
     expect(mkdtempSpy).toHaveBeenCalled();
-    expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile).toBe(
-      "/tmp/openclaw-active-memory-temp/session.jsonl",
-    );
-    expect(rmSpy).toHaveBeenCalledWith("/tmp/openclaw-active-memory-temp", {
+    const sessionFile = runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.sessionFile;
+    expect(sessionFile).toMatch(/openclaw-active-memory-.*\/session\.jsonl$/);
+    expect(rmSpy).toHaveBeenCalledWith(path.dirname(sessionFile), {
       recursive: true,
       force: true,
     });

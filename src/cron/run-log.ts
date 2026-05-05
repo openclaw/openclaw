@@ -1,9 +1,10 @@
-import { randomBytes } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
+import { appendRegularFile } from "../infra/fs-safe.js";
+import { writePrivateTextAtomic } from "../infra/private-file-store.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -147,11 +148,11 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
     .map((l) => l.trim())
     .filter(Boolean);
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
-  const tmp = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-  await fs.writeFile(tmp, `${kept.join("\n")}\n`, { encoding: "utf-8", mode: 0o600 });
-  await setSecureFileMode(tmp);
-  await fs.rename(tmp, filePath);
-  await setSecureFileMode(filePath);
+  await writePrivateTextAtomic({
+    rootDir: path.dirname(filePath),
+    filePath,
+    content: `${kept.join("\n")}\n`,
+  });
 }
 
 export async function appendCronRunLog(
@@ -167,9 +168,10 @@ export async function appendCronRunLog(
       const runDir = path.dirname(resolved);
       await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
       await fs.chmod(runDir, 0o700).catch(() => undefined);
-      await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
+      await appendRegularFile({
+        filePath: resolved,
+        content: `${JSON.stringify(entry)}\n`,
+        rejectSymlinkParents: true,
       });
       await setSecureFileMode(resolved);
       await pruneIfNeeded(resolved, {

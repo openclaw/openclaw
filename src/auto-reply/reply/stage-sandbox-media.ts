@@ -7,7 +7,7 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { copyFileWithinRoot, SafeOpenError } from "../../infra/fs-safe.js";
+import { root as fsRoot, FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-host.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
@@ -107,7 +107,7 @@ export async function stageSandboxMedia(params: {
         });
       }
     } catch (err) {
-      if (err instanceof SafeOpenError && err.code === "too-large") {
+      if (err instanceof FsSafeError && err.code === "too-large") {
         logVerbose(
           `Blocking inbound media staging above ${STAGED_MEDIA_MAX_BYTES} bytes: ${source}`,
         );
@@ -139,10 +139,8 @@ async function stageLocalFileIntoRoot(params: {
   relativeDestPath: string;
   maxBytes?: number;
 }): Promise<void> {
-  await copyFileWithinRoot({
-    sourcePath: params.sourcePath,
-    rootDir: params.rootDir,
-    relativePath: params.relativeDestPath,
+  const root = await fsRoot(params.rootDir);
+  await root.copyIn(params.relativeDestPath, params.sourcePath, {
     maxBytes: params.maxBytes,
   });
 }
