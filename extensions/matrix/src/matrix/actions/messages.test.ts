@@ -400,4 +400,98 @@ describe("matrix message actions", () => {
     );
     expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1"]);
   });
+
+  it("keeps main-room pagination cursors aligned while filtering thread replies", async () => {
+    const pages = [
+      {
+        chunk: [
+          {
+            event_id: "$thread-reply-1",
+            sender: "@bob:example.org",
+            type: "m.room.message",
+            origin_server_ts: 30,
+            content: {
+              msgtype: "m.text",
+              body: "hidden thread reply 1",
+              "m.relates_to": {
+                rel_type: "m.thread",
+                event_id: "$thread-root",
+              },
+            },
+          },
+          {
+            event_id: "$thread-reply-2",
+            sender: "@bob:example.org",
+            type: "m.room.message",
+            origin_server_ts: 20,
+            content: {
+              msgtype: "m.text",
+              body: "hidden thread reply 2",
+              "m.relates_to": {
+                rel_type: "m.thread",
+                event_id: "$thread-root",
+              },
+            },
+          },
+        ],
+        start: "start-token",
+        end: "page-1",
+      },
+      {
+        chunk: [
+          {
+            event_id: "$main-1",
+            sender: "@alice:example.org",
+            type: "m.room.message",
+            origin_server_ts: 10,
+            content: {
+              msgtype: "m.text",
+              body: "main room message 1",
+            },
+          },
+          {
+            event_id: "$main-2",
+            sender: "@alice:example.org",
+            type: "m.room.message",
+            origin_server_ts: 5,
+            content: {
+              msgtype: "m.text",
+              body: "main room message 2",
+            },
+          },
+        ],
+        start: "page-1",
+        end: "page-2",
+      },
+    ];
+    const doRequest = vi.fn(
+      async () => pages[doRequest.mock.calls.length - 1] ?? pages[pages.length - 1],
+    );
+    const hydrateEvents = vi.fn(
+      async (_roomId: string, events: Array<Record<string, unknown>>) => events,
+    );
+    const client = {
+      doRequest,
+      hydrateEvents,
+      getEvent: vi.fn(),
+      stop: vi.fn(),
+    } as unknown as MatrixClient;
+
+    const result = await readMatrixMessages("room:!room:example.org", { client, limit: 2 });
+
+    expect(doRequest).toHaveBeenNthCalledWith(
+      1,
+      "GET",
+      expect.stringContaining("/rooms/!room%3Aexample.org/messages"),
+      expect.objectContaining({ limit: 2, from: undefined }),
+    );
+    expect(doRequest).toHaveBeenNthCalledWith(
+      2,
+      "GET",
+      expect.stringContaining("/rooms/!room%3Aexample.org/messages"),
+      expect.objectContaining({ limit: 2, from: "page-1" }),
+    );
+    expect(result.messages.map((message) => message.eventId)).toEqual(["$main-1", "$main-2"]);
+    expect(result.nextBatch).toBe("page-2");
+  });
 });

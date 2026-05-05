@@ -35,6 +35,7 @@ export type { HistoryEntry };
 type HistorySnapshotToken = {
   snapshotIdx: number;
   queueGeneration: number;
+  threadGeneration?: number;
 };
 
 type PreparedTriggerResult = {
@@ -93,6 +94,11 @@ type RoomHistoryTrackerTestApi = RoomHistoryTracker & {
     entry: HistoryEntry,
     threadRootId?: string,
   ) => HistorySnapshotToken;
+
+  /**
+   * Test-only helper for simulating pre-threading watermark state.
+   */
+  recordLegacyWatermarkForTests: (agentId: string, roomId: string, snapshotIdx: number) => void;
 };
 
 type RoomQueue = {
@@ -108,6 +114,7 @@ type RoomQueue = {
 type ThreadSubQueue = {
   entries: HistoryEntry[];
   baseIndex: number;
+  generation: number;
 };
 
 function createRoomHistoryTrackerInternal(
@@ -129,10 +136,12 @@ function createRoomHistoryTrackerInternal(
    */
   const agentWatermarks = new Map<string, number>();
   let nextQueueGeneration = 1;
+  let nextThreadQueueGeneration = 1;
 
   function clearRoomWatermarks(roomId: string): void {
     for (const key of agentWatermarks.keys()) {
-      if (parseWatermarkKey(key)?.roomId === roomId) {
+      const parsed = parseWatermarkKey(key);
+      if (parsed?.roomId === roomId || (!parsed && key.endsWith(`:${roomId}`))) {
         agentWatermarks.delete(key);
       }
     }
@@ -184,6 +193,7 @@ function createRoomHistoryTrackerInternal(
       subQueue = {
         entries: [],
         baseIndex: 0,
+        generation: nextThreadQueueGeneration++,
       };
       queue.threadQueues.set(threadRootId, subQueue);
       if (queue.threadQueues.size > MAX_THREAD_QUEUES_PER_ROOM) {
@@ -224,6 +234,7 @@ function createRoomHistoryTrackerInternal(
     return {
       snapshotIdx: subQueue.baseIndex + subQueue.entries.length,
       queueGeneration: queue.generation,
+      threadGeneration: subQueue.generation,
     };
   }
 
@@ -359,6 +370,10 @@ function createRoomHistoryTrackerInternal(
       return appendToQueue(queue, entry);
     },
 
+    recordLegacyWatermarkForTests(agentId, roomId, snapshotIdx) {
+      rememberWatermark(legacyWmKey(agentId, roomId), snapshotIdx);
+    },
+
     prepareTrigger(agentId, roomId, limit, entry, threadRootId) {
       const queue = getOrCreateQueue(roomId);
       const retryKey = preparedTriggerKey(agentId, entry.messageId);
@@ -407,6 +422,12 @@ function createRoomHistoryTrackerInternal(
       }
       if (queue.generation !== snapshot.queueGeneration) {
         return;
+      }
+      if (threadRootId) {
+        const subQueue = queue.threadQueues.get(threadRootId);
+        if (!subQueue || subQueue.generation !== snapshot.threadGeneration) {
+          return;
+        }
       }
       rememberWatermark(key, snapshot.snapshotIdx);
       const retryKey = preparedTriggerKey(agentId, messageId);

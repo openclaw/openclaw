@@ -585,7 +585,7 @@ Outbound reaction tooling is gated by `channels.matrix.actions.reactions`:
 ## History context
 
 - `channels.matrix.historyLimit` controls how many recent room messages are included as `InboundHistory` when a Matrix room message triggers the agent. Falls back to `messages.groupChat.historyLimit`; if both are unset, the effective default is `0`. Set `0` to disable.
-- Matrix room history is room-only. DMs keep using normal session history.
+- Matrix room history is scoped by Matrix conversation surface. Top-level room messages use the main room history queue; native Matrix thread messages use a separate queue keyed by the thread root, so each thread consumes pending history independently from the main room. DMs keep using normal session history.
 - Matrix room history is pending-only: OpenClaw buffers room messages that did not trigger a reply yet, then snapshots that window when a mention or other trigger arrives.
 - The current trigger message is not included in `InboundHistory`; it stays in the main inbound body for that turn.
 - Retries of the same Matrix event reuse the original history snapshot instead of drifting forward to newer room messages.

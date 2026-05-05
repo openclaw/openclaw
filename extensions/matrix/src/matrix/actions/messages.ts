@@ -13,7 +13,6 @@ import {
 } from "./types.js";
 
 const MATRIX_THREAD_RELATION_TYPE = "m.thread";
-const MAIN_TIMELINE_FETCH_MULTIPLIER = 3;
 const MAX_MAIN_TIMELINE_FETCH_PAGES = 3;
 
 function isThreadEvent(event: MatrixRawEvent): boolean {
@@ -148,10 +147,7 @@ export async function readMatrixMessages(
         page < MAX_MAIN_TIMELINE_FETCH_PAGES && mainEvents.length < limit;
         page += 1
       ) {
-        const fetchLimit =
-          page === 0
-            ? limit
-            : Math.max(limit, Math.min(limit * MAIN_TIMELINE_FETCH_MULTIPLIER, 100));
+        const fetchLimit = Math.max(1, limit - mainEvents.length);
         res = (await client.doRequest(
           "GET",
           `/_matrix/client/v3/rooms/${encodeURIComponent(resolvedRoom)}/messages`,
