@@ -81,6 +81,14 @@ function isMarkdown(filePath: string): boolean {
   return MARKDOWN_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
+function isSkillMarkdown(filePath: string): boolean {
+  return path.basename(filePath).toLowerCase() === "skill.md";
+}
+
+function isNonSkillMarkdown(filePath: string): boolean {
+  return isMarkdown(filePath) && !isSkillMarkdown(filePath);
+}
+
 function getCachedFileScanResult(params: {
   filePath: string;
   size: number;
@@ -467,8 +475,32 @@ function tokenizeShellWords(segment: string): string[] {
   return tokens;
 }
 
+function isDownloaderToken(token: string): boolean {
+  return /^(?:curl|wget)$/i.test(path.basename(token));
+}
+
 function isDownloadCommandSegment(segment: string): boolean {
-  return /^(?:curl|wget)\b/i.test(stripMarkdownCommandPrefix(segment));
+  const tokens = tokenizeShellWords(stripMarkdownCommandPrefix(segment));
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] ?? "";
+    if (token === "sudo" || token === "doas") {
+      while (tokens[index + 1]?.startsWith("-")) {
+        index += 1;
+      }
+      continue;
+    }
+    if (token === "env" || token === "/usr/bin/env") {
+      while (
+        tokens[index + 1]?.startsWith("-") ||
+        isEnvironmentAssignment(tokens[index + 1] ?? "")
+      ) {
+        index += 1;
+      }
+      continue;
+    }
+    return isDownloaderToken(token);
+  }
+  return false;
 }
 
 function isEnvironmentAssignment(token: string): boolean {
@@ -518,12 +550,43 @@ function markdownCommandCandidates(line: string): string[] {
   return candidates;
 }
 
+function isMarkdownTableSeparatorLine(line: string | undefined): boolean {
+  const trimmed = line?.trim() ?? "";
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+  const cells = trimmed
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isMarkdownTableRow(params: { lines: string[]; line: number; text: string }): boolean {
+  const trimmed = params.text.trim();
+  if (!trimmed.includes("|")) {
+    return false;
+  }
+  if (trimmed.startsWith("|")) {
+    return true;
+  }
+  return (
+    isMarkdownTableSeparatorLine(params.lines[params.line - 2]) ||
+    isMarkdownTableSeparatorLine(params.lines[params.line])
+  );
+}
+
 function findMarkdownDownloadExecMatch(params: {
   lines: string[];
 }): { line: number; evidence: string } | null {
   for (const logicalLine of logicalMarkdownLines(params.lines)) {
     const trimmed = logicalLine.text.trim();
-    if (!trimmed || trimmed.startsWith("|") || !/\b(?:curl|wget)\b/i.test(trimmed)) {
+    if (
+      !trimmed ||
+      isMarkdownTableRow({ lines: params.lines, line: logicalLine.line, text: logicalLine.text }) ||
+      !/\b(?:curl|wget)\b/i.test(trimmed)
+    ) {
       continue;
     }
 
@@ -747,18 +810,31 @@ async function walkDirWithLimit(
   maxFiles: number,
   excludeTestFiles: boolean,
 ): Promise<string[]> {
-  const codeFiles = await walkDirMatchingLimit(dirPath, maxFiles, excludeTestFiles, isCode);
-  if (codeFiles.length >= maxFiles) {
-    return codeFiles;
+  const skillBudget = maxFiles > 1 ? 1 : 0;
+  const skillFiles = await walkDirMatchingLimit(
+    dirPath,
+    skillBudget,
+    excludeTestFiles,
+    isSkillMarkdown,
+  );
+  const codeFiles = await walkDirMatchingLimit(
+    dirPath,
+    maxFiles - skillFiles.length,
+    excludeTestFiles,
+    isCode,
+  );
+  const remainingFiles = maxFiles - codeFiles.length - skillFiles.length;
+  if (remainingFiles <= 0) {
+    return [...codeFiles, ...skillFiles];
   }
 
   const markdownFiles = await walkDirMatchingLimit(
     dirPath,
-    maxFiles - codeFiles.length,
+    remainingFiles,
     excludeTestFiles,
-    isMarkdown,
+    isNonSkillMarkdown,
   );
-  return [...codeFiles, ...markdownFiles];
+  return [...codeFiles, ...skillFiles, ...markdownFiles];
 }
 
 async function readDirEntriesWithCache(dirPath: string): Promise<CachedDirEntry[]> {
