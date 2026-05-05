@@ -170,10 +170,21 @@ export function listPluginOriginsFromMetadataSnapshot(
   return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
 }
 
+// TTL cache for loadPluginMetadataSnapshot — prevents redundant filesystem scans
+// when called rapidly from multiple code paths (28+ callers observed).
+let _snapshotCache: PluginMetadataSnapshot | null = null;
+let _snapshotCacheTimestamp = 0;
+const _SNAPSHOT_CACHE_TTL_MS = 5000;
+
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
-  return measureDiagnosticsTimelineSpanSync(
+  const now = Date.now();
+  if (_snapshotCache && now - _snapshotCacheTimestamp < _SNAPSHOT_CACHE_TTL_MS) {
+    return _snapshotCache;
+  }
+
+  const result = measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.scan",
     () => loadPluginMetadataSnapshotImpl(params),
     {
@@ -186,6 +197,10 @@ export function loadPluginMetadataSnapshot(
       },
     },
   );
+
+  _snapshotCache = result;
+  _snapshotCacheTimestamp = now;
+  return result;
 }
 
 function loadPluginMetadataSnapshotImpl(
