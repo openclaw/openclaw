@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveDoctorHealthContributions,
   shouldSkipLegacyUpdateDoctorConfigWrite,
@@ -7,6 +7,7 @@ import {
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   note: vi.fn(),
+  readConfigFileSnapshot: vi.fn(),
 }));
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
@@ -21,10 +22,15 @@ vi.mock("../version.js", () => ({
   VERSION: "2026.5.2-test",
 }));
 
+vi.mock("../config/config.js", () => ({
+  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
+}));
+
 describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
     mocks.note.mockReset();
+    mocks.readConfigFileSnapshot.mockReset();
   });
 
   it("runs release configured plugin install repair before plugin registry and final config writes", () => {
@@ -138,5 +144,89 @@ describe("doctor health contributions", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  describe("doctor:final-config-validation", () => {
+    const previousExitCode = process.exitCode;
+
+    afterEach(() => {
+      process.exitCode = previousExitCode;
+    });
+
+    function getFinalConfigValidation() {
+      const contribution = resolveDoctorHealthContributions().find(
+        (entry) => entry.id === "doctor:final-config-validation",
+      );
+      if (!contribution) {
+        throw new Error("doctor:final-config-validation contribution not registered");
+      }
+      return contribution;
+    }
+
+    function buildCtx(): Parameters<ReturnType<typeof getFinalConfigValidation>["run"]>[0] {
+      const errors: string[] = [];
+      return {
+        runtime: {
+          error: (msg: string) => errors.push(msg),
+        },
+      } as unknown as Parameters<ReturnType<typeof getFinalConfigValidation>["run"]>[0];
+    }
+
+    it("sets exitCode=1 and reports issues when final snapshot is invalid", async () => {
+      process.exitCode = 0;
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: false,
+        issues: [
+          {
+            path: "models.providers.bailian.models.0.compat.thinkingFormat",
+            message: "Invalid input",
+          },
+        ],
+      });
+
+      await getFinalConfigValidation().run(buildCtx());
+
+      expect(process.exitCode).toBe(1);
+    });
+
+    it("leaves exitCode untouched when final snapshot is valid", async () => {
+      process.exitCode = 0;
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: true,
+        issues: [],
+      });
+
+      await getFinalConfigValidation().run(buildCtx());
+
+      expect(process.exitCode).toBe(0);
+    });
+
+    it("leaves exitCode untouched when config does not exist", async () => {
+      process.exitCode = 0;
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: false,
+        valid: false,
+        issues: [],
+      });
+
+      await getFinalConfigValidation().run(buildCtx());
+
+      expect(process.exitCode).toBe(0);
+    });
+
+    it("does not lower a non-zero exitCode set earlier in the run", async () => {
+      process.exitCode = 2;
+      mocks.readConfigFileSnapshot.mockResolvedValue({
+        exists: true,
+        valid: false,
+        issues: [{ path: "x", message: "y" }],
+      });
+
+      await getFinalConfigValidation().run(buildCtx());
+
+      expect(process.exitCode).toBe(2);
+    });
   });
 });
