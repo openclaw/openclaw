@@ -882,6 +882,37 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
   });
 
+  it("short-circuits a repeatedly failing sticky fallback during cooldown", async () => {
+    for (let i = 0; i < 7; i += 1) {
+      undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+    }
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+      "fetch failed",
+    );
+    for (let i = 0; i < 4; i += 1) {
+      await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+        "fetch failed",
+      );
+    }
+
+    await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+      "temporarily unhealthy",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(7);
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram transport attempt marked temporarily unhealthy"),
+    );
+  });
+
   it("preserves caller-provided dispatcher across fallback retry", async () => {
     const fetchError = buildFetchFallbackError("EHOSTUNREACH");
     undiciFetch.mockRejectedValueOnce(fetchError).mockResolvedValueOnce({ ok: true } as Response);
