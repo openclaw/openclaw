@@ -173,6 +173,7 @@ export async function monitorWebChannel(
         groupPolicy: account.groupPolicy,
         textChunkLimit: account.textChunkLimit,
         chunkMode: account.chunkMode,
+        streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
         blockStreaming: account.blockStreaming,
         groups: account.groups,

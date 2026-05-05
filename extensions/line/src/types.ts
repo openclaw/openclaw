@@ -1,4 +1,5 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
+import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-streaming";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
@@ -26,6 +27,7 @@ interface LineAccountBaseConfig {
   dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   responsePrefix?: string;
+  streaming?: ChannelPreviewStreamingConfig;
   mediaMaxMb?: number;
   webhookPath?: string;
   threadBindings?: LineThreadBindingsConfig;

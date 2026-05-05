@@ -1,4 +1,7 @@
-import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import {
+  buildChannelConfigSchema,
+  ChannelPreviewStreamingConfigSchema,
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
 const DmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
@@ -27,6 +30,7 @@ const LineCommonConfigSchema = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   responsePrefix: z.string().optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
   threadBindings: ThreadBindingsSchema.optional(),

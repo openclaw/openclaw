@@ -608,6 +608,32 @@ describe("setupChannels", () => {
     expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
   });
 
+  it("does not crash when setup wizard text input returns undefined", async () => {
+    const note = vi.fn(async (_message?: string, _title?: string) => {});
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select channel (QuickStart)") {
+        return "whatsapp";
+      }
+      return "__done__";
+    });
+    const text = vi.fn(async () => undefined);
+
+    const prompter = createPrompter({
+      note,
+      select: select as unknown as WizardPrompter["select"],
+      text: text as unknown as WizardPrompter["text"],
+    });
+
+    const cfg = await runSetupChannels({} as OpenClawConfig, prompter, {
+      quickstartDefaults: true,
+    });
+
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Your personal WhatsApp number" }),
+    );
+    expect((cfg.channels?.whatsapp as { account?: string } | undefined)?.account).toBeUndefined();
+  });
+
   it("shows explicit dmScope config command in channel primer", async () => {
     const note = vi.fn(async (_message?: string, _title?: string) => {});
     const select = vi.fn(async () => "__done__");

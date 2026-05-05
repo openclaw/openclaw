@@ -37,6 +37,23 @@ describe("slack config schema", () => {
     }
   });
 
+  it("preserves preview tool progress settings without streaming mode", () => {
+    const res = SlackConfigSchema.safeParse({
+      streaming: { preview: { toolProgress: false } },
+      accounts: {
+        ops: {
+          streaming: { preview: { toolProgress: false } },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.streaming?.preview?.toolProgress).toBe(false);
+      expect(res.data.accounts?.ops?.streaming?.preview?.toolProgress).toBe(false);
+    }
+  });
+
   it('rejects dmPolicy="open" without allowFrom "*"', () => {
     expectSlackConfigIssue(
       {

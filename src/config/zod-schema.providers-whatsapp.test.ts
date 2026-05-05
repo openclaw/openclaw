@@ -97,6 +97,25 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
+  it("preserves streaming preview toolProgress without streaming mode", () => {
+    const result = WhatsAppConfigSchema.safeParse({
+      streaming: { preview: { toolProgress: false } },
+      accounts: {
+        work: {
+          streaming: { preview: { toolProgress: false } },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.streaming?.preview?.toolProgress).toBe(false);
+      expect(result.data.streaming?.mode).toBeUndefined();
+      expect(result.data.accounts?.work?.streaming?.preview?.toolProgress).toBe(false);
+      expect(result.data.accounts?.work?.streaming?.mode).toBeUndefined();
+    }
+  });
+
   it("accepts deprecated exposeErrorText as a no-op compatibility key", () => {
     const result = WhatsAppConfigSchema.safeParse({
       exposeErrorText: false,

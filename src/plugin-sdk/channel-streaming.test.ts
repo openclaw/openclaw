@@ -163,6 +163,17 @@ describe("channel-streaming", () => {
         { draftStreamActive: false },
       ),
     ).toBe(false);
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages({
+        streaming: { preview: { toolProgress: false } },
+      }),
+    ).toBe(true);
+    expect(
+      resolveChannelStreamingSuppressDefaultToolProgressMessages(
+        { streaming: { preview: { toolProgress: false } } },
+        { draftStreamActive: false, previewStreamingEnabled: false },
+      ),
+    ).toBe(true);
   });
 
   it("uses auto progress labels when no explicit label is configured", () => {

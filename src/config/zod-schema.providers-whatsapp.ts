@@ -15,6 +15,7 @@ import {
   MarkdownConfigSchema,
   ReplyToModeSchema,
 } from "./zod-schema.core.js";
+import { ChannelPreviewStreamingConfigSchema } from "./zod-schema.providers-core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -85,6 +86,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: ChannelPreviewStreamingConfigSchema.optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: WhatsAppGroupsSchema,
