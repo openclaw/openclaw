@@ -397,9 +397,29 @@ const listRequiredBundledPluginRuntimeOverlayOutputs = (pluginEntries, deps) => 
   return [...new Set(runtimePaths)].toSorted((left, right) => left.localeCompare(right));
 };
 
+const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
+  const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const pluginSdkDir = path.join(distRoot, "plugin-sdk");
+  let dirents = [];
+  try {
+    dirents = deps.fs.readdirSync(pluginSdkDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw");
+  return [
+    path.join(aliasDir, "package.json"),
+    ...dirents
+      .filter((dirent) => dirent.isFile() && path.extname(dirent.name) === ".js")
+      .map((dirent) => path.join(aliasDir, "plugin-sdk", dirent.name)),
+  ].toSorted((left, right) => left.localeCompare(right));
+};
+
 const listRequiredRuntimePostBuildOutputs = (deps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
   return [
+    ...listRequiredOpenClawExtensionAliasOutputs(deps),
     ...listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),
     ...listRequiredBundledPluginRuntimeOverlayOutputs(builtPluginEntries, deps),
   ];

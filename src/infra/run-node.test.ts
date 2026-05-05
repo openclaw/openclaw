@@ -29,6 +29,7 @@ const GENERATED_PLUGIN_ASSET_BUNDLE_HASH = "extensions/demo/src/host/assets/.bun
 const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
+const DIST_PLUGIN_SDK_INDEX = "dist/plugin-sdk/index.js";
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
@@ -46,6 +47,9 @@ const DIST_RUNTIME_EXTENSION_INDEX = "dist-runtime/extensions/demo/index.js";
 const DIST_RUNTIME_EXTENSION_MANIFEST = "dist-runtime/extensions/demo/openclaw.plugin.json";
 const DIST_RUNTIME_EXTENSION_PACKAGE = "dist-runtime/extensions/demo/package.json";
 const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.md";
+const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
+const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX =
+  "dist/extensions/node_modules/openclaw/plugin-sdk/index.js";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -1668,6 +1672,44 @@ describe("run-node script", () => {
         ],
       });
       await fs.rm(resolvePath(tmp, DIST_EXTENSION_PACKAGE));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("reports missing OpenClaw SDK alias outputs when runtime stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_PLUGIN_SDK_INDEX]: "export * from './core.js';\n",
+          [DIST_OPENCLAW_ALIAS_PACKAGE]:
+            '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js"}}\n',
+          [DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX]:
+            "export * from '../../../../plugin-sdk/index.js';\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_PLUGIN_SDK_INDEX,
+          DIST_OPENCLAW_ALIAS_PACKAGE,
+          DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX));
 
       const requirement = resolveRuntimePostBuildRequirement(
         createBuildRequirementDeps(tmp, {
