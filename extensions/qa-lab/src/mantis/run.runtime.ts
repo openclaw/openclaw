@@ -24,6 +24,7 @@ export type MantisBeforeAfterOptions = {
 
 export type MantisBeforeAfterResult = {
   comparisonPath: string;
+  manifestPath: string;
   outputDir: string;
   reportPath: string;
   status: "pass" | "fail";
@@ -217,6 +218,106 @@ function renderReport(params: {
   return `${lines.join("\n")}\n`;
 }
 
+function relativeArtifactPath(outputDir: string, artifactPath: string | undefined) {
+  if (!artifactPath) {
+    return undefined;
+  }
+  return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
+}
+
+function buildEvidenceManifest(params: {
+  baseline: LaneResult;
+  candidate: LaneResult;
+  comparison: Comparison;
+  outputDir: string;
+}) {
+  const artifacts: {
+    alt?: string;
+    kind: string;
+    label: string;
+    lane: "baseline" | "candidate" | "run";
+    path: string;
+    required?: boolean;
+    targetPath: string;
+    width?: number;
+  }[] = [
+    {
+      kind: "metadata",
+      label: "Comparison JSON",
+      lane: "run",
+      path: "comparison.json",
+      targetPath: "comparison.json",
+    },
+    {
+      kind: "report",
+      label: "Mantis report",
+      lane: "run",
+      path: "mantis-report.md",
+      targetPath: "mantis-report.md",
+    },
+  ];
+  const baselineScreenshot = relativeArtifactPath(params.outputDir, params.baseline.screenshotPath);
+  if (baselineScreenshot) {
+    artifacts.push({
+      alt: "Baseline Discord status reaction timeline",
+      kind: "timeline",
+      label: "Baseline queued-only",
+      lane: "baseline",
+      path: baselineScreenshot,
+      targetPath: "baseline.png",
+      width: 420,
+    });
+  }
+  const candidateScreenshot = relativeArtifactPath(
+    params.outputDir,
+    params.candidate.screenshotPath,
+  );
+  if (candidateScreenshot) {
+    artifacts.push({
+      alt: "Candidate Discord status reaction timeline",
+      kind: "timeline",
+      label: "Candidate queued -> thinking -> done",
+      lane: "candidate",
+      path: candidateScreenshot,
+      targetPath: "candidate.png",
+      width: 420,
+    });
+  }
+  const baselineVideo = relativeArtifactPath(params.outputDir, params.baseline.videoPath);
+  if (baselineVideo) {
+    artifacts.push({
+      kind: "fullVideo",
+      label: "Baseline MP4",
+      lane: "baseline",
+      path: baselineVideo,
+      targetPath: "baseline.mp4",
+      required: false,
+    });
+  }
+  const candidateVideo = relativeArtifactPath(params.outputDir, params.candidate.videoPath);
+  if (candidateVideo) {
+    artifacts.push({
+      kind: "fullVideo",
+      label: "Candidate MP4",
+      lane: "candidate",
+      path: candidateVideo,
+      targetPath: "candidate.mp4",
+      required: false,
+    });
+  }
+
+  return {
+    artifacts,
+    comparison: params.comparison,
+    id: params.comparison.scenario,
+    scenario: params.comparison.scenario,
+    schemaVersion: 1,
+    summary:
+      "Mantis ran the before/after scenario, captured baseline and candidate evidence, and compared the expected bug reproduction against the candidate fix.",
+    title: "Mantis Before/After QA",
+  };
+}
+
 async function copyScreenshot(params: { lane: "baseline" | "candidate"; result: LaneResult }) {
   if (!params.result.screenshotPath) {
     return undefined;
@@ -359,6 +460,7 @@ export async function runMantisBeforeAfter(
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
   const comparisonPath = path.join(outputDir, "comparison.json");
+  const manifestPath = path.join(outputDir, "mantis-evidence.json");
   const reportPath = path.join(outputDir, "mantis-report.md");
   await fs.mkdir(worktreeRoot, { recursive: true });
 
@@ -423,8 +525,23 @@ export async function runMantisBeforeAfter(
       }),
       "utf8",
     );
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        buildEvidenceManifest({
+          baseline: baselineResult,
+          candidate: candidateResult,
+          comparison,
+          outputDir,
+        }),
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
     return {
       comparisonPath,
+      manifestPath,
       outputDir,
       reportPath,
       status: comparison.pass ? "pass" : "fail",

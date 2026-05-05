@@ -85,6 +85,28 @@ function formatLocalSessionTimestamp(date: Date): {
   };
 }
 
+async function resolveAvailableMemoryFilename(params: {
+  memoryDir: string;
+  dateStr: string;
+  slug: string;
+}): Promise<string> {
+  const basename = `${params.dateStr}-${params.slug}`;
+  let suffix = 1;
+
+  while (true) {
+    const filename = suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
+    try {
+      await fs.access(path.join(params.memoryDir, filename));
+      suffix += 1;
+    } catch (err) {
+      if ((err as { code?: string }).code === "ENOENT") {
+        return filename;
+      }
+      throw err;
+    }
+  }
+}
+
 function resolveDisplaySessionKey(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -223,7 +245,7 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     }
 
     // Create filename with date and slug
-    const filename = `${dateStr}-${slug}.md`;
+    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
