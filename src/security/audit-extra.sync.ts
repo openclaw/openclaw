@@ -275,6 +275,53 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
   return out;
 }
 
+/** List all config paths where dmPolicy="open" (or legacy dm.policy="open") is set. */
+function listDmPolicyOpen(cfg: OpenClawConfig): string[] {
+  const out: string[] = [];
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  if (!channels || typeof channels !== "object") {
+    return out;
+  }
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const section = value as Record<string, unknown>;
+    if (section.dmPolicy === "open") {
+      out.push(`channels.${channelId}.dmPolicy`);
+    }
+    // Legacy dot-notation key: channels.<id>.dm.policy
+    const dm = section.dm;
+    if (dm && typeof dm === "object") {
+      const dmSection = dm as Record<string, unknown>;
+      if (dmSection.policy === "open") {
+        out.push(`channels.${channelId}.dm.policy`);
+      }
+    }
+    const accounts = section.accounts;
+    if (accounts && typeof accounts === "object") {
+      for (const [accountId, accountVal] of Object.entries(accounts)) {
+        if (!accountVal || typeof accountVal !== "object") {
+          continue;
+        }
+        const acc = accountVal as Record<string, unknown>;
+        if (acc.dmPolicy === "open") {
+          out.push(`channels.${channelId}.accounts.${accountId}.dmPolicy`);
+        }
+        // Legacy dot-notation at account level
+        const accDm = acc.dm;
+        if (accDm && typeof accDm === "object") {
+          const accDmSection = accDm as Record<string, unknown>;
+          if (accDmSection.policy === "open") {
+            out.push(`channels.${channelId}.accounts.${accountId}.dm.policy`);
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
   const groupKeys = ["groups", "guilds", "channels", "rooms"];
   return groupKeys.some((key) => {
@@ -1016,20 +1063,28 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
 export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const openGroups = listGroupPolicyOpen(cfg);
-  if (openGroups.length === 0) {
+  const openDms = listDmPolicyOpen(cfg);
+  // Both groupPolicy="open" and dmPolicy="open" expose the same attack surface.
+  const allOpenPolicies = [...openGroups, ...openDms];
+  if (allOpenPolicies.length === 0) {
     return findings;
   }
+
+  const policyPathList = allOpenPolicies.map((p) => `- ${p}`).join("\n");
 
   const elevatedEnabled = cfg.tools?.elevated?.enabled !== false;
   if (elevatedEnabled) {
     findings.push({
+      // checkId keeps "open_groups" naming for backward compatibility;
+      // it now covers both groupPolicy="open" and dmPolicy="open" (including legacy dm.policy).
       checkId: "security.exposure.open_groups_with_elevated",
       severity: "critical",
-      title: "Open groupPolicy with elevated tools enabled",
+      title: "Open groupPolicy/dmPolicy with elevated tools enabled",
       detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
-      remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+        `Found open policy at:\n${policyPathList}\n` +
+        "With tools.elevated enabled, a prompt injection in those rooms/DMs can become a high-impact incident.",
+      remediation:
+        'Set groupPolicy="allowlist" / dmPolicy="allowlist" and keep elevated allowlists extremely tight.',
     });
   }
 
@@ -1037,15 +1092,16 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
 
   if (riskyContexts.length > 0) {
     findings.push({
+      // checkId keeps "open_groups" naming for backward compatibility (see above).
       checkId: "security.exposure.open_groups_with_runtime_or_fs",
       severity: hasRuntimeRisk ? "critical" : "warn",
-      title: "Open groupPolicy with runtime/filesystem tools exposed",
+      title: "Open groupPolicy/dmPolicy with runtime/filesystem tools exposed",
       detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+        `Found open policy at:\n${policyPathList}\n` +
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
-        "Prompt injection in open groups can trigger command/file actions in these contexts.",
+        "Prompt injection in open groups/DMs can trigger command/file actions in these contexts.",
       remediation:
-        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+        'For open groups/DMs, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
     });
   }
 
