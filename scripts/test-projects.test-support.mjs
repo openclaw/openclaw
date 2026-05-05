@@ -365,6 +365,14 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
   ],
   [
+    "src/agents/model-fallback-observation.ts",
+    ["src/agents/model-fallback.test.ts", "src/agents/model-fallback.probe.test.ts"],
+  ],
+  [
+    "src/config/sessions/transcript-append.ts",
+    ["src/config/sessions/transcript.test.ts", "src/agents/subagent-registry.persistence.test.ts"],
+  ],
+  [
     "src/memory-host-sdk/host/embedding-defaults.ts",
     ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
   ],
