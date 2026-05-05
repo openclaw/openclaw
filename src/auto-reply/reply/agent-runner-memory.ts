@@ -907,6 +907,7 @@ export async function runMemoryFlushIfNeeded(params: {
         });
         const result = await memoryDeps.runEmbeddedPiAgent({
           ...embeddedContext,
+          sessionEntry: activeSessionEntry,
           ...senderContext,
           ...runBaseParams,
           sandboxSessionKey: params.runtimePolicySessionKey,

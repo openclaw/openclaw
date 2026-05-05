@@ -13,6 +13,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import type { PromptBuildScopeEnvelope } from "../../../shared/prompt-build-scope-envelope.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
@@ -46,7 +47,7 @@ export type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginAgentTurnPrepareResult | undefined>;
   runBeforePromptBuild: (
-    event: { prompt: string; messages: unknown[] },
+    event: { prompt: string; messages: unknown[]; scopeEnvelope?: PromptBuildScopeEnvelope },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
   runBeforeAgentStart: (
@@ -92,6 +93,7 @@ export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
+  scopeEnvelope?: PromptBuildScopeEnvelope;
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -150,6 +152,7 @@ export async function resolvePromptBuildHookResult(params: {
           {
             prompt: params.prompt,
             messages: params.messages,
+            scopeEnvelope: params.scopeEnvelope,
           },
           params.hookCtx,
         )

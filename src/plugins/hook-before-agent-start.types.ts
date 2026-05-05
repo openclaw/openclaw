@@ -1,3 +1,5 @@
+import type { PromptBuildScopeEnvelope } from "../shared/prompt-build-scope-envelope.js";
+
 // before_model_resolve hook
 export type PluginHookBeforeModelResolveAttachment = {
   kind: "image" | "video" | "audio" | "document" | "other";
@@ -23,6 +25,8 @@ export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Session messages prepared for this run. */
   messages: unknown[];
+  /** Optional structured scope/task envelope prepared upstream for prompt-build-time consumers. */
+  scopeEnvelope?: PromptBuildScopeEnvelope;
 };
 
 export type PluginHookBeforePromptBuildResult = {

@@ -2582,6 +2582,7 @@ export async function runEmbeddedAttempt(
               config: params.config ?? getRuntimeConfig(),
               prompt: params.prompt,
               messages: promptBuildMessages,
+              scopeEnvelope: params.sessionEntry?.scopeEnvelope,
               hookCtx,
               hookRunner,
               legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,

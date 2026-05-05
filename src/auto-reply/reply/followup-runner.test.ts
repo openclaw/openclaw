@@ -1067,6 +1067,45 @@ describe("createFollowupRunner bootstrap warning dedupe", () => {
     expect(call?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
     expect(call?.bootstrapPromptWarningSignature).toBe("sig-b");
   });
+
+  it("passes sessionEntry scopeEnvelope into runEmbeddedPiAgent", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+
+    const sessionEntry = {
+      sessionId: "sess-scope",
+      updatedAt: Date.now(),
+      scopeEnvelope: {
+        workspaceKind: "topic_workspace",
+        scopeOwner: "active_task",
+        topicKey: "duoduo-memory",
+        topicAliases: ["duoduo-memory"],
+        taskId: "duoduo-memory-benchmark",
+        statePath: "state/active-tasks/duoduo-memory-benchmark.json",
+        statusDocPath: "docs/status/duoduo-memory-benchmark.md",
+      },
+    } as SessionEntry;
+    const sessionStore: Record<string, SessionEntry> = { main: sessionEntry };
+
+    const runner = createFollowupRunner({
+      opts: { onBlockReply: vi.fn(async () => {}) },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude-opus-4-6",
+    });
+
+    await runner(baseQueuedRun());
+
+    const call = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0] as
+      | { sessionEntry?: SessionEntry }
+      | undefined;
+    expect(call?.sessionEntry?.scopeEnvelope).toEqual(sessionEntry.scopeEnvelope);
+  });
 });
 
 describe("createFollowupRunner messaging delivery and dedupe", () => {

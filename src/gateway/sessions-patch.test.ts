@@ -543,6 +543,77 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid groupActivation");
   });
 
+  test("persists scopeEnvelope", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: {
+          key: MAIN_SESSION_KEY,
+          scopeEnvelope: {
+            workspaceKind: "topic_workspace",
+            scopeOwner: "active_task",
+            topicKey: "duoduo-memory",
+            topicAliases: ["memory", "duoduo-memory"],
+            taskId: "duoduo-memory-benchmark",
+            statePath: "state/active-tasks/duoduo-memory-benchmark.json",
+            statusDocPath: "docs/status/duoduo-memory-benchmark.md",
+          },
+        },
+      }),
+    );
+    expect(entry.scopeEnvelope).toEqual({
+      workspaceKind: "topic_workspace",
+      scopeOwner: "active_task",
+      topicKey: "duoduo-memory",
+      topicAliases: ["memory", "duoduo-memory"],
+      taskId: "duoduo-memory-benchmark",
+      statePath: "state/active-tasks/duoduo-memory-benchmark.json",
+      statusDocPath: "docs/status/duoduo-memory-benchmark.md",
+    });
+  });
+
+  test("clears scopeEnvelope when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-1",
+        updatedAt: 1,
+        scopeEnvelope: {
+          workspaceKind: "topic_workspace",
+          scopeOwner: "active_task",
+          topicKey: "duoduo-memory",
+        },
+      },
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, scopeEnvelope: null },
+      }),
+    );
+    expect(entry.scopeEnvelope).toBeUndefined();
+  });
+
+  test("rejects invalid scopeEnvelope.workspaceKind", async () => {
+    const result = await runPatch({
+      patch: {
+        key: MAIN_SESSION_KEY,
+        scopeEnvelope: JSON.parse('{"workspaceKind":"unknown_kind","scopeOwner":"active_task"}'),
+      },
+    });
+    expectPatchError(result, "invalid scopeEnvelope");
+  });
+
+  test("rejects invalid scopeEnvelope.scopeOwner", async () => {
+    const result = await runPatch({
+      patch: {
+        key: MAIN_SESSION_KEY,
+        scopeEnvelope: JSON.parse(
+          '{"workspaceKind":"topic_workspace","scopeOwner":"unknown_owner"}',
+        ),
+      },
+    });
+    expectPatchError(result, "invalid scopeEnvelope");
+  });
+
   test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
       agentPrimaryModel: "synthetic/hf:moonshotai/Kimi-K2.5",

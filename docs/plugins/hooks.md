@@ -222,9 +222,10 @@ Use the phase-specific hooks for new plugins:
 - `agent_turn_prepare`: receives the current prompt, prepared session messages,
   and any exactly-once queued injections drained for this session. Return
   `prependContext` or `appendContext`.
-- `before_prompt_build`: receives the current prompt and session messages.
-  Return `prependContext`, `appendContext`, `systemPrompt`,
-  `prependSystemContext`, or `appendSystemContext`.
+- `before_prompt_build`: receives the current prompt, session messages, and
+  optional `scopeEnvelope` metadata for session-backed runs. Return
+  `prependContext`, `appendContext`, `systemPrompt`, `prependSystemContext`, or
+  `appendSystemContext`.
 - `heartbeat_prompt_contribution`: runs only for heartbeat turns and returns
   `prependContext` or `appendContext`. It is intended for background monitors
   that need to summarize current state without changing user-initiated turns.
