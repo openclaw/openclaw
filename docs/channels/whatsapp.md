@@ -26,6 +26,16 @@ openclaw plugins install @openclaw/whatsapp
 Use the bare package to follow the current official release tag. Pin an exact
 version only when you need a reproducible install.
 
+On Windows, the WhatsApp plugin needs Git on `PATH` during npm install because
+one of its Baileys/libsignal dependencies is fetched from a git URL. Install
+Git for Windows, then restart the shell and rerun the install:
+
+```powershell
+winget install --id Git.Git -e
+```
+
+Portable Git also works if its `bin` directory is on `PATH`.
+
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     Default DM policy is pairing for unknown senders.
@@ -153,6 +163,7 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
 - The reconnect watchdog uses WhatsApp Web transport activity, not only inbound app-message volume, so a quiet linked-device session is not restarted solely because nobody has sent a message recently. A longer application-silence cap still forces a reconnect if transport frames keep arriving but no application messages are handled for the watchdog window; after a transient reconnect for a recently active session, that application-silence check uses the normal message timeout for the first recovery window.
 - Baileys socket timings are explicit under `web.whatsapp.*`: `keepAliveIntervalMs` controls WhatsApp Web application pings, `connectTimeoutMs` controls the opening handshake timeout, and `defaultQueryTimeoutMs` controls Baileys query timeouts.
 - Outbound sends require an active WhatsApp listener for the target account.
+- Group sends attach native mention metadata for `@+<digits>` and `@<digits>` tokens in text and media captions when the token matches current WhatsApp participant metadata, including LID-backed groups.
 - Status and broadcast chats are ignored (`@status`, `@broadcast`).
 - The reconnect watchdog follows WhatsApp Web transport activity, not only inbound app-message volume: quiet linked-device sessions stay up while transport frames continue, but a transport stall forces reconnect well before the later remote disconnect path.
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs to the agent main session).

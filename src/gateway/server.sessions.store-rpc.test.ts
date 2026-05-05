@@ -337,7 +337,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     resolved?: {
       model?: string;
       modelProvider?: string;
-      agentRuntime?: { id: string; fallback?: string; source: string };
+      agentRuntime?: { id: string; source: string };
     };
   }>("sessions.patch", {
     key: "agent:main:main",
@@ -360,7 +360,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
       key: string;
       modelProvider?: string;
       model?: string;
-      agentRuntime?: { id: string; fallback?: string; source: string };
+      agentRuntime?: { id: string; source: string };
     }>;
   }>("sessions.list", {});
   expect(listAfterModelPatch.ok).toBe(true);

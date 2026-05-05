@@ -31,7 +31,7 @@ function isManifestlessBundledRuntimeSupportPackage(params) {
   return params.topLevelPublicSurfaceEntries.length > 0;
 }
 
-function collectPluginSourceEntries(packageJson) {
+export function collectPluginSourceEntries(packageJson) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
         (entry) => typeof entry === "string" && entry.trim().length > 0,
@@ -48,7 +48,7 @@ function collectPluginSourceEntries(packageJson) {
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
 }
 
-function collectTopLevelPublicSurfaceEntries(pluginDir) {
+export function collectTopLevelPublicSurfaceEntries(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
     return [];
   }

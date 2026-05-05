@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -1094,15 +1095,51 @@ describe("registerTelegramNativeCommands — session metadata", () => {
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         storePath: "/tmp/openclaw-sessions/sessions.json",
         sessionsDir: "/tmp/openclaw-sessions",
-        fallbackSessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+        fallbackSessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
       }),
     );
     expect(pluginRuntimeMocks.executePluginCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
         sessionId: "sess-topic",
-        sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+        sessionFile: path.resolve("/tmp/openclaw-sessions", "sess-topic-topic-42.jsonl"),
         messageThreadId: 42,
+      }),
+    );
+  });
+
+  it("sends an empty-response fallback when a plugin command returns undefined", async () => {
+    pluginRuntimeMocks.executePluginCommand.mockResolvedValue(undefined as never);
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "status",
+    });
+
+    await handler(createTelegramPrivateCommandContext({ match: "status" }));
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
       }),
     );
   });

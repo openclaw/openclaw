@@ -190,6 +190,8 @@ const PluginEntrySchema = z
       .object({
         allowPromptInjection: z.boolean().optional(),
         allowConversationAccess: z.boolean().optional(),
+        timeoutMs: z.number().int().positive().max(600_000).optional(),
+        timeouts: z.record(z.string(), z.number().int().positive().max(600_000)).optional(),
       })
       .strict()
       .optional(),
@@ -340,6 +342,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         flags: z.array(z.string()).optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
+        stuckSessionAbortMs: z.number().int().positive().optional(),
         otel: z
           .object({
             enabled: z.boolean().optional(),
@@ -1071,6 +1074,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
+        bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
       })
       .strict()
       .optional(),

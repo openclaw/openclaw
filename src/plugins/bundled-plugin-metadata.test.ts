@@ -49,7 +49,6 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
 ] as const;
 const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
-  "bonjour",
   "browser",
   "device-pair",
   "file-transfer",
@@ -132,11 +131,58 @@ function listRepoBundledPluginManifests() {
     });
 }
 
+function createRepoBundledManifestRegistry(): PluginManifestRegistry {
+  return {
+    plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
+      id: manifest.id,
+      name: manifest.name,
+      description: manifest.description,
+      version: manifest.version,
+      enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
+      enabledByDefaultOnPlatforms: manifest.enabledByDefaultOnPlatforms,
+      kind: manifest.kind,
+      channels: manifest.channels ?? [],
+      providers: manifest.providers ?? [],
+      cliBackends: manifest.cliBackends ?? [],
+      syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
+      nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
+      skills: manifest.skills ?? [],
+      origin: "bundled",
+      rootDir: path.join(repoRoot, "extensions", dirName),
+      source: path.join(repoRoot, "extensions", dirName, "index.ts"),
+      manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
+      activation: manifest.activation,
+      setup: manifest.setup,
+      hooks: [],
+      contracts: manifest.contracts,
+    })),
+    diagnostics: [],
+  };
+}
+
 function readPackageManifest(pluginDir: string): PackageManifest | undefined {
   const packagePath = path.join(pluginDir, "package.json");
   return fs.existsSync(packagePath)
     ? (JSON.parse(fs.readFileSync(packagePath, "utf8")) as PackageManifest)
     : undefined;
+}
+
+function collectRootPackageExcludedExtensionDirsForTest(): readonly string[] {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+    files?: unknown;
+  };
+  if (!Array.isArray(packageJson.files)) {
+    return [];
+  }
+  return packageJson.files
+    .flatMap((entry) => {
+      if (typeof entry !== "string") {
+        return [];
+      }
+      const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+      return match?.[1] ? [match[1]] : [];
+    })
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectRepoBundledChannelConfigsForTest(dirName: string) {
@@ -168,6 +214,9 @@ function createInstalledPluginRecordForManifest(
     origin: record.origin,
     enabled: record.enabledByDefault === true,
     ...(record.enabledByDefault === true ? { enabledByDefault: true } : {}),
+    ...(record.enabledByDefaultOnPlatforms?.length
+      ? { enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms }
+      : {}),
     startup: {
       sidecar: record.activation?.onStartup === true,
       memory: hasPluginKind(record, "memory"),
@@ -226,6 +275,18 @@ describe("bundled plugin metadata", () => {
     );
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-lab/runtime-api.js");
     expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain("dist/extensions/qa-matrix/runtime-api.js");
+  });
+
+  it("excludes root-package-excluded plugin sidecars from the packaged runtime sidecar baseline", () => {
+    for (const pluginDir of collectRootPackageExcludedExtensionDirsForTest()) {
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(`dist/extensions/${pluginDir}/index.js`);
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+        `dist/extensions/${pluginDir}/runtime-api.js`,
+      );
+      expect(BUNDLED_RUNTIME_SIDECAR_PATHS).not.toContain(
+        `dist/extensions/${pluginDir}/runtime-setter-api.js`,
+      );
+    }
   });
 
   it("captures setup-entry metadata for bundled channel plugins", () => {
@@ -402,31 +463,7 @@ describe("bundled plugin metadata", () => {
   });
 
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
-    const manifestRegistry = {
-      plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
-        id: manifest.id,
-        name: manifest.name,
-        description: manifest.description,
-        version: manifest.version,
-        enabledByDefault: manifest.enabledByDefault === true ? true : undefined,
-        kind: manifest.kind,
-        channels: manifest.channels ?? [],
-        providers: manifest.providers ?? [],
-        cliBackends: manifest.cliBackends ?? [],
-        syntheticAuthRefs: manifest.syntheticAuthRefs ?? [],
-        nonSecretAuthMarkers: manifest.nonSecretAuthMarkers ?? [],
-        skills: manifest.skills ?? [],
-        origin: "bundled",
-        rootDir: path.join(repoRoot, "extensions", dirName),
-        source: path.join(repoRoot, "extensions", dirName, "index.ts"),
-        manifestPath: path.join(repoRoot, "extensions", dirName, "openclaw.plugin.json"),
-        activation: manifest.activation,
-        setup: manifest.setup,
-        hooks: [],
-        contracts: manifest.contracts,
-      })),
-      diagnostics: [],
-    } satisfies PluginManifestRegistry;
+    const manifestRegistry = createRepoBundledManifestRegistry();
     const index = createInstalledPluginIndexForManifests(manifestRegistry);
 
     expect(
@@ -435,8 +472,39 @@ describe("bundled plugin metadata", () => {
         env: process.env,
         index,
         manifestRegistry,
+        platform: "linux",
       }),
     ).toEqual(EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS);
+  });
+
+  it("auto-starts Bonjour for empty-config macOS Gateway startup", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: {},
+        env: process.env,
+        index,
+        manifestRegistry,
+        platform: "darwin",
+      }),
+    ).toContain("bonjour");
+  });
+
+  it("starts Bonjour when explicitly enabled", () => {
+    const manifestRegistry = createRepoBundledManifestRegistry();
+    const index = createInstalledPluginIndexForManifests(manifestRegistry);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: { plugins: { entries: { bonjour: { enabled: true } } } },
+        env: process.env,
+        index,
+        manifestRegistry,
+        platform: "linux",
+      }),
+    ).toContain("bonjour");
   });
 
   it("prefers built generated paths when present and falls back to source paths", () => {

@@ -324,6 +324,7 @@ export function hasRuntimeAvailableProviderAuth(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  allowPluginSyntheticAuth?: boolean;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = resolveProviderAuthOverride(params.cfg, provider);
@@ -347,7 +348,10 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+  if (
+    params.allowPluginSyntheticAuth !== false &&
+    resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })
+  ) {
     return true;
   }
   return false;
@@ -796,7 +800,7 @@ export function resolveModelAuthMode(
 
   if (
     normalizeProviderId(resolved) === "codex" &&
-    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000 })
+    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
     return "oauth";
   }

@@ -159,8 +159,18 @@ export const ar: TranslationMap = {
     store: "المخزن: {path}",
     active: "نشط",
     limit: "الحد",
+    filters: "عوامل التصفية",
+    showFilters: "إظهار عوامل التصفية",
+    hideFilters: "إخفاء عوامل التصفية",
+    sourceFilters: "عوامل تصفية مصدر الجلسة",
     global: "عام",
     unknown: "غير معروف",
+    showArchived: "إظهار المؤرشفة",
+    activeTooltip: "تم التحديث خلال آخر {count} دقيقة.",
+    limitTooltip: "الحد الأقصى للجلسات المراد تحميلها.",
+    globalTooltip: "تضمين الجلسات العامة.",
+    unknownTooltip: "تضمين الجلسات غير المعروفة.",
+    showArchivedTooltip: "تضمين الجلسات المؤرشفة.",
     minutesPlaceholder: "دقيقة",
     searchPlaceholder: "تصفية حسب المفتاح أو الوكيل أو التسمية أو النوع…",
     selected: "تم تحديد {count}",
@@ -179,6 +189,8 @@ export const ar: TranslationMap = {
     verbose: "مطوّل",
     reasoning: "الاستدلال",
     noSessions: "لم يتم العثور على جلسات.",
+    noSessionsMatchFilters: "لا توجد جلسات تطابق عوامل التصفية لديك.",
+    showAll: "عرض الكل",
     inherit: "وراثة",
     defaultOption: "الافتراضي ({value})",
     offExplicit: "إيقاف (صريح)",
@@ -717,6 +729,16 @@ export const ar: TranslationMap = {
       dailyCsv: "CSV اليومي",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "تجري إعادة بناء ذاكرة الاستخدام المؤقتة في الخلفية. قد تكون الإجماليات المعروضة قديمة.",
+      title: "{status}: {pending} معلّقة، {stale} قديمة، {cached} مخزّنة مؤقتًا",
+      status: {
+        refreshing: "جارٍ التحديث",
+        stale: "قديم",
+        partial: "جزئي",
+      },
+    },
     empty: {
       title: "ابدأ بنطاق تاريخ",
       subtitle:
@@ -905,6 +927,7 @@ export const ar: TranslationMap = {
     updating: "جارٍ التحديث…",
     updateNow: "التحديث الآن",
     dismissUpdateBanner: "إغلاق لافتة التحديث",
+    switchedSession: "تم التبديل إلى {session}",
   },
   languages: {
     en: "English (الإنجليزية)",

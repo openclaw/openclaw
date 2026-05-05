@@ -12,7 +12,7 @@ Adds the Nextcloud Talk channel surface for sending and receiving OpenClaw messa
 ## Distribution
 
 - Package: `@openclaw/nextcloud-talk`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

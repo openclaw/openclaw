@@ -203,6 +203,15 @@ Notes:
 - The live CLI-backend smoke now exercises the same end-to-end flow for Claude, Codex, and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
 - Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
+## Live: APNs HTTP/2 proxy reachability
+
+- Test: `src/infra/push-apns-http2.live.test.ts`
+- Goal: tunnel through a local HTTP CONNECT proxy to Apple's sandbox APNs endpoint, send the APNs HTTP/2 validation request, and assert Apple's real `403 InvalidProviderToken` response comes back through the proxy path.
+- Enable:
+  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_APNS_REACHABILITY=1 pnpm test:live src/infra/push-apns-http2.live.test.ts`
+- Optional timeout:
+  - `OPENCLAW_LIVE_APNS_TIMEOUT_MS=30000`
+
 ## Live: ACP bind smoke (`/acp spawn ... --bind here`)
 
 - Test: `src/gateway/gateway-acp-bind.live.test.ts`
@@ -291,8 +300,8 @@ Docker notes:
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
-- The smoke sets `OPENCLAW_AGENT_HARNESS_FALLBACK=none` so a broken Codex
-  harness cannot pass by silently falling back to PI.
+- The smoke uses `agentRuntime.id: "codex"` so a broken Codex harness cannot
+  pass by silently falling back to PI.
 - Auth: Codex app-server auth from the local Codex subscription login. Docker
   smokes can also provide `OPENAI_API_KEY` for non-Codex probes when applicable,
   plus optional copied `~/.codex/auth.json` and `~/.codex/config.toml`.
@@ -327,9 +336,8 @@ Docker notes:
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
   run.
-- Docker also exports `OPENCLAW_AGENT_HARNESS_FALLBACK=none`, matching the live
-  test config so legacy aliases or PI fallback cannot hide a Codex harness
-  regression.
+- Docker uses the same explicit Codex runtime config, so legacy aliases or PI
+  fallback cannot hide a Codex harness regression.
 
 ### Recommended live recipes
 

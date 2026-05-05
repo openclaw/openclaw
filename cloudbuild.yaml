@@ -8,9 +8,9 @@
 # registry's moving tags.
 #
 # Triggered by pushes to the `dev` (openclaw-dev) and `main` (openclaw-prod)
-# branches. The image is tagged with the upstream version from package.json,
-# the short commit SHA, and the branch name so consumers can pin to whichever
-# level of stability they want.
+# branches. The image is tagged with the pinned upstream release version, the
+# short commit SHA, and the branch name so consumers can pin to whichever level
+# of stability they want.
 
 steps:
   - id: read-version
@@ -19,13 +19,13 @@ steps:
     args:
       - -ceu
       - |
-        VERSION=$(grep -m1 '"version"' package.json | sed -E 's/.*"version": "([^"]+)".*/\1/')
+        VERSION="2026.5.4"
         if [ -z "$$VERSION" ]; then
-          echo "Failed to read version from package.json" >&2
+          echo "Failed to read pinned upstream release version" >&2
           exit 1
         fi
         echo "VERSION=$$VERSION" > /workspace/env.sh
-        echo "Building openclaw v$$VERSION (sha=${SHORT_SHA}, branch=${BRANCH_NAME})"
+        echo "Building openclaw fork from official v$$VERSION (sha=${SHORT_SHA}, branch=${BRANCH_NAME})"
 
   - id: build-fork
     name: gcr.io/cloud-builders/docker
@@ -36,9 +36,8 @@ steps:
       - -ceu
       - |
         source /workspace/env.sh
-        # BASE_IMAGE is derived from package.json so the upstream base
-        # tracks the fork version automatically. Dockerfile.fork has a
-        # matching default for local `docker build` without this flag.
+        # BASE_IMAGE is pinned to the latest official release tag. Dockerfile.fork
+        # has a matching default for local `docker build` without this flag.
         docker build \
           --platform=linux/amd64 \
           --build-arg BASE_IMAGE=ghcr.io/openclaw/openclaw:$$VERSION-slim \

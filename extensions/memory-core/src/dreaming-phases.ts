@@ -72,6 +72,7 @@ type RunPhaseIfTriggeredParams = {
 );
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
+const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
 const DAILY_INGESTION_SCORE = 0.62;
@@ -386,6 +387,7 @@ type DailyIngestionBatch = {
 type DailyIngestionFileState = {
   mtimeMs: number;
   size: number;
+  lastDreamingDayIngested?: string;
 };
 
 type DailyIngestionState = {
@@ -417,15 +419,25 @@ function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
     if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
       continue;
     }
+    const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
     files[key] = {
       mtimeMs: Math.floor(mtimeMs),
       size: Math.floor(size),
+      ...(lastDreamingDayIngested ? { lastDreamingDayIngested } : {}),
     };
   }
   return {
     version: 1,
     files,
   };
+}
+
+function normalizeMemoryDay(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const day = value.trim();
+  return MEMORY_DAY_RE.test(day) ? day : undefined;
 }
 
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
@@ -1065,6 +1077,7 @@ async function collectDailyIngestionBatches(params: {
   lookbackDays: number;
   limit: number;
   nowMs: number;
+  ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
   const memoryDir = path.join(params.workspaceDir, "memory");
@@ -1119,11 +1132,15 @@ async function collectDailyIngestionBatches(params: {
       previous !== undefined &&
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size;
-    if (!unchanged) {
-      changed = true;
-    } else {
+    const previousDreamingDay = normalizeMemoryDay(previous?.lastDreamingDayIngested);
+    if (unchanged && previousDreamingDay === params.ingestionDreamingDay) {
+      nextFiles[relativePath] = {
+        ...fingerprint,
+        lastDreamingDayIngested: previousDreamingDay,
+      };
       continue;
     }
+    changed = true;
 
     const raw = await fs.readFile(filePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
@@ -1155,6 +1172,10 @@ async function collectDailyIngestionBatches(params: {
     }
     batches.push({ day: file.day, results });
     total += results.length;
+    nextFiles[relativePath] = {
+      ...fingerprint,
+      lastDreamingDayIngested: params.ingestionDreamingDay,
+    };
     if (total >= totalCap) {
       break;
     }
@@ -1189,14 +1210,15 @@ async function ingestDailyMemorySignals(params: {
   timezone?: string;
 }): Promise<void> {
   const state = await readDailyIngestionState(params.workspaceDir);
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   const collected = await collectDailyIngestionBatches({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.lookbackDays,
     limit: params.limit,
     nowMs: params.nowMs,
+    ingestionDreamingDay: ingestionDayBucket,
     state,
   });
-  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,

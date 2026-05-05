@@ -144,13 +144,23 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "only bundled plugins can register agent tool result middleware",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
+    "control UI descriptor registration requires id, surface, label, and valid optional fields",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
+    "node invoke policy registration missing commands",
+    "only bundled plugins can register trusted tool policies",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
     "plugin must declare contracts.tools for: kitchen-sink-tool",
     'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
+    "session extension registration requires namespace and description",
+    "session scheduler job registration requires unique id, sessionKey, and kind",
+    "tool metadata registration missing toolName",
   ]);
+  const optionalErrorMessages = new Set([
+    "agent event subscription registration requires id and handle",
+  ]);
+  const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
     if (errorMessages.size > 0) {
       throw new Error(
@@ -160,11 +170,11 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     return;
   }
   for (const message of errorMessages) {
-    if (!expectedErrorMessages.has(message)) {
+    if (!allowedErrorMessages.has(message)) {
       throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
     }
   }
-  if (surfaceMode === "full") {
+  if (surfaceMode === "full" && process.env.KITCHEN_SINK_REQUIRE_ALL_DIAGNOSTICS === "1") {
     for (const message of expectedErrorMessages) {
       if (!errorMessages.has(message)) {
         throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);

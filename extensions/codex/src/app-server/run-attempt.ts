@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -26,18 +27,24 @@ import {
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
   registerNativeHookRelay,
+  resolveBootstrapContextForRun,
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
+  type EmbeddedContextFile,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
+import {
+  refreshCodexAppServerAuthTokens,
+  resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
 import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
@@ -77,12 +84,16 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
+import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
+  areCodexDynamicToolFingerprintsCompatible,
   buildDeveloperInstructions,
   buildTurnStartParams,
+  codexDynamicToolsFingerprint,
   startOrResumeThread,
 } from "./thread-lifecycle.js";
 import {
@@ -101,6 +112,16 @@ const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
+const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
+const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
+  ["soul.md", 10],
+  ["identity.md", 20],
+  ["user.md", 30],
+  ["tools.md", 40],
+  ["bootstrap.md", 50],
+  ["memory.md", 60],
+  ["heartbeat.md", 70],
+]);
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -330,11 +351,13 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
+  const attemptClientFactory = clientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
@@ -363,16 +386,31 @@ export async function runCodexAppServerAttempt(
     agentId: params.agentId,
   });
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  const runtimeParams = { ...params, sessionKey: sandboxSessionKey };
+  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  const startupAuthProfileCandidate =
+    params.runtimePlan?.auth.forwardedAuthProfileId ??
+    params.authProfileId ??
+    startupBinding?.authProfileId;
+  const startupAuthProfileId = params.authProfileStore
+    ? resolveCodexAppServerAuthProfileId({
+        authProfileId: startupAuthProfileCandidate,
+        store: params.authProfileStore,
+        config: params.config,
+      })
+    : resolveCodexAppServerAuthProfileIdForAgent({
+        authProfileId: startupAuthProfileCandidate,
+        agentDir,
+        config: params.config,
+      });
+  const runtimeParams = {
+    ...params,
+    sessionKey: sandboxSessionKey,
+    ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
+  };
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
   let yieldDetected = false;
-  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
-  const startupAuthProfileId =
-    params.runtimePlan?.auth.forwardedAuthProfileId ??
-    params.authProfileId ??
-    startupBinding?.authProfileId;
   const tools = await buildDynamicTools({
     params,
     resolvedWorkspace,
@@ -391,6 +429,7 @@ export async function runCodexAppServerAttempt(
     signal: runAbortController.signal,
     hookContext: {
       agentId: sessionAgentId,
+      config: params.config,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
@@ -465,12 +504,33 @@ export async function runCodexAppServerAttempt(
         error: formatErrorMessage(assembleErr),
       });
     }
+  } else if (
+    shouldProjectMirroredHistoryForCodexStart({
+      startupBinding,
+      dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+      historyMessages,
+    })
+  ) {
+    const projection = projectContextEngineAssemblyForCodex({
+      assembledMessages: historyMessages,
+      originalHistoryMessages: historyMessages,
+      prompt: params.prompt,
+    });
+    promptText = projection.promptText;
+    prePromptMessageCount = projection.prePromptMessageCount;
   }
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
     prompt: promptText,
     developerInstructions,
     messages: historyMessages,
     ctx: hookContext,
+  });
+  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+    params,
+    resolvedWorkspace,
+    effectiveWorkspace,
+    sessionKey: sandboxSessionKey,
+    sessionAgentId,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
@@ -494,6 +554,7 @@ export async function runCodexAppServerAttempt(
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
+      config: params.config,
       runId: params.runId,
       signal: runAbortController.signal,
     });
@@ -506,6 +567,10 @@ export async function runCodexAppServerAttempt(
       : options.nativeHookRelay?.enabled === false
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
+    const threadConfig = mergeCodexConfigInstructions(
+      nativeHookRelayConfig,
+      workspaceBootstrapInstructions,
+    );
     ({ client, thread } = await withCodexStartupTimeout({
       timeoutMs: params.timeoutMs,
       timeoutFloorMs: options.startupTimeoutFloorMs,
@@ -513,10 +578,11 @@ export async function runCodexAppServerAttempt(
       operation: async () => {
         let attemptedClient: CodexAppServerClient | undefined;
         const startupAttempt = async () => {
-          const startupClient = await clientFactory(
+          const startupClient = await attemptClientFactory(
             appServer.start,
             startupAuthProfileId,
             agentDir,
+            params.config,
           );
           attemptedClient = startupClient;
           startupClientForCleanup = startupClient;
@@ -528,12 +594,12 @@ export async function runCodexAppServerAttempt(
           });
           const startupThread = await startOrResumeThread({
             client: startupClient,
-            params,
+            params: runtimeParams,
             cwd: effectiveWorkspace,
             dynamicTools: toolBridge.specs,
             appServer,
             developerInstructions: promptBuild.developerInstructions,
-            config: nativeHookRelayConfig,
+            config: threadConfig,
           });
           return { client: startupClient, thread: startupThread };
         };
@@ -970,16 +1036,18 @@ export async function runCodexAppServerAttempt(
       ),
     );
   } catch (error) {
+    const usageLimitError = formatCodexTurnStartUsageLimitError(error, pendingNotifications);
+    const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
-      data: { phase: "turn_start_failed", error: formatErrorMessage(error) },
+      data: { phase: "turn_start_failed", error: turnStartErrorMessage },
     });
     trajectoryRecorder?.recordEvent("session.ended", {
       status: "error",
       threadId: thread.threadId,
       timedOut,
       aborted: runAbortController.signal.aborted,
-      promptError: normalizeCodexTrajectoryError(error),
+      promptError: turnStartErrorMessage,
     });
     trajectoryEndRecorded = true;
     runAgentHarnessLlmOutputHook({
@@ -1001,7 +1069,7 @@ export async function runCodexAppServerAttempt(
       event: {
         messages: turnStartFailureMessages,
         success: false,
-        error: formatErrorMessage(error),
+        error: turnStartErrorMessage,
         durationMs: Date.now() - attemptStartedAt,
       },
       ctx: hookContext,
@@ -1019,6 +1087,11 @@ export async function runCodexAppServerAttempt(
       },
     });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    if (usageLimitError) {
+      throw new Error(usageLimitError, {
+        cause: error,
+      });
+    }
     throw error;
   }
   turnId = turn.turn.id;
@@ -1330,6 +1403,7 @@ function createCodexNativeHookRelay(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
+  config: EmbeddedRunAttemptParams["config"];
   runId: string;
   signal: AbortSignal;
 }): NativeHookRelayRegistrationHandle | undefined {
@@ -1346,6 +1420,7 @@ function createCodexNativeHookRelay(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
     ttlMs: params.options?.ttlMs,
@@ -1427,6 +1502,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     sessionKey: input.sandboxSessionKey,
+    runSessionKey:
+      params.sessionKey && params.sessionKey !== input.sandboxSessionKey
+        ? params.sessionKey
+        : undefined,
     sessionId: params.sessionId,
     runId: params.runId,
     agentDir,
@@ -1458,6 +1537,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
+    forceMessageTool: params.sourceReplyDeliveryMode === "message_tool_only",
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
@@ -1488,6 +1568,23 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelId: params.modelId,
     modelApi: params.model.api,
     model: params.model,
+  });
+}
+
+function shouldProjectMirroredHistoryForCodexStart(params: {
+  startupBinding: CodexAppServerThreadBinding | undefined;
+  dynamicToolsFingerprint: string;
+  historyMessages: AgentMessage[];
+}): boolean {
+  if (!params.historyMessages.some((message) => message.role === "user")) {
+    return false;
+  }
+  if (!params.startupBinding?.threadId) {
+    return true;
+  }
+  return !areCodexDynamicToolFingerprintsCompatible({
+    previous: params.startupBinding.dynamicToolsFingerprint,
+    next: params.dynamicToolsFingerprint,
   });
 }
 
@@ -1556,6 +1653,76 @@ function readDynamicToolCallParams(
   return readCodexDynamicToolCallParams(value);
 }
 
+function formatCodexTurnStartUsageLimitError(
+  error: unknown,
+  pendingNotifications: CodexServerNotification[],
+): string | undefined {
+  const notificationError = readLatestCodexErrorNotification(pendingNotifications);
+  const errorPayload = readCodexErrorPayload(error);
+  return formatCodexUsageLimitErrorMessage({
+    message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
+    codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
+    rateLimits:
+      readLatestRateLimitNotificationPayload(pendingNotifications) ??
+      errorPayload.rateLimits ??
+      readRecentCodexRateLimits(),
+  });
+}
+
+function readLatestRateLimitNotificationPayload(
+  notifications: CodexServerNotification[],
+): JsonValue | undefined {
+  for (let index = notifications.length - 1; index >= 0; index -= 1) {
+    const notification = notifications[index];
+    if (notification?.method === "account/rateLimits/updated") {
+      rememberCodexRateLimits(notification.params);
+      return notification.params;
+    }
+  }
+  return undefined;
+}
+
+function readLatestCodexErrorNotification(
+  notifications: CodexServerNotification[],
+): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
+  for (let index = notifications.length - 1; index >= 0; index -= 1) {
+    const notification = notifications[index];
+    if (notification?.method !== "error" || !isJsonObject(notification.params)) {
+      continue;
+    }
+    const error = notification.params.error;
+    if (!isJsonObject(error)) {
+      continue;
+    }
+    return {
+      message: readString(error, "message"),
+      codexErrorInfo: error.codexErrorInfo,
+    };
+  }
+  return undefined;
+}
+
+function readCodexErrorPayload(error: unknown): {
+  message?: string;
+  codexErrorInfo?: JsonValue | null;
+  rateLimits?: JsonValue;
+} {
+  const message = error instanceof Error ? error.message : undefined;
+  if (!error || typeof error !== "object" || !("data" in error)) {
+    return { message };
+  }
+  const data = (error as { data?: unknown }).data as JsonValue | undefined;
+  if (!isJsonObject(data)) {
+    return { message };
+  }
+  const nestedError = isJsonObject(data.error) ? data.error : data;
+  return {
+    message: readString(nestedError, "message") ?? message,
+    codexErrorInfo: nestedError.codexErrorInfo,
+    rateLimits: nestedError.rateLimits ?? data.rateLimits,
+  };
+}
+
 function isTurnNotification(
   value: JsonValue | undefined,
   threadId: string,
@@ -1597,6 +1764,129 @@ async function readMirroredSessionHistoryMessages(
   return messages;
 }
 
+async function buildCodexWorkspaceBootstrapInstructions(params: {
+  params: EmbeddedRunAttemptParams;
+  resolvedWorkspace: string;
+  effectiveWorkspace: string;
+  sessionKey: string;
+  sessionAgentId: string;
+}): Promise<string | undefined> {
+  try {
+    const { contextFiles } = await resolveBootstrapContextForRun({
+      workspaceDir: params.resolvedWorkspace,
+      config: params.params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.params.sessionId,
+      agentId: params.params.agentId ?? params.sessionAgentId,
+      warn: (message) => embeddedAgentLog.warn(message),
+      contextMode: params.params.bootstrapContextMode,
+      runKind: params.params.bootstrapContextRunKind,
+    });
+    return renderCodexWorkspaceBootstrapInstructions(
+      contextFiles.map((file) =>
+        remapCodexContextFilePath({
+          file,
+          sourceWorkspaceDir: params.resolvedWorkspace,
+          targetWorkspaceDir: params.effectiveWorkspace,
+        }),
+      ),
+    );
+  } catch (error) {
+    embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
+    return undefined;
+  }
+}
+
+function renderCodexWorkspaceBootstrapInstructions(
+  contextFiles: EmbeddedContextFile[],
+): string | undefined {
+  const files = contextFiles
+    .filter((file) => {
+      const baseName = getCodexContextFileBasename(file.path);
+      return baseName && !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName);
+    })
+    .toSorted(compareCodexContextFiles);
+  if (files.length === 0) {
+    return undefined;
+  }
+  const hasSoulFile = files.some((file) => getCodexContextFileBasename(file.path) === "soul.md");
+  const lines = [
+    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.",
+    "",
+    "# Project Context",
+    "",
+    "The following project context files have been loaded:",
+  ];
+  if (hasSoulFile) {
+    lines.push(
+      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+    );
+  }
+  lines.push("");
+  for (const file of files) {
+    lines.push(`## ${file.path}`, "", file.content, "");
+  }
+  return lines.join("\n").trim();
+}
+
+function mergeCodexConfigInstructions(
+  config: JsonObject | undefined,
+  instructions: string | undefined,
+): JsonObject | undefined {
+  if (!instructions?.trim()) {
+    return config;
+  }
+  const merged: JsonObject = { ...config };
+  const existingInstructions =
+    typeof merged.instructions === "string" ? merged.instructions.trim() : undefined;
+  merged.instructions = joinPresentSections(existingInstructions, instructions);
+  return merged;
+}
+
+function remapCodexContextFilePath(params: {
+  file: EmbeddedContextFile;
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+}): EmbeddedContextFile {
+  const relativePath = path.relative(params.sourceWorkspaceDir, params.file.path);
+  if (
+    !relativePath ||
+    relativePath.startsWith("..") ||
+    path.isAbsolute(relativePath) ||
+    params.sourceWorkspaceDir === params.targetWorkspaceDir
+  ) {
+    return params.file;
+  }
+  return {
+    ...params.file,
+    path: path.join(params.targetWorkspaceDir, relativePath),
+  };
+}
+
+function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedContextFile): number {
+  const leftPath = normalizeCodexContextFilePath(left.path);
+  const rightPath = normalizeCodexContextFilePath(right.path);
+  const leftBase = getCodexContextFileBasename(left.path);
+  const rightBase = getCodexContextFileBasename(right.path);
+  const leftOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(leftBase) ?? Number.MAX_SAFE_INTEGER;
+  const rightOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(rightBase) ?? Number.MAX_SAFE_INTEGER;
+  if (leftOrder !== rightOrder) {
+    return leftOrder - rightOrder;
+  }
+  if (leftBase !== rightBase) {
+    return leftBase.localeCompare(rightBase);
+  }
+  return leftPath.localeCompare(rightPath);
+}
+
+function normalizeCodexContextFilePath(filePath: string): string {
+  return filePath.trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function getCodexContextFileBasename(filePath: string): string {
+  return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
+}
+
 async function mirrorTranscriptBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
@@ -1611,7 +1901,14 @@ async function mirrorTranscriptBestEffort(params: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
-      idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
+      // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
+      // with a per-turn `attachCodexMirrorIdentity` value carrying its own
+      // turnId, so distinct turns produce distinct dedupe keys via the
+      // identity (not via the scope). Dropping `turnId` from the scope
+      // here is what lets a re-emitted prior-turn entry — which still
+      // carries its original `${turnId}:${kind}` identity — collide with
+      // its existing on-disk key and be a true no-op.
+      idempotencyScope: `codex-app-server:${params.threadId}`,
       config: params.params.config,
     });
   } catch (error) {
@@ -1663,6 +1960,7 @@ export const __testing = {
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
   applyCodexDynamicToolProfile,
+  buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

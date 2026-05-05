@@ -8,8 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import { writePackageDistInventory } from "../infra/package-dist-inventory.js";
+import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { VERSION } from "../version.js";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 import { isOwningNpmCommand } from "./update-cli.test-helpers.js";
 
@@ -29,6 +31,7 @@ const runRestartScript = vi.fn();
 const mockedRunDaemonInstall = vi.fn();
 const serviceReadCommand = vi.fn();
 const serviceReadRuntime = vi.fn();
+const mockGetSelfAndAncestorPidsSync = vi.fn(() => new Set<number>([process.pid]));
 const inspectPortUsage = vi.fn();
 const classifyPortListener = vi.fn();
 const formatPortDiagnostics = vi.fn();
@@ -126,6 +129,10 @@ vi.mock("../infra/runtime-guard.js", () => ({
       patch: Number.parseInt(match[3] ?? "0", 10),
     };
   },
+}));
+
+vi.mock("../infra/restart-stale-pids.js", () => ({
+  getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
 }));
 
 vi.mock("node:child_process", async () => {
@@ -498,6 +505,7 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid]));
     prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
@@ -613,6 +621,33 @@ describe("update-cli", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(runDaemonInstall).not.toHaveBeenCalled();
     expect(runDaemonRestart).not.toHaveBeenCalled();
+  });
+
+  it("finishes package updates when the post-core process writes a result but keeps handles open", async () => {
+    setupUpdatedRootRefresh();
+    const kill = vi.fn();
+    spawn.mockImplementationOnce((_command: unknown, _argv: unknown, options: unknown) => {
+      const resultPath = (options as { env?: NodeJS.ProcessEnv }).env
+        ?.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH;
+      if (!resultPath) {
+        throw new Error("missing post-core result path");
+      }
+      queueMicrotask(() => {
+        void fs.writeFile(resultPath, `${JSON.stringify({ status: "ok" })}\n`, "utf-8");
+      });
+      const child = new EventEmitter() as EventEmitter & {
+        kill: typeof kill;
+        once: EventEmitter["once"];
+      };
+      child.kill = kill;
+      return child;
+    });
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("does not carry gateway service markers into the post-core update process", async () => {
@@ -742,8 +777,34 @@ describe("update-cli", () => {
       ["npm", "i", "-g", expect.any(String)],
       expect.anything(),
     );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("post-core resume children exit after writing a plugin update result", async () => {
+    const resultDir = createCaseDir("openclaw-post-core-result");
+    const resultPath = path.join(resultDir, "plugins.json");
+    await fs.mkdir(resultDir, { recursive: true });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_RESULT_PATH: resultPath,
+      },
+      async () => {
+        await updateCommand({ restart: false });
+      },
+    );
+
+    const result = JSON.parse(await fs.readFile(resultPath, "utf-8")) as {
+      status?: string;
+    };
+    expect(result.status).toBe("ok");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
 
@@ -1121,7 +1182,7 @@ describe("update-cli", () => {
         expect(last).toBeDefined();
         const parsed = last as Record<string, unknown>;
         const channel = parsed.channel as { value?: unknown };
-        expect(channel.value).toBe("stable");
+        expect(channel.value).toBe(isBetaTag(VERSION) ? "beta" : "stable");
       },
     },
   ] as const)("updateStatusCommand rendering: $name", runUpdateCliScenario);
@@ -1419,6 +1480,26 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
     expect(serviceStop).not.toHaveBeenCalled();
     expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      expect.any(Object),
+    );
+  });
+
+  it("refuses package updates from inside the active gateway process tree", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceLoaded.mockResolvedValue(true);
+    mockGetSelfAndAncestorPidsSync.mockReturnValue(new Set<number>([process.pid, 4242]));
+
+    await updateCommand({ yes: true });
+
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw update detected it is running inside the gateway process tree.",
+    );
+    expect(errors.join("\n")).toContain("Gateway PID 4242 is an ancestor");
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
       expect.any(Object),

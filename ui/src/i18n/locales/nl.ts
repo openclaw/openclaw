@@ -162,8 +162,18 @@ export const nl: TranslationMap = {
     store: "Opslag: {path}",
     active: "Actief",
     limit: "Limiet",
+    filters: "Filters",
+    showFilters: "Filters tonen",
+    hideFilters: "Filters verbergen",
+    sourceFilters: "Filters voor sessiebron",
     global: "Globaal",
     unknown: "Onbekend",
+    showArchived: "Gearchiveerde tonen",
+    activeTooltip: "Bijgewerkt in de afgelopen {count} minuten.",
+    limitTooltip: "Maximaal aantal te laden sessies.",
+    globalTooltip: "Globale sessies opnemen.",
+    unknownTooltip: "Onbekende sessies opnemen.",
+    showArchivedTooltip: "Gearchiveerde sessies opnemen.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter op sleutel, agent, label, type…",
     selected: "{count} geselecteerd",
@@ -182,6 +192,8 @@ export const nl: TranslationMap = {
     verbose: "Uitgebreid",
     reasoning: "Redenering",
     noSessions: "Geen sessies gevonden.",
+    noSessionsMatchFilters: "Geen sessies komen overeen met je filters.",
+    showAll: "Alles weergeven",
     inherit: "overnemen",
     defaultOption: "Standaard ({value})",
     offExplicit: "uit (expliciet)",
@@ -727,6 +739,16 @@ export const nl: TranslationMap = {
       dailyCsv: "Dagelijkse CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Gebruikscache wordt op de achtergrond opnieuw opgebouwd. Weergegeven totalen kunnen verouderd zijn.",
+      title: "{status}: {pending} in behandeling, {stale} verouderd, {cached} gecachet",
+      status: {
+        refreshing: "verversen",
+        stale: "verouderd",
+        partial: "gedeeltelijk",
+      },
+    },
     empty: {
       title: "Begin met een datumbereik",
       subtitle:
@@ -916,6 +938,7 @@ export const nl: TranslationMap = {
     updating: "Bijwerken…",
     updateNow: "Nu bijwerken",
     dismissUpdateBanner: "Updatebanner sluiten",
+    switchedSession: "Overgeschakeld naar {session}",
   },
   languages: {
     en: "English (Engels)",

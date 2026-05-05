@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildQaImageGenerationConfigPatch } from "./image-generation.js";
 
 describe("QA provider image generation config", () => {
-  it("routes mock-openai image generation through the OpenAI image provider", () => {
+  it("uses the OpenAI image provider against the selected mock-openai endpoint", () => {
     const patch = buildQaImageGenerationConfigPatch({
       providerMode: "mock-openai",
       providerBaseUrl: "http://127.0.0.1:44080/v1",
@@ -10,9 +10,10 @@ describe("QA provider image generation config", () => {
     });
 
     expect(patch.plugins.allow).toEqual(["acpx", "memory-core", "openai", "qa-channel"]);
-    expect(patch.plugins.entries).toEqual({ openai: { enabled: true } });
+    expect(patch.plugins.entries?.openai).toEqual({ enabled: true });
     expect(patch.agents.defaults.imageGenerationModel.primary).toBe("openai/gpt-image-1");
     expect(patch.models?.providers["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(patch.models?.providers.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
   });
 
   it("preserves already-allowed plugins when configuring image generation", () => {

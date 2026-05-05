@@ -160,8 +160,18 @@ export const it: TranslationMap = {
     store: "Archivio: {path}",
     active: "Attivo",
     limit: "Limite",
+    filters: "Filtri",
+    showFilters: "Mostra filtri",
+    hideFilters: "Nascondi filtri",
+    sourceFilters: "Filtri origine sessione",
     global: "Globale",
     unknown: "Sconosciuto",
+    showArchived: "Mostra archiviate",
+    activeTooltip: "Aggiornate negli ultimi {count} minuti.",
+    limitTooltip: "Numero massimo di sessioni da caricare.",
+    globalTooltip: "Includi sessioni globali.",
+    unknownTooltip: "Includi sessioni sconosciute.",
+    showArchivedTooltip: "Includi sessioni archiviate.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtra per chiave, agente, etichetta, tipo…",
     selected: "{count} selezionati",
@@ -180,6 +190,8 @@ export const it: TranslationMap = {
     verbose: "Dettagliato",
     reasoning: "Ragionamento",
     noSessions: "Nessuna sessione trovata.",
+    noSessionsMatchFilters: "Nessuna sessione corrisponde ai tuoi filtri.",
+    showAll: "Mostra tutto",
     inherit: "eredita",
     defaultOption: "Predefinito ({value})",
     offExplicit: "disattivato (esplicito)",
@@ -727,6 +739,16 @@ export const it: TranslationMap = {
       dailyCsv: "CSV giornaliero",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "La cache di utilizzo viene ricostruita in background. I totali visualizzati potrebbero non essere aggiornati.",
+      title: "{status}: {pending} in sospeso, {stale} obsoleti, {cached} memorizzati nella cache",
+      status: {
+        refreshing: "aggiornamento in corso",
+        stale: "obsoleta",
+        partial: "parziale",
+      },
+    },
     empty: {
       title: "Inizia con un intervallo di date",
       subtitle:
@@ -918,6 +940,7 @@ export const it: TranslationMap = {
     updating: "Aggiornamento…",
     updateNow: "Aggiorna ora",
     dismissUpdateBanner: "Ignora banner di aggiornamento",
+    switchedSession: "Passato a {session}",
   },
   languages: {
     en: "English (Inglese)",

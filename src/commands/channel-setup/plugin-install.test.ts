@@ -437,6 +437,54 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(await runInitialValueForChannel("beta")).toBe("npm");
   });
 
+  it("installs npm beta on the beta channel without persisting the beta tag", async () => {
+    const runtime = makeRuntime();
+    const { prompter, select } = makeSkipInstallPrompter();
+    const cfg: OpenClawConfig = { update: { channel: "beta" } };
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "wecom-openclaw-plugin",
+      targetDir: "/tmp/wecom-openclaw-plugin",
+      version: "2026.5.4-beta.1",
+      npmResolution: {
+        name: "@openclaw/wecom",
+        version: "2026.5.4-beta.1",
+        resolvedSpec: "@openclaw/wecom@2026.5.4-beta.1",
+      },
+    });
+
+    const result = await ensureChannelSetupPluginInstalled({
+      cfg,
+      entry: {
+        id: "wecom",
+        pluginId: "wecom-openclaw-plugin",
+        meta: {
+          id: "wecom",
+          label: "WeCom",
+          selectionLabel: "WeCom",
+          docsPath: "/channels/wecom",
+          blurb: "WeCom channel",
+        },
+        install: {
+          npmSpec: "@openclaw/wecom",
+        },
+      },
+      prompter,
+      runtime,
+      promptInstall: false,
+    });
+
+    expect(select).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/wecom@beta",
+        expectedPluginId: "wecom-openclaw-plugin",
+      }),
+    );
+    expect(result.cfg.plugins?.installs?.["wecom-openclaw-plugin"]?.spec).toBe("@openclaw/wecom");
+  });
+
   it("defaults to bundled local path on beta channel when available", async () => {
     const runtime = makeRuntime();
     const { prompter, select } = makeSkipInstallPrompter();
@@ -607,7 +655,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     // npm-only entry (no local path)
     const npmOnlyEntry: ChannelPluginCatalogEntry = {
       id: "wecom",
-      pluginId: "wecom",
+      pluginId: "wecom-openclaw-plugin",
       meta: {
         id: "wecom",
         label: "WeCom",
@@ -621,8 +669,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     };
     installPluginFromNpmSpec.mockResolvedValue({
       ok: true,
-      pluginId: "wecom",
-      installPath: "/tmp/wecom",
+      pluginId: "wecom-openclaw-plugin",
+      installPath: "/tmp/wecom-openclaw-plugin",
     });
     vi.mocked(fs.existsSync).mockReturnValue(false);
     resolveBundledPluginSources.mockReturnValue(new Map());
@@ -637,7 +685,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
 
     expect(select).not.toHaveBeenCalled();
     expect(result.installed).toBe(true);
-    expect(result.pluginId).toBe("wecom");
+    expect(result.pluginId).toBe("wecom-openclaw-plugin");
   });
 
   it("reloads the setup plugin registry without using plugin registry cache", () => {

@@ -131,7 +131,7 @@ import {
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
-import { getDmHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
 import { hardenManualCompactionBoundary } from "./manual-compaction-boundary.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "./message-action-discovery-input.js";
@@ -482,7 +482,9 @@ async function compactEmbeddedPiSessionDirectOnce(
     };
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  await ensureOpenClawModelsJson(params.config, agentDir);
+  await ensureOpenClawModelsJson(params.config, agentDir, {
+    workspaceDir: resolvedWorkspace,
+  });
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     provider,
     modelId,
@@ -574,15 +576,17 @@ async function compactEmbeddedPiSessionDirectOnce(
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
   try {
+    const skillsSnapshotForRun =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       agentId: effectiveSkillAgentId,
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: skillsSnapshotForRun,
     });
-    restoreSkillEnv = params.skillsSnapshot
+    restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
+          snapshot: skillsSnapshotForRun,
           config: params.config,
         })
       : applySkillEnvOverrides({
@@ -590,7 +594,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           config: params.config,
         });
     const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: skillsSnapshotForRun,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
@@ -664,6 +668,10 @@ async function compactEmbeddedPiSessionDirectOnce(
       messageProvider: resolvedMessageProvider,
       agentAccountId: params.agentAccountId,
       sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
       sessionId: params.sessionId,
       runId: params.runId,
       groupId: params.groupId,
@@ -1096,7 +1104,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           const originalMessages = session.messages.slice();
           const truncated = limitHistoryTurns(
             session.messages,
-            getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            getHistoryLimitFromSessionKey(params.sessionKey, params.config),
           );
           // Re-run tool_use/tool_result pairing repair after truncation, since
           // limitHistoryTurns can orphan tool_result blocks by removing the
@@ -1130,6 +1138,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             workspaceDir: effectiveWorkspace,
             messageProvider: resolvedMessageProvider,
             metrics: beforeHookMetrics,
+            onHookMessages: params.onCompactionHookMessages,
           });
           const { messageCountOriginal } = beforeHookMetrics;
           const diagEnabled = log.isEnabled("debug");
@@ -1314,6 +1323,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             summaryLength: typeof result.summary === "string" ? result.summary.length : undefined,
             tokensBefore: result.tokensBefore,
             firstKeptEntryId: effectiveFirstKeptEntryId,
+            onHookMessages: params.onCompactionHookMessages,
           });
           return {
             ok: true,

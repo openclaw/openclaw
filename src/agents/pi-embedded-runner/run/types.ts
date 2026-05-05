@@ -9,6 +9,7 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type { ToolOutcomeObserver } from "../../pi-tools.before-tool-call.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -40,6 +41,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Live observer called after wrapped tool outcomes are recorded. */
+  onToolOutcome?: ToolOutcomeObserver;
   model: Model<Api>;
   authStorage: AuthStorage;
   /** Auth profile store already resolved during startup for this attempt. */
@@ -112,8 +115,14 @@ export type EmbeddedRunAttemptResult = {
   promptCache?: ContextEnginePromptCacheInfo;
   compactionCount?: number;
   compactionTokensAfter?: number;
-  /** Client tool call detected (OpenResponses hosted tools). */
-  clientToolCall?: { name: string; params: Record<string, unknown> };
+  /**
+   * Client tool calls detected during this attempt (OpenResponses hosted
+   * tools), in the order the underlying LLM emitted them. Field is
+   * `undefined` when no client tools were called so existing truthiness
+   * checks across the runner pipeline (`attempt.clientToolCalls ? ...`)
+   * keep their meaning. When set, the array always has at least one entry.
+   */
+  clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;

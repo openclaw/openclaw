@@ -14,16 +14,15 @@
 #
 # BASE_IMAGE is a published upstream tag so cloudbuild does not rebuild the
 # upstream runtime from source. The cloudbuild pipeline overrides this with
-# a value derived from package.json's "version" field. The default below is
-# a fallback for local `docker build` and should be bumped in lockstep with
-# package.json.
+# the latest official release tag. The default below is a fallback for local
+# `docker build` and should be bumped when the fork advances its upstream base.
 #
 # Build (local):
 #   docker build -f Dockerfile.fork .
 # Build (override base):
 #   docker build --build-arg BASE_IMAGE=<upstream-image> -f Dockerfile.fork .
 
-ARG BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.5.2-slim"
+ARG BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.5.4-slim"
 
 # ── Stage 1: source — install gh, lark-cli, pm2, gcloud ─────────
 FROM ${BASE_IMAGE} AS source

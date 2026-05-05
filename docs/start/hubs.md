@@ -84,7 +84,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Gateway + operations
 
 - [Gateway runbook](/gateway)
-- [Network model](/gateway/network-model)
+- [Network model](/network#core-model)
 - [Gateway pairing](/gateway/pairing)
 - [Gateway lock](/gateway/gateway-lock)
 - [Background process](/gateway/background-process)

@@ -8,6 +8,7 @@ const SCENARIOS = new Set([
   "bootstrap-persona",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
+  "stale-source-plugin-shadow",
   "tilde-log-path",
   "versioned-runtime-deps",
 ]);
@@ -337,10 +338,12 @@ function assertStateSurvived() {
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
   if (stage === "baseline") {
-    assert(
-      fs.existsSync(path.join(legacyRuntimeRoot, "discord")),
-      "legacy plugin runtime deps root missing before doctor cleanup",
-    );
+    if (fs.existsSync(legacyRuntimeRoot)) {
+      assert(
+        fs.existsSync(path.join(legacyRuntimeRoot, "discord")),
+        "legacy plugin runtime deps root exists but discord debris is missing before doctor cleanup",
+      );
+    }
   } else {
     assert(
       !fs.existsSync(legacyRuntimeRoot),
@@ -352,6 +355,13 @@ function assertStateSurvived() {
       const actual = fs.readFileSync(path.join(workspace, fileName), "utf8");
       assert(actual === contents, `${fileName} was changed during update/doctor`);
     }
+  }
+  if (scenario === "stale-source-plugin-shadow") {
+    const staleRoot = path.join(stateDir, "extensions", "opik-openclaw");
+    assert(
+      fs.existsSync(path.join(staleRoot, "src", "index.ts")),
+      "source-only plugin shadow fixture missing",
+    );
   }
   if (scenario === "versioned-runtime-deps") {
     if (stage === "baseline") {
@@ -376,6 +386,42 @@ function readInstalledPluginIndex() {
   return readJson(file);
 }
 
+function assertExternalPluginInstall(records, pluginId, packageName) {
+  const record = records[pluginId];
+  assert(record, `configured external ${pluginId} plugin install record missing`);
+  assert(
+    record.source === "npm",
+    `configured external ${pluginId} plugin must be installed from npm, got: ${record.source}`,
+  );
+  const installPath = resolveHomePath(record.installPath);
+  assert(
+    installPath,
+    `configured external ${pluginId} plugin installPath missing: ${JSON.stringify(record)}`,
+  );
+  assert(
+    fs.existsSync(installPath),
+    `configured external ${pluginId} plugin installPath missing on disk: ${installPath}`,
+  );
+  assert(
+    fs.existsSync(path.join(installPath, "package.json")),
+    `configured external ${pluginId} plugin package.json missing: ${installPath}`,
+  );
+  const packageJson = readJson(path.join(installPath, "package.json"));
+  assert(
+    packageJson.name === packageName,
+    `configured external ${pluginId} package name changed: ${packageJson.name}`,
+  );
+  const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+  assert(
+    isPathInside(npmRoot, installPath),
+    `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+  );
+  assert(
+    String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+    `configured external ${pluginId} plugin npm spec changed`,
+  );
+}
+
 function assertConfiguredPluginInstalls() {
   const coverage = getCoverage();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
@@ -388,41 +434,14 @@ function assertConfiguredPluginInstalls() {
   const index = readInstalledPluginIndex();
   const records = index.installRecords ?? {};
   const matrix = records.matrix;
-  assert(matrix, "configured external matrix plugin install record missing");
-  assert(
-    matrix.source === "clawhub" || matrix.source === "npm",
-    `configured external matrix plugin installed from unexpected source: ${matrix.source}`,
-  );
-  const installPath = resolveHomePath(matrix.installPath);
-  assert(
-    installPath,
-    `configured external matrix plugin installPath missing: ${JSON.stringify(matrix)}`,
-  );
-  assert(
-    fs.existsSync(installPath),
-    `configured external matrix plugin installPath missing on disk: ${installPath}`,
-  );
-  assert(
-    fs.existsSync(path.join(installPath, "package.json")),
-    `configured external matrix plugin package.json missing: ${installPath}`,
-  );
-  if (matrix.source === "clawhub") {
-    assert(
-      String(matrix.spec ?? "").startsWith("clawhub:@openclaw/matrix"),
-      "configured external matrix plugin ClawHub spec changed",
-    );
-  } else {
-    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
-    assert(
-      isPathInside(npmRoot, installPath),
-      `configured external matrix npm install path outside managed npm root: ${installPath}`,
-    );
-    assert(
-      String(matrix.spec ?? matrix.resolvedSpec ?? "").startsWith("@openclaw/matrix"),
-      "configured external matrix plugin npm spec changed",
-    );
-  }
-  assert(!records.discord, "internal discord plugin should not be installed externally");
+  const bundledMatrix = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "matrix");
+  assert(!matrix, "internal matrix plugin should not be installed externally");
+  assert(bundledMatrix, "configured bundled matrix plugin is missing from the plugin index");
+  assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
+  const brave = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "brave");
+  assert(brave, "configured external brave plugin is missing from the plugin index");
+  assert(brave.enabled !== false, "configured external brave plugin is disabled");
+  assertExternalPluginInstall(records, "brave", "@openclaw/brave-plugin");
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
 }
 

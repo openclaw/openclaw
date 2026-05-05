@@ -74,6 +74,10 @@ describe("buildOfficialChannelCatalog", () => {
         expect.objectContaining({
           name: "@wecom/wecom-openclaw-plugin",
           openclaw: expect.objectContaining({
+            plugin: {
+              id: "wecom-openclaw-plugin",
+              label: "WeCom",
+            },
             channel: expect.objectContaining({
               id: "wecom",
               label: "WeCom",
@@ -89,6 +93,10 @@ describe("buildOfficialChannelCatalog", () => {
         expect.objectContaining({
           name: "openclaw-plugin-yuanbao",
           openclaw: expect.objectContaining({
+            plugin: {
+              id: "openclaw-plugin-yuanbao",
+              label: "Yuanbao",
+            },
             channel: expect.objectContaining({
               id: "yuanbao",
               label: "Yuanbao",
@@ -158,6 +166,40 @@ describe("buildOfficialChannelCatalog", () => {
     const installSource = describePluginInstallSource(twitch?.openclaw?.install ?? {});
     expect(installSource.npm?.pinState).toBe("floating-without-integrity");
     expect(installSource.warnings).toEqual(["npm-spec-floating", "npm-spec-missing-integrity"]);
+  });
+
+  it("preserves ClawHub specs when generating publishable channel catalog entries", () => {
+    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-clawhub-");
+    writeJson(path.join(repoRoot, "extensions", "storepack-chat", "package.json"), {
+      name: "@openclaw/storepack-chat",
+      openclaw: {
+        channel: {
+          id: "storepack-chat",
+          label: "Storepack Chat",
+          selectionLabel: "Storepack Chat",
+          docsPath: "/channels/storepack-chat",
+          blurb: "storepack-first channel",
+        },
+        install: {
+          clawhubSpec: "clawhub:@openclaw/storepack-chat",
+          npmSpec: "@openclaw/storepack-chat",
+          defaultChoice: "clawhub",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    const entry = buildOfficialChannelCatalog({ repoRoot }).entries.find(
+      (candidate) => candidate.openclaw?.channel?.id === "storepack-chat",
+    );
+
+    expect(entry?.openclaw?.install).toEqual({
+      clawhubSpec: "clawhub:@openclaw/storepack-chat",
+      npmSpec: "@openclaw/storepack-chat",
+      defaultChoice: "clawhub",
+    });
   });
 
   it("writes the official catalog under dist", () => {

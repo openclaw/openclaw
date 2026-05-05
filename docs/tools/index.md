@@ -146,7 +146,7 @@ Per-agent override: `agents.list[].tools.profile`.
 
 | Profile     | What it includes                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | Unrestricted baseline for broader command/control access; same as leaving `tools.profile` unset                                                   |
+| `full`      | All core and optional plugin tools; unrestricted baseline for broader command/control access                                                      |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
@@ -196,10 +196,10 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:memory`     | memory_search, memory_get                                                                                 |
 | `group:web`        | web_search, x_search, web_fetch                                                                           |
 | `group:ui`         | browser, canvas                                                                                           |
-| `group:automation` | cron, gateway                                                                                             |
+| `group:automation` | heartbeat_respond, cron, gateway                                                                          |
 | `group:messaging`  | message                                                                                                   |
 | `group:nodes`      | nodes                                                                                                     |
-| `group:agents`     | agents_list                                                                                               |
+| `group:agents`     | agents_list, update_plan                                                                                  |
 | `group:media`      | image, image_generate, music_generate, video_generate, tts                                                |
 | `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 

@@ -12,7 +12,7 @@ OpenClaw diagnostics Prometheus exporter.
 ## Distribution
 
 - Package: `@openclaw/diagnostics-prometheus`
-- Install route: ClawHub: `clawhub:@openclaw/diagnostics-prometheus`; npm
+- Install route: npm; ClawHub: `clawhub:@openclaw/diagnostics-prometheus`
 
 ## Surface
 

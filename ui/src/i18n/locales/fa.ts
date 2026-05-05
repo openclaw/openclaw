@@ -161,8 +161,18 @@ export const fa: TranslationMap = {
     store: "ذخیره‌گاه: {path}",
     active: "فعال",
     limit: "حد",
+    filters: "فیلترها",
+    showFilters: "نمایش فیلترها",
+    hideFilters: "پنهان کردن فیلترها",
+    sourceFilters: "فیلترهای منبع جلسه",
     global: "سراسری",
     unknown: "نامشخص",
+    showArchived: "نمایش بایگانی‌شده‌ها",
+    activeTooltip: "در {count} دقیقهٔ گذشته به‌روزرسانی شده است.",
+    limitTooltip: "حداکثر جلسه‌هایی که بارگیری می‌شوند.",
+    globalTooltip: "شامل جلسه‌های سراسری شود.",
+    unknownTooltip: "شامل جلسه‌های ناشناخته شود.",
+    showArchivedTooltip: "شامل جلسه‌های بایگانی‌شده شود.",
     minutesPlaceholder: "دقیقه",
     searchPlaceholder: "فیلتر بر اساس کلید، عامل، برچسب، نوع…",
     selected: "{count} انتخاب‌شده",
@@ -181,6 +191,8 @@ export const fa: TranslationMap = {
     verbose: "پرگویی",
     reasoning: "استدلال",
     noSessions: "هیچ نشستی پیدا نشد.",
+    noSessionsMatchFilters: "هیچ جلسه‌ای با فیلترهای شما مطابقت ندارد.",
+    showAll: "نمایش همه",
     inherit: "ارث‌بری",
     defaultOption: "پیش‌فرض ({value})",
     offExplicit: "خاموش (صریح)",
@@ -725,6 +737,16 @@ export const fa: TranslationMap = {
       dailyCsv: "CSV روزانه",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "کشِ استفاده در پس‌زمینه در حال بازسازی است. مجموع‌های نمایش‌داده‌شده ممکن است قدیمی باشند.",
+      title: "{status}: {pending} در انتظار، {stale} قدیمی، {cached} کش‌شده",
+      status: {
+        refreshing: "در حال تازه‌سازی",
+        stale: "قدیمی",
+        partial: "جزئی",
+      },
+    },
     empty: {
       title: "با یک بازه تاریخ شروع کنید",
       subtitle:
@@ -914,6 +936,7 @@ export const fa: TranslationMap = {
     updating: "در حال به‌روزرسانی…",
     updateNow: "اکنون به‌روزرسانی کن",
     dismissUpdateBanner: "بستن بنر به‌روزرسانی",
+    switchedSession: "به {session} جابه‌جا شد",
   },
   languages: {
     en: "English (انگلیسی)",

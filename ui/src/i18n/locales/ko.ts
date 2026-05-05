@@ -159,8 +159,18 @@ export const ko: TranslationMap = {
     store: "저장소: {path}",
     active: "활성",
     limit: "제한",
+    filters: "필터",
+    showFilters: "필터 표시",
+    hideFilters: "필터 숨기기",
+    sourceFilters: "세션 소스 필터",
     global: "전역",
     unknown: "알 수 없음",
+    showArchived: "보관된 세션 표시",
+    activeTooltip: "최근 {count}분 이내에 업데이트됨.",
+    limitTooltip: "로드할 최대 세션 수.",
+    globalTooltip: "전역 세션 포함.",
+    unknownTooltip: "알 수 없는 세션 포함.",
+    showArchivedTooltip: "보관된 세션 포함.",
     minutesPlaceholder: "분",
     searchPlaceholder: "키, 에이전트, 레이블, 종류로 필터링…",
     selected: "{count}개 선택됨",
@@ -179,6 +189,8 @@ export const ko: TranslationMap = {
     verbose: "상세",
     reasoning: "추론",
     noSessions: "세션을 찾을 수 없습니다.",
+    noSessionsMatchFilters: "필터와 일치하는 세션이 없습니다.",
+    showAll: "모두 보기",
     inherit: "상속",
     defaultOption: "기본값({value})",
     offExplicit: "꺼짐(명시적)",
@@ -722,6 +734,16 @@ export const ko: TranslationMap = {
       dailyCsv: "일별 CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "사용량 캐시가 백그라운드에서 다시 빌드되고 있습니다. 표시된 합계가 최신이 아닐 수 있습니다.",
+      title: "{status}: 대기 중 {pending}, 오래됨 {stale}, 캐시됨 {cached}",
+      status: {
+        refreshing: "새로 고치는 중",
+        stale: "오래됨",
+        partial: "부분적",
+      },
+    },
     empty: {
       title: "날짜 범위부터 시작하세요",
       subtitle:
@@ -909,6 +931,7 @@ export const ko: TranslationMap = {
     updating: "업데이트 중…",
     updateNow: "지금 업데이트",
     dismissUpdateBanner: "업데이트 배너 닫기",
+    switchedSession: "{session}(으)로 전환됨",
   },
   languages: {
     en: "영어",

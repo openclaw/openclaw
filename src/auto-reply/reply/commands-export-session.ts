@@ -131,6 +131,28 @@ async function fileExists(pathName: string): Promise<boolean> {
   }
 }
 
+function addCollisionSuffix(filePath: string, suffix: number): string {
+  const ext = path.extname(filePath);
+  const baseName = path.basename(filePath, ext);
+  return path.join(path.dirname(filePath), `${baseName}-${suffix}${ext}`);
+}
+
+async function writeNewDefaultExportFile(filePath: string, html: string): Promise<string> {
+  for (let suffix = 1; suffix <= 100; suffix++) {
+    const candidate = suffix === 1 ? filePath : addCollisionSuffix(filePath, suffix);
+    try {
+      await fsp.writeFile(candidate, html, { encoding: "utf-8", flag: "wx" });
+      return candidate;
+    } catch (error) {
+      if (typeof error === "object" && error && "code" in error && error.code === "EEXIST") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error(`Could not find an unused export filename near ${filePath}`);
+}
+
 async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   header: SessionHeader | null;
   entries: PiSessionEntry[];
@@ -193,7 +215,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   // 6. Determine output path
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;
-  const outputPath = args.outputPath
+  let outputPath = args.outputPath
     ? path.resolve(
         args.outputPath.startsWith("~")
           ? args.outputPath.replace("~", process.env.HOME ?? "")
@@ -206,7 +228,11 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   await fsp.mkdir(outputDir, { recursive: true });
 
   // 7. Write file
-  await fsp.writeFile(outputPath, html, "utf-8");
+  if (args.outputPath) {
+    await fsp.writeFile(outputPath, html, "utf-8");
+  } else {
+    outputPath = await writeNewDefaultExportFile(outputPath, html);
+  }
 
   const relativePath = path.relative(params.workspaceDir, outputPath);
   const displayPath = relativePath.startsWith("..") ? outputPath : relativePath;

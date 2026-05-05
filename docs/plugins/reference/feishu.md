@@ -12,7 +12,7 @@ Adds the Feishu channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/feishu`
-- Install route: ClawHub + npm
+- Install route: npm; ClawHub
 
 ## Surface
 

@@ -117,7 +117,7 @@ describe("repairSessionFileIfNeeded", () => {
         errorMessage: "transient stream failure",
       },
     };
-    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
+    // Follow-up keeps this case focused on empty error-turn repair.
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -293,7 +293,7 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
+    // Follow-up keeps this case focused on silent-reply preservation.
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -312,7 +312,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(after).toBe(original);
   });
 
-  it("trims trailing assistant messages from the session file", async () => {
+  it("preserves delivered trailing assistant messages in the session file", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry = {
@@ -329,19 +329,15 @@ describe("repairSessionFileIfNeeded", () => {
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
-    const debug = vi.fn();
-    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
-    expect(result.repaired).toBe(true);
-    expect(result.trimmedTrailingAssistantMessages).toBe(1);
-    expect(debug.mock.calls[0]?.[0]).toContain("trimmed 1 trailing assistant message(s)");
+    expect(result.repaired).toBe(false);
 
-    const repaired = await fs.readFile(file, "utf-8");
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(2);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
   });
 
-  it("trims multiple consecutive trailing assistant messages", async () => {
+  it("preserves multiple consecutive delivered trailing assistant messages", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const assistantEntry1 = {
@@ -371,12 +367,10 @@ describe("repairSessionFileIfNeeded", () => {
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
-    expect(result.repaired).toBe(true);
-    expect(result.trimmedTrailingAssistantMessages).toBe(2);
+    expect(result.repaired).toBe(false);
 
-    const repaired = await fs.readFile(file, "utf-8");
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(2);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
   });
 
   it("does not trim non-trailing assistant messages", async () => {
@@ -406,7 +400,6 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
     expect(result.repaired).toBe(false);
-    expect(result.trimmedTrailingAssistantMessages ?? 0).toBe(0);
   });
 
   it("preserves trailing assistant messages that contain tool calls", async () => {
@@ -432,12 +425,11 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
     expect(result.repaired).toBe(false);
-    expect(result.trimmedTrailingAssistantMessages ?? 0).toBe(0);
     const after = await fs.readFile(file, "utf-8");
     expect(after).toBe(original);
   });
 
-  it("trims non-tool-call assistant but stops at tool-call assistant", async () => {
+  it("preserves adjacent trailing tool-call and text assistant messages", async () => {
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const toolCallAssistant = {
@@ -467,16 +459,67 @@ describe("repairSessionFileIfNeeded", () => {
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
-    expect(result.repaired).toBe(true);
-    expect(result.trimmedTrailingAssistantMessages).toBe(1);
+    expect(result.repaired).toBe(false);
 
-    const repaired = await fs.readFile(file, "utf-8");
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(3);
-    expect(JSON.parse(repairedLines[2]).id).toBe("msg-asst-tc");
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
   });
 
-  it("never trims below the session header", async () => {
+  it("preserves final text assistant turn that follows a tool-call/tool-result pair", async () => {
+    // Regression: a trailing assistant message with stopReason "stop" that follows a
+    // tool-call turn and its matching tool-result must never be trimmed by the repair
+    // pass. This is the exact sequence produced by any agent run that calls at least
+    // one tool before returning a final text response, and it must survive intact so
+    // subsequent user messages are parented to the correct leaf node.
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-tc",
+      parentId: "msg-1",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "get_tasks", input: {} }],
+        stopReason: "toolUse",
+      },
+    };
+    const toolResult = {
+      type: "message",
+      id: "msg-tool-result",
+      parentId: "msg-asst-tc",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "get_tasks",
+        content: [{ type: "text", text: "Task A, Task B" }],
+        isError: false,
+      },
+    };
+    const finalAssistant = {
+      type: "message",
+      id: "msg-asst-final",
+      parentId: "msg-tool-result",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Here are your tasks: Task A, Task B." }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(toolResult)}\n${JSON.stringify(finalAssistant)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
+  });
+
+  it("preserves assistant-only session history after the header", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
     const assistantEntry = {
@@ -495,13 +538,10 @@ describe("repairSessionFileIfNeeded", () => {
 
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
 
-    expect(result.repaired).toBe(true);
-    expect(result.trimmedTrailingAssistantMessages).toBe(1);
+    expect(result.repaired).toBe(false);
 
-    const repaired = await fs.readFile(file, "utf-8");
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(1);
-    expect(JSON.parse(repairedLines[0]).type).toBe("session");
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
   });
 
   it("is a no-op on a session that was already repaired", async () => {
@@ -522,7 +562,7 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "error",
       },
     };
-    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
+    // Follow-up keeps this case focused on idempotent empty error-turn repair.
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -539,5 +579,124 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
     const after = await fs.readFile(file, "utf-8");
     expect(after).toBe(original);
+  });
+
+  it("drops type:message entries with null role instead of preserving them through repair (#77228)", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+
+    const nullRoleEntry = {
+      type: "message",
+      id: "corrupt-1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: null, content: "ignored" },
+    };
+    const missingRoleEntry = {
+      type: "message",
+      id: "corrupt-2",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { content: "no role at all" },
+    };
+    const emptyRoleEntry = {
+      type: "message",
+      id: "corrupt-3",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "   ", content: "blank role" },
+    };
+
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(message),
+      JSON.stringify(nullRoleEntry),
+      JSON.stringify(missingRoleEntry),
+      JSON.stringify(emptyRoleEntry),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedLines).toBe(3);
+    expect(result.backupPath).toBeTruthy();
+
+    const after = await fs.readFile(file, "utf-8");
+    const lines = after.trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual(header);
+    expect(JSON.parse(lines[1])).toEqual(message);
+    expect(after).not.toContain('"role":null');
+  });
+
+  it("drops a type:message entry whose message field is missing or non-object", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+
+    const missingMessage = {
+      type: "message",
+      id: "corrupt-4",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+    };
+    const stringMessage = {
+      type: "message",
+      id: "corrupt-5",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: "not an object",
+    };
+
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(message),
+      JSON.stringify(missingMessage),
+      JSON.stringify(stringMessage),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.droppedLines).toBe(2);
+
+    const after = await fs.readFile(file, "utf-8");
+    const lines = after.trimEnd().split("\n");
+    expect(lines).toHaveLength(2);
+  });
+
+  it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+
+    const summary = {
+      type: "summary",
+      id: "summary-1",
+      timestamp: new Date().toISOString(),
+      summary: "opaque summary blob",
+    };
+    const custom = {
+      type: "custom",
+      id: "custom-1",
+      customType: "model-snapshot",
+      timestamp: new Date().toISOString(),
+      data: { provider: "openai", modelApi: "openai-responses", modelId: "gpt-5" },
+    };
+
+    const content = [
+      JSON.stringify(header),
+      JSON.stringify(message),
+      JSON.stringify(summary),
+      JSON.stringify(custom),
+    ].join("\n");
+    await fs.writeFile(file, `${content}\n`, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.droppedLines).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(`${content}\n`);
   });
 });

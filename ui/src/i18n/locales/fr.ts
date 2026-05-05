@@ -162,8 +162,18 @@ export const fr: TranslationMap = {
     store: "Stockage : {path}",
     active: "Actif",
     limit: "Limite",
+    filters: "Filtres",
+    showFilters: "Afficher les filtres",
+    hideFilters: "Masquer les filtres",
+    sourceFilters: "Filtres de source de session",
     global: "Global",
     unknown: "Inconnu",
+    showArchived: "Afficher les sessions archivées",
+    activeTooltip: "Mis à jour au cours des {count} dernières minutes.",
+    limitTooltip: "Nombre maximal de sessions à charger.",
+    globalTooltip: "Inclure les sessions globales.",
+    unknownTooltip: "Inclure les sessions inconnues.",
+    showArchivedTooltip: "Inclure les sessions archivées.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filtrer par clé, agent, libellé, type…",
     selected: "{count} sélectionné(s)",
@@ -182,6 +192,8 @@ export const fr: TranslationMap = {
     verbose: "Détaillé",
     reasoning: "Raisonnement",
     noSessions: "Aucune session trouvée.",
+    noSessionsMatchFilters: "Aucune session ne correspond à vos filtres.",
+    showAll: "Tout afficher",
     inherit: "hériter",
     defaultOption: "Par défaut ({value})",
     offExplicit: "désactivé (explicite)",
@@ -729,6 +741,16 @@ export const fr: TranslationMap = {
       dailyCsv: "CSV quotidien",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Le cache d’utilisation est en cours de reconstruction en arrière-plan. Les totaux affichés peuvent être obsolètes.",
+      title: "{status} : {pending} en attente, {stale} obsolètes, {cached} en cache",
+      status: {
+        refreshing: "actualisation",
+        stale: "obsolète",
+        partial: "partiel",
+      },
+    },
     empty: {
       title: "Commencez par une plage de dates",
       subtitle:
@@ -920,6 +942,7 @@ export const fr: TranslationMap = {
     updating: "Mise à jour…",
     updateNow: "Mettre à jour maintenant",
     dismissUpdateBanner: "Ignorer la bannière de mise à jour",
+    switchedSession: "Passage à {session}",
   },
   languages: {
     en: "Anglais",

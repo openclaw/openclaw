@@ -8,6 +8,7 @@ import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
+  handleToolExecutionUpdate,
 } from "./pi-embedded-subscribe.handlers.tools.js";
 import type {
   ToolCallSummary,
@@ -713,6 +714,47 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {
+  it("emits command output deltas for exec update results", async () => {
+    const { ctx, onAgentEvent } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-update-output",
+        args: { command: "npm test" },
+      } as never,
+    );
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "exec",
+        toolCallId: "tool-exec-update-output",
+        partialResult: {
+          details: {
+            status: "running",
+            aggregated: "RUN  src/example.test.ts",
+          },
+        },
+      } as never,
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "command_output",
+        data: expect.objectContaining({
+          itemId: "command:tool-exec-update-output",
+          phase: "delta",
+          output: "RUN  src/example.test.ts",
+          status: "running",
+        }),
+      }),
+    );
+  });
+
   it("emits command output events for exec results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 
@@ -847,6 +889,13 @@ describe("messaging tool media URL tracking", () => {
     await handleToolExecutionEnd(ctx, endEvt);
 
     expect(ctx.state.messagingToolSentMediaUrls).toContain("file:///img.jpg");
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        to: "channel:123",
+        text: "hi",
+        mediaUrls: ["file:///img.jpg"],
+      }),
+    ]);
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-m2")).toBe(false);
   });
 
@@ -882,6 +931,13 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.messagingToolSentMediaUrls).toEqual([
       "file:///img-a.jpg",
       "file:///img-b.jpg",
+    ]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        to: "channel:123",
+        text: "hi",
+        mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
+      }),
     ]);
   });
 

@@ -9,9 +9,11 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronRunDiagnostics,
   CronRunStatus,
   CronRunTelemetry,
 } from "./types.js";
@@ -23,12 +25,14 @@ export type CronRunLogEntry = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
   delivery?: CronDeliveryTrace;
   sessionId?: string;
   sessionKey?: string;
+  runId?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;
@@ -310,6 +314,8 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         status: obj.status,
         error: obj.error,
         summary: obj.summary,
+        runId: typeof obj.runId === "string" && obj.runId.trim() ? obj.runId : undefined,
+        diagnostics: normalizeCronRunDiagnostics(obj.diagnostics),
         runAtMs: obj.runAtMs,
         durationMs: obj.durationMs,
         nextRunAtMs: obj.nextRunAtMs,
@@ -406,6 +412,8 @@ export async function readCronRunLogEntriesPage(
       [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.diagnostics?.summary ?? "",
+        ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
         entry.jobId,
         entry.delivery?.intended?.channel ?? "",
         entry.delivery?.resolved?.channel ?? "",
@@ -470,6 +478,8 @@ export async function readCronRunLogEntriesPageAll(
       return [
         entry.summary ?? "",
         entry.error ?? "",
+        entry.diagnostics?.summary ?? "",
+        ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
         entry.jobId,
         jobName,
         entry.delivery?.intended?.channel ?? "",
