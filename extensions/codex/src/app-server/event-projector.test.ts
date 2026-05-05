@@ -706,6 +706,7 @@ describe("CodexAppServerEventProjector", () => {
         kind: "command",
         name: "bash",
         itemId: "cmd-1",
+        suppressChannelProgress: true,
       }),
     });
     expect(onAgentEvent).toHaveBeenCalledWith({

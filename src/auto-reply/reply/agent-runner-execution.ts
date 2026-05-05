@@ -1675,7 +1675,7 @@ export async function runAgentTurnWithFallback(params: {
                       ]);
                     }
                   }
-                  if (evt.stream === "item") {
+                  if (evt.stream === "item" && evt.data.suppressChannelProgress !== true) {
                     await params.opts?.onItemEvent?.({
                       itemId: readStringValue(evt.data.itemId),
                       kind: readStringValue(evt.data.kind),

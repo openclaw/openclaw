@@ -663,6 +663,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const suppressChannelProgress = shouldSynthesizeToolProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -673,6 +674,7 @@ export class CodexAppServerEventProjector {
         status: params.phase === "start" ? "running" : itemStatus(item),
         ...(itemName(item) ? { name: itemName(item) } : {}),
         ...(meta ? { meta } : {}),
+        ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
       },
     });
   }
