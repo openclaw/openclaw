@@ -51,6 +51,7 @@ function buildProps(result: SessionsListResult): SessionsProps {
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
     onToggleFiltersCollapsed: () => undefined,
+    onClearFilters: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
     onPageChange: () => undefined,
@@ -100,7 +101,13 @@ describe("sessions view", () => {
 
   it("uses one short styled tooltip per session filter", async () => {
     const container = document.createElement("div");
-    render(renderSessions(buildProps(buildMultiResult([]))), container);
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "120",
+      }),
+      container,
+    );
     await Promise.resolve();
 
     const filters = container.querySelector(".sessions-filter-bar");
@@ -120,7 +127,7 @@ describe("sessions view", () => {
       ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
       ?.closest("label");
 
-    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last N minutes.");
+    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last 120 minutes.");
     expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
     expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
     expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
@@ -558,5 +565,54 @@ describe("sessions view", () => {
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();
     expect(onSelectPage).not.toHaveBeenCalled();
+  });
+
+  it("shows a reset action when filters hide every session", async () => {
+    const container = document.createElement("div");
+    const onClearFilters = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+          ]),
+        ),
+        searchQuery: "missing",
+        onClearFilters,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("No sessions match your filters.");
+    const showAll = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Show all",
+    );
+    expect(showAll).toBeTruthy();
+    showAll?.click();
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the plain empty state when no filters are active", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "",
+        limit: "",
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("No sessions found.");
+    expect(container.textContent).not.toContain("Show all");
   });
 });

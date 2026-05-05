@@ -173,6 +173,7 @@ type DiagnosticSessionAttentionBaseEvent = DiagnosticBaseEvent & {
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
+  terminalProgressStale?: boolean;
 };
 
 export type DiagnosticSessionLongRunningEvent = DiagnosticSessionAttentionBaseEvent & {
@@ -188,6 +189,38 @@ export type DiagnosticSessionStalledEvent = DiagnosticSessionAttentionBaseEvent 
 export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
   type: "session.stuck";
   classification: "stale_session_state";
+};
+
+export type DiagnosticSessionRecoveryStatus =
+  | "aborted"
+  | "released"
+  | "skipped"
+  | "noop"
+  | "failed";
+
+type DiagnosticSessionRecoveryBaseEvent = DiagnosticBaseEvent & {
+  sessionKey?: string;
+  sessionId?: string;
+  state: DiagnosticSessionState;
+  stateGeneration?: number;
+  ageMs: number;
+  queueDepth?: number;
+  reason?: string;
+  activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  allowActiveAbort?: boolean;
+};
+
+export type DiagnosticSessionRecoveryRequestedEvent = DiagnosticSessionRecoveryBaseEvent & {
+  type: "session.recovery.requested";
+};
+
+export type DiagnosticSessionRecoveryCompletedEvent = DiagnosticSessionRecoveryBaseEvent & {
+  type: "session.recovery.completed";
+  status: DiagnosticSessionRecoveryStatus;
+  action: string;
+  outcomeReason?: string;
+  released?: number;
+  stale?: boolean;
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -233,6 +266,20 @@ export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
 
 export type DiagnosticLivenessWarningReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
+export type DiagnosticPhaseDetails = Record<string, string | number | boolean>;
+
+export type DiagnosticPhaseSnapshot = {
+  name: string;
+  startedAt: number;
+  endedAt?: number;
+  durationMs?: number;
+  cpuUserMs?: number;
+  cpuSystemMs?: number;
+  cpuTotalMs?: number;
+  cpuCoreRatio?: number;
+  details?: DiagnosticPhaseDetails;
+};
+
 export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   type: "diagnostic.liveness.warning";
   reasons: DiagnosticLivenessWarningReason[];
@@ -247,7 +294,17 @@ export type DiagnosticLivenessWarningEvent = DiagnosticBaseEvent & {
   active: number;
   waiting: number;
   queued: number;
+  phase?: string;
+  recentPhases?: DiagnosticPhaseSnapshot[];
+  activeWorkLabels?: string[];
+  waitingWorkLabels?: string[];
+  queuedWorkLabels?: string[];
 };
+
+export type DiagnosticPhaseCompletedEvent = DiagnosticBaseEvent &
+  DiagnosticPhaseSnapshot & {
+    type: "diagnostic.phase.completed";
+  };
 
 export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   type: "tool.loop";
@@ -551,12 +608,15 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionLongRunningEvent
   | DiagnosticSessionStalledEvent
   | DiagnosticSessionStuckEvent
+  | DiagnosticSessionRecoveryRequestedEvent
+  | DiagnosticSessionRecoveryCompletedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
+  | DiagnosticPhaseCompletedEvent
   | DiagnosticToolLoopEvent
   | DiagnosticToolExecutionStartedEvent
   | DiagnosticToolExecutionCompletedEvent

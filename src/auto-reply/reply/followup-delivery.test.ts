@@ -1,14 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../../channels/plugins/index.js", async () => {
-  const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
-    "../../channels/plugins/index.js",
-  );
-  return {
-    ...actual,
-    getChannelPlugin: (id: string) => (id === "telegram" ? undefined : actual.getChannelPlugin(id)),
-  };
-});
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: () => undefined,
+}));
 
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";

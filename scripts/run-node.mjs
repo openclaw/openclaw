@@ -16,14 +16,22 @@ import {
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
 import { listStaticExtensionAssetSources } from "./lib/static-extension-assets.mjs";
+import {
+  extensionRestartMetadataFiles,
+  isBuildRelevantRunNodePath,
+  isRestartRelevantRunNodePath,
+  normalizeRunNodePath as normalizePath,
+  runNodeConfigFiles,
+  runNodeSourceRoots,
+  runNodeWatchedPaths,
+} from "./run-node-watch-paths.mjs";
 import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
+
+export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
 const buildScript = "scripts/tsdown-build.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 
-const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
-const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
-export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
   "scripts/copy-plugin-sdk-root-alias.mjs",
@@ -40,63 +48,10 @@ const runtimePostBuildWatchedPaths = [
   "src/plugin-sdk/root-alias.cjs",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
-const ignoredRunNodeRepoPaths = new Set([
-  "src/canvas-host/a2ui/.bundle.hash",
-  "src/canvas-host/a2ui/a2ui.bundle.js",
-]);
 const runtimePostBuildScriptPaths = new Set(
   runtimePostBuildWatchedPaths.filter((entry) => entry.startsWith("scripts/")),
 );
 const runtimePostBuildStaticAssetPaths = new Set(listStaticExtensionAssetSources());
-const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
-const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
-
-const normalizePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
-
-const isIgnoredSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return (
-    normalizedPath.endsWith(".test.ts") ||
-    normalizedPath.endsWith(".test.tsx") ||
-    normalizedPath.endsWith("test-helpers.ts")
-  );
-};
-
-const isBuildRelevantSourcePath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  return extensionSourceFilePattern.test(normalizedPath) && !isIgnoredSourcePath(normalizedPath);
-};
-
-const isRestartRelevantExtensionPath = (relativePath) => {
-  const normalizedPath = normalizePath(relativePath);
-  if (extensionRestartMetadataFiles.has(path.posix.basename(normalizedPath))) {
-    return true;
-  }
-  return isBuildRelevantSourcePath(normalizedPath);
-};
-
-const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
-  const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPaths.has(normalizedPath)) {
-    return false;
-  }
-  if (runNodeConfigFiles.includes(normalizedPath)) {
-    return true;
-  }
-  if (normalizedPath.startsWith("src/")) {
-    return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
-  }
-  if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
-    return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));
-  }
-  return false;
-};
-
-export const isBuildRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
-
-export const isRestartRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
 
 const statMtime = (filePath, fsImpl = fs) => {
   try {
@@ -431,6 +386,7 @@ const getSignalExitCode = (signal) => (isSignalKey(signal) ? SIGNAL_EXIT_CODES[s
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
@@ -532,6 +488,15 @@ const resolveRunNodeCpuProfileArgs = (deps) => {
   return ["--cpu-prof", `--cpu-prof-dir=${absoluteProfileDir}`, `--cpu-prof-name=${profileName}`];
 };
 
+const resolveRunNodeDiagnosticArgs = (deps) => {
+  const args = [...resolveRunNodeCpuProfileArgs(deps)];
+  if (deps.env.OPENCLAW_TRACE_SYNC_IO === "1") {
+    logRunner("Enabling Node --trace-sync-io for startup I/O diagnostics.", deps);
+    args.push("--trace-sync-io");
+  }
+  return args;
+};
+
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
   let onSigInt;
@@ -602,8 +567,8 @@ const getInterruptedSpawnExitCode = (res) => {
 };
 
 const runOpenClaw = async (deps) => {
-  const cpuProfileArgs = resolveRunNodeCpuProfileArgs(deps);
-  const nodeProcess = deps.spawn(deps.execPath, [...cpuProfileArgs, "openclaw.mjs", ...deps.args], {
+  const diagnosticArgs = resolveRunNodeDiagnosticArgs(deps);
+  const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, "openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
@@ -621,14 +586,78 @@ const pipeSpawnedOutput = (childProcess, deps) => {
   if (!deps.outputTee) {
     return;
   }
+  const stderrFilter =
+    deps.env[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] === "1"
+      ? createSyncIoTraceStderrFilter(deps)
+      : null;
   childProcess.stdout?.on("data", (chunk) => {
     deps.stdout.write(chunk);
     deps.outputTee.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
-    deps.stderr.write(chunk);
+    if (stderrFilter) {
+      stderrFilter.write(chunk);
+    } else {
+      deps.stderr.write(chunk);
+    }
     deps.outputTee.write(chunk);
   });
+  childProcess.stderr?.on("end", () => {
+    stderrFilter?.flush();
+  });
+};
+
+const createSyncIoTraceStderrFilter = (deps) => {
+  let buffer = "";
+  let inSyncIoTrace = false;
+
+  const shouldSuppressLine = (line) => {
+    const text = line.replace(/\r?\n$/, "");
+    if (/^\(node:\d+\) WARNING: Detected use of sync API/.test(text)) {
+      inSyncIoTrace = true;
+      return true;
+    }
+    if (!inSyncIoTrace) {
+      return false;
+    }
+    if (text.trim() === "") {
+      inSyncIoTrace = false;
+      return true;
+    }
+    if (/^\s+at\b/.test(text)) {
+      return true;
+    }
+    inSyncIoTrace = false;
+    return false;
+  };
+
+  const writeLine = (line) => {
+    if (!shouldSuppressLine(line)) {
+      deps.stderr.write(line);
+    }
+  };
+
+  return {
+    write(chunk) {
+      buffer += String(chunk);
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex === -1) {
+          break;
+        }
+        const line = buffer.slice(0, newlineIndex + 1);
+        buffer = buffer.slice(newlineIndex + 1);
+        writeLine(line);
+      }
+    },
+    flush() {
+      if (!buffer) {
+        return;
+      }
+      writeLine(buffer);
+      buffer = "";
+    },
+  };
 };
 
 const closeRunNodeOutputTee = async (deps, exitCode) => {
@@ -841,6 +870,7 @@ const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
   statMtime(deps.distEntry, deps.fs) != null;
 
 const isQaParityReportCommand = (args) => args[0] === "qa" && args[1] === "parity-report";
+const isQaCoverageReportCommand = (args) => args[0] === "qa" && args[1] === "coverage";
 
 const shouldRunQaParityReportFromSource = (deps, buildRequirement) =>
   buildRequirement.reason === "missing_private_qa_dist" &&
@@ -848,8 +878,34 @@ const shouldRunQaParityReportFromSource = (deps, buildRequirement) =>
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
   statMtime(path.join(deps.cwd, "extensions", "qa-lab", "src", "cli.runtime.ts"), deps.fs) != null;
 
+const shouldRunQaCoverageReportFromSource = (deps, buildRequirement) =>
+  buildRequirement.reason === "missing_private_qa_dist" &&
+  isQaCoverageReportCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(path.join(deps.cwd, "extensions", "qa-lab", "src", "cli.runtime.ts"), deps.fs) != null;
+
 const runQaParityReportFromSource = async (deps) => {
   const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-parity-report.ts");
+  const nodeProcess = deps.spawn(
+    deps.execPath,
+    ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
+    {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+    },
+  );
+  pipeSpawnedOutput(nodeProcess, deps);
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
+  }
+  return res.exitCode ?? 1;
+};
+
+const runQaCoverageReportFromSource = async (deps) => {
+  const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-coverage-report.ts");
   const nodeProcess = deps.spawn(
     deps.execPath,
     ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
@@ -907,12 +963,18 @@ export async function runNodeMain(params = {}) {
       buildRequirement,
     );
     const useQaParityReportSource = shouldRunQaParityReportFromSource(deps, buildRequirement);
+    const useQaCoverageReportSource = shouldRunQaCoverageReportFromSource(deps, buildRequirement);
     if (useExistingGatewayClientDist) {
       buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
     }
     if (useQaParityReportSource) {
       logRunner("Running QA parity report from source without rebuilding private QA dist.", deps);
       exitCode = await runQaParityReportFromSource(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
+    }
+    if (useQaCoverageReportSource) {
+      logRunner("Running QA coverage report from source without rebuilding private QA dist.", deps);
+      exitCode = await runQaCoverageReportFromSource(deps);
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {

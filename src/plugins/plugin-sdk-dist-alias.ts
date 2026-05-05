@@ -8,12 +8,7 @@ function writeRuntimeJsonFile(targetPath: string, value: unknown): void {
 
 function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string): void {
   const relative = `./${path.relative(path.dirname(targetPath), sourcePath).split(path.sep).join("/")}`;
-  const content = [
-    `export * from ${JSON.stringify(relative)};`,
-    `import * as moduleExports from ${JSON.stringify(relative)};`,
-    `export default moduleExports.default ?? moduleExports;`,
-    "",
-  ].join("\n");
+  const content = [`export * from ${JSON.stringify(relative)};`, ""].join("\n");
   try {
     if (fs.readFileSync(targetPath, "utf8") === content) {
       return;
