@@ -94,6 +94,8 @@ export type AgentConfig = {
   toolProgressDetail?: AgentDefaultsConfig["toolProgressDetail"];
   /** Optional per-agent default reasoning visibility. */
   reasoningDefault?: "on" | "off" | "stream";
+  /** Optional per-agent default elevated permissions level. */
+  elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */

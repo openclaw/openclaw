@@ -324,4 +324,50 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts per-agent verboseDefault and elevatedDefault overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            verboseDefault: "on",
+            elevatedDefault: "ask",
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid per-agent verboseDefault enum values", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            verboseDefault: "loud" as unknown as "off" | "on" | "full",
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects invalid per-agent elevatedDefault enum values", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "main",
+            elevatedDefault: "always" as unknown as "off" | "on" | "ask" | "full",
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });

@@ -957,7 +957,9 @@ for provider examples and precedence.
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
         thinkingDefault: "high", // per-agent thinking level override
+        verboseDefault: "on", // per-agent verbose level override
         reasoningDefault: "on", // per-agent reasoning visibility override
+        elevatedDefault: "ask", // per-agent elevated default override
         fastModeDefault: false, // per-agent fast mode override
         agentRuntime: { id: "auto" },
         params: { cacheRetention: "none" }, // overrides matching defaults.models params by key
@@ -1004,7 +1006,9 @@ for provider examples and precedence.
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `messages.tts`, so keep shared provider credentials and fallback policy in `messages.tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
+- `verboseDefault`: optional per-agent default verbose level (`off | on | full`). Overrides `agents.defaults.verboseDefault` for this agent when no per-message or session override is set.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
+- `elevatedDefault`: optional per-agent default elevated-output level (`off | on | ask | full`). Overrides `agents.defaults.elevatedDefault` for this agent when no per-message or session override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`true | false`). Applies when no per-message or session fast-mode override is set.
 - `agentRuntime`: optional per-agent low-level runtime policy override. Use `{ id: "codex" }` to make one agent Codex-only while other agents keep the default PI fallback in `auto` mode.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.

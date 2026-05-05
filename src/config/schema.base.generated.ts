@@ -6362,6 +6362,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 verboseDefault: {
                   type: "string",
                   enum: ["off", "on", "full"],
+                  title: "Agent Verbose Default",
+                  description:
+                    "Optional per-agent default verbosity level (off|on|full). Overrides agents.defaults.verboseDefault for this agent when no per-message or session override is set.",
                 },
                 toolProgressDetail: {
                   type: "string",
@@ -6373,6 +6376,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Reasoning Default",
                   description:
                     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+                },
+                elevatedDefault: {
+                  type: "string",
+                  enum: ["off", "on", "ask", "full"],
+                  title: "Agent Elevated Default",
+                  description:
+                    "Optional per-agent default elevated permissions level (off|on|ask|full). Overrides agents.defaults.elevatedDefault for this agent when no per-message or session override is set.",
                 },
                 fastModeDefault: {
                   type: "boolean",
@@ -24854,9 +24864,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
       tags: ["advanced"],
     },
+    "agents.list[].verboseDefault": {
+      label: "Agent Verbose Default",
+      help: "Optional per-agent default verbosity level (off|on|full). Overrides agents.defaults.verboseDefault for this agent when no per-message or session override is set.",
+      tags: ["advanced"],
+    },
     "agents.list[].reasoningDefault": {
       label: "Agent Reasoning Default",
       help: "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
+      tags: ["advanced"],
+    },
+    "agents.list[].elevatedDefault": {
+      label: "Agent Elevated Default",
+      help: "Optional per-agent default elevated permissions level (off|on|ask|full). Overrides agents.defaults.elevatedDefault for this agent when no per-message or session override is set.",
       tags: ["advanced"],
     },
     "agents.list[].fastModeDefault": {
