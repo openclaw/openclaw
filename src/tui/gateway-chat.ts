@@ -182,6 +182,7 @@ export class GatewayChatClient implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
+      ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,
@@ -219,15 +220,7 @@ export class GatewayChatClient implements TuiBackend {
   }
 
   async listSessions(opts?: SessionsListParams) {
-    return await this.client.request<GatewaySessionList>("sessions.list", {
-      limit: opts?.limit,
-      activeMinutes: opts?.activeMinutes,
-      includeGlobal: opts?.includeGlobal,
-      includeUnknown: opts?.includeUnknown,
-      includeDerivedTitles: opts?.includeDerivedTitles,
-      includeLastMessage: opts?.includeLastMessage,
-      agentId: opts?.agentId,
-    });
+    return await this.client.request<GatewaySessionList>("sessions.list", opts ?? {});
   }
 
   async listAgents() {

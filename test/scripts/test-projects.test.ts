@@ -213,6 +213,23 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
+  it("routes model fallback observation changes through fallback regressions", () => {
+    expect(resolveChangedTestTargetPlan(["src/agents/model-fallback-observation.ts"])).toEqual({
+      mode: "targets",
+      targets: ["src/agents/model-fallback.test.ts", "src/agents/model-fallback.probe.test.ts"],
+    });
+  });
+
+  it("routes transcript append changes through transcript and persistence regressions", () => {
+    expect(resolveChangedTestTargetPlan(["src/config/sessions/transcript-append.ts"])).toEqual({
+      mode: "targets",
+      targets: [
+        "src/config/sessions/transcript.test.ts",
+        "src/agents/subagent-registry.persistence.test.ts",
+      ],
+    });
+  });
+
   it("keeps extension batch runner edits on extension script tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/test-extension-batch.mjs"])).toEqual({
       mode: "targets",
@@ -481,7 +498,7 @@ describe("scripts/test-projects changed-target routing", () => {
     );
   });
 
-  it("narrows default-lane changed source files to include globs", () => {
+  it("narrows default-lane changed source files to affected tests", () => {
     const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
       "packages/sdk/src/index.ts",
     ]);
@@ -489,8 +506,8 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(plans).toEqual([
       {
         config: "test/vitest/vitest.unit.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["packages/sdk/src/**/*.test.ts"],
+        forwardedArgs: ["packages/sdk/src/index.test.ts"],
+        includePatterns: null,
         watchMode: false,
       },
     ]);
@@ -522,6 +539,50 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.ui.config.ts",
         forwardedArgs: [],
         includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes unit ui test targets to the unit ui lane", () => {
+    expect(buildVitestRunPlans(["ui/src/ui/chat/grouped-render.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/chat.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/chat.test.ts"],
+        watchMode: false,
+      },
+    ]);
+
+    expect(buildVitestRunPlans(["ui/src/ui/views/dreaming.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/views/dreaming.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("routes changed unit ui tests to the unit ui lane", () => {
+    const plans = buildVitestRunPlans(["--changed", "origin/main"], process.cwd(), () => [
+      "ui/src/ui/chat/grouped-render.test.ts",
+    ]);
+
+    expect(plans).toEqual([
+      {
+        config: "test/vitest/vitest.unit-ui.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/ui/chat/grouped-render.test.ts"],
         watchMode: false,
       },
     ]);
@@ -591,14 +652,27 @@ describe("scripts/test-projects changed-target routing", () => {
       resolveChangedTestTargetPlan([
         "src/commands/doctor-memory-search.ts",
         "src/memory-host-sdk/host/embedding-defaults.ts",
-        "src/memory-host-sdk/host/embeddings.ts",
       ]),
     ).toEqual({
       mode: "targets",
       targets: [
         "src/commands/doctor-memory-search.test.ts",
-        "src/memory-host-sdk/host/embeddings.test.ts",
+        "packages/memory-host-sdk/src/host/embeddings.test.ts",
       ],
+    });
+  });
+
+  it("routes commitment model-selection runtime edits away from broad gateway dependents", () => {
+    expect(
+      resolveChangedTestTargetPlan([
+        "src/agents/model-selection.test.ts",
+        "src/commitments/model-selection.runtime.ts",
+        "src/commitments/runtime.test.ts",
+        "src/commitments/runtime.ts",
+      ]),
+    ).toEqual({
+      mode: "targets",
+      targets: ["src/agents/model-selection.test.ts", "src/commitments/runtime.test.ts"],
     });
   });
 
@@ -1085,6 +1159,7 @@ describe("scripts/test-projects full-suite sharding", () => {
 
   it("can expand full-suite shards to project configs for perf experiments", () => {
     const previous = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
     try {
@@ -1130,7 +1205,10 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.gateway-core.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
-      "test/vitest/vitest.gateway-server.config.ts",
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
+      gatewayServerConfig,
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
@@ -1173,13 +1251,25 @@ describe("scripts/test-projects full-suite sharding", () => {
       "test/vitest/vitest.extensions.config.ts",
       "test/vitest/vitest.extension-misc.config.ts",
     ]);
-    expect(plans).toEqual(
-      plans.map((plan) => ({
-        config: plan.config,
-        forwardedArgs: [],
-        includePatterns: null,
-        watchMode: false,
-      })),
+
+    const gatewayPlans = plans.filter((plan) => plan.config === gatewayServerConfig);
+    const gatewayTargets = gatewayPlans.flatMap((plan) => plan.forwardedArgs);
+    const gatewayChunkSizes = gatewayPlans.map((plan) => plan.forwardedArgs.length);
+    expect(gatewayPlans).toHaveLength(4);
+    expect(gatewayTargets.length).toBeGreaterThan(90);
+    expect(new Set(gatewayTargets).size).toBe(gatewayTargets.length);
+    expect(gatewayTargets).toContain("src/gateway/server-network-runtime.e2e.test.ts");
+    expect(gatewayTargets).not.toContain("src/gateway/gateway.test.ts");
+    expect(Math.max(...gatewayChunkSizes) - Math.min(...gatewayChunkSizes)).toBeLessThanOrEqual(1);
+    expect(plans.filter((plan) => plan.config !== gatewayServerConfig)).toEqual(
+      plans
+        .filter((plan) => plan.config !== gatewayServerConfig)
+        .map((plan) => ({
+          config: plan.config,
+          forwardedArgs: [],
+          includePatterns: null,
+          watchMode: false,
+        })),
     );
   });
 

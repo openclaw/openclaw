@@ -10,7 +10,7 @@ function resolveLifecycleAllowFrom(params: {
   return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
 }
 
-export function createLifecycleConfig(params: {
+function createLifecycleConfig(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -38,7 +38,7 @@ export function createLifecycleConfig(params: {
   } as OpenClawConfig;
 }
 
-export function createLifecycleAccount(params: {
+function createLifecycleAccount(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -257,13 +257,23 @@ export function createImageLifecycleCore() {
             updateLastRoute: resolved.record?.updateLastRoute,
             onRecordError: resolved.record?.onRecordError ?? (() => undefined),
           });
+          if ("runDispatch" in resolved) {
+            const dispatchResult = await resolved.runDispatch();
+            return {
+              admission: { kind: "dispatch" as const },
+              dispatched: true,
+              ctxPayload: resolved.ctxPayload,
+              routeSessionKey: resolved.routeSessionKey,
+              dispatchResult,
+            };
+          }
           const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
               ...resolved.dispatcherOptions,
-              deliver: async (payload, info) => {
-                await resolved.delivery.deliver(payload, info);
+              deliver: async (...args: Parameters<typeof resolved.delivery.deliver>) => {
+                await resolved.delivery.deliver(...args);
               },
               onError: resolved.delivery.onError,
             },
@@ -278,90 +288,8 @@ export function createImageLifecycleCore() {
             dispatchResult,
           };
         }) as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runResolved: vi.fn(
-          async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
-            const input =
-              typeof params.input === "function" ? await params.input(params.raw) : params.input;
-            if (!input) {
-              return {
-                admission: { kind: "drop" as const, reason: "ingest-null" },
-                dispatched: false,
-              };
-            }
-            const resolved = await params.resolveTurn(
-              input,
-              {
-                kind: "message",
-                canStartAgentTurn: true,
-              },
-              {},
-            );
-            await resolved.recordInboundSession({
-              storePath: resolved.storePath,
-              sessionKey: resolved.ctxPayload.SessionKey ?? resolved.routeSessionKey,
-              ctx: resolved.ctxPayload,
-              groupResolution: resolved.record?.groupResolution,
-              createIfMissing: resolved.record?.createIfMissing,
-              updateLastRoute: resolved.record?.updateLastRoute,
-              onRecordError: resolved.record?.onRecordError ?? (() => undefined),
-            });
-            const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: resolved.ctxPayload,
-              cfg: resolved.cfg,
-              dispatcherOptions: {
-                ...resolved.dispatcherOptions,
-                deliver: async (payload, info) => {
-                  await resolved.delivery.deliver(payload, info);
-                },
-                onError: resolved.delivery.onError,
-              },
-              replyOptions: resolved.replyOptions,
-              replyResolver: resolved.replyResolver,
-            });
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: resolved.ctxPayload,
-              routeSessionKey: resolved.routeSessionKey,
-              dispatchResult,
-            };
-          },
-        ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
         buildContext:
           buildChannelTurnContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
-        dispatchAssembled: vi.fn(
-          async (turn: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
-            await turn.recordInboundSession({
-              storePath: turn.storePath,
-              sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-              ctx: turn.ctxPayload,
-              groupResolution: turn.record?.groupResolution,
-              createIfMissing: turn.record?.createIfMissing,
-              updateLastRoute: turn.record?.updateLastRoute,
-              onRecordError: turn.record?.onRecordError ?? (() => undefined),
-            });
-            const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
-              ctx: turn.ctxPayload,
-              cfg: turn.cfg,
-              dispatcherOptions: {
-                ...turn.dispatcherOptions,
-                deliver: async (payload, info) => {
-                  await turn.delivery.deliver(payload, info);
-                },
-                onError: turn.delivery.onError,
-              },
-              replyOptions: turn.replyOptions,
-              replyResolver: turn.replyResolver,
-            });
-            return {
-              admission: { kind: "dispatch" as const },
-              dispatched: true,
-              ctxPayload: turn.ctxPayload,
-              routeSessionKey: turn.routeSessionKey,
-              dispatchResult,
-            };
-          },
-        ) as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(
@@ -431,7 +359,7 @@ export async function settleAsyncWork(): Promise<void> {
   }
 }
 
-export async function postWebhookUpdate(params: {
+async function postWebhookUpdate(params: {
   baseUrl: string;
   path: string;
   secret: string;

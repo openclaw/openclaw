@@ -14,6 +14,7 @@ import { attachModelProviderRequestTransport } from "./provider-request-config.j
 import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
   isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
@@ -167,6 +168,20 @@ describe("openai transport stream", () => {
   it("builds boundary-aware stream shapers for supported default agent transports", () => {
     expect(
       createBoundaryAwareStreamFnForModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createOpenClawTransportStreamFnForModel({
         id: "gpt-5.4",
         name: "GPT-5.4",
         api: "openai-responses",
@@ -766,8 +781,8 @@ describe("openai transport stream", () => {
     expect(output.stopReason).toBe("stop");
   });
 
-  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", async () => {
-    const streamFn = buildTransportAwareSimpleStreamFn(
+  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
+    const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
         {
           id: "anthropic/claude-sonnet-4",
@@ -788,28 +803,6 @@ describe("openai transport stream", () => {
           },
         },
       ),
-    );
-
-    expect(streamFn).toBeTypeOf("function");
-    let capturedPayload: Record<string, unknown> | undefined;
-    let resolveCaptured!: () => void;
-    const captured = new Promise<void>((resolve) => {
-      resolveCaptured = resolve;
-    });
-
-    void streamFn!(
-      {
-        id: "anthropic/claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        api: "openclaw-openai-completions-transport",
-        provider: "openrouter",
-        baseUrl: "https://proxy.example.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openclaw-openai-completions-transport">,
       {
         systemPrompt: "system",
         messages: [],
@@ -817,25 +810,18 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          resolveCaptured();
-          return payload;
-        },
       } as never,
     );
 
-    await captured;
-
-    expect(capturedPayload).toMatchObject({
+    expect(params).toMatchObject({
       reasoning: {
         effort: "high",
       },
     });
   });
 
-  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", async () => {
-    const streamFn = buildTransportAwareSimpleStreamFn(
+  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", () => {
+    const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
         {
           id: "anthropic/claude-sonnet-4",
@@ -856,28 +842,6 @@ describe("openai transport stream", () => {
           },
         },
       ),
-    );
-
-    expect(streamFn).toBeTypeOf("function");
-    let capturedPayload: Record<string, unknown> | undefined;
-    let resolveCaptured!: () => void;
-    const captured = new Promise<void>((resolve) => {
-      resolveCaptured = resolve;
-    });
-
-    void streamFn!(
-      {
-        id: "anthropic/claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        api: "openclaw-openai-completions-transport",
-        provider: "custom-openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openclaw-openai-completions-transport">,
       {
         systemPrompt: "system",
         messages: [],
@@ -885,17 +849,10 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          resolveCaptured();
-          return payload;
-        },
       } as never,
     );
 
-    await captured;
-
-    expect(capturedPayload).toMatchObject({
+    expect(params).toMatchObject({
       reasoning: {
         effort: "high",
       },
@@ -980,7 +937,32 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
   });
 
-  it("uses top-level instructions for Codex responses without dropping parity fields", () => {
+  it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { max_output_tokens?: unknown };
+
+    expect(params.max_output_tokens).toBe(65_536);
+  });
+
+  it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
     const params = buildOpenAIResponsesParams(
       {
         id: "gpt-5.4",
@@ -1020,15 +1002,319 @@ describe("openai transport stream", () => {
       false,
     );
     expect(params.prompt_cache_key).toBe("session-123");
-    expect(params.prompt_cache_retention).toBeUndefined();
+    expect(params.store).toBe(false);
+    expect(params).not.toHaveProperty("metadata");
+    expect(params).not.toHaveProperty("max_output_tokens");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+    expect(params).not.toHaveProperty("service_tier");
+    expect(params).not.toHaveProperty("temperature");
+  });
+
+  it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
+    const payload = {
+      model: "gpt-5.4",
+      input: [],
+      stream: true,
+      max_output_tokens: 1024,
+      metadata: { openclaw_session_id: "session-123" },
+      prompt_cache_key: "session-123",
+      prompt_cache_retention: "24h",
+      service_tier: "auto",
+      temperature: 0.2,
+    };
+
+    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      payload,
+    );
+
+    expect(sanitized.prompt_cache_key).toBe("session-123");
+    expect(sanitized).not.toHaveProperty("metadata");
+    expect(sanitized).not.toHaveProperty("max_output_tokens");
+    expect(sanitized).not.toHaveProperty("prompt_cache_retention");
+    expect(sanitized).not.toHaveProperty("service_tier");
+    expect(sanitized).not.toHaveProperty("temperature");
+  });
+
+  it("preserves custom Codex-compatible responses params", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        cacheRetention: "long",
+        maxTokens: 1024,
+        sessionId: "session-123",
+        temperature: 0.2,
+      },
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.prompt_cache_key).toBe("session-123");
     expect(params.metadata).toEqual({
       openclaw_session_id: "session-123",
       openclaw_turn_id: "turn-123",
     });
-    expect(params.store).toBe(false);
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
-    expect(params.service_tier).toBe("auto");
+  });
+
+  it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {
+    const payload = {
+      model: "gpt-5.4",
+      input: [],
+      stream: true,
+      max_output_tokens: 1024,
+      metadata: { openclaw_session_id: "session-123" },
+      prompt_cache_key: "session-123",
+      prompt_cache_retention: "24h",
+      service_tier: "auto",
+      temperature: 0.2,
+    };
+
+    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      payload,
+    );
+
+    expect(sanitized).toEqual(payload);
+  });
+
+  it("omits prior Responses replay item ids for native Codex responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+          { role: "user", content: "what is the capital of the philippines", timestamp: 3 },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expect(reasoningItem).toMatchObject({
+      type: "reasoning",
+      encrypted_content: "ciphertext",
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage?.id).toBeUndefined();
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall?.id).toBeUndefined();
+  });
+
+  it("preserves prior Responses replay item ids for custom Codex-compatible responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+      }>;
+    };
+
+    expect(params.input?.some((item) => item.type === "reasoning")).toBe(true);
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
   });
 
   it("adds minimal user input for Codex responses when only the system prompt is present", () => {
@@ -1345,7 +1631,7 @@ describe("openai transport stream", () => {
         baseUrl: "https://proxy.example.com/v1",
       },
     },
-  ])("replays assistant phase metadata for $label responses payloads", ({ model }) => {
+  ])("replays assistant phase metadata for $label responses payloads", ({ label, model }) => {
     const params = buildOpenAIResponsesParams(
       {
         ...model,
@@ -1401,9 +1687,13 @@ describe("openai transport stream", () => {
     const assistantItem = params.input?.find((item) => item.role === "assistant");
     expect(assistantItem).toMatchObject({
       role: "assistant",
-      id: "msg_commentary",
       phase: "commentary",
     });
+    if (label === "openai-codex") {
+      expect(assistantItem?.id).toBeUndefined();
+    } else {
+      expect(assistantItem?.id).toBe("msg_commentary");
+    }
   });
 
   it("strips the internal cache boundary from OpenAI system prompts", () => {
@@ -1903,6 +2193,68 @@ describe("openai transport stream", () => {
     expect(params.reasoning_effort).toBe("high");
   });
 
+  it("omits reasoning_effort for gpt-5.4-mini Chat Completions tool payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 mini",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toBeDefined();
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps reasoning_effort for gpt-5.4-mini Chat Completions payloads without tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 mini",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toEqual([]);
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
   it("uses provider-native reasoning effort values declared by model compat", () => {
     const baseModel = {
       id: "qwen/qwen3-32b",
@@ -2248,6 +2600,57 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_tokens).toBe(2048);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
+  it("uses model maxTokens for OpenAI completions params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "zai-org/GLM-4.7-TEE",
+        name: "GLM 4.7 TEE",
+        api: "openai-completions",
+        provider: "chutes",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_tokens).toBe(65_536);
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 

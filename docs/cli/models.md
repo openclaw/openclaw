@@ -56,6 +56,11 @@ Notes:
   rows from plugin manifests or bundled provider catalog metadata even when you
   have not authenticated with that provider yet. Those rows still show as
   unavailable until matching auth is configured.
+- `models list` keeps the control plane responsive while provider catalog
+  discovery is slow. The default and configured views fall back to configured or
+  synthetic model rows after a short wait and let discovery finish in the
+  background. Use `--all` when you need the exact full discovered catalog and
+  are willing to wait for provider discovery.
 - Broad `models list --all` merges manifest catalog rows over registry rows
   without loading provider runtime supplement hooks. Provider-filtered manifest
   fast paths use only providers marked `static`; providers marked `refreshable`
@@ -157,6 +162,7 @@ openclaw models fallbacks list
 
 ```bash
 openclaw models auth add
+openclaw models auth list [--provider <id>] [--json]
 openclaw models auth login --provider <id>
 openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
@@ -166,16 +172,22 @@ openclaw models auth paste-token
 flow (OAuth/API key) or guide you into manual token paste, depending on the
 provider you choose.
 
+`models auth list` lists saved auth profiles for the selected agent without
+printing token, API-key, or OAuth secret material. Use `--provider <id>` to
+filter to one provider, such as `openai-codex`, and `--json` for scripting.
+
 `models auth login` runs a provider plugin’s auth flow (OAuth/API key). Use
 `openclaw plugins list` to see which providers are installed.
 Use `openclaw models auth --agent <id> <subcommand>` to write auth results to a
 specific configured agent store. The parent `--agent` flag is honored by
-`add`, `login`, `setup-token`, `paste-token`, and `login-github-copilot`.
+`add`, `list`, `login`, `setup-token`, `paste-token`, and
+`login-github-copilot`.
 
 Examples:
 
 ```bash
 openclaw models auth login --provider openai-codex --set-default
+openclaw models auth list --provider openai-codex
 ```
 
 Notes:

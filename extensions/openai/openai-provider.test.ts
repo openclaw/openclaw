@@ -19,9 +19,7 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
   const wrapStreamFn: NonNullable<typeof actual.OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn> = (
     ctx,
   ) => {
-    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn, {
-      codexNativeTransportStreamFn: mocks.openAIResponsesTransportStreamFn,
-    });
+    let nextStreamFn = actual.createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
     if (actual.resolveOpenAIFastMode(ctx.extraParams)) {
       nextStreamFn = actual.createOpenAIFastModeWrapper(nextStreamFn);
@@ -510,9 +508,9 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(extraParams).toMatchObject({
-      transport: "auto",
-      openaiWsWarmup: true,
+      transport: "sse",
     });
+    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },
@@ -785,7 +783,11 @@ describe("buildOpenAIProvider", () => {
       payload,
     });
 
-    expect(mocks.openAIResponsesTransportStreamFn).toHaveBeenCalledTimes(1);
+    expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
+    expect(result.options?.headers).toMatchObject({
+      originator: "openclaw",
+      "User-Agent": expect.stringMatching(/^openclaw\//u),
+    });
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });

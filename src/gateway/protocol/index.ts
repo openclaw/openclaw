@@ -38,6 +38,17 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type ArtifactsDownloadParams,
+  ArtifactsDownloadParamsSchema,
+  type ArtifactsDownloadResult,
+  type ArtifactsGetParams,
+  ArtifactsGetParamsSchema,
+  type ArtifactsGetResult,
+  type ArtifactsListParams,
+  ArtifactsListParamsSchema,
+  type ArtifactsListResult,
+  type ArtifactSummary,
+  ArtifactSummarySchema,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
@@ -46,6 +57,8 @@ import {
   AgentWaitParamsSchema,
   type ChannelsStartParams,
   ChannelsStartParamsSchema,
+  type ChannelsStopParams,
+  ChannelsStopParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
   type TalkConfigParams,
@@ -158,6 +171,18 @@ import {
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
+  type EnvironmentSummary,
+  EnvironmentSummarySchema,
+  type EnvironmentsListParams,
+  EnvironmentsListParamsSchema,
+  type EnvironmentsListResult,
+  EnvironmentsListResultSchema,
+  type EnvironmentsStatusParams,
+  EnvironmentsStatusParamsSchema,
+  type EnvironmentsStatusResult,
+  EnvironmentsStatusResultSchema,
+  type EnvironmentStatus,
+  EnvironmentStatusSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -243,6 +268,8 @@ import {
   SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCleanupParams,
+  SessionsCleanupParamsSchema,
   type SessionsCompactionBranchParams,
   SessionsCompactionBranchParamsSchema,
   type SessionsCompactionGetParams,
@@ -255,6 +282,8 @@ import {
   SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
+  type SessionsDescribeParams,
+  SessionsDescribeParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -300,6 +329,9 @@ import {
   type ToolsEffectiveParams,
   ToolsEffectiveParamsSchema,
   type ToolsEffectiveResult,
+  type ToolsInvokeParams,
+  ToolsInvokeParamsSchema,
+  type ToolsInvokeResult,
   type Snapshot,
   SnapshotSchema,
   type StateVersion,
@@ -367,6 +399,12 @@ export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
 export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
 );
+export const validateArtifactsListParams =
+  ajv.compile<ArtifactsListParams>(ArtifactsListParamsSchema);
+export const validateArtifactsGetParams = ajv.compile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
+export const validateArtifactsDownloadParams = ajv.compile<ArtifactsDownloadParams>(
+  ArtifactsDownloadParamsSchema,
+);
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
 );
@@ -385,6 +423,12 @@ export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
 );
 export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateEnvironmentsListParams = ajv.compile<EnvironmentsListParams>(
+  EnvironmentsListParamsSchema,
+);
+export const validateEnvironmentsStatusParams = ajv.compile<EnvironmentsStatusParams>(
+  EnvironmentsStatusParamsSchema,
+);
 export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -422,8 +466,14 @@ export const validateSecretsResolveResult = ajv.compile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsCleanupParams = ajv.compile<SessionsCleanupParams>(
+  SessionsCleanupParamsSchema,
+);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
+);
+export const validateSessionsDescribeParams = ajv.compile<SessionsDescribeParams>(
+  SessionsDescribeParamsSchema,
 );
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
@@ -508,6 +558,7 @@ export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
 );
 export const validateChannelsStartParams =
   ajv.compile<ChannelsStartParams>(ChannelsStartParamsSchema);
+export const validateChannelsStopParams = ajv.compile<ChannelsStopParams>(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
@@ -517,6 +568,7 @@ export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsC
 export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
 );
+export const validateToolsInvokeParams = ajv.compile<ToolsInvokeParams>(ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
@@ -636,6 +688,12 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  EnvironmentStatusSchema,
+  EnvironmentSummarySchema,
+  EnvironmentsListParamsSchema,
+  EnvironmentsListResultSchema,
+  EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -669,7 +727,9 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
+  SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
@@ -684,6 +744,10 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  ArtifactSummarySchema,
+  ArtifactsListParamsSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsDownloadParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -715,6 +779,7 @@ export {
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsStartParamsSchema,
+  ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
@@ -741,6 +806,7 @@ export {
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
+  ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
@@ -828,6 +894,7 @@ export type {
   ChannelsStatusParams,
   ChannelsStatusResult,
   ChannelsStartParams,
+  ChannelsStopParams,
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
@@ -845,6 +912,13 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  ArtifactSummary,
+  ArtifactsListParams,
+  ArtifactsListResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsDownloadParams,
+  ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
   CommandsListParams,
@@ -855,6 +929,8 @@ export type {
   ToolsCatalogResult,
   ToolsEffectiveParams,
   ToolsEffectiveResult,
+  ToolsInvokeParams,
+  ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
   SkillsSearchParams,
@@ -863,6 +939,12 @@ export type {
   SkillsDetailResult,
   SkillsInstallParams,
   SkillsUpdateParams,
+  EnvironmentStatus,
+  EnvironmentSummary,
+  EnvironmentsListParams,
+  EnvironmentsListResult,
+  EnvironmentsStatusParams,
+  EnvironmentsStatusResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,
@@ -878,7 +960,9 @@ export type {
   NodePendingEnqueueParams,
   NodePendingEnqueueResult,
   SessionsListParams,
+  SessionsCleanupParams,
   SessionsPreviewParams,
+  SessionsDescribeParams,
   SessionsResolveParams,
   SessionsPatchParams,
   SessionsPatchResult,

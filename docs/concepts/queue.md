@@ -31,23 +31,28 @@ When unset, all inbound channel surfaces use:
 - `drop: "summarize"`
 
 `steer` is the default because it keeps the active model turn responsive without
-starting a second session run. If the current run cannot accept steering,
+starting a second session run. It drains all steering messages that arrived
+before the next model boundary. If the current run cannot accept steering,
 OpenClaw falls back to a followup queue entry.
 
 ## Queue modes
 
 Inbound messages can steer the current run, wait for a followup turn, or do both:
 
-- `steer`: queue a steering message into the active Pi run. Pi delivers it **after the current assistant turn finishes executing its tool calls**, before the next LLM call. If the run is not actively streaming or steering is unavailable, OpenClaw falls back to a followup queue entry.
+- `steer`: queue steering messages into the active runtime. Pi delivers all pending steering messages **after the current assistant turn finishes executing its tool calls**, before the next LLM call; Codex app-server receives one batched `turn/steer`. If the run is not actively streaming or steering is unavailable, OpenClaw falls back to a followup queue entry.
+- `queue` (legacy): old one-at-a-time steering. Pi delivers one queued steering message at each model boundary; Codex app-server receives separate `turn/steer` requests. Prefer `steer` unless you need the previous serialized behavior.
 - `followup`: enqueue each message for a later agent turn after the current run ends.
 - `collect`: coalesce queued messages into a **single** followup turn after the quiet window. If messages target different channels/threads, they drain individually to preserve routing.
 - `steer-backlog` (aka `steer+backlog`): steer now **and** preserve the same message for a followup turn.
 - `interrupt` (legacy): abort the active run for that session, then run the newest message.
-- `queue` (legacy alias): same as `steer`.
 
 Steer-backlog means you can get a followup response after the steered run, so
 streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
 one response per inbound message.
+
+For runtime-specific timing and dependency behavior, see
+[Steering queue](/concepts/queue-steering). For the explicit `/steer <message>`
+command, see [Steer](/tools/steer).
 
 Configure globally or per channel via `messages.queue`:
 
@@ -67,7 +72,7 @@ Configure globally or per channel via `messages.queue`:
 
 ## Queue options
 
-Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` when it falls back to followup):
+Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` or legacy `queue` when steering falls back to followup):
 
 - `debounceMs`: quiet window before draining queued followups. Bare numbers are milliseconds; units `ms`, `s`, `m`, `h`, and `d` are accepted by `/queue` options.
 - `cap`: max queued messages per session. Values below `1` are ignored.
@@ -110,9 +115,12 @@ keys.
 
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
 - If you need queue depth, enable verbose logs and watch for queue timing lines.
-- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` log a stuck-session warning. Active embedded runs, active reply operations, and active lane tasks remain warning-only by default; stale startup bookkeeping with no active session work can release the affected session lane so queued work drains.
+- Codex app-server runs that accept a turn and then stop emitting progress are interrupted by the Codex adapter so the active session lane can release instead of waiting for the outer run timeout.
+- When diagnostics are enabled, sessions that remain in `processing` past `diagnostics.stuckSessionWarnMs` with no observed reply, tool, status, block, or ACP progress are classified by current activity. Active work logs as `session.long_running`; active work with no recent progress logs as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work, and only that path can release the affected session lane so queued work drains. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
 
 ## Related
 
 - [Session management](/concepts/session)
+- [Steering queue](/concepts/queue-steering)
+- [Steer](/tools/steer)
 - [Retry policy](/concepts/retry)

@@ -9,13 +9,13 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import type { WebChannelStatus } from "./auto-reply/types.js";
 import type { WebInboundMessage, WebListenerCloseReason } from "./inbound.js";
+import type { WhatsAppSendKind, WhatsAppSendResult } from "./inbound/send-result.js";
 import {
   resetBaileysMocks as _resetBaileysMocks,
   resetLoadConfigMock as _resetLoadConfigMock,
 } from "./test-helpers.js";
 
 export {
-  resetBaileysMocks,
   resetLoadConfigMock,
   setLoadConfigMock,
   setRuntimeConfigSourceSnapshotMock,
@@ -27,9 +27,9 @@ type MockWebListener = {
   close: () => Promise<void>;
   onClose: Promise<WebListenerCloseReason>;
   signalClose: () => void;
-  sendMessage: () => Promise<{ messageId: string }>;
-  sendPoll: () => Promise<{ messageId: string }>;
-  sendReaction: () => Promise<void>;
+  sendMessage: () => Promise<WhatsAppSendResult>;
+  sendPoll: () => Promise<WhatsAppSendResult>;
+  sendReaction: () => Promise<WhatsAppSendResult>;
   sendComposingTo: () => Promise<void>;
 };
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -55,7 +55,7 @@ type MockSessionSocket = {
   user: { id: string };
 };
 
-export const TEST_NET_IP = "93.184.216.34";
+const TEST_NET_IP = "93.184.216.34";
 const WEB_AUTO_REPLY_SOCKETS_KEY = Symbol.for("openclaw:webAutoReplySessionSockets");
 
 function getSessionSockets(): MockSessionSocket[] {
@@ -96,7 +96,7 @@ export function getLastWebAutoReplySessionSocket(): MockSessionSocket {
   return last;
 }
 
-export function resetWebAutoReplySessionSockets() {
+function resetWebAutoReplySessionSockets() {
   getSessionSockets().length = 0;
 }
 
@@ -114,7 +114,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   runEmbeddedPiAgent: vi.fn(),
 }));
 
-export async function rmDirWithRetries(
+async function rmDirWithRetries(
   dir: string,
   opts?: { attempts?: number; delayMs?: number },
 ): Promise<void> {
@@ -253,10 +253,23 @@ export function createMockWebListener(): MockWebListener {
     close: vi.fn(async () => undefined),
     onClose: new Promise<WebListenerCloseReason>(() => {}),
     signalClose: vi.fn(),
-    sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
-    sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
-    sendReaction: vi.fn(async () => undefined),
+    sendMessage: vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg-1")),
+    sendPoll: vi.fn(async () => createAcceptedWhatsAppSendResult("poll", "poll-1")),
+    sendReaction: vi.fn(async () => createAcceptedWhatsAppSendResult("reaction", "reaction-1")),
     sendComposingTo: vi.fn(async () => undefined),
+  };
+}
+
+export function createAcceptedWhatsAppSendResult(
+  kind: WhatsAppSendKind,
+  id: string,
+): WhatsAppSendResult {
+  return {
+    kind,
+    messageId: id,
+    messageIds: [id],
+    keys: [{ id }],
+    providerAccepted: true,
   };
 }
 
@@ -294,13 +307,13 @@ export function createScriptedWebListenerFactory(): AnyExport {
 
 export function createWebInboundDeliverySpies(): AnyExport {
   return {
-    sendMedia: vi.fn(),
-    reply: vi.fn().mockResolvedValue(undefined),
+    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
+    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
     sendComposing: vi.fn(),
   };
 }
 
-export function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
+function createWebAutoReplyRuntime(): WebAutoReplyRuntime {
   return {
     log: vi.fn(),
     error: vi.fn(),

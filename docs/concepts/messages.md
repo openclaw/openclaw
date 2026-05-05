@@ -93,8 +93,11 @@ OpenClaw keeps that boundary explicit:
 
 OpenClaw separates the **prompt body** from the **command body**:
 
-- `Body`: prompt text sent to the agent. This may include channel envelopes and
-  optional history wrappers.
+- `BodyForAgent`: primary model-facing text for the current message. Channel
+  plugins should keep this focused on the sender's current prompt-bearing text.
+- `Body`: legacy prompt fallback. This may include channel envelopes and
+  optional history wrappers, but current channels should not rely on it as the
+  primary model input when `BodyForAgent` is available.
 - `CommandBody`: raw user text for directive/command parsing.
 - `RawBody`: legacy alias for `CommandBody` (kept for compatibility).
 
@@ -114,6 +117,8 @@ already in the session transcript.
 Directive stripping only applies to the **current message** section so history
 remains intact. Channels that wrap history should set `CommandBody` (or
 `RawBody`) to the original message text and keep `Body` as the combined prompt.
+Structured history, reply, forwarded, and channel metadata are rendered as
+user-role untrusted context blocks during prompt assembly.
 History buffers are configurable via `messages.groupChat.historyLimit` (global
 default) and per-channel overrides like `channels.slack.historyLimit` or
 `channels.telegram.accounts.<id>.historyLimit` (set `0` to disable).
@@ -127,9 +132,9 @@ current run, or collected for a followup turn.
 - Default mode is `steer`, with a 500ms followup debounce when steering falls
   back to queued followup delivery.
 - Modes: `steer`, `followup`, `collect`, `steer-backlog`, `interrupt`, and the
-  legacy `queue` alias.
+  legacy one-at-a-time `queue` mode.
 
-Details: [Command queue](/concepts/queue).
+Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
 ## Channel run ownership
 
@@ -161,7 +166,7 @@ OpenClaw can expose or hide model reasoning:
 
 - `/reasoning on|off|stream` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
-- Telegram supports reasoning stream into the draft bubble.
+- Telegram supports reasoning stream into a transient draft bubble that is deleted after final delivery; use `/reasoning on` for persistent reasoning output.
 
 Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/reference/token-use).
 

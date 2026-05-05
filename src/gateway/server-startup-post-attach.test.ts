@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PluginHookGatewayContext,
@@ -21,7 +24,9 @@ const hoisted = vi.hoisted(() => {
   const scheduleSubagentOrphanRecovery = vi.fn();
   const shouldWakeFromRestartSentinel = vi.fn(() => false);
   const scheduleRestartSentinelWake = vi.fn();
-  const refreshLatestUpdateRestartSentinel = vi.fn(async () => null);
+  const refreshLatestUpdateRestartSentinel = vi.fn<
+    typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
+  >(async () => null);
   const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
@@ -30,7 +35,7 @@ const hoisted = vi.hoisted(() => {
   }));
   const resolveAgentModelPrimaryValue = vi.fn(() => "");
   const normalizeProviderId = vi.fn((provider: string) => provider.toLowerCase());
-  const resolveOpenClawAgentDir = vi.fn(() => "/tmp/openclaw-state/agents/default/agent");
+  const resolveDefaultAgentDir = vi.fn(() => "/tmp/openclaw-state/agents/default/agent");
   const isCliProvider = vi.fn(() => false);
   const resolveConfiguredModelRef = vi.fn(() => ({
     provider: "openai",
@@ -59,7 +64,7 @@ const hoisted = vi.hoisted(() => {
     reconcilePendingSessionIdentities,
     resolveAgentModelPrimaryValue,
     normalizeProviderId,
-    resolveOpenClawAgentDir,
+    resolveDefaultAgentDir,
     isCliProvider,
     resolveConfiguredModelRef,
     resolveEmbeddedAgentRuntime,
@@ -149,11 +154,8 @@ vi.mock("../agents/provider-id.js", () => ({
   normalizeProviderId: hoisted.normalizeProviderId,
 }));
 
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: hoisted.resolveOpenClawAgentDir,
-}));
-
 vi.mock("../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: hoisted.resolveDefaultAgentDir,
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
 }));
@@ -213,7 +215,7 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.resolveAgentModelPrimaryValue.mockReset();
     hoisted.resolveAgentModelPrimaryValue.mockReturnValue("");
     hoisted.normalizeProviderId.mockClear();
-    hoisted.resolveOpenClawAgentDir.mockClear();
+    hoisted.resolveDefaultAgentDir.mockClear();
     hoisted.isCliProvider.mockReset();
     hoisted.isCliProvider.mockReturnValue(false);
     hoisted.resolveConfiguredModelRef.mockClear();
@@ -251,6 +253,196 @@ describe("startGatewayPostAttachRuntime", () => {
     );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+  });
+
+  it("refreshes the restart sentinel after sidecars without blocking post-attach", async () => {
+    const events: string[] = [];
+    const refreshLatestUpdateRestartSentinel = vi.fn(async () => {
+      events.push("sentinel");
+      return null;
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      events.push("sidecars");
+      return { pluginServices: null };
+    });
+
+    await startGatewayPostAttachRuntime(
+      createPostAttachParams(),
+      createPostAttachRuntimeDeps({
+        refreshLatestUpdateRestartSentinel,
+        startGatewaySidecars,
+      }),
+    );
+
+    events.push("returned");
+    expect(refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
+    });
+    expect(events).toEqual(["sidecars", "returned", "sentinel"]);
+  });
+
+  it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const result = await __testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+    expect(result).toBeNull();
+    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("refreshes the restart sentinel when the sentinel file exists", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
+    fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
+    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
+
+    const result = await __testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+    expect(result).toBe(sentinel);
+    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("expands tilde-based restart sentinel state paths", () => {
+    const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-"));
+    try {
+      const openclawHome = path.join(osHome, "openclaw-home");
+      const stateDirFromHome = path.join(openclawHome, ".openclaw");
+      fs.mkdirSync(stateDirFromHome, { recursive: true });
+      fs.writeFileSync(path.join(stateDirFromHome, "restart-sentinel.json"), "{}\n");
+
+      expect(
+        __testing.hasRestartSentinelFileFast({
+          HOME: osHome,
+          OPENCLAW_HOME: "~/openclaw-home",
+        } as NodeJS.ProcessEnv),
+      ).toBe(true);
+
+      const backslashStateDir = path.resolve(`${osHome}\\openclaw-state`);
+      fs.mkdirSync(backslashStateDir, { recursive: true });
+      fs.writeFileSync(path.join(backslashStateDir, "restart-sentinel.json"), "{}\n");
+
+      expect(
+        __testing.hasRestartSentinelFileFast({
+          HOME: osHome,
+          OPENCLAW_STATE_DIR: "~\\openclaw-state",
+        } as NodeJS.ProcessEnv),
+      ).toBe(true);
+    } finally {
+      fs.rmSync(osHome, { recursive: true, force: true });
+    }
+  });
+
+  it("loads deferred startup plugins before channel sidecars", async () => {
+    const events: string[] = [];
+    const loadedPluginRegistry = {
+      plugins: [{ id: "acpx", status: "loaded" }],
+      typedHooks: [],
+    } as never;
+    const loadStartupPlugins = vi.fn(async () => {
+      events.push("load-startup-plugins");
+      return {
+        pluginRegistry: loadedPluginRegistry,
+        gatewayMethods: ["ping", "acp.spawn"],
+      };
+    });
+    const onStartupPluginsLoading = vi.fn(() => {
+      events.push("startup-loading");
+    });
+    const onStartupPluginsLoaded = vi.fn(() => {
+      events.push("startup-loaded");
+    });
+    const startGatewaySidecars = vi.fn(async (params) => {
+      events.push("sidecars");
+      expect(params.pluginRegistry).toBe(loadedPluginRegistry);
+      return { pluginServices: null };
+    });
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          pluginRegistry: {
+            plugins: [],
+            typedHooks: [],
+          } as never,
+          loadStartupPlugins,
+          onStartupPluginsLoading,
+          onStartupPluginsLoaded,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    );
+
+    expect(events).toEqual([
+      "startup-loading",
+      "load-startup-plugins",
+      "startup-loaded",
+      "sidecars",
+    ]);
+    expect(loadStartupPlugins).toHaveBeenCalledTimes(1);
+    expect(onStartupPluginsLoaded).toHaveBeenCalledWith({
+      pluginRegistry: loadedPluginRegistry,
+      gatewayMethods: ["ping", "acp.spawn"],
+    });
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({ loadedPluginIds: ["acpx"] }),
+    );
+  });
+
+  it("waits for deferred startup plugin attachment before channel sidecars", async () => {
+    const events: string[] = [];
+    let finishAttachment!: () => void;
+    const attachmentFinished = new Promise<void>((resolve) => {
+      finishAttachment = () => {
+        events.push("startup-loaded-end");
+        resolve();
+      };
+    });
+    const loadedPluginRegistry = {
+      plugins: [{ id: "acpx", status: "loaded" }],
+      typedHooks: [],
+    } as never;
+    const loadStartupPlugins = vi.fn(async () => ({
+      pluginRegistry: loadedPluginRegistry,
+      gatewayMethods: ["ping", "acp.spawn"],
+    }));
+    const onStartupPluginsLoaded = vi.fn(() => {
+      events.push("startup-loaded-start");
+      return attachmentFinished;
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      events.push("sidecars");
+      return { pluginServices: null };
+    });
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          pluginRegistry: {
+            plugins: [],
+            typedHooks: [],
+          } as never,
+          loadStartupPlugins,
+          onStartupPluginsLoaded,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    );
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(["startup-loaded-start"]);
+    });
+    expect(startGatewaySidecars).not.toHaveBeenCalled();
+
+    finishAttachment();
+    await runtimePromise;
+
+    expect(events).toEqual(["startup-loaded-start", "startup-loaded-end", "sidecars"]);
   });
 
   it("keeps the qmd memory backend lazy by default", async () => {
@@ -379,6 +571,33 @@ describe("startGatewayPostAttachRuntime", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("prewarms models.json in the configured default agent dir", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "openai/gpt-5.4" },
+        list: [{ id: "main" }, { id: "ops", default: true }],
+      },
+    } as never;
+    hoisted.resolveAgentModelPrimaryValue.mockReturnValue("openai/gpt-5.4");
+    hoisted.resolveDefaultAgentDir.mockReturnValue("/tmp/openclaw-state/agents/ops/agent");
+
+    await __testing.prewarmConfiguredPrimaryModel({
+      cfg,
+      workspaceDir: "/tmp/openclaw-workspace",
+      log: { warn: vi.fn() },
+    });
+
+    expect(hoisted.resolveDefaultAgentDir).toHaveBeenCalledWith(cfg);
+    expect(hoisted.ensureOpenClawModelsJson).toHaveBeenCalledWith(
+      cfg,
+      "/tmp/openclaw-state/agents/ops/agent",
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-workspace",
+        providerDiscoveryProviderIds: ["openai"],
+      }),
+    );
   });
 
   it("starts channels without waiting for primary model prewarm completion", async () => {

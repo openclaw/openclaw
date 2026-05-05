@@ -6,6 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parsePositiveIntOrUndefined } from "../program/helpers.js";
@@ -44,12 +45,18 @@ export function registerCronListCommand(cron: Command) {
       .command("list")
       .description("List cron jobs")
       .option("--all", "Include disabled jobs", false)
+      .option("--agent <id>", "Filter by agent id")
       .option("--json", "Output JSON", false)
       .action(async (opts) => {
         try {
-          const res = await callGatewayFromCli("cron.list", opts, {
+          const listParams: Record<string, unknown> = {
             includeDisabled: Boolean(opts.all),
-          });
+          };
+          const agentId = normalizeOptionalString(opts.agent);
+          if (agentId) {
+            listParams.agentId = sanitizeAgentId(agentId);
+          }
+          const res = await callGatewayFromCli("cron.list", opts, listParams);
           if (opts.json) {
             printCronJson(res);
             return;
@@ -230,6 +237,15 @@ export function registerCronAddCommand(cron: Command) {
           const description = normalizeOptionalString(opts.description);
 
           const sessionKey = normalizeOptionalString(opts.sessionKey);
+
+          if (payload.kind === "agentTurn" && !agentId) {
+            defaultRuntime.error(
+              theme.warn(
+                "No --agent specified; the job will run with the configured default agent. " +
+                  "Specify --agent to choose a specific agent.",
+              ),
+            );
+          }
 
           const params = {
             name,

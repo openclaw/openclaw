@@ -1,8 +1,28 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
+
+function isLoopbackGatewayUrl(rawUrl: string): boolean {
+  try {
+    const hostname = new URL(rawUrl).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
+}
+
+function shouldOmitOperatorApprovalDeviceIdentity(params: {
+  url: string;
+  token?: string;
+  password?: string;
+}): boolean {
+  return Boolean((params.token || params.password) && isLoopbackGatewayUrl(params.url));
+}
 
 export async function createOperatorApprovalsGatewayClient(
   params: Pick<
@@ -33,6 +53,13 @@ export async function createOperatorApprovalsGatewayClient(
     clientDisplayName: params.clientDisplayName,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes: ["operator.approvals"],
+    deviceIdentity: shouldOmitOperatorApprovalDeviceIdentity({
+      url: bootstrap.url,
+      token: bootstrap.auth.token,
+      password: bootstrap.auth.password,
+    })
+      ? null
+      : undefined,
     onEvent: params.onEvent,
     onHelloOk: params.onHelloOk,
     onConnectError: params.onConnectError,
@@ -91,7 +118,11 @@ export async function withOperatorApprovalsGatewayClient<T>(
       clientOptions: { preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs },
     });
     if (!readiness.ready) {
-      throw new Error("gateway event loop readiness timeout");
+      throw new Error(
+        readiness.aborted
+          ? "gateway approval client start aborted before readiness"
+          : "gateway readiness unavailable before approval client start",
+      );
     }
     await ready;
     return await run(gatewayClient);

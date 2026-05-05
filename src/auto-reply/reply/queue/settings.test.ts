@@ -54,4 +54,20 @@ describe("resolveQueueSettings", () => {
       dropPolicy: "summarize",
     });
   });
+
+  it("keeps legacy queue mode distinct from steer", () => {
+    expect(
+      resolveQueueSettings({
+        cfg: {
+          messages: {
+            queue: {
+              mode: "queue",
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).toMatchObject({
+      mode: "queue",
+    });
+  });
 });

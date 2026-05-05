@@ -4,12 +4,28 @@
     "target": "OpenClaw"
   },
   {
+    "source": "ClawHub",
+    "target": "ClawHub"
+  },
+  {
     "source": "OpenAI",
     "target": "OpenAI"
   },
   {
     "source": "OpenAI provider",
     "target": "OpenAI provider"
+  },
+  {
+    "source": "Mantis",
+    "target": "Mantis"
+  },
+  {
+    "source": "OpenClaw App SDK",
+    "target": "OpenClaw 应用 SDK"
+  },
+  {
+    "source": "OpenClaw App SDK API design",
+    "target": "OpenClaw 应用 SDK API 设计"
   },
   {
     "source": "Azure Speech",
@@ -20,12 +36,24 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Web tools",
+    "target": "Web 工具"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },
   {
     "source": "Gateway",
     "target": "Gateway 网关"
+  },
+  {
+    "source": "Gateway RPC reference",
+    "target": "Gateway RPC 参考"
+  },
+  {
+    "source": "Sessions",
+    "target": "会话"
   },
   {
     "source": "Pi",
@@ -50,6 +78,14 @@
   {
     "source": "Agent loop",
     "target": "Agent loop"
+  },
+  {
+    "source": "Steering queue",
+    "target": "Steering queue"
+  },
+  {
+    "source": "Steer",
+    "target": "Steer"
   },
   {
     "source": "Models",
@@ -180,6 +216,50 @@
     "target": "能力扩展手册"
   },
   {
+    "source": "WhatsApp group messages",
+    "target": "WhatsApp 群组消息"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Install overview",
+    "target": "安装概览"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "Linux server",
+    "target": "Linux 服务器"
+  },
+  {
+    "source": "Platforms",
+    "target": "平台"
+  },
+  {
+    "source": "Adding capabilities (redirect)",
+    "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Adding capabilities (contributor guide)",
+    "target": "添加能力（贡献者指南）"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
+  },
+  {
+    "source": "SDK overview",
+    "target": "SDK 概览"
+  },
+  {
+    "source": "Creating skills",
+    "target": "创建技能"
+  },
+  {
     "source": "Setup Wizard Reference",
     "target": "设置向导参考"
   },
@@ -254,6 +334,42 @@
   {
     "source": "Block streaming",
     "target": "分块流式传输"
+  },
+  {
+    "source": "Progress drafts",
+    "target": "进度草稿"
+  },
+  {
+    "source": "Streaming and chunking",
+    "target": "流式传输和分块"
+  },
+  {
+    "source": "Messages",
+    "target": "消息"
+  },
+  {
+    "source": "Channel configuration",
+    "target": "频道配置"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
   },
   {
     "source": "Discovery + transports",
@@ -448,6 +564,14 @@
     "target": "插件"
   },
   {
+    "source": "Manage plugins",
+    "target": "管理插件"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "插件清单"
+  },
+  {
     "source": "Building plugins",
     "target": "构建插件"
   },
@@ -558,6 +682,18 @@
   {
     "source": "Testing",
     "target": "测试"
+  },
+  {
+    "source": "Update and plugin tests",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing: updates and plugins",
+    "target": "更新和插件测试"
   },
   {
     "source": "Async Exec Duplicate Completion Investigation",

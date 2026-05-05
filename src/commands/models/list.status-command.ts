@@ -1,5 +1,4 @@
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
 import {
   resolveAgentDir,
   resolveAgentExplicitModelPrimary,
@@ -25,6 +24,7 @@ import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
+  modelKey,
   normalizeProviderId,
   parseModelRef,
   resolveConfiguredModelRef,
@@ -41,9 +41,10 @@ import type { ProviderSyntheticAuthResult } from "../../plugins/provider-externa
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../../plugins/synthetic-auth.runtime.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { colorize, theme } from "../../terminal/theme.js";
-import { shortenHomePath } from "../../utils.js";
+import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import { type AuthProbeSummary } from "./list.probe.js";
@@ -57,13 +58,26 @@ import {
 
 type ProviderUsageRuntime = typeof import("../../infra/provider-usage.js");
 type ProgressRuntime = typeof import("../../cli/progress.js");
+
+function resolveEnvAgentDirOverride(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const override = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  return override ? resolveUserPath(override, env) : undefined;
+}
 type TerminalTableRuntime = typeof import("../../terminal/table.js");
 type ListProbeRuntime = typeof import("./list.probe.js");
 
-let providerUsageRuntimePromise: Promise<ProviderUsageRuntime> | undefined;
-let progressRuntimePromise: Promise<ProgressRuntime> | undefined;
-let terminalTableRuntimePromise: Promise<TerminalTableRuntime> | undefined;
-let listProbeRuntimePromise: Promise<ListProbeRuntime> | undefined;
+const providerUsageRuntimeLoader = createLazyImportLoader<ProviderUsageRuntime>(
+  () => import("../../infra/provider-usage.js"),
+);
+const progressRuntimeLoader = createLazyImportLoader<ProgressRuntime>(
+  () => import("../../cli/progress.js"),
+);
+const terminalTableRuntimeLoader = createLazyImportLoader<TerminalTableRuntime>(
+  () => import("../../terminal/table.js"),
+);
+const listProbeRuntimeLoader = createLazyImportLoader<ListProbeRuntime>(
+  () => import("./list.probe.js"),
+);
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
@@ -76,23 +90,19 @@ type StatusSyntheticAuth = {
 };
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
-  providerUsageRuntimePromise ??= import("../../infra/provider-usage.js");
-  return providerUsageRuntimePromise;
+  return providerUsageRuntimeLoader.load();
 }
 
 function loadProgressRuntime(): Promise<ProgressRuntime> {
-  progressRuntimePromise ??= import("../../cli/progress.js");
-  return progressRuntimePromise;
+  return progressRuntimeLoader.load();
 }
 
 function loadTerminalTableRuntime(): Promise<TerminalTableRuntime> {
-  terminalTableRuntimePromise ??= import("../../terminal/table.js");
-  return terminalTableRuntimePromise;
+  return terminalTableRuntimeLoader.load();
 }
 
 function loadListProbeRuntime(): Promise<ListProbeRuntime> {
-  listProbeRuntimePromise ??= import("./list.probe.js");
-  return listProbeRuntimePromise;
+  return listProbeRuntimeLoader.load();
 }
 
 function resolveProviderConfigForStatus(
@@ -167,8 +177,10 @@ export async function modelsStatusCommand(
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
   const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
   const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
+  const agentDir = agentId
+    ? resolveAgentDir(cfg, agentId)
+    : (resolveEnvAgentDirOverride() ?? resolveAgentDir(cfg, workspaceAgentId));
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
   const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
@@ -202,7 +214,7 @@ export async function modelsStatusCommand(
 
   const rawDefaultsModel = resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ?? "";
   const rawModel = agentModelPrimary ?? rawDefaultsModel;
-  const resolvedLabel = `${resolved.provider}/${resolved.model}`;
+  const resolvedLabel = modelKey(resolved.provider, resolved.model);
   const defaultLabel = rawModel || resolvedLabel;
   const defaultsFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   const fallbacks = agentFallbacksOverride ?? defaultsFallbacks;

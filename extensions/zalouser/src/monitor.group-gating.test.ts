@@ -3,7 +3,7 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
-import { __testing } from "./monitor.js";
+import { __testing, monitorZalouserProvider } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
   sendMessageZalouserMock,
@@ -13,6 +13,11 @@ import {
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
+import {
+  listZaloFriendsMock,
+  listZaloGroupsMock,
+  startZaloListenerMock,
+} from "./zalo-js.test-mocks.js";
 
 function createAccount(): ResolvedZalouserAccount {
   return {
@@ -89,30 +94,21 @@ function installRuntime(params: {
   const readSessionUpdatedAt = vi.fn(
     (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
   );
-  const dispatchAssembled = vi.fn(
-    async (turn: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
-      await turn.recordInboundSession({
-        storePath: turn.storePath,
-        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
-        ctx: turn.ctxPayload,
-        groupResolution: turn.record?.groupResolution,
-        createIfMissing: turn.record?.createIfMissing,
-        updateLastRoute: turn.record?.updateLastRoute,
-        onRecordError: turn.record?.onRecordError ?? (() => undefined),
-      });
-      const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: turn.ctxPayload,
-        cfg: turn.cfg,
-        dispatcherOptions: {
-          ...turn.dispatcherOptions,
-          deliver: async (payload, info) => {
-            await turn.delivery.deliver(payload, info);
-          },
-          onError: turn.delivery.onError,
-        },
-        replyOptions: turn.replyOptions,
-        replyResolver: turn.replyResolver,
-      });
+  type ResolvedTurn = Awaited<
+    ReturnType<Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]["adapter"]["resolveTurn"]>
+  >;
+  const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
+    await turn.recordInboundSession({
+      storePath: turn.storePath,
+      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+      ctx: turn.ctxPayload,
+      groupResolution: turn.record?.groupResolution,
+      createIfMissing: turn.record?.createIfMissing,
+      updateLastRoute: turn.record?.updateLastRoute,
+      onRecordError: turn.record?.onRecordError ?? (() => undefined),
+    });
+    if ("runDispatch" in turn) {
+      const dispatchResult = await turn.runDispatch();
       return {
         admission: { kind: "dispatch" as const },
         dispatched: true,
@@ -120,8 +116,28 @@ function installRuntime(params: {
         routeSessionKey: turn.routeSessionKey,
         dispatchResult,
       };
-    },
-  );
+    }
+    const dispatchResult = await turn.dispatchReplyWithBufferedBlockDispatcher({
+      ctx: turn.ctxPayload,
+      cfg: turn.cfg,
+      dispatcherOptions: {
+        ...turn.dispatcherOptions,
+        deliver: async (...args: Parameters<typeof turn.delivery.deliver>) => {
+          await turn.delivery.deliver(...args);
+        },
+        onError: turn.delivery.onError,
+      },
+      replyOptions: turn.replyOptions,
+      replyResolver: turn.replyResolver,
+    });
+    return {
+      admission: { kind: "dispatch" as const },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.routeSessionKey,
+      dispatchResult,
+    };
+  });
   const runTurn = vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
     const input = await params.adapter.ingest(params.raw);
     if (!input) {
@@ -137,27 +153,6 @@ function installRuntime(params: {
     );
     return await dispatchAssembled(resolved);
   });
-  const runResolvedTurn = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
-      const input =
-        typeof params.input === "function" ? await params.input(params.raw) : params.input;
-      if (!input) {
-        return {
-          admission: { kind: "drop" as const, reason: "ingest-null" },
-          dispatched: false,
-        };
-      }
-      const resolved = await params.resolveTurn(
-        input,
-        {
-          kind: "message",
-          canStartAgentTurn: true,
-        },
-        {},
-      );
-      return await dispatchAssembled(resolved);
-    },
-  );
   const buildContext = vi.fn(
     (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
       ({
@@ -264,10 +259,7 @@ function installRuntime(params: {
       },
       turn: {
         run: runTurn as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runResolved: runResolvedTurn as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
         buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
-        dispatchAssembled:
-          dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       text: {
         resolveMarkdownTableMode: vi.fn(() => "code"),
@@ -354,6 +346,12 @@ describe("zalouser monitor group mention gating", () => {
     sendTypingZalouserMock.mockClear();
     sendDeliveredZalouserMock.mockClear();
     sendSeenZalouserMock.mockClear();
+    listZaloFriendsMock.mockReset();
+    listZaloFriendsMock.mockResolvedValue([]);
+    listZaloGroupsMock.mockReset();
+    listZaloGroupsMock.mockResolvedValue([]);
+    startZaloListenerMock.mockReset();
+    startZaloListenerMock.mockResolvedValue({ stop: vi.fn() });
   });
 
   async function processMessageWithDefaults(params: {
@@ -385,6 +383,23 @@ describe("zalouser monitor group mention gating", () => {
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(sendTypingZalouserMock).not.toHaveBeenCalled();
+  }
+
+  async function startMonitorForStartupResolution(
+    accountConfig: ResolvedZalouserAccount["config"],
+  ) {
+    installRuntime({ commandAuthorized: false });
+    const abortController = new AbortController();
+    abortController.abort();
+    await monitorZalouserProvider({
+      account: {
+        ...createAccount(),
+        config: accountConfig,
+      },
+      config: createConfig(),
+      runtime: createRuntimeEnv(),
+      abortSignal: abortController.signal,
+    });
   }
 
   async function expectGroupCommandAuthorizers(params: {
@@ -680,6 +695,45 @@ describe("zalouser monitor group mention gating", () => {
     });
     const callArg = dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0];
     expect(callArg?.ctx?.To).toBe("zalouser:group:g-attacker-001");
+  });
+
+  it("does not resolve mutable allowlist or group names at startup by default", async () => {
+    listZaloFriendsMock.mockResolvedValue([{ userId: "999", displayName: "Alice" }]);
+    listZaloGroupsMock.mockResolvedValue([{ groupId: "g-other", name: "Trusted Team" }]);
+
+    await startMonitorForStartupResolution({
+      ...createAccount().config,
+      dmPolicy: "allowlist",
+      allowFrom: ["Alice"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Alice"],
+      groups: {
+        "Trusted Team": { enabled: true },
+      },
+    });
+
+    expect(listZaloFriendsMock).not.toHaveBeenCalled();
+    expect(listZaloGroupsMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves mutable allowlist and group names at startup when enabled", async () => {
+    listZaloFriendsMock.mockResolvedValue([{ userId: "123", displayName: "Alice" }]);
+    listZaloGroupsMock.mockResolvedValue([{ groupId: "g-trusted", name: "Trusted Team" }]);
+
+    await startMonitorForStartupResolution({
+      ...createAccount().config,
+      dangerouslyAllowNameMatching: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["Alice"],
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["Alice"],
+      groups: {
+        "Trusted Team": { enabled: true },
+      },
+    });
+
+    expect(listZaloFriendsMock).toHaveBeenCalledWith("default");
+    expect(listZaloGroupsMock).toHaveBeenCalledWith("default");
   });
 
   it("allows group control commands when sender is in groupAllowFrom", async () => {

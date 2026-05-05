@@ -142,6 +142,45 @@ exit 0
       await cleanupScript(scriptPath);
     });
 
+    it("fails with sudo systemd guidance when the gateway unit is system-scoped", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const callsPath = path.join(tmpDir, "systemctl-calls.log");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await fs.writeFile(
+        path.join(fakeBinDir, "systemctl"),
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$OPENCLAW_SYSTEMCTL_CALLS"
+if [ "$1" = "--user" ] && [ "$2" = "is-active" ]; then exit 3; fi
+if [ "$1" = "--user" ] && [ "$2" = "is-enabled" ]; then exit 1; fi
+if [ "$1" = "is-active" ] && [ "$2" = "--quiet" ]; then exit 0; fi
+if [ "$1" = "is-enabled" ] && [ "$2" = "--quiet" ]; then exit 0; fi
+if [ "$1" = "--user" ] && [ "$2" = "restart" ]; then exit 99; fi
+exit 1
+`,
+        { mode: 0o755 },
+      );
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: path.join(tmpDir, "state"),
+      });
+      const result = await executeScript(scriptPath, {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_SYSTEMCTL_CALLS: callsPath,
+      });
+      const calls = await fs.readFile(callsPath, "utf-8");
+
+      expect(result.code).toBe(78);
+      expect(result.stderr).toContain("system-scoped openclaw gateway unit detected");
+      expect(result.stderr).toContain("sudo systemctl restart openclaw-gateway.service");
+      expect(calls).toContain("--user is-active --quiet openclaw-gateway.service");
+      expect(calls).toContain("is-active --quiet openclaw-gateway.service");
+      expect(calls).not.toContain("--user restart openclaw-gateway.service");
+    });
+
     it("creates a launchd restart script on macOS", async () => {
       Object.defineProperty(process, "platform", { value: "darwin" });
       process.getuid = () => 501;
@@ -155,6 +194,7 @@ exit 0
       // Should clear disabled state and fall back to bootstrap when kickstart fails.
       expect(content).toContain("launchctl enable 'gui/501/ai.openclaw.gateway'");
       expect(content).toContain("launchctl bootstrap 'gui/501'");
+      expect(content).toContain("Bootstrap loads RunAtLoad agents");
       expect(content).toContain('rm -f "$0"');
       await cleanupScript(scriptPath);
     });
@@ -211,7 +251,8 @@ exit 0
 echo "launchctl $*" >&2
 case "$1" in
   kickstart) exit 42 ;;
-  enable|bootstrap) exit 0 ;;
+  enable) exit 0 ;;
+  bootstrap) exit 1 ;;
 esac
 exit 0
 `,

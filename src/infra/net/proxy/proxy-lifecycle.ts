@@ -9,11 +9,18 @@
 
 import http from "node:http";
 import https from "node:https";
+import { isIP } from "node:net";
 import { bootstrap as bootstrapGlobalAgent } from "global-agent";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { logInfo, logWarn } from "../../../logger.js";
 import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
+import {
+  getActiveManagedProxyUrl,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+  type ActiveManagedProxyRegistration,
+} from "./active-proxy-state.js";
 
 export type ProxyHandle = {
   /** The operator-managed proxy URL injected into process.env. */
@@ -63,21 +70,28 @@ type NodeHttpStackSnapshot = {
   hadGlobalAgent: boolean;
   globalAgent: unknown;
 };
-type ActiveProxyRegistration = {
-  proxyUrl: string;
-  stopped: boolean;
+type GlobalAgentConnectConfiguration = Record<string, unknown> & {
+  host: string;
+  tls: Record<string, unknown>;
+};
+type GlobalAgentCreateConnection = typeof https.globalAgent.createConnection;
+type GlobalAgentCreateConnectionConfiguration = Parameters<GlobalAgentCreateConnection>[0];
+type GlobalAgentCreateConnectionCallback = Parameters<GlobalAgentCreateConnection>[1];
+type GlobalAgentCreateConnectionResult = ReturnType<GlobalAgentCreateConnection>;
+type GlobalAgentHttpsAgent = {
+  createConnection: GlobalAgentCreateConnection;
 };
 
 let globalAgentBootstrapped = false;
 let nodeHttpStackSnapshot: NodeHttpStackSnapshot | null = null;
-let activeProxyRegistrations: ActiveProxyRegistration[] = [];
 let baseProxyEnvSnapshot: ProxyEnvSnapshot | null = null;
+let patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 
 export function _resetGlobalAgentBootstrapForTests(): void {
   globalAgentBootstrapped = false;
   nodeHttpStackSnapshot = null;
-  activeProxyRegistrations = [];
   baseProxyEnvSnapshot = null;
+  patchedGlobalAgentHttpsAgents = new WeakSet<object>();
 }
 
 function captureProxyEnv(): ProxyEnvSnapshot {
@@ -212,6 +226,7 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
   if (!globalAgentBootstrapped) {
     nodeHttpStackSnapshot = captureNodeHttpStack();
     bootstrapGlobalAgent();
+    patchGlobalAgentHttpsConnectTlsTargetHost();
     globalAgentBootstrapped = true;
   }
 
@@ -226,14 +241,65 @@ function bootstrapNodeHttpStack(proxyUrl: string): void {
   }
 }
 
-function findTopActiveProxyRegistration(): ActiveProxyRegistration | null {
-  for (let index = activeProxyRegistrations.length - 1; index >= 0; index -= 1) {
-    const registration = activeProxyRegistrations[index];
-    if (!registration.stopped) {
-      return registration;
-    }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isGlobalAgentConnectConfiguration(
+  value: unknown,
+): value is GlobalAgentConnectConfiguration {
+  if (!isRecord(value)) {
+    return false;
   }
-  return null;
+  return typeof value["host"] === "string" && isRecord(value["tls"]);
+}
+
+function isGlobalAgentHttpsAgent(value: unknown): value is GlobalAgentHttpsAgent {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value["createConnection"] === "function";
+}
+
+function withTlsTargetHost(
+  configuration: GlobalAgentCreateConnectionConfiguration,
+): GlobalAgentCreateConnectionConfiguration {
+  if (!isGlobalAgentConnectConfiguration(configuration)) {
+    return configuration;
+  }
+
+  // Compatibility shim for https://github.com/gajus/global-agent/issues/83.
+  // global-agent@4.1.3 can CONNECT to the right host while leaving Node TLS
+  // certificate validation pointed at the proxy socket host. Keep this until
+  // upstream carries the CONNECT target host through to tls.connect().
+  const tlsOptions: Record<string, unknown> = {
+    ...configuration.tls,
+    host: configuration.host,
+  };
+  if (tlsOptions["servername"] === undefined && isIP(configuration.host) === 0) {
+    tlsOptions["servername"] = configuration.host;
+  }
+  return {
+    ...configuration,
+    tls: tlsOptions,
+  } as GlobalAgentCreateConnectionConfiguration;
+}
+
+function patchGlobalAgentHttpsConnectTlsTargetHost(): void {
+  const agent = https.globalAgent;
+  if (!isGlobalAgentHttpsAgent(agent) || patchedGlobalAgentHttpsAgents.has(agent)) {
+    return;
+  }
+
+  const createConnection = agent.createConnection.bind(agent);
+  agent.createConnection = function createConnectionWithTlsTargetHost(
+    this: unknown,
+    configuration: GlobalAgentCreateConnectionConfiguration,
+    callback?: GlobalAgentCreateConnectionCallback,
+  ): GlobalAgentCreateConnectionResult {
+    return createConnection(withTlsTargetHost(configuration), callback);
+  };
+  patchedGlobalAgentHttpsAgents.add(agent);
 }
 
 function resetUndiciDispatcherForProxyLifecycle(): void {
@@ -260,16 +326,6 @@ function restoreNodeHttpStackForProxyLifecycle(): void {
   }
 }
 
-function reapplyActiveProxyRuntime(proxyUrl: string): void {
-  applyProxyEnv(proxyUrl);
-  resetUndiciDispatcherForProxyLifecycle();
-  try {
-    bootstrapNodeHttpStack(proxyUrl);
-  } catch (err) {
-    logWarn(`proxy: failed to refresh node HTTP proxy hooks: ${String(err)}`);
-  }
-}
-
 function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   restoreProxyEnv(snapshot);
   resetUndiciDispatcherForProxyLifecycle();
@@ -277,28 +333,17 @@ function restoreInactiveProxyRuntime(snapshot: ProxyEnvSnapshot): void {
   restoreNodeHttpStackForProxyLifecycle();
 }
 
-function restoreAfterFailedProxyActivation(
-  previousActiveRegistration: ActiveProxyRegistration | null,
-  restoreSnapshot: ProxyEnvSnapshot,
-): void {
-  if (previousActiveRegistration) {
-    reapplyActiveProxyRuntime(previousActiveRegistration.proxyUrl);
-    return;
-  }
+function restoreAfterFailedProxyActivation(restoreSnapshot: ProxyEnvSnapshot): void {
   restoreInactiveProxyRuntime(restoreSnapshot);
   baseProxyEnvSnapshot = null;
 }
 
-function stopActiveProxyRegistration(registration: ActiveProxyRegistration): void {
+function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistration): void {
   if (registration.stopped) {
     return;
   }
-  registration.stopped = true;
-  activeProxyRegistrations = activeProxyRegistrations.filter((entry) => !entry.stopped);
-
-  const nextActiveRegistration = findTopActiveProxyRegistration();
-  if (nextActiveRegistration) {
-    reapplyActiveProxyRuntime(nextActiveRegistration.proxyUrl);
+  stopActiveManagedProxyRegistration(registration);
+  if (getActiveManagedProxyUrl()) {
     return;
   }
 
@@ -348,23 +393,34 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  const previousActiveRegistration = findTopActiveProxyRegistration();
+  const activeProxyUrl = getActiveManagedProxyUrl();
+  if (activeProxyUrl) {
+    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl));
+    const handle: ProxyHandle = {
+      proxyUrl,
+      injectedProxyUrl: proxyUrl,
+      envSnapshot: baseProxyEnvSnapshot ?? captureProxyEnv(),
+      stop: async () => {
+        stopActiveProxyRegistration(registration);
+      },
+      kill: () => {
+        stopActiveProxyRegistration(registration);
+      },
+    };
+    return handle;
+  }
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
   let injectedEnvSnapshot = captureProxyEnv();
-  let registration: ActiveProxyRegistration | null = null;
+  let registration: ActiveManagedProxyRegistration | null = null;
 
   try {
     injectedEnvSnapshot = injectProxyEnv(proxyUrl);
     forceResetGlobalDispatcher();
     bootstrapNodeHttpStack(proxyUrl);
-    registration = {
-      proxyUrl,
-      stopped: false,
-    };
-    activeProxyRegistrations.push(registration);
+    registration = registerActiveManagedProxyUrl(new URL(proxyUrl));
   } catch (err) {
-    restoreAfterFailedProxyActivation(previousActiveRegistration, lifecycleBaseEnvSnapshot);
+    restoreAfterFailedProxyActivation(lifecycleBaseEnvSnapshot);
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {
       cause: err,
     });

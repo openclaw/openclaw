@@ -20,6 +20,7 @@ import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
@@ -101,7 +102,7 @@ type GatewayHost = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   chatRunId: string | null;
-  pendingAbort?: { runId: string; sessionKey: string } | null;
+  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -153,6 +154,21 @@ function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
 ): state is "final" | "aborted" | "error" {
   return state === "final" || state === "aborted" || state === "error";
+}
+
+function isChatTurnSessionChangedPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as { phase?: unknown; reason?: unknown };
+  return (
+    record.phase === "start" ||
+    record.phase === "message" ||
+    record.phase === "end" ||
+    record.phase === "error" ||
+    record.reason === "send" ||
+    record.reason === "steer"
+  );
 }
 
 type ConnectGatewayOptions = {
@@ -438,10 +454,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         const abort = host.pendingAbort;
         host.pendingAbort = null;
         void host.client
-          .request("chat.abort", {
-            sessionKey: abort.sessionKey,
-            runId: abort.runId,
-          })
+          .request(
+            "chat.abort",
+            abort.runId
+              ? { sessionKey: abort.sessionKey, runId: abort.runId }
+              : { sessionKey: abort.sessionKey },
+          )
           .catch((err) => {
             // Log to console for diagnostics; user sees no feedback for a stale abort
             // since the run likely completed during the disconnect window anyway.
@@ -465,7 +483,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+      if (host.tab !== "chat") {
+        void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+      }
       void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
@@ -510,6 +530,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       handleGatewayEvent(host, evt);
+    },
+    onRequestTiming: (timing) => {
+      if (host.client !== client) {
+        return;
+      }
+      recordControlUiRpcTiming(host, timing);
     },
     onGap: ({ expected, received }) => {
       if (host.client !== client) {
@@ -731,7 +757,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    const result = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
+      return;
+    }
     void loadSessions(host as unknown as SessionsState);
     return;
   }

@@ -102,7 +102,7 @@
     },
     {
       "source": "/tools/capability-cookbook",
-      "destination": "/plugins/architecture"
+      "destination": "/plugins/adding-capabilities"
     },
     {
       "source": "/brave-search",
@@ -1093,6 +1093,7 @@
                 "group": "Configuration",
                 "pages": [
                   "channels/pairing",
+                  "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
                   "channels/broadcast-groups",
@@ -1153,6 +1154,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
                 ]
@@ -1162,8 +1164,10 @@
                 "pages": [
                   "concepts/messages",
                   "concepts/streaming",
+                  "concepts/progress-drafts",
                   "concepts/retry",
-                  "concepts/queue"
+                  "concepts/queue",
+                  "concepts/queue-steering"
                 ]
               }
             ]
@@ -1179,8 +1183,12 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
+                  "plugins/manage-plugins",
                   "plugins/community",
+                  "plugins/plugin-inventory",
+                  "plugins/reference",
                   "plugins/bundles",
+                  "plugins/dependency-resolution",
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
@@ -1198,17 +1206,19 @@
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/adding-capabilities",
                       "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
                   {
-                    "group": "SDK reference",
+                    "group": "Plugin SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
                       "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-channel-turn",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
@@ -1300,6 +1310,7 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
@@ -1328,6 +1339,7 @@
                   "providers/anthropic",
                   "providers/arcee",
                   "providers/azure-speech",
+                  "providers/cerebras",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1362,6 +1374,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
+                  "providers/senseaudio",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
@@ -1487,6 +1500,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/audit-checks",
+                      "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1506,13 +1520,7 @@
                   },
                   {
                     "group": "Networking and discovery",
-                    "pages": [
-                      "network",
-                      "gateway/network-model",
-                      "gateway/pairing",
-                      "gateway/discovery",
-                      "gateway/bonjour"
-                    ]
+                    "pages": ["network", "gateway/pairing", "gateway/discovery", "gateway/bonjour"]
                   }
                 ]
               },
@@ -1567,6 +1575,7 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
+                      "cli/crestodian",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/gateway",
@@ -1651,7 +1660,12 @@
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "concepts/openclaw-sdk",
+                  "reference/openclaw-sdk-api-design",
+                  "reference/device-models"
+                ]
               },
               {
                 "group": "Templates",
@@ -1697,11 +1711,17 @@
               },
               {
                 "group": "Project",
-                "pages": ["reference/credits"]
+                "pages": ["reference/application-modernization-plan", "reference/credits"]
               },
               {
                 "group": "Release and CI",
-                "pages": ["reference/RELEASING", "reference/test", "ci", "help/scripts"]
+                "pages": [
+                  "reference/RELEASING",
+                  "reference/full-release-validation",
+                  "reference/test",
+                  "ci",
+                  "help/scripts"
+                ]
               }
             ]
           },
@@ -1718,7 +1738,7 @@
               },
               {
                 "group": "Testing",
-                "pages": ["help/testing", "help/testing-live"]
+                "pages": ["help/testing", "help/testing-updates-plugins", "help/testing-live"]
               },
               {
                 "group": "Diagnostics",

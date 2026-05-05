@@ -436,6 +436,8 @@ async function processMessage(
     configuredGroupAllowFrom: configGroupAllowFrom,
     senderId,
     isSenderAllowed,
+    channel: "zalouser",
+    accountId: account.accountId,
     readAllowFromStore: async () => storeAllowFrom,
     shouldComputeCommandAuthorized: (body, cfg) =>
       core.channel.commands.shouldComputeCommandAuthorized(body, cfg),
@@ -671,64 +673,66 @@ async function processMessage(
     },
   });
 
-  await core.channel.turn.runResolved({
+  await core.channel.turn.run({
     channel: "zalouser",
     accountId: account.accountId,
     raw: message,
-    input: {
-      id: messageSid ?? `${message.timestampMs}`,
-      timestamp: message.timestampMs,
-      rawText: rawBody,
-      textForAgent: rawBody,
-      textForCommands: commandBody,
-      raw: message,
-    },
-    resolveTurn: () => ({
-      cfg: config,
-      channel: "zalouser",
-      accountId: account.accountId,
-      agentId: route.agentId,
-      routeSessionKey: route.sessionKey,
-      storePath,
-      ctxPayload,
-      recordInboundSession: core.channel.session.recordInboundSession,
-      dispatchReplyWithBufferedBlockDispatcher:
-        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-      delivery: {
-        deliver: async (payload) => {
-          await deliverZalouserReply({
-            payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
-            profile: account.profile,
-            chatId,
-            isGroup,
-            runtime,
-            core,
-            config,
-            accountId: account.accountId,
-            statusSink,
-            tableMode: core.channel.text.resolveMarkdownTableMode({
-              cfg: config,
-              channel: "zalouser",
+    adapter: {
+      ingest: () => ({
+        id: messageSid ?? `${message.timestampMs}`,
+        timestamp: message.timestampMs,
+        rawText: rawBody,
+        textForAgent: rawBody,
+        textForCommands: commandBody,
+        raw: message,
+      }),
+      resolveTurn: () => ({
+        cfg: config,
+        channel: "zalouser",
+        accountId: account.accountId,
+        agentId: route.agentId,
+        routeSessionKey: route.sessionKey,
+        storePath,
+        ctxPayload,
+        recordInboundSession: core.channel.session.recordInboundSession,
+        dispatchReplyWithBufferedBlockDispatcher:
+          core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver: async (payload) => {
+            await deliverZalouserReply({
+              payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
+              profile: account.profile,
+              chatId,
+              isGroup,
+              runtime,
+              core,
+              config,
               accountId: account.accountId,
-            }),
-          });
+              statusSink,
+              tableMode: core.channel.text.resolveMarkdownTableMode({
+                cfg: config,
+                channel: "zalouser",
+                accountId: account.accountId,
+              }),
+            });
+          },
+          onError: (err, info) => {
+            runtime.error(
+              `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
+            );
+          },
         },
-        onError: (err, info) => {
-          runtime.error(
-            `[${account.accountId}] Zalouser ${info.kind} reply failed: ${String(err)}`,
-          );
+        dispatcherOptions: replyPipeline,
+        replyOptions: {
+          onModelSelected,
         },
-      },
-      dispatcherOptions: replyPipeline,
-      replyOptions: {
-        onModelSelected,
-      },
-      record: {
-        onRecordError: (err) => {
-          runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+        record: {
+          onRecordError: (err) => {
+            runtime.error?.(`zalouser: failed updating session meta: ${String(err)}`);
+          },
         },
-      },
-    }),
+      }),
+    },
   });
   if (isGroup && historyKey) {
     clearHistoryEntriesIfEnabled({
@@ -824,8 +828,9 @@ export async function monitorZalouserProvider(
     const groupAllowFromEntries = (account.config.groupAllowFrom ?? [])
       .map((entry) => normalizeZalouserEntry(String(entry)))
       .filter((entry) => entry && entry !== "*");
+    const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
-    if (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0) {
+    if (allowNameMatching && (allowFromEntries.length > 0 || groupAllowFromEntries.length > 0)) {
       const friends = await listZaloFriends(profile);
       const byName = buildNameIndex(friends, (friend) => friend.displayName);
       if (allowFromEntries.length > 0) {
@@ -865,7 +870,7 @@ export async function monitorZalouserProvider(
 
     const groupsConfig = account.config.groups ?? {};
     const groupKeys = Object.keys(groupsConfig).filter((key) => key !== "*");
-    if (groupKeys.length > 0) {
+    if (allowNameMatching && groupKeys.length > 0) {
       const groups = await listZaloGroups(profile);
       const byName = buildNameIndex(groups, (group) => group.name);
       const mapping: string[] = [];

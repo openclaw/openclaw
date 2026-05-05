@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,6 +34,41 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
     ].join("\n"),
     "utf8",
   );
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      return await fs.readFile(filePath, "utf8");
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function waitUntil(check: () => boolean, timeoutMs: number): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (check()) {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return check();
+}
+
+function isProcessAlive(pid: number | undefined): boolean {
+  if (!pid) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function launcherEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -139,6 +174,103 @@ describe("openclaw launcher", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "forwards SIGTERM to source-checkout compile-cache respawn children",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          'process.title = "openclaw-launcher-sigterm-test-child";',
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        respawnChildPid = childInfo.pid;
+
+        launcher.kill("SIGTERM");
+
+        await waitUntil(() => !isProcessAlive(respawnChildPid), 5000);
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "exits after SIGTERM when the respawn child ignores the forwarded signal",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          'process.title = "openclaw-launcher-sigterm-ignore-test-child";',
+          'process.on("SIGTERM", () => {});',
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        respawnChildPid = childInfo.pid;
+
+        launcher.kill("SIGTERM");
+
+        await waitUntil(
+          () => !isProcessAlive(launcher.pid) && !isProcessAlive(respawnChildPid),
+          5000,
+        );
+        expect(isProcessAlive(launcher.pid)).toBe(false);
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "respawns symlinked source-checkout launchers without inherited NODE_COMPILE_CACHE",
     async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
@@ -161,7 +293,7 @@ describe("openclaw launcher", () => {
     },
   );
 
-  it("does not respawn packaged launchers when NODE_COMPILE_CACHE is configured", async () => {
+  it("keeps compile cache enabled for packaged launchers when NODE_COMPILE_CACHE is configured", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await addCompileCacheProbe(fixtureRoot);
 
@@ -175,6 +307,56 @@ describe("openclaw launcher", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("cache:enabled;respawn:0");
+  });
+
+  it("scopes packaged launcher compile cache inside configured cache roots", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import module from "node:module";',
+        'process.stdout.write(module.getCompileCacheDir?.() ?? "cache:disabled");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+      }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(path.join(".node-compile-cache", "openclaw", "2026.4.29"));
+  });
+
+  it("falls back to the default packaged launcher compile cache when NODE_COMPILE_CACHE is empty", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const runCwd = makeTempDir(fixtureRoots, "openclaw-launcher-cwd-");
+    await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import module from "node:module";',
+        'process.stdout.write(module.getCompileCacheDir?.() ?? "cache:disabled");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: runCwd,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: "",
+      }),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(path.join("node-compile-cache", "openclaw", "2026.4.29"));
+    expect(result.stdout).not.toContain(path.join(runCwd, "openclaw"));
   });
 
   it("enables compile cache for packaged launchers", async () => {

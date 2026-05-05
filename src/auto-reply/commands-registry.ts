@@ -6,17 +6,14 @@ import {
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   isCommandEnabled,
   listChatCommands,
   listChatCommandsForConfig,
 } from "./commands-registry-list.js";
 import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
-import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
+import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -27,7 +24,6 @@ import type {
   CommandDetection,
   CommandNormalizeOptions,
   NativeCommandSpec,
-  ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
 import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
@@ -44,6 +40,8 @@ export {
   resolveTextCommand,
 } from "./commands-registry-normalize.js";
 
+export { isNativeCommandSurface, shouldHandleTextCommands } from "./commands-text-routing.js";
+
 export type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -54,7 +52,6 @@ export type {
   CommandDetection,
   CommandNormalizeOptions,
   CommandScope,
-  CommandTier,
   NativeCommandSpec,
   ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
@@ -87,12 +84,23 @@ function resolveNativeName(
 }
 
 function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
-  return {
+  const spec: NativeCommandSpec = {
     name: resolveNativeName(command, provider) ?? command.key,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
     args: command.args,
   };
+  if (command.descriptionLocalizations) {
+    spec.descriptionLocalizations = command.descriptionLocalizations;
+  }
+  return spec;
+}
+
+function resolveNativeNames(command: ChatCommandDefinition, provider?: string): string[] {
+  const primary = resolveNativeName(command, provider);
+  return [primary, ...(command.nativeAliases ?? [])].filter((name): name is string =>
+    Boolean(name),
+  );
 }
 
 function listNativeSpecsFromCommands(
@@ -101,7 +109,23 @@ function listNativeSpecsFromCommands(
 ): NativeCommandSpec[] {
   return commands
     .filter((command) => command.scope !== "text" && command.nativeName)
-    .map((command) => toNativeCommandSpec(command, provider));
+    .flatMap((command) => {
+      const spec = toNativeCommandSpec(command, provider);
+      return resolveNativeNames(command, provider).map((name) => {
+        const nativeSpec: NativeCommandSpec = {
+          name,
+          description: spec.description,
+          acceptsArgs: spec.acceptsArgs,
+        };
+        if (spec.args) {
+          nativeSpec.args = spec.args;
+        }
+        if (spec.descriptionLocalizations) {
+          nativeSpec.descriptionLocalizations = spec.descriptionLocalizations;
+        }
+        return nativeSpec;
+      });
+    });
 }
 
 export function listNativeCommandSpecs(params?: {
@@ -133,8 +157,9 @@ export function findCommandByNativeName(
   return getChatCommands().find(
     (command) =>
       command.scope !== "text" &&
-      normalizeOptionalLowercaseString(resolveNativeName(command, provider, options)) ===
-        normalized,
+      [resolveNativeName(command, provider, options), ...(command.nativeAliases ?? [])].some(
+        (name) => normalizeOptionalLowercaseString(name) === normalized,
+      ),
   );
 }
 
@@ -371,21 +396,4 @@ export function formatCommandArgMenuTitle(params: {
 export function isCommandMessage(raw: string): boolean {
   const trimmed = normalizeCommandBody(raw);
   return trimmed.startsWith("/");
-}
-
-export function isNativeCommandSurface(surface?: string): boolean {
-  if (!surface) {
-    return false;
-  }
-  return getNativeCommandSurfaces().has(normalizeLowercaseStringOrEmpty(surface));
-}
-
-export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams): boolean {
-  if (params.commandSource === "native") {
-    return true;
-  }
-  if (params.cfg.commands?.text !== false) {
-    return true;
-  }
-  return !isNativeCommandSurface(params.surface);
 }

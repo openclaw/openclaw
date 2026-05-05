@@ -18,6 +18,7 @@ import {
   resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
   resolveThinkingDefault,
@@ -388,6 +389,18 @@ describe("model-selection", () => {
         model: "kimi-code",
       });
     });
+
+    it("ignores malformed persisted model fields and tolerates a missing default provider", () => {
+      expect(
+        resolvePersistedModelRef({
+          defaultProvider: undefined,
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
+    });
   });
 
   describe("resolvePersistedOverrideModelRef", () => {
@@ -414,6 +427,16 @@ describe("model-selection", () => {
         provider: "kimi",
         model: "kimi-code",
       });
+    });
+
+    it("ignores malformed persisted override fields", () => {
+      expect(
+        resolvePersistedOverrideModelRef({
+          defaultProvider: undefined,
+          overrideProvider: ["anthropic"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
     });
   });
 
@@ -446,6 +469,18 @@ describe("model-selection", () => {
         provider: "openrouter",
         model: "anthropic/claude-haiku-4.5",
       });
+    });
+
+    it("ignores malformed persisted model metadata instead of throwing", () => {
+      expect(
+        resolvePersistedSelectedModelRef({
+          defaultProvider: "anthropic",
+          runtimeProvider: { provider: "openai" },
+          runtimeModel: false,
+          overrideProvider: ["openrouter"],
+          overrideModel: 123,
+        }),
+      ).toBeNull();
     });
   });
 
@@ -854,6 +889,34 @@ describe("model-selection", () => {
       expect(result).toEqual({
         key: "anthropic/claude-sonnet-4-6",
         ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
+    });
+
+    it("keeps legacy CLI runtime refs accepted when canonical runtime refs are also configured", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            model: { primary: "anthropic/claude-sonnet-4-6" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "claude-cli/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: BUNDLED_ALLOWLIST_CATALOG,
+        raw: "claude-cli/claude-sonnet-4-6",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({
+        key: "claude-cli/claude-sonnet-4-6",
+        ref: { provider: "claude-cli", model: "claude-sonnet-4-6" },
       });
     });
 
@@ -1600,10 +1663,14 @@ describe("model-selection", () => {
       expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
     });
 
-    it("falls back to medium when no provider thinking hook is active", () => {
+    it("uses bundled provider thinking defaults when no explicit config overrides them", () => {
       const cfg = {} as OpenClawConfig;
 
-      expect(resolveAnthropicOpusThinking(cfg)).toBe("medium");
+      expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
+    });
+
+    it("falls back to medium when no provider thinking policy is active", () => {
+      const cfg = {} as OpenClawConfig;
 
       expect(
         resolveThinkingDefault({
@@ -1620,6 +1687,49 @@ describe("model-selection", () => {
           ],
         }),
       ).toBe("medium");
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "custom-provider",
+          model: "custom-reasoning-model",
+          catalog: [
+            {
+              provider: "custom-provider",
+              id: "custom-reasoning-model",
+              name: "Custom Reasoning Model",
+              reasoning: true,
+            },
+          ],
+        }),
+      ).toBe("medium");
+    });
+  });
+});
+
+describe("resolveDefaultModelForAgent", () => {
+  it("uses an agent primary model override before the global default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            model: {
+              primary: "openai-codex/gpt-5.5",
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "main" })).toEqual({
+      provider: "openai-codex",
+      model: "gpt-5.5",
     });
   });
 });

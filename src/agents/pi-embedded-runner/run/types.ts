@@ -1,12 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import type { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
+import type { AuthProfileStore } from "../../auth-profiles/types.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
+import type { ToolOutcomeObserver } from "../../pi-tools.before-tool-call.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
 import type { NormalizedUsage } from "../../usage.js";
@@ -38,8 +41,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Live observer called after wrapped tool outcomes are recorded. */
+  onToolOutcome?: ToolOutcomeObserver;
   model: Model<Api>;
   authStorage: AuthStorage;
+  /** Auth profile store already resolved during startup for this attempt. */
+  authProfileStore: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
@@ -54,6 +61,8 @@ export type EmbeddedRunAttemptResult = {
   idleTimedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
+  /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
+  timedOutDuringToolExecution?: boolean;
   promptError: unknown;
   /**
    * Identifies which phase produced the promptError.
@@ -68,11 +77,13 @@ export type EmbeddedRunAttemptResult = {
   preflightRecovery?:
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
+        source?: "mid-turn";
         handled: true;
         truncatedCount?: number;
       }
     | {
         route: Exclude<PreemptiveCompactionRoute, "fits">;
+        source?: "mid-turn";
         handled?: false;
       };
   sessionIdUsed: string;
@@ -95,6 +106,7 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
   successfulCronAdds?: number;
@@ -103,8 +115,14 @@ export type EmbeddedRunAttemptResult = {
   promptCache?: ContextEnginePromptCacheInfo;
   compactionCount?: number;
   compactionTokensAfter?: number;
-  /** Client tool call detected (OpenResponses hosted tools). */
-  clientToolCall?: { name: string; params: Record<string, unknown> };
+  /**
+   * Client tool calls detected during this attempt (OpenResponses hosted
+   * tools), in the order the underlying LLM emitted them. Field is
+   * `undefined` when no client tools were called so existing truthiness
+   * checks across the runner pipeline (`attempt.clientToolCalls ? ...`)
+   * keep their meaning. When set, the array always has at least one entry.
+   */
+  clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;

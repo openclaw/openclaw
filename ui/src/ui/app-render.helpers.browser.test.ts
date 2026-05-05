@@ -15,6 +15,9 @@ function createState(overrides: Partial<AppViewState> = {}) {
   return {
     connected: true,
     chatLoading: false,
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
     onboarding: false,
     sessionKey: "main",
     sessionsHideCron: true,
@@ -45,8 +48,23 @@ function createState(overrides: Partial<AppViewState> = {}) {
     applySettings: () => undefined,
     chatMobileControlsOpen: false,
     setChatMobileControlsOpen: () => undefined,
+    chatModelCatalog: [],
+    chatModelOverrides: {},
+    chatModelsLoading: false,
+    client: { request: vi.fn() },
     ...overrides,
   } as unknown as AppViewState;
+}
+
+function renderRefreshButton(overrides: Partial<AppViewState> = {}) {
+  const container = document.createElement("div");
+  render(renderChatControls(createState(overrides)), container);
+
+  const button = container.querySelector<HTMLButtonElement>(
+    `.chat-controls .btn--icon[data-tooltip="${t("chat.refreshTitle")}"]`,
+  );
+  expect(button).not.toBeNull();
+  return button!;
 }
 
 describe("chat header controls (browser)", () => {
@@ -76,14 +94,41 @@ describe("chat header controls (browser)", () => {
     }
   });
 
+  it.each([
+    ["connected and idle", {}, false],
+    ["chat history loading", { chatLoading: true }, true],
+    ["chat send in flight", { chatSending: true }, true],
+    ["active run", { chatRunId: "run-123" }, true],
+    ["active stream", { chatStream: "streaming" }, true],
+    ["disconnected", { connected: false }, true],
+  ] as const)("sets refresh disabled state while %s", (_name, overrides, disabled) => {
+    const button = renderRefreshButton(overrides);
+
+    expect(button.disabled).toBe(disabled);
+  });
+
   it("renders the cron session filter in the mobile dropdown controls", async () => {
     const state = createState({
+      sessionKey: "agent:alpha:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Alpha" },
+          { id: "beta", name: "Beta" },
+        ],
+      },
       sessionsResult: {
         ts: 0,
         path: "",
-        count: 2,
+        count: 3,
         defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-        sessions: [row({ key: "main" }), row({ key: "agent:main:cron:daily-briefing" })],
+        sessions: [
+          row({ key: "agent:alpha:main" }),
+          row({ key: "agent:alpha:cron:daily-briefing" }),
+          row({ key: "agent:beta:cron:nightly-check" }),
+        ],
       },
     });
     const container = document.createElement("div");
@@ -105,6 +150,42 @@ describe("chat header controls (browser)", () => {
     cronButton?.click();
 
     expect(state.sessionsHideCron).toBe(false);
+  });
+
+  it("uses the shared chat session controls in the mobile dropdown", async () => {
+    const state = createState({
+      sessionKey: "agent:alpha:main",
+      chatMobileControlsOpen: true,
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Alpha" },
+          { id: "beta", name: "Beta" },
+        ],
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "agent:alpha:main" }),
+          row({ key: "agent:beta:dashboard:recent", label: "Beta recent" }),
+        ],
+      },
+    });
+    const container = document.createElement("div");
+    render(renderChatMobileToggle(state), container);
+    await Promise.resolve();
+
+    const sessionRows = container.querySelectorAll(".chat-controls__session-row");
+    expect(sessionRows).toHaveLength(1);
+    expect(container.querySelector('select[data-chat-agent-filter="true"]')).not.toBeNull();
+    expect(container.querySelector('select[data-chat-session-select="true"]')).not.toBeNull();
+    expect(container.querySelector('select[data-chat-model-select="true"]')).not.toBeNull();
+    expect(container.querySelector('select[data-chat-thinking-select="true"]')).not.toBeNull();
   });
 
   it("renders the mobile dropdown from state instead of mutating DOM classes", async () => {

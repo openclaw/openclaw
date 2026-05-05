@@ -1,21 +1,25 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.4.25",
+  "version": "2026.5.4",
   "description": "OpenClaw WhatsApp channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "https-proxy-agent": "^9.0.0",
     "jimp": "^1.6.1",
-    "typebox": "1.1.34",
-    "undici": "8.1.0"
+    "typebox": "1.1.37",
+    "undici": "8.2.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.4"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -57,13 +61,10 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.4.25"
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
+      "pluginApi": ">=2026.5.4"
     },
     "build": {
-      "openclawVersion": "2026.4.25"
+      "openclawVersion": "2026.5.4"
     },
     "release": {
       "publishToClawHub": true,

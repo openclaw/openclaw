@@ -1,9 +1,5 @@
 import type { CoreConfig } from "../../types.js";
-import {
-  MATRIX_ANNOTATION_RELATION_TYPE,
-  MATRIX_REACTION_EVENT_TYPE,
-  type MatrixReactionEventContent,
-} from "../reaction-common.js";
+import { MATRIX_ANNOTATION_RELATION_TYPE, MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import type {
   DimensionalFileInfo,
   EncryptedFile,
@@ -55,7 +51,7 @@ export type MatrixThreadRelation = {
 
 export type MatrixRelation = MatrixReplyRelation | MatrixThreadRelation;
 
-export type MatrixReplyMeta = {
+type MatrixReplyMeta = {
   "m.relates_to"?: MatrixRelation;
 };
 
@@ -78,8 +74,6 @@ export type MatrixMediaContent = MessageEventContent &
   };
 
 export type MatrixOutboundContent = MatrixTextContent | MatrixMediaContent;
-
-export type ReactionEventContent = MatrixReactionEventContent;
 
 export type MatrixSendResult = {
   messageId: string;

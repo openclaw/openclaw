@@ -145,8 +145,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Enable direct channel sends for completed async media generation tasks.
-     * Default: false.
+     * Deprecated compatibility flag. Async media generation completions stay
+     * requester-session mediated so source delivery policy remains agent-owned.
      */
     directSend?: boolean;
   };
@@ -166,6 +166,11 @@ export type ToolLoopDetectionDetectorConfig = {
   pingPong?: boolean;
 };
 
+export type ToolLoopPostCompactionGuardConfig = {
+  /** How many attempts post-compaction the guard remains armed (default: 3). */
+  windowSize?: number;
+};
+
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -181,6 +186,8 @@ export type ToolLoopDetectionConfig = {
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
+  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
+  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
@@ -575,6 +582,8 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
+      useTrustedEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */

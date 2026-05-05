@@ -9,7 +9,7 @@ import {
   pickMatchingExternalInterfaceAddress,
   readNetworkInterfaces,
 } from "../infra/network-interfaces.js";
-import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import {
   isCanonicalDottedDecimalIPv4,
   isIpInCidr,
@@ -206,31 +206,6 @@ export function resolveRequestClientIp(
   });
 }
 
-export function isLocalGatewayAddress(ip: string | undefined): boolean {
-  if (isLoopbackAddress(ip)) {
-    return true;
-  }
-  if (!ip) {
-    return false;
-  }
-  const normalized = normalizeIp(ip);
-  if (!normalized) {
-    return false;
-  }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  if (tailnetIPv4 && normalized === normalizeLowercaseStringOrEmpty(tailnetIPv4)) {
-    return true;
-  }
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  if (
-    tailnetIPv6 &&
-    normalizeLowercaseStringOrEmpty(ip) === normalizeLowercaseStringOrEmpty(tailnetIPv6)
-  ) {
-    return true;
-  }
-  return false;
-}
-
 export {
   isContainerEnvironment,
   __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
@@ -333,7 +308,7 @@ export function defaultGatewayBindMode(tailscaleMode?: string): GatewayBindMode 
  * @param host - The host address to test
  * @returns True if we can successfully bind to this address
  */
-export async function canBindToHost(host: string): Promise<boolean> {
+async function canBindToHost(host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const testServer = net.createServer();
     testServer.once("error", () => {
@@ -353,6 +328,12 @@ export async function resolveGatewayListenHosts(
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
   if (bindHost !== "127.0.0.1") {
+    return [bindHost];
+  }
+  // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
+  // also accepts ::ffff:127.0.0.1 connections. Binding both ::1 and 127.0.0.1 on
+  // the same port causes non-deterministic TCP routing → HTTP requests hang silently.
+  if (process.platform === "win32") {
     return [bindHost];
   }
   const canBind = opts?.canBindToHost ?? canBindToHost;

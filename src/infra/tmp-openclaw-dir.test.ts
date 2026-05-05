@@ -394,6 +394,104 @@ describe("resolvePreferredOpenClawTmpDir", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
   });
 
+  it("uses /tmp/openclaw when another process tightened permissions before repair", () => {
+    const chmodSync = vi.fn();
+    const warn = vi.fn();
+    const tmpdir = vi.fn(() => "/var/fallback");
+    const states = [0o40777, 0o40700, 0o40700];
+    const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR) {
+        return makeDirStat({ mode: states.shift() ?? 0o40700 });
+      }
+      return secureDirStat();
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn(),
+      lstatSync,
+      chmodSync,
+      mkdirSync: vi.fn(),
+      getuid: vi.fn(() => 501),
+      tmpdir,
+      warn,
+    });
+
+    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(chmodSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+    expect(tmpdir).not.toHaveBeenCalled();
+  });
+
+  it("uses fallback when another process tightened fallback permissions before repair", () => {
+    const fallbackPath = fallbackTmp();
+    const chmodSync = vi.fn();
+    const warn = vi.fn();
+    const states = [0o40777, 0o40700, 0o40700];
+
+    const resolved = resolveWithReadOnlyTmpFallback({
+      fallbackPath,
+      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: states.shift() ?? 0o40700 })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses /tmp/openclaw when chmod loses a concurrent repair race", () => {
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR && mode === 0o700) {
+        throw nodeErrorWithCode("EPERM");
+      }
+    });
+    const warn = vi.fn();
+    const states = [0o40777, 0o40777, 0o40700];
+    const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>((target: string) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR) {
+        return makeDirStat({ mode: states.shift() ?? 0o40700 });
+      }
+      return secureDirStat();
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn(),
+      lstatSync,
+      chmodSync,
+      mkdirSync: vi.fn(),
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn,
+    });
+
+    expect(resolved).toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(chmodSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR, 0o700);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("uses fallback when chmod loses a concurrent fallback repair race", () => {
+    const fallbackPath = fallbackTmp();
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === fallbackPath && mode === 0o700) {
+        throw nodeErrorWithCode("EACCES");
+      }
+    });
+    const warn = vi.fn();
+    const states = [0o40777, 0o40777, 0o40700];
+
+    const resolved = resolveWithReadOnlyTmpFallback({
+      fallbackPath,
+      fallbackLstatSync: vi.fn(() => makeDirStat({ mode: states.shift() ?? 0o40700 })),
+      chmodSync,
+      warn,
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("throws when the fallback directory cannot be created", () => {
     expect(() =>
       resolvePreferredOpenClawTmpDir({
@@ -413,5 +511,54 @@ describe("resolvePreferredOpenClawTmpDir", () => {
         warn: vi.fn(),
       }),
     ).toThrow(/Unable to create fallback OpenClaw temp dir/);
+  });
+
+  it("skips the POSIX preferred path on Windows even when /tmp is accessible (#60713)", () => {
+    // Node on Windows resolves the POSIX path `/tmp` to `C:\tmp` against the
+    // current drive root. If `C:\tmp` happens to exist (Git, MSYS2, etc.
+    // create it), the previous code path returned `/tmp/openclaw` and routed
+    // log files / TTS temp files there instead of `%TEMP%\openclaw`. The
+    // platform: "win32" branch must skip the POSIX path entirely.
+    const winFallback = path.win32.join("C:\\Users\\u\\AppData\\Local\\Temp", "openclaw-501");
+    const accessSync = vi.fn();
+    const lstatSync = vi.fn((target: string) => {
+      if (target === POSIX_OPENCLAW_TMP_DIR || target === winFallback) {
+        return secureDirStat();
+      }
+      throw nodeErrorWithCode("ENOENT");
+    });
+    const mkdirSync = vi.fn();
+    const chmodSync = vi.fn();
+    const tmpdir = vi.fn(() => "C:\\Users\\u\\AppData\\Local\\Temp");
+
+    const result = resolvePreferredOpenClawTmpDir({
+      platform: "win32",
+      accessSync,
+      lstatSync,
+      mkdirSync,
+      chmodSync,
+      getuid: vi.fn(() => 501),
+      tmpdir,
+      warn: vi.fn(),
+    });
+
+    expect(result).toBe(winFallback);
+    expect(result).not.toBe(POSIX_OPENCLAW_TMP_DIR);
+    expect(tmpdir).toHaveBeenCalled();
+  });
+
+  it("still uses the POSIX preferred path on non-Windows platforms when available", () => {
+    const result = resolvePreferredOpenClawTmpDir({
+      platform: "linux",
+      accessSync: vi.fn(),
+      lstatSync: vi.fn(() => secureDirStat()),
+      mkdirSync: vi.fn(),
+      chmodSync: vi.fn(),
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn: vi.fn(),
+    });
+
+    expect(result).toBe(POSIX_OPENCLAW_TMP_DIR);
   });
 });

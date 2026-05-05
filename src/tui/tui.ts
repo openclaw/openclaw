@@ -33,9 +33,16 @@ import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import { formatTokens } from "./tui-formatters.js";
+import {
+  buildTuiLastSessionScopeKey,
+  readTuiLastSessionKey,
+  resolveRememberedTuiSessionKey,
+  writeTuiLastSessionKey,
+} from "./tui-last-session.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandlers } from "./tui-overlays.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import {
   createEditorSubmitHandler,
   createSubmitBurstCoalescer,
@@ -307,9 +314,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const agentNames = new Map<string, string>();
   let currentSessionKey = "";
   let initialSessionApplied = false;
+  let rememberedSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
   let pendingOptimisticUserMessage = false;
+  let pendingChatRunId: string | null = null;
   let historyLoaded = false;
   let isConnected = false;
   let wasDisconnected = false;
@@ -387,6 +396,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     },
     set pendingOptimisticUserMessage(value) {
       pendingOptimisticUserMessage = value;
+    },
+    get pendingChatRunId() {
+      return pendingChatRunId;
+    },
+    set pendingChatRunId(value) {
+      pendingChatRunId = value ?? null;
     },
     get historyLoaded() {
       return historyLoaded;
@@ -582,6 +597,67 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   currentSessionKey = resolveSessionKey(initialSessionInput);
+
+  const buildLastSessionScopeKeyFor = (sessionKey = currentSessionKey) => {
+    const parsed = parseAgentSessionKey(sessionKey);
+    return buildTuiLastSessionScopeKey({
+      connectionUrl: client.connection.url,
+      agentId: parsed?.agentId ?? currentAgentId,
+      sessionScope,
+    });
+  };
+
+  const rememberCurrentSessionKey = (sessionKey: string) => {
+    const trimmed = sessionKey.trim();
+    if (!trimmed || trimmed === "unknown") {
+      return;
+    }
+    void writeTuiLastSessionKey({
+      scopeKey: buildLastSessionScopeKeyFor(trimmed),
+      sessionKey: trimmed,
+    }).catch(() => undefined);
+  };
+
+  const restoreRememberedSession = async () => {
+    if (initialSessionInput || rememberedSessionApplied) {
+      return;
+    }
+    rememberedSessionApplied = true;
+    const remembered = await readTuiLastSessionKey({
+      scopeKey: buildLastSessionScopeKeyFor(),
+    });
+    const rememberedKey = remembered ? resolveSessionKey(remembered) : null;
+    if (!rememberedKey || rememberedKey === currentSessionKey) {
+      return;
+    }
+    const rememberedAgent = parseAgentSessionKey(rememberedKey)?.agentId;
+    if (rememberedAgent && normalizeAgentId(rememberedAgent) !== currentAgentId) {
+      return;
+    }
+    const sessions = await client
+      .listSessions({
+        limit: TUI_SESSION_LOOKUP_LIMIT,
+        search: rememberedKey,
+        includeGlobal: false,
+        includeUnknown: false,
+        agentId: currentAgentId,
+      })
+      .catch(() => null);
+    if (!sessions) {
+      return;
+    }
+    const restored = resolveRememberedTuiSessionKey({
+      rememberedKey,
+      currentAgentId,
+      sessions: sessions.sessions,
+    });
+    if (!restored || restored === currentSessionKey) {
+      return;
+    }
+    currentSessionKey = restored;
+    updateHeader();
+    updateFooter();
+  };
 
   const updateHeader = () => {
     const sessionLabel = formatSessionKey(currentSessionKey);
@@ -890,6 +966,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     updateAutocompleteProvider,
     setActivityStatus,
     clearLocalRunIds,
+    rememberSessionKey: rememberCurrentSessionKey,
   });
   const {
     refreshAgents,
@@ -1081,6 +1158,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     setConnectionStatus(isLocalMode ? "local ready" : "connected");
     void (async () => {
       await refreshAgents();
+      await restoreRememberedSession();
       updateHeader();
       await loadHistory();
       setConnectionStatus(

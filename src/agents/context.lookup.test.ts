@@ -1,6 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-type DiscoveredModel = { id: string; contextWindow?: number; contextTokens?: number };
+type DiscoveredModel = {
+  id: string;
+  provider?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+};
 type ContextModule = typeof import("./context.js");
 
 const contextTestState = vi.hoisted(() => {
@@ -22,10 +27,6 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
-}));
-
-vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
 }));
 
 vi.mock("./pi-model-discovery-runtime.js", () => ({
@@ -225,6 +226,7 @@ describe("lookupContextTokens", () => {
     expect(
       shouldEagerWarmContextWindowCache(["node", "openclaw", "memory", "search", "--json"]),
     ).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "message", "read"])).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
       false,
@@ -278,6 +280,27 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
+  });
+
+  it("skips model normalization during warmup but preserves provider-owned context metadata", async () => {
+    mockDiscoveryDeps([
+      {
+        id: "anthropic/claude-opus-4.7-20260219",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("anthropic/claude-opus-4.7-20260219");
+    await flushAsyncWarmup();
+
+    expect(contextTestState.discoverModels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringMatching(/\/\.openclaw\/agents\/main\/agent$/),
+      { normalizeModels: false },
+    );
+    expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 
   it("resolveContextTokensForModel returns discovery value when provider-qualified entry exists in cache", async () => {

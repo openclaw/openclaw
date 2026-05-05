@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { CallMode } from "../config.js";
+import {
+  resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallSessionKey,
+  type CallMode,
+} from "../config.js";
 import { resolvePreferredTtsVoice } from "../tts-provider-voice.js";
 import {
   type EndReason,
@@ -16,7 +20,7 @@ import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
 import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
-import { generateNotifyTwiml } from "./twiml.js";
+import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
   CallManagerContext,
@@ -118,6 +122,20 @@ export async function initiateCall(
     typeof options === "string" ? { message: options } : (options ?? {});
   const initialMessage = opts.message;
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
+  const dtmfSequence = opts.dtmfSequence;
+  if (dtmfSequence) {
+    const validationError = validateDtmfDigits(dtmfSequence);
+    if (validationError) {
+      return { callId: "", success: false, error: validationError };
+    }
+    if (mode !== "conversation") {
+      return {
+        callId: "",
+        success: false,
+        error: "dtmfSequence requires conversation mode",
+      };
+    }
+  }
 
   if (!ctx.provider) {
     return { callId: "", success: false, error: "Provider not initialized" };
@@ -148,7 +166,12 @@ export async function initiateCall(
     state: "initiated",
     from,
     to,
-    sessionKey,
+    sessionKey: resolveVoiceCallSessionKey({
+      config: ctx.config,
+      callId,
+      phone: to,
+      explicitSessionKey: sessionKey,
+    }),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
@@ -164,10 +187,16 @@ export async function initiateCall(
   try {
     // For notify mode with a message, use inline TwiML with <Say>.
     let inlineTwiml: string | undefined;
+    let preConnectTwiml: string | undefined;
     if (mode === "notify" && initialMessage) {
       const pollyVoice = mapVoiceToPolly(resolvePreferredTtsVoice(ctx.config));
       inlineTwiml = generateNotifyTwiml(initialMessage, pollyVoice);
       console.log(`[voice-call] Using inline TwiML for notify mode (voice: ${pollyVoice})`);
+    } else if (dtmfSequence) {
+      preConnectTwiml = generateDtmfRedirectTwiml(dtmfSequence, ctx.webhookUrl);
+      console.log(
+        `[voice-call] Using pre-connect DTMF TwiML for call ${callId} (digits=${dtmfSequence.length}, initialMessage=${initialMessage ? "yes" : "no"})`,
+      );
     }
 
     const result = await ctx.provider.initiateCall({
@@ -176,11 +205,15 @@ export async function initiateCall(
       to,
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
+      preConnectTwiml,
     });
 
     callRecord.providerCallId = result.providerCallId;
     ctx.providerCallIdMap.set(result.providerCallId, callId);
     persistCallRecord(ctx.storePath, callRecord);
+    console.log(
+      `[voice-call] Outbound call initiated: callId=${callId} providerCallId=${result.providerCallId} mode=${mode} preConnectDtmf=${preConnectTwiml ? "yes" : "no"} initialMessage=${initialMessage ? "yes" : "no"}`,
+    );
 
     return { callId, success: true };
   } catch (err) {
@@ -213,7 +246,11 @@ export async function speak(
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const voice = resolvePreferredTtsVoice(ctx.config);
+    const numberRouteKey =
+      typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+    const voice = resolvePreferredTtsVoice(
+      resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
+    );
     await provider.playTts({
       callId,
       providerCallId,

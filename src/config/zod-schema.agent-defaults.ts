@@ -17,11 +17,18 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
-export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),
   z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
+]);
+
+const OptionalBootstrapFileNameSchema = z.enum([
+  "SOUL.md",
+  "USER.md",
+  "HEARTBEAT.md",
+  "IDENTITY.md",
 ]);
 
 export const SilentReplyPolicyConfigSchema = z
@@ -89,6 +96,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     skipBootstrap: z.boolean().optional(),
+    skipOptionalBootstrapFiles: z.array(OptionalBootstrapFileNameSchema).optional(),
     contextInjection: z
       .union([z.literal("always"), z.literal("continuation-skip"), z.literal("never")])
       .optional(),
@@ -182,6 +190,12 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        midTurnPrecheck: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
         postIndexSync: z.enum(["off", "async", "await"]).optional(),
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
@@ -225,9 +239,8 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
-    reasoningDefault: z
-      .union([z.literal("off"), z.literal("on"), z.literal("stream")])
-      .optional(),
+    toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
+    reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])
       .optional(),

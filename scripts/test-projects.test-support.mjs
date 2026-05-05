@@ -238,6 +238,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
+  ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
   [
     "scripts/run-vitest.mjs",
     [
@@ -286,6 +287,10 @@ const TOOLING_TEST_TARGETS = new Map([
   ],
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
+  [
+    "test/scripts/mantis-publish-pr-evidence.test.ts",
+    ["test/scripts/mantis-publish-pr-evidence.test.ts"],
+  ],
   [
     "test/scripts/plugin-prerelease-test-plan.test.ts",
     ["test/scripts/plugin-prerelease-test-plan.test.ts"],
@@ -346,6 +351,10 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
+  [
+    "src/commitments/model-selection.runtime.ts",
+    ["src/commitments/runtime.test.ts", "src/agents/model-selection.test.ts"],
+  ],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
   [
     "src/plugins/provider-auth-choice.ts",
@@ -356,10 +365,17 @@ const SOURCE_TEST_TARGETS = new Map([
     ["src/secrets/provider-env-vars.dynamic.test.ts", "src/secrets/provider-env-vars.test.ts"],
   ],
   [
-    "src/memory-host-sdk/host/embedding-defaults.ts",
-    ["src/memory-host-sdk/host/embeddings.test.ts"],
+    "src/agents/model-fallback-observation.ts",
+    ["src/agents/model-fallback.test.ts", "src/agents/model-fallback.probe.test.ts"],
   ],
-  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
+  [
+    "src/config/sessions/transcript-append.ts",
+    ["src/config/sessions/transcript.test.ts", "src/agents/subagent-registry.persistence.test.ts"],
+  ],
+  [
+    "src/memory-host-sdk/host/embedding-defaults.ts",
+    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
+  ],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -400,7 +416,20 @@ const IMPORT_SPECIFIER_PATTERN =
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "180000";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
+const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
+const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+]);
+const GATEWAY_SERVER_EXCLUDED_TEST_TARGETS = new Set([
+  "src/gateway/gateway.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+]);
 const VITEST_CONFIG_TARGET_KIND_BY_PATH = new Map(
   Object.entries(VITEST_CONFIG_BY_KIND).map(([kind, config]) => [config, kind]),
 );
@@ -450,6 +479,62 @@ const CHANNEL_CONTRACT_CONFIG_PATTERNS = new Map([
 
 function normalizePathPattern(value) {
   return value.replaceAll("\\", "/");
+}
+
+function listRepoFilesRecursive(root, cwd) {
+  const entries = fs.readdirSync(root, { withFileTypes: true });
+  return entries.flatMap((entry) => {
+    const absolute = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      return listRepoFilesRecursive(absolute, cwd);
+    }
+    if (!entry.isFile()) {
+      return [];
+    }
+    return [normalizePathPattern(path.relative(cwd, absolute))];
+  });
+}
+
+function isGatewayServerFullSuiteTarget(relative) {
+  if (
+    GATEWAY_SERVER_EXCLUDED_TEST_TARGETS.has(relative) ||
+    relative.startsWith("src/gateway/server-methods/")
+  ) {
+    return false;
+  }
+  return (
+    GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS.has(relative) ||
+    (relative.startsWith("src/gateway/") &&
+      path.posix.basename(relative).includes("server") &&
+      relative.endsWith(".test.ts"))
+  );
+}
+
+function resolveGatewayServerFullSuiteTargets(cwd) {
+  const gatewayDir = path.join(cwd, "src/gateway");
+  if (!fs.existsSync(gatewayDir)) {
+    return [];
+  }
+  return listRepoFilesRecursive(gatewayDir, cwd)
+    .filter(isGatewayServerFullSuiteTarget)
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function splitTargetChunks(targets, chunkCount) {
+  if (targets.length === 0) {
+    return [];
+  }
+  const normalizedChunkCount = Math.min(chunkCount, targets.length);
+  const baseSize = Math.floor(targets.length / normalizedChunkCount);
+  const remainder = targets.length % normalizedChunkCount;
+  const chunks = [];
+  let offset = 0;
+  for (let index = 0; index < normalizedChunkCount; index += 1) {
+    const chunkSize = baseSize + (index < remainder ? 1 : 0);
+    chunks.push(targets.slice(offset, offset + chunkSize));
+    offset += chunkSize;
+  }
+  return chunks;
 }
 
 function isExistingPathTarget(arg, cwd) {
@@ -508,13 +593,7 @@ function toScopedIncludePattern(arg, cwd) {
 }
 
 function isSkippedImportGraphDirectory(name) {
-  return (
-    name === ".git" ||
-    name === "dist" ||
-    name === "node_modules" ||
-    name === "vendor" ||
-    name.startsWith(".openclaw-runtime-deps")
-  );
+  return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
 
 function listImportGraphFiles(cwd, directory, files = []) {
@@ -635,6 +714,23 @@ function resolveVitestConfigTargetKind(relative) {
 
 function isVitestConfigTargetForKind(kind, targetArg, cwd) {
   return resolveVitestConfigTargetKind(toRepoRelativeTarget(targetArg, cwd)) === kind;
+}
+
+function isUnitUiTestTarget(relative) {
+  if (!relative.endsWith(".test.ts")) {
+    return false;
+  }
+  return (
+    relative === "ui/src/ui/app-chat.test.ts" ||
+    relative.startsWith("ui/src/ui/chat/") ||
+    relative === "ui/src/ui/views/agents-utils.test.ts" ||
+    relative === "ui/src/ui/views/channels.test.ts" ||
+    relative === "ui/src/ui/views/chat.test.ts" ||
+    relative === "ui/src/ui/views/dreaming.test.ts" ||
+    relative === "ui/src/ui/views/usage-render-details.test.ts" ||
+    relative === "ui/src/ui/controllers/agents.test.ts" ||
+    relative === "ui/src/ui/controllers/chat.test.ts"
+  );
 }
 
 function resolveChannelContractTargetKind(relative) {
@@ -1040,6 +1136,9 @@ function classifyTarget(arg, cwd) {
     return "plugin";
   }
   if (relative.startsWith("ui/src/")) {
+    if (isUnitUiTestTarget(relative)) {
+      return "unitUi";
+    }
     return "ui";
   }
   if (relative.startsWith("src/utils/")) {
@@ -1282,7 +1381,7 @@ export function buildVitestRunPlans(
 }
 
 export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
-  const { forwardedArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
   if (watchMode) {
     return [
       {
@@ -1307,12 +1406,30 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
     }
     const expandShard = expandToProjectConfigs;
     const configs = expandShard ? shard.projects : [shard.config];
-    return configs.map((config) => ({
-      config,
-      forwardedArgs,
-      includePatterns: null,
-      watchMode: false,
-    }));
+    return configs.flatMap((config) => {
+      if (expandShard && targetArgs.length === 0 && config === GATEWAY_SERVER_VITEST_CONFIG) {
+        const chunks = splitTargetChunks(
+          resolveGatewayServerFullSuiteTargets(cwd),
+          GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
+        );
+        if (chunks.length > 0) {
+          return chunks.map((targets) => ({
+            config,
+            forwardedArgs: [...forwardedArgs, ...targets],
+            includePatterns: null,
+            watchMode: false,
+          }));
+        }
+      }
+      return [
+        {
+          config,
+          forwardedArgs,
+          includePatterns: null,
+          watchMode: false,
+        },
+      ];
+    });
   });
 }
 
