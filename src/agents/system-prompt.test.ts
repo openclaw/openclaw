@@ -4,10 +4,51 @@ import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
+  appendExtraSystemPromptToSystemPrompt,
   buildAgentSystemPrompt,
   buildAgentUserPromptPrefix,
   buildRuntimeLine,
 } from "./system-prompt.js";
+
+describe("appendExtraSystemPromptToSystemPrompt", () => {
+  it("preserves the override prompt when there is no extra prompt", () => {
+    expect(
+      appendExtraSystemPromptToSystemPrompt({
+        systemPrompt: "  Static role prompt  ",
+      }),
+    ).toBe("Static role prompt");
+  });
+
+  it("appends extra prompt context with the default context header", () => {
+    const prompt = appendExtraSystemPromptToSystemPrompt({
+      systemPrompt: "Static role prompt",
+      extraSystemPrompt: "Runtime context",
+    });
+
+    expect(prompt).toBe("Static role prompt\n\n## Group Chat Context\n\nRuntime context");
+  });
+
+  it("uses the subagent context header in minimal prompt mode", () => {
+    const prompt = appendExtraSystemPromptToSystemPrompt({
+      systemPrompt: "Static role prompt",
+      extraSystemPrompt: "Runtime context",
+      promptMode: "minimal",
+    });
+
+    expect(prompt).toBe("Static role prompt\n\n## Subagent Context\n\nRuntime context");
+  });
+
+  it("does not append duplicate extra prompt content", () => {
+    const prompt = appendExtraSystemPromptToSystemPrompt({
+      systemPrompt: "Static role prompt\n\n## Subagent Context\n\nRuntime context",
+      extraSystemPrompt: "Runtime context",
+      promptMode: "minimal",
+    });
+
+    expect(prompt.match(/Runtime context/g)).toHaveLength(1);
+    expect(prompt.match(/## Subagent Context/g)).toHaveLength(1);
+  });
+});
 
 describe("buildAgentSystemPrompt", () => {
   it("formats owner section for plain, hash, and missing owner lists", () => {

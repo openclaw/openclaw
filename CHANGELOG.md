@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: preserve runtime task context when `systemPromptOverride` is configured, so native subagent and CLI runs keep both the role prompt override and the task handoff context.
 - fix: harden backend message action gateway routing [AI]. (#76374) Thanks @pgondhi987.
 - Gate QQBot streaming command auth [AI]. (#76375) Thanks @pgondhi987.
 - Plugins/release: make the published npm runtime verifier reject blank `openclaw.runtimeExtensions` entries instead of treating them as absent and passing via inferred outputs. Thanks @vincentkoc.

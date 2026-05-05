@@ -226,7 +226,7 @@ export type AgentDefaultsConfig = {
   silentReplyRewrite?: SilentReplyRewriteShape;
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
-  /** Optional full system prompt replacement. Primarily for prompt debugging and controlled experiments. */
+  /** Optional base system prompt override. Runtime extra context may still be appended. */
   systemPromptOverride?: string;
   /** Provider-independent prompt overlays applied by model family. */
   promptOverlays?: PromptOverlaysConfig;

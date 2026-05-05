@@ -8,6 +8,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.js";
+import { buildSubagentSystemPrompt } from "../../subagent-system-prompt.js";
 import {
   type AttemptContextEngine,
   buildLoopPromptCacheInfo,
@@ -340,6 +341,90 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toBe("Continue the OpenClaw runtime event.");
     expect(contextCompiled?.data?.systemPrompt).toContain("internal heartbeat event");
+  });
+
+  it("records merged override and extraSystemPrompt in compiled context", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            defaults: {
+              systemPromptOverride: "STATIC_ROLE_PROMPT_OVERRIDE_SPIKE",
+            },
+          },
+        },
+        extraSystemPrompt: "## Spawn Context\nOC_EXTRA_PROMPT_OVERRIDE_SPIKE_SENTINEL",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    const systemPrompt = contextCompiled?.data?.systemPrompt;
+
+    expect(systemPrompt).toContain("STATIC_ROLE_PROMPT_OVERRIDE_SPIKE");
+    expect(systemPrompt).toContain("## Spawn Context");
+    expect(systemPrompt).toContain("OC_EXTRA_PROMPT_OVERRIDE_SPIKE_SENTINEL");
+  });
+
+  it("preserves native subagent role and task context for target role overrides", async () => {
+    const task = "Smoke test only. Reply with exactly: OC_NATIVE_SUBAGENT_TASK_SPIKE_SENTINEL";
+    const childSystemPrompt = buildSubagentSystemPrompt({
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex-verifier:subagent:child",
+      task,
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:codex-verifier:subagent:child",
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          agents: {
+            list: [
+              {
+                id: "codex-verifier",
+                systemPromptOverride: "STATIC_VERIFIER_ROLE_PROMPT_SPIKE",
+              },
+            ],
+          },
+        } satisfies OpenClawConfig,
+        extraSystemPrompt: childSystemPrompt,
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    const trajectoryEvents = (
+      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
+    const systemPrompt = contextCompiled?.data?.systemPrompt;
+
+    expect(systemPrompt).toContain("STATIC_VERIFIER_ROLE_PROMPT_SPIKE");
+    expect(systemPrompt).toContain("## Your Role");
+    expect(systemPrompt).toContain("OC_NATIVE_SUBAGENT_TASK_SPIKE_SENTINEL");
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {

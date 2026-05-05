@@ -233,6 +233,10 @@ vi.mock("../../subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
 
+vi.mock("global-agent", () => ({
+  bootstrap: vi.fn(),
+}));
+
 vi.mock("../../sandbox.js", () => ({
   resolveSandboxContext: (...args: unknown[]) => hoisted.resolveSandboxContextMock(...args),
 }));
@@ -255,7 +259,8 @@ vi.mock("../../../plugins/provider-runtime.js", () => ({
   resolveProviderReasoningOutputModeWithPlugin: () => undefined,
   resolveProviderSystemPromptContribution: () => undefined,
   resolveProviderTextTransforms: () => undefined,
-  transformProviderSystemPrompt: ({ systemPrompt }: { systemPrompt: string }) => systemPrompt,
+  transformProviderSystemPrompt: ({ context }: { context: { systemPrompt: string } }) =>
+    context.systemPrompt,
 }));
 
 vi.mock("../../../infra/machine-name.js", () => ({

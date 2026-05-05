@@ -482,7 +482,7 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
 
 ### `agents.defaults.systemPromptOverride`
 
-Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at the default level (`agents.defaults.systemPromptOverride`) or per agent (`agents.list[].systemPromptOverride`). Per-agent values take precedence; an empty or whitespace-only value is ignored. Useful for controlled prompt experiments.
+Use a fixed string as the base system prompt instead of the OpenClaw-assembled base prompt. Runtime extra context, such as subagent task context, may still be appended. Set at the default level (`agents.defaults.systemPromptOverride`) or per agent (`agents.list[].systemPromptOverride`). Per-agent values take precedence; an empty or whitespace-only value is ignored. Useful for controlled prompt experiments.
 
 ```json5
 {

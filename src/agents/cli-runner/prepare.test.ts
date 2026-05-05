@@ -24,6 +24,10 @@ vi.mock("../../plugin-sdk/anthropic-cli.js", () => ({
   isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
 }));
 
+vi.mock("global-agent", () => ({
+  bootstrap: vi.fn(),
+}));
+
 vi.mock("../../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
@@ -478,6 +482,32 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.systemPrompt).toBe("base extra system");
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("merges extraSystemPrompt into a configured systemPromptOverride", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-override-extra-system",
+        extraSystemPrompt: "## Spawn Context\nOC_EXTRA_PROMPT_OVERRIDE_SPIKE_SENTINEL",
+        config: createCliBackendConfig({
+          systemPromptOverride: "STATIC_ROLE_PROMPT_OVERRIDE_SPIKE",
+        }),
+      });
+
+      expect(context.systemPrompt).toContain("STATIC_ROLE_PROMPT_OVERRIDE_SPIKE");
+      expect(context.systemPrompt).toContain("## Spawn Context");
+      expect(context.systemPrompt).toContain("OC_EXTRA_PROMPT_OVERRIDE_SPIKE_SENTINEL");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

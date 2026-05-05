@@ -103,6 +103,7 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
+import { appendExtraSystemPromptToSystemPrompt } from "../system-prompt.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -378,6 +379,23 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedPiCompactResul
     compacted: false,
     reason,
   };
+}
+
+function buildCompactionSystemPrompt(params: {
+  systemPromptOverride?: string;
+  buildDefaultSystemPrompt: () => string;
+  extraSystemPrompt?: string;
+  promptMode?: Parameters<typeof appendExtraSystemPromptToSystemPrompt>[0]["promptMode"];
+}): string {
+  if (params.systemPromptOverride) {
+    return appendExtraSystemPromptToSystemPrompt({
+      systemPrompt: params.systemPromptOverride,
+      extraSystemPrompt: params.extraSystemPrompt,
+      promptMode: params.promptMode,
+    });
+  }
+
+  return params.buildDefaultSystemPrompt();
 }
 
 /**
@@ -843,48 +861,52 @@ async function compactEmbeddedPiSessionDirectOnce(
     const promptContribution =
       runtimePlan.prompt.resolveSystemPromptContribution(promptContributionContext);
     const buildSystemPromptOverride = (defaultThinkLevel: ThinkLevel) => {
-      const builtSystemPrompt =
-        resolveSystemPromptOverride({
+      const builtSystemPrompt = buildCompactionSystemPrompt({
+        systemPromptOverride: resolveSystemPromptOverride({
           config: params.config,
           agentId: sessionAgentId,
-        }) ??
-        buildEmbeddedSystemPrompt({
-          workspaceDir: effectiveWorkspace,
-          defaultThinkLevel,
-          reasoningLevel: params.reasoningLevel ?? "off",
-          extraSystemPrompt: params.extraSystemPrompt,
-          ownerNumbers: params.ownerNumbers,
-          ownerDisplay: ownerDisplay.ownerDisplay,
-          ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-          reasoningTagHint,
-          heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
-            config: params.config,
-            agentId: sessionAgentId,
-            defaultAgentId,
+        }),
+        buildDefaultSystemPrompt: () =>
+          buildEmbeddedSystemPrompt({
+            workspaceDir: effectiveWorkspace,
+            defaultThinkLevel,
+            reasoningLevel: params.reasoningLevel ?? "off",
+            extraSystemPrompt: params.extraSystemPrompt,
+            ownerNumbers: params.ownerNumbers,
+            ownerDisplay: ownerDisplay.ownerDisplay,
+            ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
+            reasoningTagHint,
+            heartbeatPrompt: resolveHeartbeatPromptForSystemPrompt({
+              config: params.config,
+              agentId: sessionAgentId,
+              defaultAgentId,
+            }),
+            skillsPrompt,
+            docsPath: openClawReferences.docsPath ?? undefined,
+            sourcePath: openClawReferences.sourcePath ?? undefined,
+            ttsHint,
+            promptMode,
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            acpEnabled: isAcpRuntimeSpawnAvailable({
+              config: params.config,
+              sandboxed: sandboxInfo?.enabled === true,
+            }),
+            runtimeInfo,
+            reactionGuidance,
+            messageToolHints,
+            sandboxInfo,
+            tools: effectiveTools,
+            modelAliasLines: buildModelAliasLines(params.config),
+            userTimezone,
+            userTime,
+            userTimeFormat,
+            contextFiles,
+            memoryCitationsMode: params.config?.memory?.citations,
+            promptContribution,
           }),
-          skillsPrompt,
-          docsPath: openClawReferences.docsPath ?? undefined,
-          sourcePath: openClawReferences.sourcePath ?? undefined,
-          ttsHint,
-          promptMode,
-          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          acpEnabled: isAcpRuntimeSpawnAvailable({
-            config: params.config,
-            sandboxed: sandboxInfo?.enabled === true,
-          }),
-          runtimeInfo,
-          reactionGuidance,
-          messageToolHints,
-          sandboxInfo,
-          tools: effectiveTools,
-          modelAliasLines: buildModelAliasLines(params.config),
-          userTimezone,
-          userTime,
-          userTimeFormat,
-          contextFiles,
-          memoryCitationsMode: params.config?.memory?.citations,
-          promptContribution,
-        });
+        extraSystemPrompt: params.extraSystemPrompt,
+        promptMode,
+      });
       return createSystemPromptOverride(
         transformProviderSystemPrompt({
           provider,
@@ -1398,6 +1420,7 @@ export const __testing = {
   buildBeforeCompactionHookMetrics,
   hardenManualCompactionBoundary,
   resolveCompactionProviderStream,
+  buildCompactionSystemPrompt,
   prepareCompactionSessionAgent,
   runBeforeCompactionHooks,
   runAfterCompactionHooks,

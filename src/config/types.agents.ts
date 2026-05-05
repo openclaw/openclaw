@@ -79,7 +79,7 @@ export type AgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
-  /** Optional per-agent full system prompt replacement. */
+  /** Optional per-agent base system prompt override. Runtime extra context may still be appended. */
   systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
   /** Optional per-agent agent runtime policy override. */
   agentRuntime?: AgentRuntimePolicyConfig;
