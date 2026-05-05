@@ -179,7 +179,7 @@ himalaya message forward 42
 ### Send from stdin
 
 ```bash
-cat message.txt | himalaya template send
+cat message.txt | himalaya template send -a personal
 ```
 
 ### Prefill headers from CLI

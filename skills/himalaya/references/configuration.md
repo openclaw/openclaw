@@ -2,6 +2,15 @@
 
 Configuration file location: `~/.config/himalaya/config.toml`
 
+This reference is aligned with the installed CLI here: `himalaya v1.1.0`.
+
+## What Actually Matters
+
+- Account selection is per subcommand in v1.1.x: `himalaya envelope list -a work`.
+- Folder aliases use `folder.aliases.*`, not `folder.alias.*`.
+- The stock Homebrew build does not include OAuth2 support, so the reliable local path is IMAP/SMTP with passwords or provider app passwords.
+- Read failures usually come from the wrong IMAP login or the wrong folder aliases, not from the base read/list commands.
+
 ## Minimal IMAP + SMTP Setup
 
 ```toml
@@ -9,6 +18,11 @@ Configuration file location: `~/.config/himalaya/config.toml`
 email = "user@example.com"
 display-name = "Your Name"
 default = true
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Trash"
 
 # IMAP backend for reading emails
 backend.type = "imap"
@@ -54,11 +68,18 @@ Then run `himalaya account configure <account>` to store the password.
 
 ## Gmail Configuration
 
+Use Gmail app passwords with the stock Homebrew build. Generic aliases like `Sent` are not enough for Gmail because Gmail exposes provider-specific mailbox names.
+
 ```toml
 [accounts.gmail]
 email = "you@gmail.com"
 display-name = "Your Name"
 default = true
+
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "[Gmail]/Sent Mail"
+folder.aliases.drafts = "[Gmail]/Drafts"
+folder.aliases.trash = "[Gmail]/Trash"
 
 backend.type = "imap"
 backend.host = "imap.gmail.com"
@@ -70,27 +91,38 @@ backend.auth.cmd = "pass show google/app-password"
 
 message.send.backend.type = "smtp"
 message.send.backend.host = "smtp.gmail.com"
-message.send.backend.port = 587
-message.send.backend.encryption.type = "start-tls"
+message.send.backend.port = 465
+message.send.backend.encryption.type = "tls"
 message.send.backend.login = "you@gmail.com"
 message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show google/app-password"
 ```
 
-**Note:** Gmail requires an App Password if 2FA is enabled.
+Notes:
+
+- Gmail IMAP must be enabled on the account.
+- Gmail requires a Google app password for this local non-OAuth setup.
+- If reads work but sent-mail copy, drafts, or trash behavior is wrong, the alias block is usually the bug.
 
 ## iCloud Configuration
+
+The easy failure mode here is using the full email address for both logins. Upstream Himalaya documents different login shapes for IMAP vs SMTP on iCloud.
 
 ```toml
 [accounts.icloud]
 email = "you@icloud.com"
 display-name = "Your Name"
 
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent Messages"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Deleted Messages"
+
 backend.type = "imap"
 backend.host = "imap.mail.me.com"
 backend.port = 993
 backend.encryption.type = "tls"
-backend.login = "you@icloud.com"
+backend.login = "you"
 backend.auth.type = "password"
 backend.auth.cmd = "pass show icloud/app-password"
 
@@ -103,18 +135,22 @@ message.send.backend.auth.type = "password"
 message.send.backend.auth.cmd = "pass show icloud/app-password"
 ```
 
-**Note:** Generate an app-specific password at appleid.apple.com
+Notes:
+
+- IMAP login is the mailbox name, not the full email address. For `you@icloud.com`, that means `backend.login = "you"`.
+- SMTP login stays the full email address.
+- Generate an app-specific password in Apple ID settings and use it for both IMAP and SMTP auth.
+- If folder operations miss, verify aliases against `himalaya folder list -a icloud`.
 
 ## Folder Aliases
 
 Map custom folder names:
 
 ```toml
-[accounts.default.folder.alias]
-inbox = "INBOX"
-sent = "Sent"
-drafts = "Drafts"
-trash = "Trash"
+folder.aliases.inbox = "INBOX"
+folder.aliases.sent = "Sent"
+folder.aliases.drafts = "Drafts"
+folder.aliases.trash = "Trash"
 ```
 
 ## Multiple Accounts
@@ -130,10 +166,10 @@ email = "work@company.com"
 # ... backend config ...
 ```
 
-Switch accounts with `--account`:
+Switch accounts by placing `-a/--account` on the subcommand:
 
 ```bash
-himalaya --account work envelope list
+himalaya envelope list -a work
 ```
 
 ## Notmuch Backend (local mail)
@@ -147,6 +183,8 @@ backend.db-path = "~/.mail/.notmuch"
 ```
 
 ## OAuth2 Authentication (for providers that support it)
+
+Only use this if your Himalaya build actually includes OAuth2 support. The Homebrew build used in this worktree does not.
 
 ```toml
 backend.auth.type = "oauth2"
@@ -182,3 +220,17 @@ Set via environment variable:
 ```bash
 export EDITOR="vim"
 ```
+
+## Validation Checklist
+
+Use read-only checks in this order after editing config:
+
+```bash
+himalaya account list
+himalaya folder list -a gmail
+himalaya envelope list -a gmail --folder INBOX --page 1 --page-size 5
+himalaya folder list -a icloud
+himalaya envelope list -a icloud --folder INBOX --page 1 --page-size 5
+```
+
+If folder names differ from the examples above, update `folder.aliases.*` to match what `folder list` returns for that provider.
