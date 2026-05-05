@@ -1091,6 +1091,73 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("refreshes same-path claim hashes before legacy daily aliases merge", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const oldSnippet = "Use the old conference hotel for the booking.";
+      const newSnippet = "Use the new conference hotel for the booking.";
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "hotel old",
+        results: [
+          {
+            path: "2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.7,
+            snippet: oldSnippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "hotel new",
+        results: [
+          {
+            path: "2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet: newSnippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "hotel canonical",
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: newSnippet,
+            source: "memory",
+          },
+        ],
+        nowMs: Date.parse("2026-04-03T10:02:00.000Z"),
+      });
+
+      const entries = await readShortTermRecallEntries({
+        workspaceDir,
+        nowMs: Date.parse("2026-04-03T10:03:00.000Z"),
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        path: "memory/2026-04-03.md",
+        snippet: newSnippet,
+        recallCount: 3,
+        claimHash: __testing.buildClaimHash(newSnippet),
+      });
+      expect(entries[0]?.claimHash).not.toBe(__testing.buildClaimHash(oldSnippet));
+    });
+  });
+
   it("records same-day durable slugged search results as separate recall events", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const snippet = 'Always use "Happy Together" calendar for flights and reservations.';

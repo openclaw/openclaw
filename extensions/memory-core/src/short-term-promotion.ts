@@ -1605,6 +1605,8 @@ export async function recordShortTermRecalls(params: {
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
+      const storedSnippet = snippet || existing?.snippet || "";
+      const storedClaimHash = storedSnippet ? buildClaimHash(storedSnippet) : undefined;
 
       store.entries[key] = {
         key,
@@ -1612,7 +1614,7 @@ export async function recordShortTermRecalls(params: {
         startLine: location.startLine,
         endLine: location.endLine,
         source: "memory",
-        snippet: snippet || existing?.snippet || "",
+        snippet: storedSnippet,
         recallCount,
         dailyCount,
         groundedCount: Math.max(0, Math.floor(existing?.groundedCount ?? 0)),
@@ -1623,9 +1625,7 @@ export async function recordShortTermRecalls(params: {
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
-        ...((existing?.claimHash ?? claimHash)
-          ? { claimHash: existing?.claimHash ?? claimHash }
-          : {}),
+        ...(storedClaimHash ? { claimHash: storedClaimHash } : {}),
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
