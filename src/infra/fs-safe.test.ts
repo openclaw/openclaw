@@ -535,6 +535,87 @@ describe("fs-safe", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects raced final symlink source rename endpoints in the pinned helper",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const from = path.join(root, "from.txt");
+      const to = path.join(root, "to.txt");
+      const outsideTarget = path.join(outside, "target.txt");
+      await fs.writeFile(from, "from");
+      await fs.writeFile(outsideTarget, "outside");
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "rename") {
+            await fs.rm(from, { force: true });
+            await fs.symlink(outsideTarget, from);
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          renamePathWithinRoot({
+            rootDir: root,
+            fromRelativePath: "from.txt",
+            toRelativePath: "to.txt",
+            overwrite: true,
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+
+      expect((await fs.lstat(from)).isSymbolicLink()).toBe(true);
+      await expect(fs.lstat(to)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects raced final symlink destination rename endpoints in the pinned helper",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const from = path.join(root, "from.txt");
+      const to = path.join(root, "to.txt");
+      const outsideTarget = path.join(outside, "target.txt");
+      await fs.writeFile(from, "from");
+      await fs.writeFile(outsideTarget, "outside");
+
+      const realRunPinnedPathHelper = pinnedPathHelperModule.runPinnedPathHelper;
+      const runPinnedPathHelperSpy = vi
+        .spyOn(pinnedPathHelperModule, "runPinnedPathHelper")
+        .mockImplementation(async (params) => {
+          if (params.operation === "rename") {
+            await fs.symlink(outsideTarget, to);
+          }
+          return await realRunPinnedPathHelper(params);
+        });
+
+      try {
+        await expect(
+          renamePathWithinRoot({
+            rootDir: root,
+            fromRelativePath: "from.txt",
+            toRelativePath: "to.txt",
+            overwrite: true,
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+
+      await expect(fs.readFile(from, "utf8")).resolves.toBe("from");
+      expect((await fs.lstat(to)).isSymbolicLink()).toBe(true);
+      await expect(fs.readFile(outsideTarget, "utf8")).resolves.toBe("outside");
+    },
+  );
+
   it("fails closed for stat, readdir, and rename helpers on Windows", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
     await fs.mkdir(path.join(root, "nested"), { recursive: true });
