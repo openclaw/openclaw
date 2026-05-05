@@ -99,15 +99,20 @@ export async function loadProviderUsageSummary(
     env,
     skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
-  const auths = await withTimeout(authPromise, timeoutMs, []);
+  const authResult = await withTimeout(
+    authPromise.then((auths) => ({ auths, timedOut: false as const })),
+    timeoutMs,
+    { auths: [], timedOut: true as const },
+  );
+  if (authResult.timedOut) {
+    console.warn(
+      `status --usage: provider auth resolution timed out after ${timeoutMs}ms; returning empty providers`,
+    );
+    return { updatedAt: now, providers: [] };
+  }
+
+  const auths = authResult.auths;
   if (auths.length === 0) {
-    // Distinguish "no providers configured" from "auth resolution timed out"
-    const didTimeout = await Promise.race([authPromise.then(() => false), Promise.resolve(true)]);
-    if (didTimeout) {
-      console.warn(
-        `status --usage: provider auth resolution timed out after ${timeoutMs}ms; returning empty providers`,
-      );
-    }
     return { updatedAt: now, providers: [] };
   }
 

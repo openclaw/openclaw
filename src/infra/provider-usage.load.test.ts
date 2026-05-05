@@ -229,4 +229,21 @@ describe("provider-usage.load", () => {
     );
     warnSpy.mockRestore();
   });
+
+  it("does not warn when auth resolution returns no providers", async () => {
+    resolveProviderAuthsMock.mockResolvedValueOnce([]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const summary = await loadProviderUsageSummary({
+      now: usageNow,
+      timeoutMs: 50,
+      providers: ["anthropic"],
+      config: {} as OpenClawConfig,
+      env: {},
+    });
+
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
