@@ -163,6 +163,35 @@ describe("loadWebMedia", () => {
     );
   });
 
+  // Regression for #73148: callers that hit `optimizeImageToJpeg` directly
+  // (e.g. the `image` agent tool) on hosts that skipped the optional `sharp`
+  // native dep used to see a generic "Failed to optimize image" with the raw
+  // module-resolution error tail, with no install hint. The thrown error now
+  // explicitly names the missing dep and includes both the local-checkout and
+  // global-install repair commands so operators on either install posture get
+  // a working remediation.
+  it("surfaces a clear sharp-install hint covering both local and global installs when the optional optimizer is unavailable (#73148)", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageToJpeg: optimizeImageToJpegWithMissingOptimizer } =
+        await import("./web-media.js");
+      const promise = optimizeImageToJpegWithMissingOptimizer(
+        Buffer.from(TINY_PNG_BASE64, "base64"),
+        8,
+      );
+      const error = await promise.then(
+        () => null,
+        (err: unknown) => err,
+      );
+      expect(error).toBeInstanceOf(Error);
+      const message = (error as Error).message;
+      expect(message).toMatch(/requires the optional `sharp` native dependency/i);
+      // Local-install repair command (workspace checkout).
+      expect(message).toMatch(/pnpm add sharp/);
+      // Global-install repair command (npm -g openclaw users).
+      expect(message).toMatch(/npm install -g openclaw@latest --include=optional/);
+    });
+  });
+
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
     vi.doMock("./image-ops.js", () => ({
@@ -208,7 +237,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/sharp/i);
     });
   });
 
@@ -219,7 +248,7 @@ describe("loadWebMedia", () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/sharp/i);
     });
   });
 

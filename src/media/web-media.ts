@@ -701,6 +701,27 @@ export async function optimizeImageToJpeg(
   }
 
   const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";
+  // When the optional native image dependency (sharp) is missing, every
+  // resize attempt throws "Cannot find module 'sharp'". Surface a clear,
+  // actionable hint so operators know what to install instead of a generic
+  // "Failed to optimize image" with the raw module-resolution error tail.
+  // The hint covers both common scenarios:
+  //   - Local repo checkout: install `sharp` in the workspace.
+  //   - Global install (e.g. `npm install -g openclaw@latest`): a workspace
+  //     `pnpm add sharp` won't help because the global runtime resolves
+  //     `sharp` from the global openclaw `node_modules`. Reinstalling the
+  //     globally installed openclaw with optional deps included rebuilds the
+  //     `sharp` prebuilt for the host platform.
+  // See #73148.
+  if (isOptionalImageOptimizerUnavailable(firstResizeError)) {
+    throw new Error(
+      "Image optimization requires the optional `sharp` native dependency, which is not installed. " +
+        "Local repo install: `pnpm add sharp` (or `npm install sharp` / `bun add sharp`) and restart the gateway. " +
+        "Global install: reinstall openclaw with optional deps included, e.g. `npm install -g openclaw@latest --include=optional` " +
+        "(or `npm install -g sharp` if you cannot reinstall openclaw), then restart the gateway.",
+      { cause: firstResizeError },
+    );
+  }
   throw new Error(`Failed to optimize image${detail}`, { cause: firstResizeError });
 }
 
