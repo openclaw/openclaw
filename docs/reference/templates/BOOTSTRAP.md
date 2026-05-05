@@ -87,7 +87,7 @@ deeper follow-up read beyond the provided startup context.
 ```md
 ## Session
 ctx injects: AGENTS, SOUL, USER, daily memory, MEMORY.md (main-only)
-don't reread unless context missing or user asks
+don't reread unless: context missing, user asks, or deeper follow-up read needed
 ```
 
 Same rule. 85% fewer tokens.
