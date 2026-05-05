@@ -30,17 +30,12 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
   },
   { pluginId: "file-transfer" },
-  {
-    pluginId: "matrix",
-    pluginLocalRuntimeDeps: [
-      "@matrix-org/matrix-sdk-crypto-nodejs",
-      "@matrix-org/matrix-sdk-crypto-wasm",
-      "fake-indexeddb",
-      "matrix-js-sdk",
-      "music-metadata",
-    ],
-    minHostVersionBaseline: "2026.3.22",
-  },
+  // Matrix is bundled into the root npm tarball; its runtime deps are declared in
+  // both `extensions/matrix/package.json` and the root manifest (asserted by
+  // `plugin-sdk-package-contract-guardrails.test.ts`). The plugin-local-only
+  // contract enforced here therefore does not apply to those dependencies.
+  // Refs https://github.com/openclaw/openclaw/issues/77896.
+  { pluginId: "matrix", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
