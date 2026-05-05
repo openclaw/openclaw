@@ -482,4 +482,30 @@ describe("compileMemoryWikiVault", () => {
       fs.readFile(path.join(rootDir, "concepts", "gamma.md"), "utf8"),
     ).resolves.not.toContain("### Referenced By");
   });
+
+  it("does not overwrite empty source pages with a 107-byte managed-block stub (#78121)", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    // Create a valid non-empty page and an empty page alongside it
+    await fs.writeFile(
+      path.join(rootDir, "sources", "valid.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.valid", title: "Valid" },
+        body: "# Valid\n",
+      }),
+      "utf8",
+    );
+    const emptyPagePath = path.join(rootDir, "sources", "empty.md");
+    await fs.writeFile(emptyPagePath, "", "utf8");
+
+    await compileMemoryWikiVault(config);
+
+    // Empty page must remain empty — not overwritten with the managed-block stub
+    const afterCompile = await fs.readFile(emptyPagePath, "utf8");
+    expect(afterCompile).toBe("");
+    expect(afterCompile).not.toContain("openclaw:wiki:related");
+  });
 });
