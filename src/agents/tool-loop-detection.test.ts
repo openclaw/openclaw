@@ -1,12 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+
+// The diagnostic-emission tests below capture log lines emitted via
+// createSubsystemLogger("agents/loop-detection"). Subsystem console output
+// runs through tslog/console and is gated by env-dependent settings, so
+// spying on console.* is unreliable across test runners. Mocking the
+// subsystem-logger module gives a deterministic info() seam to assert on.
+const { infoMock, warnMock, errorMock } = vi.hoisted(() => ({
+  infoMock: vi.fn(),
+  warnMock: vi.fn(),
+  errorMock: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => {
+  const makeLogger = () => ({
+    subsystem: "agents/loop-detection",
+    isEnabled: () => true,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: infoMock,
+    warn: warnMock,
+    error: errorMock,
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: () => makeLogger(),
+  });
+  return { createSubsystemLogger: () => makeLogger() };
+});
+
 import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
   UNKNOWN_TOOL_THRESHOLD,
   WARNING_THRESHOLD,
+  __resetLoopDetectionDiagnosticCacheForTesting,
   detectToolCallLoop,
   getToolCallStats,
   hashToolCall,
@@ -926,5 +955,72 @@ describe("tool-loop-detection", () => {
       expect(stats.mostFrequent?.toolName).toBe("read");
       expect(stats.mostFrequent?.count).toBe(7);
     });
+  });
+});
+
+describe("diagnostic emission when disabled", () => {
+  beforeEach(() => {
+    __resetLoopDetectionDiagnosticCacheForTesting();
+    infoMock.mockClear();
+    warnMock.mockClear();
+    errorMock.mockClear();
+  });
+
+  it("emits a diagnostic line when generic_repeat would fire but enabled=false", () => {
+    const state = createState();
+    for (let i = 0; i < 11; i += 1) {
+      recordToolCall(state, "read", { path: "/x" }, `read-${i}`);
+    }
+
+    const result = detectToolCallLoop(state, "read", { path: "/x" }, { enabled: false });
+    expect(result.stuck).toBe(false);
+
+    const calls = infoMock.mock.calls.map((c) => String(c[0] ?? ""));
+    const diagLine = calls.find((c) => c.includes("[loop-detection-diag]"));
+    expect(diagLine).toBeTruthy();
+    expect(diagLine).toContain("would-fire=warning");
+    expect(diagLine).toContain("detector=generic_repeat");
+    expect(diagLine).toContain("tool=read");
+  });
+
+  it("does NOT emit a diagnostic line when no loop would fire", () => {
+    const state = createState();
+    recordToolCall(state, "read", { path: "/a" }, "read-a");
+    recordToolCall(state, "read", { path: "/b" }, "read-b");
+
+    const result = detectToolCallLoop(state, "read", { path: "/c" }, { enabled: false });
+    expect(result.stuck).toBe(false);
+
+    const calls = infoMock.mock.calls.map((c) => String(c[0] ?? ""));
+    expect(calls.find((c) => c.includes("[loop-detection-diag]"))).toBeFalsy();
+  });
+
+  it("dedupes the diagnostic — repeated calls with the same warningKey emit once", () => {
+    const state = createState();
+    for (let i = 0; i < 11; i += 1) {
+      recordToolCall(state, "read", { path: "/x" }, `read-${i}`);
+    }
+
+    detectToolCallLoop(state, "read", { path: "/x" }, { enabled: false });
+    detectToolCallLoop(state, "read", { path: "/x" }, { enabled: false });
+    detectToolCallLoop(state, "read", { path: "/x" }, { enabled: false });
+
+    const diagLines = infoMock.mock.calls
+      .map((c) => String(c[0] ?? ""))
+      .filter((c) => c.includes("[loop-detection-diag]"));
+    expect(diagLines.length).toBe(1);
+  });
+
+  it("does NOT emit a diagnostic line when enabled=true (uses normal log levels)", () => {
+    const state = createState();
+    for (let i = 0; i < 11; i += 1) {
+      recordToolCall(state, "read", { path: "/x" }, `read-${i}`);
+    }
+
+    detectToolCallLoop(state, "read", { path: "/x" }, { enabled: true });
+
+    const infoCalls = infoMock.mock.calls.map((c) => String(c[0] ?? ""));
+    // Existing log.warn lines (the regular warning) should NOT be tagged with [loop-detection-diag].
+    expect(infoCalls.find((c) => c.includes("[loop-detection-diag]"))).toBeFalsy();
   });
 });
