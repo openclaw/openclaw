@@ -334,4 +334,91 @@ describe("browser navigation guard", () => {
       false,
     );
   });
+
+  describe("external-browser-proxy mode", () => {
+    // When the browser profile has its own network stack (e.g. `existing-session`
+    // with a system proxy/PAC/VPN), Node's DNS resolution does not reflect the
+    // real connect target. The guard should skip DNS-to-IP checks but still
+    // enforce the hostname denylist as defense-in-depth.
+
+    it("allows public hostnames even when DNS resolves to a private IP on the gateway host", async () => {
+      // Simulates split-tunnel VPN DNS hijack: `www.example.com` resolves to
+      // the proxy's loopback IP on the gateway host, but the host browser
+      // would send the request through the VPN to the real public target.
+      const lookupFn = createLookupFn("192.168.42.1");
+      await expect(
+        assertBrowserNavigationAllowed({
+          url: "https://www.example.com/",
+          browserProxyMode: "external-browser-proxy",
+          lookupFn,
+        }),
+      ).resolves.toBeUndefined();
+      // The guard should not even consult DNS for external-browser-proxy mode.
+      expect(lookupFn).not.toHaveBeenCalled();
+    });
+
+    it("still blocks cloud metadata hostnames (metadata.google.internal)", async () => {
+      await expect(
+        assertBrowserNavigationAllowed({
+          url: "http://metadata.google.internal/computeMetadata/v1/",
+          browserProxyMode: "external-browser-proxy",
+        }),
+      ).rejects.toBeInstanceOf(SsrFBlockedError);
+    });
+
+    it("still blocks localhost hostnames", async () => {
+      await expect(
+        assertBrowserNavigationAllowed({
+          url: "http://localhost:8080/admin",
+          browserProxyMode: "external-browser-proxy",
+        }),
+      ).rejects.toBeInstanceOf(SsrFBlockedError);
+    });
+
+    it("still blocks reserved internal TLDs (*.internal, *.local, *.localhost)", async () => {
+      for (const url of [
+        "https://intranet.internal/",
+        "http://printer.local/",
+        "http://dev.localhost:3000/",
+      ]) {
+        await expect(
+          assertBrowserNavigationAllowed({ url, browserProxyMode: "external-browser-proxy" }),
+        ).rejects.toBeInstanceOf(SsrFBlockedError);
+      }
+    });
+
+    it("still blocks non-network protocols (file, data, javascript)", async () => {
+      for (const url of [
+        "file:///etc/passwd",
+        "data:text/html,<h1>x</h1>",
+        "javascript:alert(1)",
+      ]) {
+        await expect(
+          assertBrowserNavigationAllowed({ url, browserProxyMode: "external-browser-proxy" }),
+        ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+      }
+    });
+
+    it("still allows about:blank", async () => {
+      await expect(
+        assertBrowserNavigationAllowed({
+          url: "about:blank",
+          browserProxyMode: "external-browser-proxy",
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    it("keeps direct-mode behavior unchanged when browserProxyMode is omitted", async () => {
+      // Direct mode (default) should still perform the DNS-to-IP check and
+      // block a hostname that resolves to a private IP.
+      const lookupFn = createLookupFn("192.168.42.1");
+      await expect(
+        assertBrowserNavigationAllowed({
+          url: "https://www.example.com/",
+          lookupFn,
+        }),
+      ).rejects.toBeInstanceOf(SsrFBlockedError);
+      expect(lookupFn).toHaveBeenCalled();
+    });
+  });
 });
