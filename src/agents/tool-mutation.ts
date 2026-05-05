@@ -71,12 +71,18 @@ function normalizeActionName(value: unknown): string | undefined {
 function normalizeFingerprintValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     const normalized = value.trim();
-    return normalized ? normalizeLowercaseStringOrEmpty(normalized) : undefined;
+    return normalized
+      ? encodeFingerprintValue(normalizeLowercaseStringOrEmpty(normalized))
+      : undefined;
   }
   if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
-    return normalizeLowercaseStringOrEmpty(String(value));
+    return encodeFingerprintValue(normalizeLowercaseStringOrEmpty(String(value)));
   }
   return undefined;
+}
+
+function encodeFingerprintValue(value: string): string {
+  return value.replaceAll("%", "%25").replaceAll("|", "%7C");
 }
 
 function appendFingerprintAlias(
@@ -197,7 +203,7 @@ export function buildToolActionFingerprint(
   // Prefer stable arg-derived keys for matching; only fall back to meta
   // when no stable target key is available.
   if (normalizedMeta && !hasStableTarget) {
-    parts.push(`meta=${normalizedMeta}`);
+    parts.push(`meta=${encodeFingerprintValue(normalizedMeta)}`);
   }
   return parts.join("|");
 }
@@ -212,6 +218,36 @@ export function buildToolMutationState(
     mutatingAction: actionFingerprint != null,
     actionFingerprint,
   };
+}
+
+/**
+ * Extract identity segments from a fingerprint, ignoring target-specific keys
+ * (path, to, jobid, etc.) so that "same operation, different target" compares equal.
+ * Keeps `tool=`, `action=`, and `meta=` (used by actionless tools like exec/bash
+ * to distinguish different commands).
+ */
+function extractToolActionPrefix(fingerprint: string): string {
+  return fingerprint
+    .split("|")
+    .filter(
+      (part) => part.startsWith("tool=") || part.startsWith("action=") || part.startsWith("meta="),
+    )
+    .join("|");
+}
+
+/**
+ * Check if two tool calls are the same tool+action type (ignoring target).
+ * Used to allow clearing errors when the same operation retries on a different target,
+ * while preventing unrelated actions on the same multi-action tool from clearing errors.
+ */
+export function isSameToolActionType(existing: ToolActionRef, next: ToolActionRef): boolean {
+  if (existing.actionFingerprint != null && next.actionFingerprint != null) {
+    return (
+      extractToolActionPrefix(existing.actionFingerprint) ===
+      extractToolActionPrefix(next.actionFingerprint)
+    );
+  }
+  return existing.toolName.trim().toLowerCase() === next.toolName.trim().toLowerCase();
 }
 
 export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
