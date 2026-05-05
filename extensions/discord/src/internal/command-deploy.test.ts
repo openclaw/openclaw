@@ -393,4 +393,50 @@ describe("DiscordCommandDeployer cache scoping (multi-application)", () => {
     expect(restB.get).not.toHaveBeenCalled();
     expect(restB.post).not.toHaveBeenCalled();
   });
+
+  test("truly parallel deployers serialize cache writes via the per-path mutex (codex follow-up on #77367)", async () => {
+    // Codex follow-up on PR #77367: re-read-before-write alone isn't enough
+    // when two deployers run `persistHashes` in real parallel — both can read
+    // the same snapshot before either writes. The in-process per-path mutex
+    // around the read-merge-write cycle makes the operation atomic.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    // Run BOTH deploys with Promise.all on the SAME process tick — pre-fix,
+    // both `persistHashes` calls would race on read-then-rename and one
+    // writer's `app:<id>:...` entry would be lost.
+    const restA = createRest();
+    const restB = createRest();
+    const restC = createRest();
+    await Promise.all([
+      new DiscordCommandDeployer({
+        clientId: "app-default",
+        commands,
+        hashStorePath,
+        rest: () => restA,
+      }).deploy({ mode: "reconcile" }),
+      new DiscordCommandDeployer({
+        clientId: "app-secondary",
+        commands,
+        hashStorePath,
+        rest: () => restB,
+      }).deploy({ mode: "reconcile" }),
+      new DiscordCommandDeployer({
+        clientId: "app-tertiary",
+        commands,
+        hashStorePath,
+        rest: () => restC,
+      }).deploy({ mode: "reconcile" }),
+    ]);
+
+    const raw = await fs.readFile(hashStorePath, "utf8");
+    const parsed = JSON.parse(raw) as { hashes: Record<string, string> };
+    const keys = Object.keys(parsed.hashes);
+    // All three apps' entries must survive — pre-fix, one or two would be
+    // lost to the race.
+    expect(keys).toContain("app:app-default:global:reconcile");
+    expect(keys).toContain("app:app-secondary:global:reconcile");
+    expect(keys).toContain("app:app-tertiary:global:reconcile");
+  });
 });

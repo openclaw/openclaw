@@ -20,6 +20,41 @@ export type DeployCommandOptions = {
 
 type SerializedCommand = ReturnType<BaseCommand["serialize"]>;
 
+/**
+ * Per-`command-deploy-cache.json` path async mutex. `server-channels.ts` can
+ * start several Discord deployers concurrently in the same Node.js process;
+ * each one shares the same on-disk cache file. Without this lock, two
+ * deployers can run `persistHashes` in parallel, both read the same on-disk
+ * snapshot before either writes, and the later `rename` then overwrites the
+ * earlier writer's entries — defeating the rate-limit cache.
+ *
+ * This is an in-process lock; cross-process serialization would need an OS
+ * file lock. Discord deployers only run inside the gateway process, so an
+ * in-process mutex is sufficient for the documented concurrency surface.
+ */
+const cachePersistLocks = new Map<string, Promise<void>>();
+
+async function withCachePersistLock<T>(storePath: string, fn: () => Promise<T>): Promise<T> {
+  const previous = cachePersistLocks.get(storePath) ?? Promise.resolve();
+  let release: () => void = () => {};
+  const next = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  cachePersistLocks.set(
+    storePath,
+    previous.then(() => next),
+  );
+  try {
+    await previous;
+    return await fn();
+  } finally {
+    release();
+    if (cachePersistLocks.get(storePath) === previous.then(() => next)) {
+      cachePersistLocks.delete(storePath);
+    }
+  }
+}
+
 export class DiscordCommandDeployer {
   private readonly hashes = new Map<string, string>();
   private hashesLoaded = false;
@@ -178,18 +213,24 @@ export class DiscordCommandDeployer {
     if (!storePath) {
       return;
     }
+    // Serialize concurrent persists for the same on-disk path. The earlier
+    // "re-read inside persistHashes" merge alone is not enough — two
+    // deployers running `persistHashes` in true parallel would both read the
+    // same snapshot before either writes, and the later `rename` would still
+    // overwrite the earlier one's `app:<id>:...` entries. The mutex makes the
+    // read-merge-write cycle atomic for in-process callers.
+    await withCachePersistLock(storePath, async () => {
+      await this.persistHashesLocked(storePath);
+    });
+  }
+
+  private async persistHashesLocked(storePath: string): Promise<void> {
     try {
       await fs.mkdir(path.dirname(storePath), { recursive: true });
       // Re-read the on-disk hashes immediately before writing and merge them
-      // with our in-memory entries. Multiple Discord accounts on the same
-      // gateway share `command-deploy-cache.json`, and `server-channels.ts`
-      // can start their deployers concurrently. Without this re-read step,
-      // two deployers that both load the old file and then both write would
-      // each persist only their own scoped keys (`app:<id>:...`) and drop the
-      // other deployer's keys, defeating the rate-limit protection the cache
-      // was added for. Our in-memory entries always win on key collisions
-      // (we just produced them); on-disk entries that we don't have in memory
-      // are preserved as-is.
+      // with our in-memory entries. Our in-memory entries always win on key
+      // collisions (we just produced them); on-disk entries that we don't have
+      // in memory are preserved as-is.
       const merged = new Map<string, string>();
       try {
         const raw = await fs.readFile(storePath, "utf8");
