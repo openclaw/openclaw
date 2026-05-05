@@ -297,7 +297,13 @@ export type OutboundCallOptions = {
   /**
    * Per-call agent identity override. Frozen on CallRecord at creation.
    * Distinct from voiceConfig.agentId (DID-route default for inbound).
-   * Source: trusted plugin tool factory ctx.agentId — never user-provided RPC.
+   *
+   * Trust contract: at the gateway boundary (`voicecall.start` RPC), per-call
+   * `agentId` is honored only when the caller is in-process plugin runtime
+   * (`client.internal.pluginRuntimeOwnerId` set). Raw RPC params from external
+   * operator-write clients are silently dropped. The plugin tool factory path
+   * (`voice_call.initiate_call`) bypasses the gateway and forwards
+   * `ctx.agentId` directly to the manager.
    */
   agentId?: string;
   /**
@@ -305,6 +311,9 @@ export type OutboundCallOptions = {
    * to resolveVoiceCallSessionKey, which can collide across agents for shared
    * dial-ins (e.g., Google Meet dial-in numbers). Callers that need
    * per-meeting/per-agent isolation MUST pass an explicit sessionKey.
+   *
+   * Trust contract: same gating as `agentId` at the `voicecall.start` RPC
+   * boundary — silently dropped unless the caller is in-process plugin runtime.
    */
   sessionKey?: string;
 };

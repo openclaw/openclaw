@@ -9,4 +9,8 @@ export * from "../plugins/interactive.js";
 export * from "../plugins/lazy-service-module.js";
 export * from "../plugins/types.js";
 export { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+export {
+  dispatchPluginGatewayRequest,
+  type DispatchPluginGatewayRequestOptions,
+} from "../plugins/runtime/gateway-dispatch.runtime.js";
 export type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";

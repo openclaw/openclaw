@@ -412,6 +412,66 @@ describe("voice-call plugin", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
 
+  it("honors per-call agentId and sessionKey only when caller is in-process plugin runtime", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        to: "+15550001234",
+        message: "Hi",
+        mode: "conversation",
+        agentId: "slack-u123",
+        sessionKey: "agent:slack-u123:google-meet:meet_42",
+      },
+      client: { internal: { pluginRuntimeOwnerId: "google-meet" } },
+      respond,
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550001234",
+      "agent:slack-u123:google-meet:meet_42",
+      expect.objectContaining({
+        agentId: "slack-u123",
+        message: "Hi",
+        mode: "conversation",
+      }),
+    );
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
+  it("drops per-call agentId and sessionKey when caller is not in-process plugin runtime", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          client?: { internal?: { pluginRuntimeOwnerId?: string } };
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        to: "+15550001234",
+        message: "Hi",
+        mode: "conversation",
+        agentId: "slack-spoof",
+        sessionKey: "agent:spoof:meet:42",
+      },
+      respond,
+    });
+    const initiateArgs = vi.mocked(runtimeStub.manager.initiateCall).mock.calls[0];
+    expect(initiateArgs?.[0]).toBe("+15550001234");
+    expect(initiateArgs?.[1]).toBeUndefined();
+    expect(initiateArgs?.[2]).toEqual(expect.not.objectContaining({ agentId: expect.anything() }));
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
   it("returns call status", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as

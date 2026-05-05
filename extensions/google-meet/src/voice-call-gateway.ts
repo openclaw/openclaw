@@ -2,8 +2,16 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
-import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  dispatchPluginGatewayRequest,
+  type RuntimeLogger,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig } from "./config.js";
+
+// Plugin id used to stamp `pluginRuntimeOwnerId` on the in-process gateway
+// dispatch so voice-call honors per-call routing params (agentId/sessionKey).
+// Must match the manifest plugin id ("google-meet").
+const GOOGLE_MEET_PLUGIN_RUNTIME_OWNER_ID = "google-meet";
 
 type VoiceCallGatewayClient = InstanceType<typeof GatewayClient>;
 
@@ -99,7 +107,12 @@ export async function joinMeetViaVoiceCallGateway(params: {
     params.logger?.info(
       `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "post-connect" : "none"}, intro=${params.message ? "delayed" : "none"}, agentId=${params.agentId ?? "<unset>"}, sessionKey=${params.sessionKey ?? "<unset>"})`,
     );
-    const start = (await client.request(
+    // voicecall.start carries per-call agentId/sessionKey, which voice-call
+    // gates behind `client.internal.pluginRuntimeOwnerId`. Route through the
+    // in-process plugin runtime dispatch so the trust marker is stamped — the
+    // legacy fresh-WebSocket path looks like an external operator-write client
+    // and would have its routing params silently dropped.
+    const start = await dispatchPluginGatewayRequest<VoiceCallStartResult>(
       "voicecall.start",
       {
         to: params.dialInNumber,
@@ -107,8 +120,8 @@ export async function joinMeetViaVoiceCallGateway(params: {
         ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
-      { timeoutMs: params.config.voiceCall.requestTimeoutMs },
-    )) as VoiceCallStartResult;
+      { pluginRuntimeOwnerId: GOOGLE_MEET_PLUGIN_RUNTIME_OWNER_ID },
+    );
     if (!start.callId) {
       throw new Error(start.error || "voicecall.start did not return callId");
     }

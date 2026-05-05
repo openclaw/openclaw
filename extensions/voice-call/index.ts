@@ -602,13 +602,21 @@ export default definePluginEntry({
 
     api.registerGatewayMethod(
       "voicecall.start",
-      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+      async ({ params, client, respond }: GatewayRequestHandlerOptions) => {
         try {
           const to = normalizeOptionalString(params?.to) ?? "";
           const message = normalizeOptionalString(params?.message) ?? "";
           const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
-          const agentId = normalizeOptionalString(params?.agentId);
-          const sessionKey = normalizeOptionalString(params?.sessionKey);
+          // Trust boundary: per-call agentId / sessionKey are honored only when
+          // the request originates from in-process plugin runtime
+          // (pluginRuntimeOwnerId set on client.internal). Raw RPC params from
+          // external operator-write callers are silently dropped — the call
+          // still proceeds against the plugin-default routing.
+          const pluginOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
+          const agentId = pluginOwnerId ? normalizeOptionalString(params?.agentId) : undefined;
+          const sessionKey = pluginOwnerId
+            ? normalizeOptionalString(params?.sessionKey)
+            : undefined;
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
