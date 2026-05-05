@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import http from "node:http";
-import https from "node:https";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import {
   clearDeviceAuthToken,
@@ -14,7 +12,10 @@ import {
   signDevicePayload,
 } from "../infra/device-identity.js";
 import { getActiveManagedProxyLoopbackMode } from "../infra/net/proxy/active-proxy-state.js";
-import { dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane } from "../infra/net/proxy/proxy-lifecycle.js";
+import {
+  ensureInheritedManagedProxyRoutingActive,
+  registerManagedProxyGatewayLoopbackNoProxy,
+} from "../infra/net/proxy/proxy-lifecycle.js";
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
@@ -96,19 +97,6 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
-function createDirectGatewayAgent(url: string): http.Agent | https.Agent | undefined {
-  let hostname: string;
-  try {
-    hostname = new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
-  if (!isLoopbackHost(hostname)) {
-    return undefined;
-  }
-  return url.startsWith("wss://") ? new https.Agent() : new http.Agent();
-}
-
 export class GatewayClientRequestError extends Error {
   readonly gatewayCode: string;
   readonly details?: unknown;
@@ -127,11 +115,6 @@ export class GatewayClientRequestError extends Error {
 
 export type GatewayClientOptions = {
   url?: string; // ws://127.0.0.1:18789
-  /**
-   * Config-resolved Gateway URL used to authorize managed-proxy loopback bypass.
-   * Per-call URL overrides must not authorize their own direct loopback route.
-   */
-  configuredGatewayUrl?: string;
   connectChallengeTimeoutMs?: number;
   /** @deprecated Use connectChallengeTimeoutMs. */
   connectDelayMs?: number;
@@ -301,22 +284,12 @@ export class GatewayClient {
       return;
     }
     // Allow node screen snapshots and other large responses.
+    ensureInheritedManagedProxyRoutingActive();
     const activeLoopbackMode = getActiveManagedProxyLoopbackMode();
-    const loopbackAgent = createDirectGatewayAgent(url);
-    if (activeLoopbackMode === "block" && loopbackAgent) {
-      throw new Error("Gateway loopback connection blocked by proxy.loopbackMode");
-    }
-    const configuredGatewayUrl =
-      this.opts.configuredGatewayUrl ??
-      (this.opts.url === undefined ? DEFAULT_GATEWAY_CLIENT_URL : undefined);
-    const managedProxyBypassAllowed =
-      activeLoopbackMode === undefined ||
-      (configuredGatewayUrl !== undefined && url === configuredGatewayUrl);
-    const directAgent =
-      activeLoopbackMode === "proxy" || !managedProxyBypassAllowed ? undefined : loopbackAgent;
+    const unregisterNoProxy =
+      activeLoopbackMode === "proxy" ? undefined : registerManagedProxyGatewayLoopbackNoProxy(url);
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
-      ...(directAgent ? { agent: directAgent } : {}),
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
@@ -342,16 +315,20 @@ export class GatewayClient {
       };
     }
     const createWebSocket = () => new WebSocket(url, wsOptions as ClientOptions);
-    const ws = directAgent
-      ? dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane(
-          {
-            actualUrl: url,
-            expectedGatewayUrl:
-              activeLoopbackMode === undefined ? url : (configuredGatewayUrl ?? ""),
-          },
-          createWebSocket,
-        )
-      : createWebSocket();
+    const ws = createWebSocket();
+    if (
+      unregisterNoProxy &&
+      typeof (ws as { once?: unknown }).once === "function" &&
+      typeof (ws as { off?: unknown }).off === "function"
+    ) {
+      const unregisterOnce = () => {
+        unregisterNoProxy();
+        ws.off("close", unregisterOnce);
+        ws.off("error", unregisterOnce);
+      };
+      ws.once("close", unregisterOnce);
+      ws.once("error", unregisterOnce);
+    }
     this.ws = ws;
     this.socketOpened = false;
     this.connectNonce = null;

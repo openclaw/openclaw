@@ -12,14 +12,12 @@ type GatewayClientAuth = {
 };
 type ResolveGatewayClientBootstrap = (params: unknown) => Promise<{
   url: string;
-  configuredGatewayUrl: string;
   urlSource: string;
   auth: GatewayClientAuth;
 }>;
 type GatewayClientOptions = GatewayClientCallbacks &
   GatewayClientAuth & {
     url?: string;
-    configuredGatewayUrl?: string;
   };
 
 const mockState = vi.hoisted(() => ({
@@ -33,7 +31,6 @@ const mockState = vi.hoisted(() => ({
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
-    configuredGatewayUrl: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
     auth: {
       token: undefined,
@@ -216,7 +213,6 @@ describe("serveAcpGateway startup", () => {
     mockState.resolveGatewayClientBootstrap.mockReset();
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
-      configuredGatewayUrl: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
       auth: {
         token: undefined,
@@ -283,7 +279,6 @@ describe("serveAcpGateway startup", () => {
   it("passes resolved SecretInput gateway credentials to the ACP gateway client", async () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:18789",
-      configuredGatewayUrl: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
       auth: {
         token: undefined,
@@ -339,7 +334,6 @@ describe("serveAcpGateway startup", () => {
   it("passes the configured Gateway URL into the ACP gateway client", async () => {
     mockState.resolveGatewayClientBootstrap.mockResolvedValue({
       url: "ws://127.0.0.1:19999",
-      configuredGatewayUrl: "ws://127.0.0.1:18789",
       urlSource: "cli --url",
       auth: {
         token: undefined,
@@ -357,7 +351,6 @@ describe("serveAcpGateway startup", () => {
       expect(mockState.gatewayOptions[0]).toEqual(
         expect.objectContaining({
           url: "ws://127.0.0.1:19999",
-          configuredGatewayUrl: "ws://127.0.0.1:18789",
         }),
       );
 

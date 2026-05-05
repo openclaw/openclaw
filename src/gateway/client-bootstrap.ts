@@ -20,7 +20,6 @@ export async function resolveGatewayClientBootstrap(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{
   url: string;
-  configuredGatewayUrl: string;
   urlSource: string;
   preauthHandshakeTimeoutMs?: number;
   auth: {
@@ -32,10 +31,6 @@ export async function resolveGatewayClientBootstrap(params: {
     config: params.config,
     url: params.gatewayUrl,
   });
-  const configuredConnection = buildGatewayConnectionDetailsWithResolvers({
-    config: params.config,
-    ignoreEnvUrlOverride: Boolean(params.gatewayUrl),
-  });
   const urlOverrideSource = resolveGatewayUrlOverrideSource(connection.urlSource);
   const auth = await resolveGatewayConnectionAuth({
     config: params.config,
@@ -46,7 +41,6 @@ export async function resolveGatewayClientBootstrap(params: {
   });
   return {
     url: connection.url,
-    configuredGatewayUrl: configuredConnection.url,
     urlSource: connection.urlSource,
     preauthHandshakeTimeoutMs: params.config.gateway?.handshakeTimeoutMs,
     auth,

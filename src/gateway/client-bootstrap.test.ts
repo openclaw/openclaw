@@ -37,15 +37,10 @@ describe("resolveGatewayClientBootstrap", () => {
   });
 
   it("passes cli override context into shared auth resolution", async () => {
-    mockState.buildGatewayConnectionDetails
-      .mockReturnValueOnce({
-        url: "wss://override.example/ws",
-        urlSource: "cli --url",
-      })
-      .mockReturnValueOnce({
-        url: "ws://127.0.0.1:18789",
-        urlSource: "local loopback",
-      });
+    mockState.buildGatewayConnectionDetails.mockReturnValueOnce({
+      url: "wss://override.example/ws",
+      urlSource: "cli --url",
+    });
 
     const result = await resolveGatewayClientBootstrap({
       config: {} as never,
@@ -55,7 +50,6 @@ describe("resolveGatewayClientBootstrap", () => {
 
     expect(result).toEqual({
       url: "wss://override.example/ws",
-      configuredGatewayUrl: "ws://127.0.0.1:18789",
       urlSource: "cli --url",
       preauthHandshakeTimeoutMs: undefined,
       auth: {

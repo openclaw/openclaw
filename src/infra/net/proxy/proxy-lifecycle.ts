@@ -50,19 +50,8 @@ const ALL_PROXY_ENV_KEYS = [
   ...NO_PROXY_ENV_KEYS,
   ...PROXY_ACTIVE_KEYS,
 ] as const;
-const GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS = [
-  ...ALL_PROXY_ENV_KEYS,
-  "all_proxy",
-  "ALL_PROXY",
-] as const;
 type ProxyEnvKey = (typeof ALL_PROXY_ENV_KEYS)[number];
 type ProxyEnvSnapshot = Record<ProxyEnvKey, string | undefined>;
-type GatewayControlPlaneProxyBypassEnvKey =
-  (typeof GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS)[number];
-type GatewayControlPlaneProxyBypassEnvSnapshot = Record<
-  GatewayControlPlaneProxyBypassEnvKey,
-  string | undefined
->;
 type NodeHttpStackSnapshot = {
   httpRequest: typeof http.request;
   httpGet: typeof http.get;
@@ -143,39 +132,6 @@ function restoreProxyEnv(snapshot: ProxyEnvSnapshot): void {
     } else {
       process.env[key] = value;
     }
-  }
-}
-
-function captureGatewayControlPlaneProxyBypassEnv(): GatewayControlPlaneProxyBypassEnvSnapshot {
-  const snapshot = {} as GatewayControlPlaneProxyBypassEnvSnapshot;
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    snapshot[key] = process.env[key];
-  }
-  return snapshot;
-}
-
-function restoreGatewayControlPlaneProxyBypassEnv(
-  snapshot: GatewayControlPlaneProxyBypassEnvSnapshot,
-): void {
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
-
-function withoutGatewayControlPlaneProxyEnv<T>(run: () => T): T {
-  const snapshot = captureGatewayControlPlaneProxyBypassEnv();
-  for (const key of GATEWAY_CONTROL_PLANE_PROXY_BYPASS_ENV_KEYS) {
-    delete process.env[key];
-  }
-  try {
-    return run();
-  } finally {
-    restoreGatewayControlPlaneProxyBypassEnv(snapshot);
   }
 }
 
@@ -392,6 +348,18 @@ function redactProxyUrlForLog(value: string): string {
   }
 }
 
+export function ensureInheritedManagedProxyRoutingActive(): void {
+  if (process.env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
+    return;
+  }
+  const proxyUrl = process.env["GLOBAL_AGENT_HTTP_PROXY"] ?? process.env["HTTP_PROXY"];
+  if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
+    return;
+  }
+  bootstrapNodeHttpStack(proxyUrl);
+  forceResetGlobalDispatcher();
+}
+
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
   if (config?.enabled !== true) {
     return null;
@@ -462,11 +430,6 @@ export async function stopProxy(handle: ProxyHandle | null): Promise<void> {
   await handle.stop();
 }
 
-type GatewayControlPlaneBypassTarget = {
-  actualUrl: string;
-  expectedGatewayUrl: string;
-};
-
 function parseGatewayControlPlaneUrl(value: string): URL | null {
   try {
     return new URL(value);
@@ -479,30 +442,42 @@ function isGatewayControlPlaneProtocol(protocol: string): boolean {
   return protocol === "ws:" || protocol === "wss:" || protocol === "http:" || protocol === "https:";
 }
 
-function isGatewayLoopbackControlPlaneUrl(value: string): boolean {
+function getGatewayControlPlaneNoProxyAuthority(value: string): string | null {
   const url = parseGatewayControlPlaneUrl(value);
-  return (
-    url !== null &&
-    isGatewayControlPlaneProtocol(url.protocol) &&
-    isGatewayControlPlaneLoopbackHost(url.hostname)
-  );
+  if (
+    url === null ||
+    !isGatewayControlPlaneProtocol(url.protocol) ||
+    !isGatewayControlPlaneLoopbackHost(url.hostname)
+  ) {
+    return null;
+  }
+  return url.port ? `${url.hostname}:${url.port}` : url.hostname;
 }
 
-function assertExactGatewayControlPlaneBypassTarget(
-  target: GatewayControlPlaneBypassTarget,
-): string {
-  if (!isGatewayLoopbackControlPlaneUrl(target.actualUrl)) {
-    throw new Error("proxy: dangerous Gateway control-plane bypass is loopback-only");
+function readGlobalAgentNoProxy(): string {
+  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+  if (!isRecord(agent)) {
+    return "";
   }
-  if (!isGatewayLoopbackControlPlaneUrl(target.expectedGatewayUrl)) {
-    throw new Error(
-      "proxy: Gateway control-plane bypass expected Gateway URL must be loopback-only",
-    );
+  return typeof agent["NO_PROXY"] === "string" ? agent["NO_PROXY"] : "";
+}
+
+function writeGlobalAgentNoProxy(value: string): void {
+  const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
+  if (isRecord(agent)) {
+    agent["NO_PROXY"] = value === "" ? null : value;
   }
-  if (target.actualUrl !== target.expectedGatewayUrl) {
-    throw new Error(
-      "proxy: Gateway control-plane bypass requires the actual URL to match the configured Gateway URL",
-    );
+}
+
+function appendNoProxyAuthority(noProxy: string, authority: string): string {
+  const entries = noProxy.split(/[\s,]+/).filter(Boolean);
+  return entries.includes(authority) ? noProxy : [...entries, authority].join(",");
+}
+
+export function registerManagedProxyGatewayLoopbackNoProxy(url: string): (() => void) | undefined {
+  const authority = getGatewayControlPlaneNoProxyAuthority(url);
+  if (!authority) {
+    return undefined;
   }
   const loopbackMode = getActiveManagedProxyLoopbackMode();
   if (loopbackMode === "block") {
@@ -511,60 +486,22 @@ function assertExactGatewayControlPlaneBypassTarget(
     );
   }
   if (loopbackMode === "proxy") {
-    throw new Error(
-      "proxy: Gateway loopback control-plane bypass is disabled by proxy.loopbackMode",
-    );
+    return undefined;
   }
-  return target.actualUrl;
+
+  const previousNoProxy = readGlobalAgentNoProxy();
+  writeGlobalAgentNoProxy(appendNoProxyAuthority(previousNoProxy, authority));
+  let stopped = false;
+  return () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    writeGlobalAgentNoProxy(previousNoProxy);
+  };
 }
 
 function isGatewayControlPlaneLoopbackHost(hostname: string): boolean {
   const normalizedHost = hostname.trim().toLowerCase().replace(/\.+$/, "");
   return normalizedHost === "localhost" || isLoopbackIpAddress(hostname);
-}
-
-export function dangerouslyBypassManagedProxyForGatewayLoopbackControlPlane<T>(
-  target: GatewayControlPlaneBypassTarget,
-  run: () => T,
-): T {
-  assertExactGatewayControlPlaneBypassTarget(target);
-
-  const snapshot = nodeHttpStackSnapshot;
-  if (!snapshot) {
-    return withoutGatewayControlPlaneProxyEnv(run);
-  }
-
-  // Security-sensitive: this temporarily removes managed proxy hooks for the
-  // synchronous Gateway loopback WebSocket constructor only. Do not reuse this
-  // helper for provider, plugin, user WebUI, model server, or arbitrary egress.
-  return withoutGatewayControlPlaneProxyEnv(() => {
-    const activeStack = captureNodeHttpStack();
-    const globalRecord = global as Record<string, unknown>;
-    try {
-      http.request = snapshot.httpRequest;
-      http.get = snapshot.httpGet;
-      http.globalAgent = snapshot.httpGlobalAgent;
-      https.request = snapshot.httpsRequest;
-      https.get = snapshot.httpsGet;
-      https.globalAgent = snapshot.httpsGlobalAgent;
-      if (snapshot.hadGlobalAgent) {
-        globalRecord["GLOBAL_AGENT"] = snapshot.globalAgent;
-      } else {
-        delete globalRecord["GLOBAL_AGENT"];
-      }
-      return run();
-    } finally {
-      http.request = activeStack.httpRequest;
-      http.get = activeStack.httpGet;
-      http.globalAgent = activeStack.httpGlobalAgent;
-      https.request = activeStack.httpsRequest;
-      https.get = activeStack.httpsGet;
-      https.globalAgent = activeStack.httpsGlobalAgent;
-      if (activeStack.hadGlobalAgent) {
-        globalRecord["GLOBAL_AGENT"] = activeStack.globalAgent;
-      } else {
-        delete globalRecord["GLOBAL_AGENT"];
-      }
-    }
-  });
 }

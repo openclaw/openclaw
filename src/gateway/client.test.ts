@@ -185,6 +185,9 @@ describe("GatewayClient security checks", () => {
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_PROXY_ACTIVE",
     "OPENCLAW_PROXY_LOOPBACK_MODE",
+    "HTTP_PROXY",
+    "GLOBAL_AGENT_HTTP_PROXY",
+    "GLOBAL_AGENT_FORCE_GLOBAL_AGENT",
   ]);
 
   beforeEach(() => {
@@ -192,6 +195,10 @@ describe("GatewayClient security checks", () => {
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
+    delete process.env.HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_FORCE_GLOBAL_AGENT;
+    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
     wsInstances.length = 0;
   });
 
@@ -200,6 +207,10 @@ describe("GatewayClient security checks", () => {
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
+    delete process.env.HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_HTTP_PROXY;
+    delete process.env.GLOBAL_AGENT_FORCE_GLOBAL_AGENT;
+    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -242,7 +253,32 @@ describe("GatewayClient security checks", () => {
 
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1); // WebSocket created
-    expect(getLatestWs().options).toMatchObject({ agent: expect.any(Object) });
+    expect(getLatestWs().options).not.toHaveProperty("agent");
+    client.stop();
+  });
+
+  it("bootstraps inherited managed proxy routing before proxy-mode loopback WebSocket creation", () => {
+    process.env.OPENCLAW_PROXY_ACTIVE = "1";
+    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "proxy";
+    process.env.HTTP_PROXY = "http://127.0.0.1:3128";
+    process.env.GLOBAL_AGENT_HTTP_PROXY = "http://127.0.0.1:3128";
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1);
+    expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+    expect((global as Record<string, unknown>)["GLOBAL_AGENT"]).toEqual(
+      expect.objectContaining({
+        HTTP_PROXY: "http://127.0.0.1:3128",
+        HTTPS_PROXY: "http://127.0.0.1:3128",
+      }),
+    );
     client.stop();
   });
 
@@ -269,47 +305,6 @@ describe("GatewayClient security checks", () => {
       client.stop();
       await stopProxy(handle);
     }
-  });
-
-  it("uses direct Gateway loopback agent only for the configured URL when managed proxy is active", async () => {
-    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
-    const handle = await startProxy({
-      enabled: true,
-      proxyUrl: "http://127.0.0.1:3128",
-    });
-
-    try {
-      const configuredClient = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-        configuredGatewayUrl: "ws://127.0.0.1:18789",
-      });
-      configuredClient.start();
-      expect(getLatestWs().options).toMatchObject({ agent: expect.any(Object) });
-      configuredClient.stop();
-
-      const overrideClient = new GatewayClient({
-        url: "ws://127.0.0.1:3000",
-        configuredGatewayUrl: "ws://127.0.0.1:18789",
-      });
-      overrideClient.start();
-      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
-      overrideClient.stop();
-    } finally {
-      await stopProxy(handle);
-    }
-  });
-
-  it("does not let inherited managed proxy env treat an explicit loopback URL as configured", () => {
-    process.env.OPENCLAW_PROXY_ACTIVE = "1";
-    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:3000",
-    });
-
-    client.start();
-
-    expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
-    client.stop();
   });
 
   it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {

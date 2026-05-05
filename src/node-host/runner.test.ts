@@ -69,7 +69,7 @@ vi.mock("./plugin-node-host.js", () => ({
 }));
 
 describe("runNodeHost", () => {
-  it("passes the resolved Gateway URL as configuredGatewayUrl for managed proxy bypass", async () => {
+  it("passes the resolved Gateway URL to the Gateway client", async () => {
     await expect(
       runNodeHost({
         gatewayHost: "127.0.0.1",
@@ -81,7 +81,6 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]).toEqual(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
-        configuredGatewayUrl: "ws://127.0.0.1:18789",
       }),
     );
   });

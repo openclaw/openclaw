@@ -206,7 +206,6 @@ export function buildGatewayConnectionDetails(
     url?: string;
     configPath?: string;
     urlSource?: "cli" | "env";
-    ignoreEnvUrlOverride?: boolean;
   } = {},
 ): GatewayConnectionDetails {
   return buildGatewayConnectionDetailsWithResolvers(options, {
@@ -598,7 +597,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[];
   url: string;
-  configuredGatewayUrl: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -611,7 +609,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
     opts,
     scopes,
     url,
-    configuredGatewayUrl,
     token,
     password,
     tlsFingerprint,
@@ -641,7 +638,6 @@ async function executeGatewayRequestWithScopes<T>(params: {
 
     const client = gatewayCallDeps.createGatewayClient({
       url,
-      configuredGatewayUrl,
       token,
       password,
       tlsFingerprint,
@@ -754,11 +750,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlSource: context.urlOverrideSource,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
-  const configuredConnectionDetails = buildGatewayConnectionDetails({
-    config: context.config,
-    ignoreEnvUrlOverride: context.urlOverrideSource === "cli",
-    ...(opts.configPath ? { configPath: opts.configPath } : {}),
-  });
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolvedCredentials;
@@ -766,7 +757,6 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     opts,
     scopes,
     url,
-    configuredGatewayUrl: configuredConnectionDetails.url,
     token,
     password,
     tlsFingerprint,
