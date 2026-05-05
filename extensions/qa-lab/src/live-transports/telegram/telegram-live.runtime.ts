@@ -48,6 +48,7 @@ type TelegramQaScenarioId =
   | "telegram-whoami-command"
   | "telegram-context-command"
   | "telegram-current-session-status-tool"
+  | "telegram-stream-final-single-message"
   | "telegram-long-final-three-chunks"
   | "telegram-long-final-reuses-preview"
   | "telegram-mentioned-message-reply"
@@ -298,6 +299,22 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       expectReply: true,
       input: `@${sutUsername} Telegram QA mention routing check. Reply with a short acknowledgement.`,
       replyToLatestSutMessage: true,
+    }),
+  },
+  {
+    id: "telegram-stream-final-single-message",
+    title: "Telegram streamed final stays one message",
+    defaultEnabled: false,
+    timeoutMs: 45_000,
+    buildRun: (sutUsername) => ({
+      allowAnySutReply: true,
+      expectReply: true,
+      input: `@${sutUsername} Quiet streaming QA check. Reply exactly: QA-TELEGRAM-STREAM-SINGLE-OK`,
+      expectedTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+      expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+      expectedSutMessageCount: 1,
+      replyToLatestSutMessage: true,
+      settleMs: 4_000,
     }),
   },
   {

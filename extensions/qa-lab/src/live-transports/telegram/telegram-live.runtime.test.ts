@@ -333,6 +333,7 @@ describe("telegram live qa runtime", () => {
       "telegram-context-command",
       "telegram-current-session-status-tool",
       "telegram-mentioned-message-reply",
+      "telegram-stream-final-single-message",
       "telegram-long-final-reuses-preview",
       "telegram-long-final-three-chunks",
       "telegram-mention-gating",
@@ -345,6 +346,7 @@ describe("telegram live qa runtime", () => {
       "telegram-context-command",
       "telegram-current-session-status-tool",
       "telegram-mentioned-message-reply",
+      "telegram-stream-final-single-message",
       "telegram-long-final-reuses-preview",
       "telegram-long-final-three-chunks",
       "telegram-mention-gating",
@@ -359,6 +361,15 @@ describe("telegram live qa runtime", () => {
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
         ?.buildRun("sut_bot").replyToLatestSutMessage,
     ).toBe(true);
+    expect(
+      scenarios
+        .find((scenario) => scenario.id === "telegram-stream-final-single-message")
+        ?.buildRun("sut_bot"),
+    ).toMatchObject({
+      expectedJoinedSutTextIncludes: ["QA-TELEGRAM-STREAM-SINGLE-OK"],
+      expectedSutMessageCount: 1,
+      replyToLatestSutMessage: true,
+    });
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-long-final-reuses-preview")
