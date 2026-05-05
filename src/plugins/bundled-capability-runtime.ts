@@ -11,6 +11,7 @@ import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestContracts } from "./manifest.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
   createPluginModuleLoaderCache,
@@ -136,6 +137,7 @@ function createCapabilityPluginRecord(params: {
   source: string;
   rootDir?: string;
   workspaceDir?: string;
+  contracts?: PluginManifestContracts;
 }): PluginRecord {
   return {
     id: params.id,
@@ -146,6 +148,7 @@ function createCapabilityPluginRecord(params: {
     rootDir: params.rootDir,
     origin: "bundled",
     workspaceDir: params.workspaceDir,
+    contracts: params.contracts,
     enabled: true,
     status: "loaded",
     toolNames: [],
@@ -275,6 +278,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           : candidate.source,
       rootDir: candidate.rootDir,
       workspaceDir: candidate.workspaceDir,
+      contracts: manifest.contracts,
     });
 
     const opened = openBoundaryFileSync({
