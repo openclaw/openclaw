@@ -1009,6 +1009,14 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.envelopeTimestamp":
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
+  "agents.defaults.sessionTitle":
+    "Auto-generate session titles via AI summarization after a configurable number of turns.",
+  "agents.defaults.sessionTitle.enabled":
+    "When enabled, a concise AI-generated title replaces the truncated first-message default after enough turns.",
+  "agents.defaults.sessionTitle.turnsBeforeTitle":
+    "Number of user turns before triggering AI title generation (1–20, default 3).",
+  "agents.defaults.sessionTitle.maxChars":
+    "Maximum character length for the generated title (10–200, default 50).",
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",

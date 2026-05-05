@@ -208,6 +208,12 @@ export type AgentDefaultsConfig = {
    * fallbacks.
    */
   mediaGenerationAutoProviderFallback?: boolean;
+  /** Auto-generate session titles via AI summarization after a configurable number of turns. */
+  sessionTitle?: {
+    enabled?: boolean;
+    turnsBeforeTitle?: number;
+    maxChars?: number;
+  };
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */

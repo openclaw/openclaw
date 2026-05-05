@@ -43,6 +43,7 @@ export type GatewaySessionRow = {
   kind: "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  aiTitle?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
   channel?: string;

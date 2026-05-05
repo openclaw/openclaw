@@ -420,6 +420,7 @@ export type GatewaySessionRow = {
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  aiTitle?: string;
   surface?: string;
   subject?: string;
   room?: string;

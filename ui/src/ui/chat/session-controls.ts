@@ -487,6 +487,7 @@ export function resolveSessionDisplayName(
 ): string {
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
+  const aiTitle = normalizeOptionalString((row as { aiTitle?: string } | undefined)?.aiTitle) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
 
   const applyTypedPrefix = (name: string): string => {
@@ -502,6 +503,9 @@ export function resolveSessionDisplayName(
   }
   if (displayName && displayName !== key) {
     return applyTypedPrefix(displayName);
+  }
+  if (aiTitle && aiTitle !== key) {
+    return applyTypedPrefix(aiTitle);
   }
   return fallbackName;
 }
