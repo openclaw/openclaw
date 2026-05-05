@@ -115,6 +115,7 @@ export class OpenClawChannelBridge {
 
     this.gateway = new GatewayClientCtor({
       url: bootstrap.url,
+      configuredGatewayUrl: bootstrap.configuredGatewayUrl,
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
