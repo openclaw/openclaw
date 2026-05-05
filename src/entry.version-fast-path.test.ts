@@ -12,11 +12,6 @@ vi.mock("./cli/container-target.js", () => ({
     argv.includes("--container") ? "demo" : (env.OPENCLAW_CONTAINER ?? null),
 }));
 
-async function flushVersionFastPath() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("entry root version fast path", () => {
   it("prints version output and skips host handling when container-targeted", async () => {
     const output = vi.fn();
@@ -31,14 +26,13 @@ describe("entry root version fast path", () => {
       resolveCommitHash: vi.fn(() => "abc1234"),
     }));
 
-    expect(
+    await expect(
       tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
         output,
         exit,
         resolveVersion,
       }),
-    ).toBe(true);
-    await flushVersionFastPath();
+    ).resolves.toBe(true);
     expect(output).toHaveBeenCalledWith("OpenClaw 9.9.9-test (abc1234)");
     expect(exit).toHaveBeenCalledWith(0);
 
@@ -49,37 +43,36 @@ describe("entry root version fast path", () => {
       resolveCommitHash: vi.fn(() => null),
     });
 
-    expect(
+    await expect(
       tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
         output,
         exit,
         resolveVersion,
       }),
-    ).toBe(true);
-    await flushVersionFastPath();
+    ).resolves.toBe(true);
     expect(output).toHaveBeenCalledWith("OpenClaw 9.9.9-test");
     expect(exit).toHaveBeenCalledWith(0);
 
     output.mockClear();
     exit.mockClear();
-    expect(
+    await expect(
       tryHandleRootVersionFastPath(["node", "openclaw", "--container", "demo", "--version"], {
         output,
         exit,
         resolveVersion,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
     expect(resolveVersion).toHaveBeenCalledTimes(2);
     expect(output).not.toHaveBeenCalled();
     expect(exit).not.toHaveBeenCalled();
 
-    expect(
+    await expect(
       tryHandleRootVersionFastPath(["node", "openclaw", "--version"], {
         env: { OPENCLAW_CONTAINER: "demo" },
         output,
         exit,
         resolveVersion,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
   });
 });

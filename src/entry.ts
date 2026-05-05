@@ -169,7 +169,7 @@ if (
       }
       gatewayEntryStartupTrace.mark("argv");
 
-      if (!tryHandleRootVersionFastPath(process.argv)) {
+      if (!(await tryHandleRootVersionFastPath(process.argv))) {
         await runMainOrRootHelp(process.argv);
       }
     }
