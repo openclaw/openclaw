@@ -1321,7 +1321,8 @@ export const dispatchTelegramMessage = async ({
       }
       ({ queuedFinal } = turnResult.dispatchResult);
       suppressSilentReplyFallback =
-        turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only";
+        turnResult.dispatchResult.sourceReplyDeliveryMode === "message_tool_only" ||
+        turnResult.dispatchResult.finalResponseCommitted === true;
     } catch (err) {
       dispatchError = err;
       runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));

@@ -8,6 +8,11 @@ import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.type
 export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
+  /**
+   * An external owner accepted responsibility for the final user-visible
+   * response even though this dispatcher cycle did not enqueue one locally.
+   */
+  finalResponseCommitted?: boolean;
   failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
