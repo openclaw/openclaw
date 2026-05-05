@@ -6,6 +6,7 @@ import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
+  isEnvSecretProviderConfig,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -57,7 +58,7 @@ function canResolveEnvSecretRefInReadOnlyPath(params: {
   if (!providerConfig) {
     return params.provider === resolveDefaultSecretProviderAlias(params.cfg, "env");
   }
-  if (providerConfig.source !== "env") {
+  if (!isEnvSecretProviderConfig(providerConfig)) {
     return false;
   }
   const allowlist = providerConfig.allowlist;

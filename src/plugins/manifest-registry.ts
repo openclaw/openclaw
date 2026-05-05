@@ -77,6 +77,7 @@ export type PluginManifestContractListKey =
   | "externalAuthProviders"
   | "mediaUnderstandingProviders"
   | "documentExtractors"
+  | "secretProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "imageGenerationProviders"

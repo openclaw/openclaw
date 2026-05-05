@@ -1197,6 +1197,8 @@
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
                   "plugins/message-presentation",
+                  "plugins/secrets-gcp",
+                  "plugins/secrets-keyring",
                   "plugins/skill-workshop",
                   "plugins/zalouser",
                   {

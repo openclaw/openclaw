@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  isEnvSecretProviderConfig,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
@@ -63,7 +67,11 @@ function hasConfiguredSecretRefInConfigPath(params: {
   if (!providerConfig) {
     return params.ref.provider === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
   }
-  if (providerConfig.source !== "env") {
+  // Use the type guard so the open `PluginSecretProviderConfig` arm (which
+  // permits `source: string`) is narrowed out cleanly — a literal `!== "env"`
+  // check leaves the plugin variant in the union and breaks `.allowlist`
+  // typing.
+  if (!isEnvSecretProviderConfig(providerConfig)) {
     return false;
   }
   const allowlist = providerConfig.allowlist;
