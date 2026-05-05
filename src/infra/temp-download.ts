@@ -4,7 +4,7 @@ import {
   type TempFile,
   tempFile,
   withTempFile,
-} from "@openclaw/fs-safe/temp";
+} from "@openclaw/fs-safe/advanced";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePreferredOpenClawTmpDir } from "./tmp-openclaw-dir.js";
 

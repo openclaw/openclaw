@@ -1,1 +1,1 @@
-export { writeViaSiblingTempPath } from "@openclaw/fs-safe/temp";
+export { writeViaSiblingTempPath } from "@openclaw/fs-safe/advanced";

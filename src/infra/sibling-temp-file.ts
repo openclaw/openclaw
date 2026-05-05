@@ -2,4 +2,4 @@ export {
   writeSiblingTempFile,
   type WriteSiblingTempFileOptions,
   type WriteSiblingTempFileResult,
-} from "@openclaw/fs-safe/temp";
+} from "@openclaw/fs-safe/advanced";
