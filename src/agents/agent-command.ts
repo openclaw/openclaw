@@ -1031,14 +1031,6 @@ async function agentCommandInternal(
                 currentTurnUserMessagePersisted = true;
               },
               onAgentEvent: (evt) => {
-                if (evt.stream.startsWith("codex_app_server.")) {
-                  emitAgentEvent({
-                    runId,
-                    stream: evt.stream,
-                    data: evt.data ?? {},
-                    ...(evt.sessionKey ? { sessionKey: evt.sessionKey } : {}),
-                  });
-                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&

@@ -401,10 +401,37 @@ jobs:
             )
             pnpm "${args[@]}"
             cp "$desktop_dir/desktop-browser-smoke.png" "$root/$lane/discord-status-reactions-tool-only-desktop.png"
+            cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
           }
 
           capture_desktop_lane baseline
           capture_desktop_lane candidate
+
+          make_desktop_preview() {
+            local lane="$1"
+            local input="$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
+            local output="$root/$lane/discord-status-reactions-tool-only-desktop-preview.gif"
+            local clip="$root/$lane/discord-status-reactions-tool-only-desktop-change.mp4"
+            local metadata="$root/$lane/discord-status-reactions-tool-only-desktop-preview.json"
+            crabbox media preview \
+              --input "$input" \
+              --output "$output" \
+              --trimmed-video-output "$clip" \
+              --json > "$metadata"
+          }
+
+          if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y ffmpeg || true
+          fi
+          if ! make_desktop_preview baseline || ! make_desktop_preview candidate; then
+            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif"
+            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif"
+            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4"
+            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4"
+            rm -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.json"
+            rm -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.json"
+            echo "::warning::Could not generate motion-trimmed desktop previews; continuing with screenshots and full MP4 links."
+          fi
 
           baseline_status="$(jq -r '.scenarios[0].status' "$root/baseline/discord-qa-summary.json")"
           candidate_status="$(jq -r '.scenarios[0].status' "$root/candidate/discord-qa-summary.json")"
@@ -431,6 +458,20 @@ jobs:
             echo "- Candidate screenshot: \`candidate/discord-status-reactions-tool-only-timeline.png\`"
             echo "- Baseline desktop screenshot: \`baseline/discord-status-reactions-tool-only-desktop.png\`"
             echo "- Candidate desktop screenshot: \`candidate/discord-status-reactions-tool-only-desktop.png\`"
+            if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif" ]]; then
+              echo "- Baseline desktop preview: \`baseline/discord-status-reactions-tool-only-desktop-preview.gif\`"
+            fi
+            if [[ -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif" ]]; then
+              echo "- Candidate desktop preview: \`candidate/discord-status-reactions-tool-only-desktop-preview.gif\`"
+            fi
+            if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4" ]]; then
+              echo "- Baseline desktop change clip: \`baseline/discord-status-reactions-tool-only-desktop-change.mp4\`"
+            fi
+            if [[ -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4" ]]; then
+              echo "- Candidate desktop change clip: \`candidate/discord-status-reactions-tool-only-desktop-change.mp4\`"
+            fi
+            echo "- Baseline desktop video: \`baseline/discord-status-reactions-tool-only-desktop.mp4\`"
+            echo "- Candidate desktop video: \`candidate/discord-status-reactions-tool-only-desktop.mp4\`"
           } > "$root/mantis-report.md"
 
           cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
@@ -467,7 +508,7 @@ jobs:
           permission-issues: write
           permission-pull-requests: write
 
-      - name: Comment PR with inline QA screenshots
+      - name: Comment PR with inline QA evidence
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' && steps.run_mantis.outputs.output_dir != '' }}
         env:
           GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
@@ -491,7 +532,9 @@ jobs:
             "$root/baseline/discord-status-reactions-tool-only-timeline.png" \
             "$root/candidate/discord-status-reactions-tool-only-timeline.png" \
             "$root/baseline/discord-status-reactions-tool-only-desktop.png" \
-            "$root/candidate/discord-status-reactions-tool-only-desktop.png"
+            "$root/candidate/discord-status-reactions-tool-only-desktop.png" \
+            "$root/baseline/discord-status-reactions-tool-only-desktop.mp4" \
+            "$root/candidate/discord-status-reactions-tool-only-desktop.mp4"
           do
             if [[ ! -f "$required" ]]; then
               echo "Missing required QA evidence file: $required" >&2
@@ -519,14 +562,30 @@ jobs:
           cp "$root/candidate/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/candidate.png"
           cp "$root/baseline/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/baseline-desktop.png"
           cp "$root/candidate/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/candidate-desktop.png"
+          has_desktop_previews="false"
+          if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif" && -f "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif" ]]; then
+            cp "$root/baseline/discord-status-reactions-tool-only-desktop-preview.gif" "$artifacts_worktree/$artifact_root/baseline-desktop-preview.gif"
+            cp "$root/candidate/discord-status-reactions-tool-only-desktop-preview.gif" "$artifacts_worktree/$artifact_root/candidate-desktop-preview.gif"
+            cp "$root/baseline/discord-status-reactions-tool-only-desktop-preview.json" "$artifacts_worktree/$artifact_root/baseline-desktop-preview.json"
+            cp "$root/candidate/discord-status-reactions-tool-only-desktop-preview.json" "$artifacts_worktree/$artifact_root/candidate-desktop-preview.json"
+            has_desktop_previews="true"
+          fi
+          has_change_clips="false"
+          if [[ -f "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4" && -f "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4" ]]; then
+            cp "$root/baseline/discord-status-reactions-tool-only-desktop-change.mp4" "$artifacts_worktree/$artifact_root/baseline-desktop-change.mp4"
+            cp "$root/candidate/discord-status-reactions-tool-only-desktop-change.mp4" "$artifacts_worktree/$artifact_root/candidate-desktop-change.mp4"
+            has_change_clips="true"
+          fi
+          cp "$root/baseline/discord-status-reactions-tool-only-desktop.mp4" "$artifacts_worktree/$artifact_root/baseline-desktop.mp4"
+          cp "$root/candidate/discord-status-reactions-tool-only-desktop.mp4" "$artifacts_worktree/$artifact_root/candidate-desktop.mp4"
           cp "$root/comparison.json" "$artifacts_worktree/$artifact_root/comparison.json"
           cp "$root/mantis-report.md" "$artifacts_worktree/$artifact_root/mantis-report.md"
 
           git -C "$artifacts_worktree" add "$artifact_root"
           if git -C "$artifacts_worktree" diff --cached --quiet; then
-            echo "No QA screenshot artifact changes to publish."
+            echo "No QA screenshot/video artifact changes to publish."
           else
-            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord screenshots for PR ${TARGET_PR}"
+            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord evidence for PR ${TARGET_PR}"
             git -C "$artifacts_worktree" push --quiet origin HEAD:qa-artifacts
           fi
 
@@ -535,6 +594,26 @@ jobs:
           baseline_status="$(jq -r '.baseline.status' "$root/comparison.json")"
           candidate_status="$(jq -r '.candidate.status' "$root/comparison.json")"
           pass="$(jq -r '.pass' "$root/comparison.json")"
+          preview_section=""
+          if [[ "$has_desktop_previews" == "true" ]]; then
+            preview_section="$(cat <<EOF
+
+          | Baseline motion preview | Candidate motion preview |
+          | --- | --- |
+          | <img src="${raw_base}/baseline-desktop-preview.gif" width="420" alt="Animated baseline desktop preview"> | <img src="${raw_base}/candidate-desktop-preview.gif" width="420" alt="Animated candidate desktop preview"> |
+          EOF
+          )"
+          fi
+          change_clip_section=""
+          if [[ "$has_change_clips" == "true" ]]; then
+            change_clip_section="$(cat <<EOF
+
+          Motion-trimmed clips:
+          - [Baseline change MP4](${raw_base}/baseline-desktop-change.mp4)
+          - [Candidate change MP4](${raw_base}/candidate-desktop-change.mp4)
+          EOF
+          )"
+          fi
           comment_file="$(mktemp)"
           cat > "$comment_file" <<EOF
           <!-- mantis-discord-status-reactions -->
@@ -557,6 +636,12 @@ jobs:
           | Baseline desktop/VNC browser | Candidate desktop/VNC browser |
           | --- | --- |
           | <img src="${raw_base}/baseline-desktop.png" width="420" alt="Baseline Mantis desktop browser screenshot"> | <img src="${raw_base}/candidate-desktop.png" width="420" alt="Candidate Mantis desktop browser screenshot"> |
+          ${preview_section}
+          ${change_clip_section}
+
+          Full videos:
+          - [Baseline desktop MP4](${raw_base}/baseline-desktop.mp4)
+          - [Candidate desktop MP4](${raw_base}/candidate-desktop.mp4)
 
           Raw QA files: https://github.com/${GITHUB_REPOSITORY}/tree/qa-artifacts/${artifact_root}
           EOF
@@ -571,13 +656,13 @@ jobs:
             comment_payload="$(mktemp)"
             jq -n --rawfile body "$comment_file" '{ body: $body }' > "$comment_payload"
             if gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --input "$comment_payload" >/dev/null; then
-              echo "Updated Mantis QA screenshot comment on PR #${TARGET_PR}."
+              echo "Updated Mantis QA evidence comment on PR #${TARGET_PR}."
             else
-              echo "::warning::Could not update existing Mantis QA screenshot comment ${comment_id}; creating a new one."
+              echo "::warning::Could not update existing Mantis QA evidence comment ${comment_id}; creating a new one."
               gh pr comment "$TARGET_PR" --body-file "$comment_file"
-              echo "Created Mantis QA screenshot comment on PR #${TARGET_PR}."
+              echo "Created Mantis QA evidence comment on PR #${TARGET_PR}."
             fi
           else
             gh pr comment "$TARGET_PR" --body-file "$comment_file"
-            echo "Created Mantis QA screenshot comment on PR #${TARGET_PR}."
+            echo "Created Mantis QA evidence comment on PR #${TARGET_PR}."
           fi
