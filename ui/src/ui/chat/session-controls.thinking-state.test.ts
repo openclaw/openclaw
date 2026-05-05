@@ -7,11 +7,16 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
     sessionKey: "session-1",
     chatModelCatalog: [],
     sessionsResult: {
+      ts: 0,
+      path: "sessions.json",
+      count: 1,
       sessions: [
         {
           key: "session-1",
+          kind: "direct",
           modelProvider: "openai",
           model: "gpt-5",
+          updatedAt: null,
           thinkingLevel: undefined,
           thinkingDefault: "high",
           thinkingLevels: [
@@ -24,6 +29,7 @@ function createState(overrides: Partial<AppViewState> = {}): AppViewState {
       defaults: {
         modelProvider: "openai",
         model: "gpt-5",
+        contextTokens: null,
         thinkingDefault: "medium",
         thinkingLevels: [
           { id: "off", label: "Off" },
@@ -53,11 +59,16 @@ describe("resolveChatThinkingSelectState", () => {
     const result = resolveChatThinkingSelectState(
       createState({
         sessionsResult: {
+          ts: 0,
+          path: "sessions.json",
+          count: 1,
           sessions: [
             {
               key: "session-1",
+              kind: "direct",
               modelProvider: "openai",
               model: "gpt-5",
+              updatedAt: null,
               thinkingLevel: "low",
               thinkingDefault: "high",
               thinkingLevels: [
@@ -70,6 +81,7 @@ describe("resolveChatThinkingSelectState", () => {
           defaults: {
             modelProvider: "openai",
             model: "gpt-5",
+            contextTokens: null,
             thinkingDefault: "medium",
             thinkingLevels: [
               { id: "off", label: "Off" },
@@ -90,11 +102,16 @@ describe("resolveChatThinkingSelectState", () => {
     const result = resolveChatThinkingSelectState(
       createState({
         sessionsResult: {
+          ts: 0,
+          path: "sessions.json",
+          count: 1,
           sessions: [
             {
               key: "session-1",
+              kind: "direct",
               modelProvider: "openai",
               model: "gpt-5",
+              updatedAt: null,
               thinkingLevel: undefined,
               thinkingDefault: "off",
               thinkingLevels: [{ id: "off", label: "Off" }],
@@ -103,6 +120,7 @@ describe("resolveChatThinkingSelectState", () => {
           defaults: {
             modelProvider: "openai",
             model: "gpt-5",
+            contextTokens: null,
             thinkingDefault: "off",
             thinkingLevels: [{ id: "off", label: "Off" }],
           },
