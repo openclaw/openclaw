@@ -389,6 +389,8 @@ export async function runBtwSideQuestion(
     agentDir: params.agentDir,
     workspaceDir,
     env: process.env,
+    sessionId,
+    sessionKey: params.sessionKey,
   });
 
   const chunker =
