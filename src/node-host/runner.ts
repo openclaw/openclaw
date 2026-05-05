@@ -221,6 +221,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
 
   const client = new GatewayClient({
     url,
+    configuredGatewayUrl: url,
     token: token || undefined,
     password: password || undefined,
     preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
