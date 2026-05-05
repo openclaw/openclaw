@@ -156,6 +156,7 @@ Useful Slack desktop flags:
 
 - `--lease-id <cbx_...>` reruns against a machine where an operator already logged in to Slack Web through VNC.
 - `--gateway-setup` starts a persistent OpenClaw Slack gateway in the VM instead of only running the bot-to-bot QA lane.
+- `--keep-lease` keeps the gateway VM open for VNC inspection after success; `--no-keep-lease` stops it after collecting artifacts.
 - `--slack-url <url>` opens a specific Slack Web URL. Without it, Mantis derives `https://app.slack.com/client/<team>/<channel>` from Slack `auth.test` when the SUT bot token is available.
 - `--slack-channel-id <id>` controls the Slack channel allowlist used by gateway setup.
 - `OPENCLAW_MANTIS_SLACK_BROWSER_PROFILE_DIR` controls the persistent Chrome profile inside the VM. The default is `$HOME/.config/openclaw-mantis/slack-chrome-profile`, so a manual Slack Web login survives reruns on the same lease.
@@ -194,8 +195,10 @@ runs `pnpm openclaw qa mantis slack-desktop-smoke --gateway-setup` against that
 candidate, opens Slack Web in the VNC browser, records the desktop, generates a
 motion-trimmed preview with `crabbox media preview`, uploads the full artifact
 directory, and optionally posts the inline evidence comment on the target PR.
-Use this lane when you want "a Linux desktop with Slack and a claw running"
-instead of only a bot-to-bot Slack transcript.
+It defaults to AWS for the desktop lease and exposes a manual provider input so
+operators can switch to Hetzner when AWS capacity is slow or unavailable. Use
+this lane when you want "a Linux desktop with Slack and a claw running" instead
+of only a bot-to-bot Slack transcript.
 
 Every PR-publishing scenario writes `mantis-evidence.json` next to its report.
 This schema is the handoff between scenario code and GitHub comments:
