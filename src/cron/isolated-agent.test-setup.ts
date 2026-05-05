@@ -209,6 +209,10 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
                 ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
               });
             },
+            inferTargetChatType: ({ to }) => {
+              const target = parseTelegramTargetForTest(to);
+              return target.chatType === "unknown" ? undefined : target.chatType;
+            },
           },
         }),
         source: "test",

@@ -2907,6 +2907,7 @@ describe("sendMessageTelegram", () => {
     };
 
     const res = await sendMessageTelegram("@alice_user", "hello private", {
+      cfg: TELEGRAM_TEST_CFG,
       token: "tok",
       api,
       messageThreadId: 271,
@@ -3167,6 +3168,7 @@ describe("sendMessageTelegram", () => {
 
     await expect(
       sendMessageTelegram(`telegram:group:${chatId}:topic:271`, "hello forum", {
+        cfg: TELEGRAM_TEST_CFG,
         token: "tok",
         api,
       }),
@@ -3195,6 +3197,7 @@ describe("sendMessageTelegram", () => {
 
     await expect(
       sendMessageTelegram(chatId, "photo", {
+        cfg: TELEGRAM_TEST_CFG,
         token: "tok",
         api,
         mediaUrl: "https://example.com/photo.jpg",
@@ -3576,6 +3579,7 @@ describe("sendStickerTelegram", () => {
 
     await expect(
       sendStickerTelegram(chatId, "fileId123", {
+        cfg: TELEGRAM_TEST_CFG,
         token: "tok",
         api,
         messageThreadId: 271,
@@ -4271,7 +4275,12 @@ describe("sendPollTelegram", () => {
       sendPollTelegram(
         "-100123",
         { question: "Q", options: ["A", "B"] },
-        { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
+        {
+          cfg: TELEGRAM_TEST_CFG,
+          token: "t",
+          api: api as unknown as Bot["api"],
+          messageThreadId: 99,
+        },
       ),
     ).rejects.toThrow(/message thread not found/);
 
@@ -4296,7 +4305,12 @@ describe("sendPollTelegram", () => {
     const res = await sendPollTelegram(
       "@alice_user",
       { question: "Q", options: ["A", "B"] },
-      { token: "t", api: api as unknown as Bot["api"], messageThreadId: 99 },
+      {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "t",
+        api: api as unknown as Bot["api"],
+        messageThreadId: 99,
+      },
     );
 
     expect(res).toEqual({ messageId: "1", chatId: "123", pollId: "p2" });

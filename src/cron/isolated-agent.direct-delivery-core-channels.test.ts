@@ -1,4 +1,5 @@
 // Direct delivery tests cover isolated agent delivery through core channel targets.
+import fs from "node:fs/promises";
 import "./isolated-agent.mocks.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
@@ -218,11 +219,13 @@ function makeRunMeta(finalAssistantVisibleText: string) {
 }
 
 async function expectTelegramAnnounceDelivery({
+  assertSessionStore,
   expected,
   meta,
   payloads,
   to,
 }: {
+  assertSessionStore?: (store: Record<string, Record<string, unknown>>) => void;
   expected: Parameters<typeof expectDirectTelegramDelivery>[1];
   meta?: Parameters<typeof mockAgentPayloads>[1];
   payloads: Parameters<typeof mockAgentPayloads>[0];
@@ -248,6 +251,13 @@ async function expectTelegramAnnounceDelivery({
     expect(res.delivered).toBe(true);
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expectDirectTelegramDelivery(deps, expected);
+    if (assertSessionStore) {
+      const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      assertSessionStore(store);
+    }
   });
 }
 
@@ -428,6 +438,7 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
 
 describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => {
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     setupIsolatedAgentTurnMocks();
   });
 
@@ -451,6 +462,22 @@ describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => 
         chatId: "-1003774691294",
         text: "topic 47 completion",
         messageThreadId: 47,
+      },
+      assertSessionStore: (store) => {
+        const entry = Object.values(store).find(
+          (candidate) => candidate.lastChannel === "telegram",
+        );
+        expect(entry).toMatchObject({
+          lastChannel: "telegram",
+          lastTo: "-1003774691294",
+          lastThreadId: 47,
+          chatType: "group",
+          deliveryContext: {
+            channel: "telegram",
+            to: "-1003774691294",
+            threadId: 47,
+          },
+        });
       },
     });
   });

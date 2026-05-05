@@ -246,7 +246,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   const sessionChatTypeHint =
-    target === "last" && !heartbeat?.to ? normalizeChatType(entry?.chatType) : undefined;
+    target === "last" && !heartbeat?.to
+      ? (normalizeChatType(entry?.chatType) ?? normalizeChatType(entry?.origin?.chatType))
+      : undefined;
   const deliveryChatType = resolveHeartbeatDeliveryChatType({
     channel: resolvedTarget.channel,
     to: resolved.to,
@@ -473,6 +475,16 @@ function shouldReuseHeartbeatRouteThreadId(params: {
   const messaging = params.plugin
     ? params.plugin.messaging
     : channel && resolveOutboundChannelPlugin({ channel, cfg: params.cfg })?.messaging;
+  const routeChatType =
+    channel && params.resolvedTarget.to
+      ? (inferChatTypeFromTarget({
+          channel,
+          to: params.resolvedTarget.to,
+        }) ??
+        normalizeChatType(params.entry?.chatType) ??
+        normalizeChatType(params.entry?.origin?.chatType))
+      : (normalizeChatType(params.entry?.chatType) ??
+        normalizeChatType(params.entry?.origin?.chatType));
   return (
     messaging?.preserveHeartbeatThreadIdForGroupRoute === true &&
     params.resolvedTarget.threadId == null &&
@@ -483,7 +495,7 @@ function shouldReuseHeartbeatRouteThreadId(params: {
     Boolean(params.resolvedTarget.to) &&
     Boolean(params.resolvedTarget.lastTo) &&
     params.resolvedTarget.to === params.resolvedTarget.lastTo &&
-    normalizeChatType(params.entry?.chatType) === "group"
+    routeChatType === "group"
   );
 }
 
