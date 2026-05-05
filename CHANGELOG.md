@@ -75,7 +75,7 @@ Docs: https://docs.openclaw.ai
 - Parallels/Windows update smoke: escape the stale post-swap import regex in the generated PowerShell script so expected `ERR_MODULE_NOT_FOUND` update handoffs continue to post-update health checks. (#75315)
 - Slack: allow draft preview streaming in top-level DMs when `replyToMode` is `off` while keeping Slack native streaming and assistant thread status gated on reply threads. Fixes #56480. (#56544) Thanks @HangGlidersRule.
 - Control UI/chat: remove the delete-confirm popover outside-click listener on every dismiss path, so Cancel, Delete, outside clicks, and same-button toggles no longer leave stale document listeners behind. Refs #75590 and #69982. Thanks @Ricardo-M-L.
-- Agents/workspace: restore `workspace-<id>` sibling layout as the default for non-default agents added via `agents add`; fixes TUI routing ambiguity introduced in #59789 (#78093)
+- Agents/workspace: restore `workspace-<id>` sibling layout as the default for non-default agents added via `agents add`; fixes TUI routing ambiguity introduced in #59789 (#78093) Thanks @jkf87
 
 ## 2026.5.2
 
