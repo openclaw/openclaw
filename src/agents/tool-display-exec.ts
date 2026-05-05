@@ -396,6 +396,9 @@ export function resolveExecDetail(args: unknown): string | undefined {
     return undefined;
   }
 
+  const nodeName =
+    typeof record.node === "string" && record.node.trim() ? record.node.trim() : undefined;
+
   const unwrapped = unwrapShellWrapper(raw);
   const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
   const summary = result?.text || "run command";
@@ -409,14 +412,17 @@ export function resolveExecDetail(args: unknown): string | undefined {
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
   const compact = compactRawCommand(unwrapped);
+  const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
+
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} (in ${cwd})` : compact;
+    const base = cwd ? `${compact} (in ${cwd})` : compact;
+    return `${base}${nodeFragment}`;
   }
 
   const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
   if (compact && compact !== displaySummary && compact !== summary) {
-    return `${displaySummary} · \`${compact}\``;
+    return `${displaySummary}${nodeFragment} · \`${compact}\``;
   }
 
-  return displaySummary;
+  return `${displaySummary}${nodeFragment}`;
 }
