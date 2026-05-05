@@ -1,1 +1,1 @@
-export { isMattermostSenderAllowed } from "./src/mattermost/monitor-auth.js";
+export { isMattermostSenderAllowed } from "./src/mattermost/policy-shared.js";
