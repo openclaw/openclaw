@@ -130,6 +130,17 @@ jobs:
       - name: Build Control UI
         run: pnpm ui:build
 
+      - name: Generate Control UI checksums
+        run: pnpm ui:checksums
+
+      - name: Upload Control UI checksum artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: control-ui-checksums-${{ inputs.tag }}
+          path: .artifacts/control-ui/
+          if-no-files-found: error
+          include-hidden-files: true
+
       - name: Validate release metadata
         if: ${{ inputs.preflight_run_id == '' }}
         env:

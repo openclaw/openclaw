@@ -328,19 +328,21 @@ type SlackScopesResultShape = {
   error?: string;
 };
 
+type SlackDiagnosticLine = { text: string; tone?: "error" };
+
 function formatSlackScopeDiagnostic(params: {
   tokenType: "bot" | "user";
   result: SlackScopesResultShape;
-}) {
+}): SlackDiagnosticLine {
   const source = params.result.source ? ` (${params.result.source})` : "";
   const label = params.tokenType === "user" ? "User scopes" : "Bot scopes";
   if (params.result.ok && params.result.scopes?.length) {
-    return { text: `${label}${source}: ${params.result.scopes.join(", ")}` } as const;
+    return { text: `${label}${source}: ${params.result.scopes.join(", ")}` };
   }
   return {
     text: `${label}: ${params.result.error ?? "scope lookup failed"}`,
     tone: "error",
-  } as const;
+  };
 }
 
 const resolveSlackAllowlistGroupOverrides = createFlatAllowlistOverrideResolver({
@@ -504,11 +506,13 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         if (!token) {
           return { ok: false, error: "missing token" };
         }
-        return await (await loadSlackProbeModule()).probeSlack(token, timeoutMs);
+        return await (await loadSlackProbeModule()).probeSlack(token, timeoutMs, {
+          includeScopes: true,
+        });
       },
       formatCapabilitiesProbe: ({ probe }) => {
-        const slackProbe = probe as SlackProbe | undefined;
-        const lines = [];
+        const slackProbe = probe;
+        const lines: SlackDiagnosticLine[] = [];
         if (slackProbe?.bot?.name) {
           lines.push({ text: `Bot: @${slackProbe.bot.name}` });
         }
@@ -516,10 +520,16 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           const id = slackProbe.team?.id ? ` (${slackProbe.team.id})` : "";
           lines.push({ text: `Team: ${slackProbe.team?.name ?? "unknown"}${id}` });
         }
+        if (slackProbe?.readbackMissingScopes?.length) {
+          lines.push({
+            text: `Missing history/readback scopes: ${slackProbe.readbackMissingScopes.join(", ")}`,
+            tone: "error",
+          });
+        }
         return lines;
       },
       buildCapabilitiesDiagnostics: async ({ account, timeoutMs }) => {
-        const lines = [];
+        const lines: SlackDiagnosticLine[] = [];
         const details: Record<string, unknown> = {};
         const botToken = account.botToken?.trim();
         const userToken = account.config.userToken?.trim();
@@ -536,7 +546,11 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return { lines, details };
       },
-      resolveAccountSnapshot: ({ account }) => {
+      resolveAccountSnapshot: ({ account, probe }) => {
+        const slackProbe = probe;
+        const missingReadbackScopes = slackProbe?.readbackMissingScopes ?? [];
+        const probeReadbackState = slackProbe?.readbackState;
+        const hasReadbackProbe = typeof probeReadbackState === "string";
         const mode = account.config.mode ?? "socket";
         const configured =
           (mode === "http"
@@ -555,6 +569,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           configured,
           extra: {
             ...projectCredentialSnapshotFields(account),
+            mode,
+            ...(slackProbe?.readbackRequiredScopes
+              ? { readbackRequiredScopes: slackProbe.readbackRequiredScopes }
+              : {}),
+            ...(hasReadbackProbe || missingReadbackScopes.length > 0
+              ? { readbackMissingScopes: missingReadbackScopes }
+              : {}),
+            ...(hasReadbackProbe ? { readbackState: probeReadbackState } : {}),
+            ...(hasReadbackProbe
+              ? { lastReadbackError: slackProbe?.readbackError ?? null }
+              : slackProbe?.readbackError
+                ? { lastReadbackError: slackProbe.readbackError }
+                : {}),
           },
         };
       },

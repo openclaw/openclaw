@@ -39,6 +39,10 @@ const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachment
 const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
+const assistantAttachmentBlobUrlCache = new Map<string, Promise<string | null>>();
+const assistantAttachmentBlobUrlResolvedCache = new Map<string, string>();
+const assistantAttachmentBlobUrlMissCache = new Map<string, number>();
+const ASSISTANT_ATTACHMENT_BLOB_URL_MISS_RETRY_MS = 5_000;
 
 export type ChatTimestampDisplay = {
   label: string;
@@ -93,8 +97,14 @@ export function resetAssistantAttachmentAvailabilityCacheForTest() {
     clearTimeout(timer);
   }
   assistantAttachmentRefreshTimers.clear();
+  for (const blobUrl of assistantAttachmentBlobUrlResolvedCache.values()) {
+    URL.revokeObjectURL?.(blobUrl);
+  }
+  assistantAttachmentBlobUrlCache.clear();
+  assistantAttachmentBlobUrlResolvedCache.clear();
+  assistantAttachmentBlobUrlMissCache.clear();
   for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
-    URL.revokeObjectURL(blobUrl);
+    URL.revokeObjectURL?.(blobUrl);
   }
   managedImageBlobUrlCache.clear();
   managedImageBlobUrlResolvedCache.clear();
@@ -118,6 +128,7 @@ type ImageRenderOptions = {
 
 type RenderableImageBlock = ImageBlock & {
   displayUrl: string;
+  mediaTicket?: string;
 };
 
 type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
@@ -741,7 +752,7 @@ function resolveRenderableMessageImages(
     const displayUrl = canProxyLocalImage
       ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket)
       : img.url;
-    return [{ ...img, displayUrl }];
+    return [{ ...img, displayUrl, mediaTicket: availability.mediaTicket }];
   });
 }
 
@@ -766,6 +777,20 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
   `;
 
   const renderImage = (img: RenderableImageBlock) => {
+    if (isLocalAssistantAttachmentSource(img.url)) {
+      const preview = resolveAssistantAttachmentBlobUrl(
+        img.url,
+        opts?.basePath,
+        opts?.authToken,
+        img.mediaTicket,
+      ).then((previewUrl) => {
+        if (!previewUrl) {
+          return nothing;
+        }
+        return renderImageElement(img, previewUrl);
+      });
+      return until(preview, nothing);
+    }
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
       return renderImageElement(img, img.displayUrl);
     }
@@ -904,6 +929,78 @@ function buildAssistantAttachmentUrl(
     params.set("mediaTicket", normalizedMediaTicket);
   }
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+}
+
+function buildAssistantAttachmentNavigationUrl(
+  source: string,
+  basePath: string | undefined,
+  authToken: string | null | undefined,
+): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return attachmentUrl;
+  }
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  if (!normalizedAuthToken) {
+    return attachmentUrl;
+  }
+  const separator = attachmentUrl.includes("?") ? "&" : "?";
+  return `${attachmentUrl}${separator}token=${encodeURIComponent(normalizedAuthToken)}`;
+}
+
+async function resolveAssistantAttachmentBlobUrl(
+  source: string,
+  basePath: string | undefined,
+  authToken: string | null | undefined,
+  mediaTicket?: string | null,
+): Promise<string | null> {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, mediaTicket);
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return attachmentUrl;
+  }
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  const cacheKey = `${attachmentUrl}::${normalizedAuthToken}`;
+  const cached = assistantAttachmentBlobUrlResolvedCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const missAt = assistantAttachmentBlobUrlMissCache.get(cacheKey);
+  if (missAt && Date.now() - missAt < ASSISTANT_ATTACHMENT_BLOB_URL_MISS_RETRY_MS) {
+    return null;
+  }
+  let pending = assistantAttachmentBlobUrlCache.get(cacheKey);
+  if (!pending) {
+    pending = (async () => {
+      const headers = new Headers();
+      if (normalizedAuthToken) {
+        headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
+      }
+      let res: Response;
+      try {
+        res = await fetch(attachmentUrl, {
+          method: "GET",
+          headers,
+          credentials: "same-origin",
+        });
+      } catch {
+        assistantAttachmentBlobUrlMissCache.set(cacheKey, Date.now());
+        return null;
+      }
+      if (!res?.ok) {
+        assistantAttachmentBlobUrlMissCache.set(cacheKey, Date.now());
+        return null;
+      }
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      assistantAttachmentBlobUrlResolvedCache.set(cacheKey, blobUrl);
+      assistantAttachmentBlobUrlMissCache.delete(cacheKey);
+      return blobUrl;
+    })().finally(() => {
+      assistantAttachmentBlobUrlCache.delete(cacheKey);
+    });
+    assistantAttachmentBlobUrlCache.set(cacheKey, pending);
+  }
+  return pending;
 }
 
 function isManagedOutgoingImageSource(source: string): boolean {
@@ -1178,6 +1275,7 @@ function renderAssistantAttachments(
   return html`
     <div class="chat-assistant-attachments">
       ${attachments.map(({ attachment }) => {
+        const isLocalAttachment = isLocalAssistantAttachmentSource(attachment.url);
         const availability = resolveAssistantAttachmentAvailability(
           attachment.url,
           localMediaPreviewRoots,
@@ -1185,94 +1283,109 @@ function renderAssistantAttachments(
           authToken,
           onRequestUpdate,
         );
-        const attachmentUrl =
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
-            : null;
-        if (attachment.kind === "image") {
-          if (!attachmentUrl) {
-            return renderAssistantAttachmentStatusCard({
-              kind: "image",
-              label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
-              reason: availability.status === "unavailable" ? availability.reason : undefined,
-            });
-          }
-          return html`
-            <img
-              src=${attachmentUrl}
-              alt=${attachment.label}
-              class="chat-message-image"
-              @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
-            />
-          `;
+        const renderStatusCard = (badge: "Checking..." | "Unavailable") =>
+          renderAssistantAttachmentStatusCard({
+            kind: attachment.kind,
+            label: attachment.label,
+            badge,
+            reason: availability.status === "unavailable" ? availability.reason : undefined,
+          });
+        if (availability.status !== "available") {
+          return renderStatusCard(
+            availability.status === "checking" ? "Checking..." : "Unavailable",
+          );
         }
-        if (attachment.kind === "audio") {
-          return html`
-            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
-              <div class="chat-assistant-attachment-card__header">
-                <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
-                ${!attachmentUrl
-                  ? html`<span
-                      class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                      >${availability.status === "checking" ? "Checking..." : "Unavailable"}</span
-                    >`
-                  : attachment.isVoiceNote
+        const mediaTicket = availability.mediaTicket;
+        const attachmentUrl = buildAssistantAttachmentUrl(attachment.url, basePath, mediaTicket);
+        const navigationUrl = buildAssistantAttachmentNavigationUrl(
+          attachment.url,
+          basePath,
+          authToken,
+        );
+        const renderAvailableAttachment = (previewUrl: string, linkUrl = previewUrl) => {
+          if (attachment.kind === "image") {
+            return html`
+              <img
+                src=${previewUrl}
+                alt=${attachment.label}
+                class="chat-message-image"
+                @click=${async () => {
+                  if (!isLocalAttachment) {
+                    openExternalUrlSafe(attachmentUrl, { allowDataImage: true });
+                    return;
+                  }
+                  const resolvedPreviewUrl = await resolveAssistantAttachmentBlobUrl(
+                    attachment.url,
+                    basePath,
+                    authToken,
+                    mediaTicket,
+                  );
+                  if (resolvedPreviewUrl) {
+                    openExternalUrlSafe(resolvedPreviewUrl, { allowDataImage: true });
+                  }
+                }}
+              />
+            `;
+          }
+          if (attachment.kind === "audio") {
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--audio">
+                <div class="chat-assistant-attachment-card__header">
+                  <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+                  ${attachment.isVoiceNote
                     ? html`<span class="chat-assistant-attachment-badge">Voice note</span>`
                     : nothing}
+                </div>
+                <audio controls preload="metadata" src=${previewUrl}></audio>
               </div>
-              ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
-                : availability.status === "unavailable"
-                  ? html`<div class="chat-assistant-attachment-card__reason">
-                      ${availability.reason}
-                    </div>`
-                  : nothing}
-            </div>
-          `;
-        }
-        if (attachment.kind === "video") {
-          if (!attachmentUrl) {
-            return renderAssistantAttachmentStatusCard({
-              kind: "video",
-              label: attachment.label,
-              badge: availability.status === "checking" ? "Checking..." : "Unavailable",
-              reason: availability.status === "unavailable" ? availability.reason : undefined,
-            });
+            `;
+          }
+          if (attachment.kind === "video") {
+            return html`
+              <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
+                <video controls preload="metadata" src=${previewUrl}></video>
+                <a
+                  class="chat-assistant-attachment-card__link"
+                  href=${linkUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  >${attachment.label}</a
+                >
+              </div>
+            `;
           }
           return html`
-            <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-              <video controls preload="metadata" src=${attachmentUrl}></video>
+            <div class="chat-assistant-attachment-card">
+              <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
               <a
                 class="chat-assistant-attachment-card__link"
-                href=${attachmentUrl}
+                href=${linkUrl}
                 target="_blank"
                 rel="noreferrer"
                 >${attachment.label}</a
               >
             </div>
           `;
+        };
+        if (!isLocalAttachment) {
+          return renderAvailableAttachment(attachmentUrl);
         }
-        if (!attachmentUrl) {
-          return renderAssistantAttachmentStatusCard({
-            kind: "document",
-            label: attachment.label,
-            badge: availability.status === "checking" ? "Checking..." : "Unavailable",
-            reason: availability.status === "unavailable" ? availability.reason : undefined,
-          });
+        if (attachment.kind === "document") {
+          return renderAvailableAttachment(attachmentUrl, navigationUrl ?? attachmentUrl);
         }
-        return html`
-          <div class="chat-assistant-attachment-card">
-            <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
-            <a
-              class="chat-assistant-attachment-card__link"
-              href=${attachmentUrl}
-              target="_blank"
-              rel="noreferrer"
-              >${attachment.label}</a
-            >
-          </div>
-        `;
+        return until(
+          resolveAssistantAttachmentBlobUrl(
+            attachment.url,
+            basePath,
+            authToken,
+            mediaTicket,
+          ).then((previewUrl) =>
+            previewUrl
+              ? renderAvailableAttachment(previewUrl, attachmentUrl)
+              : renderStatusCard("Unavailable"),
+          ),
+          renderStatusCard("Checking..."),
+        );
       })}
     </div>
   `;

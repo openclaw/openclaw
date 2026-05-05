@@ -46,6 +46,8 @@ export const nl: TranslationMap = {
     lastStart: "Laatste start",
     lastProbe: "Laatste probe",
     lastInbound: "Laatste inkomend",
+    lastActivity: "Laatste activiteit",
+    lastReadback: "Laatste readback",
     lastConnect: "Laatste verbinding",
     lastMessage: "Laatste bericht",
     authAge: "Auth-leeftijd",
@@ -85,9 +87,41 @@ export const nl: TranslationMap = {
       title: "Kanaalstatus",
       subtitle: "Momentopnamen van kanaalstatus vanuit de Gateway.",
       noSnapshotYet: "Nog geen momentopname.",
+      noAttentionItems: "Geen kanaalitems die aandacht nodig hebben.",
+      metrics: {
+        configured: "Geconfigureerd",
+        running: "Actief",
+        connected: "Verbonden",
+      },
+      warnings: {
+        noActiveConnection: "{channel} draait, maar er is geen actieve verbinding/readback gemeld.",
+        healthState: "De status van {channel} is {state}.",
+        reports: "{channel} meldt: {error}",
+        accountHealthState: "De status van {account} is {state}.",
+        accountReports: "{account} meldt: {error}",
+        accountReadback: "De readback van {account} is {state}.",
+        accountReadbackWithError: "De readback van {account} is {state}: {error}.",
+        accountMissingScopes: "{account} mist geschiedenis-/readback-scopes: {scopes}.",
+        accountDisconnected: "{account} draait, maar is niet verbonden.",
+        accountStaleActivity: "De activiteit van {account} is verouderd.",
+      },
     },
     generic: {
       subtitle: "Kanaalstatus en -configuratie.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode draait, maar er is geen actieve readback-verbinding gemeld.",
+        healthState:
+          "De Slack-status is {state}; inkomende geschiedenis/readback kan verouderd zijn.",
+        staleTransport:
+          "Slack-transportactiviteit is verouderd; controleer Socket Mode en geschiedenisscopes.",
+        readbackWithError: "Slack-berichtreadback is {state}: {error}.",
+        readbackMissingScopes:
+          "Slack-berichtreadback is {state}; geschiedenis-/readback-scopes ontbreken mogelijk.",
+        missingScopes: "Slack mist geschiedenis-/readback-scopes: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Gateway-URL wijzigen",
@@ -306,6 +340,7 @@ export const nl: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status-, gezondheids- en heartbeatgegevens.",
+    buildProvenance: "Build-herkomst",
     status: "Status",
     health: "Gezondheid",
     lastHeartbeat: "Laatste heartbeat",

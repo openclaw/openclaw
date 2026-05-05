@@ -74,6 +74,56 @@ The same browser-local pattern applies to the assistant avatar override. Uploade
 
 The Control UI fetches its runtime settings from `/__openclaw/control-ui-config.json`. That endpoint is gated by the same gateway auth as the rest of the HTTP surface: unauthenticated browsers cannot fetch it, and a successful fetch requires either an already valid gateway token/password, Tailscale Serve identity, or a trusted-proxy identity.
 
+The payload includes build provenance for diagnostics: source repository URL, commit SHA when available, build timestamp from CI/build env, package version, `pnpm-lock.yaml` SHA256, and CI run id when present. The Debug panel shows the same metadata so operators can verify which source and lockfile produced the served Control UI.
+
+## Token handoff deprecation plan
+
+Control UI links should pass gateway tokens in the URL fragment (`#token=...`), not the query string. Fragments stay in the browser and are not sent in HTTP requests, which avoids leaking shared secrets into gateway logs, reverse-proxy logs, browser history sync, or `Referer` headers.
+
+Legacy `?token=` links remain accepted as a one-time compatibility fallback. The browser imports the query token only when no fragment token is present, warns in the console, and immediately strips both query and fragment token material from the visible URL after bootstrap. New generated links, docs, tests, and dashboard entry points must use `#token=`.
+
+The assistant-media route still accepts query-token auth for older Control UI builds and paired-device media links. Keep that compatibility until at least one release window has passed where supported clients no longer generate tokenized media URLs. After that window, remove media query-token auth and require `Authorization: Bearer ...`, paired-device identity, Tailscale Serve identity, or trusted-proxy identity for all assistant-media requests.
+
+## Reverse-proxy security headers
+
+The Gateway applies hardened Control UI headers itself, including `X-Frame-Options: DENY`, a restrictive Content Security Policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`. Reverse proxies should forward those upstream headers. If a proxy terminates TLS or serves cached Control UI assets, mirror the full Gateway CSP instead of adding a second, narrower policy; browsers enforce every CSP header they receive.
+
+Nginx example:
+
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:18789;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  add_header X-Frame-Options "DENY" always;
+  add_header X-Content-Type-Options "nosniff" always;
+  add_header Referrer-Policy "no-referrer" always;
+  # Do not add a second, narrower Content-Security-Policy here; forward the Gateway CSP.
+}
+```
+
+Caddy example:
+
+```caddyfile
+example.com {
+  reverse_proxy 127.0.0.1:18789
+  header {
+    X-Frame-Options "DENY"
+    X-Content-Type-Options "nosniff"
+    Referrer-Policy "no-referrer"
+    # Do not add a second, narrower Content-Security-Policy here; forward the Gateway CSP.
+  }
+}
+```
+
+Cloudflare example:
+
+- Create a Response Header Transform Rule scoped to the Control UI hostname/path.
+- Set `X-Frame-Options` to `DENY`.
+- Set `X-Content-Type-Options` to `nosniff`.
+- Set `Referrer-Policy` to `no-referrer`.
+- Do not add a second, narrower `Content-Security-Policy`; forward the Gateway CSP, or mirror the full Gateway policy if Cloudflare must terminate and cache the Control UI response.
+
 ## Language support
 
 The Control UI can localize itself on first load based on your browser locale. To override it later, open **Overview -> Gateway Access -> Language**. The locale picker lives in the Gateway Access card, not under Appearance.
@@ -449,6 +499,7 @@ The Control UI is static files; the WebSocket target is configurable and can be 
     - `gatewayUrl` is stored in localStorage after load and removed from the URL.
     - If you pass a full `ws://` or `wss://` endpoint via `gatewayUrl`, URL-encode the `gatewayUrl` value so the browser parses the query string correctly.
     - `token` should be passed via the URL fragment (`#token=...`) whenever possible. Fragments are not sent to the server, which avoids request-log and Referer leakage. Legacy `?token=` query params are still imported once for compatibility, but only as a fallback, and are stripped immediately after bootstrap.
+    - `?token=` compatibility is deprecated. New links and docs must use `#token=`. The gateway still accepts query tokens only for older Control UI/media links and paired-device compatibility; remove that fallback after a release window where older clients no longer emit tokenized media URLs.
     - `password` is kept in memory only.
     - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials. Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
     - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).

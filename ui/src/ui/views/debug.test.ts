@@ -22,6 +22,7 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
     onRefresh: () => undefined,
     onCall: () => undefined,
     ...overrides,
+    buildProvenance: overrides.buildProvenance ?? null,
   };
 }
 

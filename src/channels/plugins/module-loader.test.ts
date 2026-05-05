@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
@@ -40,6 +41,10 @@ function createTempDir(): string {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-module-loader-"));
   tempDirs.push(tempDir);
   return tempDir;
+}
+
+function normalizeLoadedTarget(target: string): string {
+  return target.startsWith("file:") ? fileURLToPath(target) : target;
 }
 
 describe("channel plugin module loader helpers", () => {
@@ -106,21 +111,21 @@ describe("channel plugin module loader helpers", () => {
     fs.writeFileSync(modulePath, 'throw new Error("native source load failed");\n', "utf8");
 
     try {
-      expect(
-        loaderModule.loadChannelPluginModule({
-          modulePath,
-          rootDir,
-        }),
-      ).toEqual({
-        loadedBy: "jiti",
-        target: fs.realpathSync.native(modulePath),
-      });
+      const loaded = loaderModule.loadChannelPluginModule({
+        modulePath,
+        rootDir,
+      }) as { loadedBy: string; target: string };
+
+      expect(loaded.loadedBy).toBe("jiti");
+      expect(path.basename(normalizeLoadedTarget(loaded.target))).toBe(path.basename(modulePath));
       expect(createJiti).toHaveBeenCalledOnce();
       expect(createJiti).toHaveBeenCalledWith(
         expect.stringContaining("module-loader.ts"),
         expect.objectContaining({ tryNative: false }),
       );
-      expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
+      expect(path.basename(normalizeLoadedTarget(loadWithJiti.mock.calls[0]?.[0] ?? ""))).toBe(
+        path.basename(modulePath),
+      );
     } finally {
       for (const [extension, hook] of sourceHooks) {
         if (hook) {

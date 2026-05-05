@@ -45,6 +45,8 @@ export const en: TranslationMap = {
     lastStart: "Last start",
     lastProbe: "Last probe",
     lastInbound: "Last inbound",
+    lastActivity: "Last activity",
+    lastReadback: "Last readback",
     lastConnect: "Last connect",
     lastMessage: "Last message",
     authAge: "Auth age",
@@ -84,9 +86,39 @@ export const en: TranslationMap = {
       title: "Channel health",
       subtitle: "Channel status snapshots from the gateway.",
       noSnapshotYet: "No snapshot yet.",
+      noAttentionItems: "No channel attention items.",
+      metrics: {
+        configured: "Configured",
+        running: "Running",
+        connected: "Connected",
+      },
+      warnings: {
+        noActiveConnection: "{channel} is running but no active connection/readback is reported.",
+        healthState: "{channel} health is {state}.",
+        reports: "{channel} reports: {error}",
+        accountHealthState: "{account} health is {state}.",
+        accountReports: "{account} reports: {error}",
+        accountReadback: "{account} readback is {state}.",
+        accountReadbackWithError: "{account} readback is {state}: {error}.",
+        accountMissingScopes: "{account} is missing history/readback scopes: {scopes}.",
+        accountDisconnected: "{account} is running but disconnected.",
+        accountStaleActivity: "{account} activity is stale.",
+      },
     },
     generic: {
       subtitle: "Channel status and configuration.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode is running, but no active readback connection is reported.",
+        healthState: "Slack health is {state}; inbound history/readback may be stale.",
+        staleTransport: "Slack transport activity is stale; verify Socket Mode and history scopes.",
+        readbackWithError: "Slack message readback is {state}: {error}.",
+        readbackMissingScopes:
+          "Slack message readback is {state}; history/readback scopes may be missing.",
+        missingScopes: "Slack is missing history/readback scopes: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Change Gateway URL",
@@ -302,6 +334,7 @@ export const en: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Build provenance",
     status: "Status",
     health: "Health",
     lastHeartbeat: "Last heartbeat",

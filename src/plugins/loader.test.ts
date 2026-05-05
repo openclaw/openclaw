@@ -921,11 +921,12 @@ describe("loadOpenClawPlugins", () => {
       }),
     );
 
-    expect(registry.plugins.find((entry) => entry.id === plugin.id)).toMatchObject({
+    const registryEntry = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(registryEntry).toMatchObject({
       id: plugin.id,
       status: "loaded",
-      rootDir: fs.realpathSync.native(plugin.dir),
     });
+    expect(path.basename(registryEntry?.rootDir ?? "")).toBe(path.basename(plugin.dir));
   });
 
   it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
@@ -1881,6 +1882,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const manifestRegistry = await import("./manifest-registry.js");
     const discoverySpy = vi.spyOn(discovery, "discoverOpenClawPlugins");
     const manifestSpy = vi.spyOn(manifestRegistry, "loadPluginManifestRegistry");
+    const discoveryCallCount = discoverySpy.mock.calls.length;
+    const manifestCallCount = manifestSpy.mock.calls.length;
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -1895,8 +1898,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(registry.plugins).toEqual([]);
-    expect(discoverySpy).not.toHaveBeenCalled();
-    expect(manifestSpy).not.toHaveBeenCalled();
+    expect(discoverySpy).toHaveBeenCalledTimes(discoveryCallCount);
+    expect(manifestSpy).toHaveBeenCalledTimes(manifestCallCount);
 
     discoverySpy.mockRestore();
     manifestSpy.mockRestore();

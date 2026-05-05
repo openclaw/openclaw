@@ -18,7 +18,7 @@ const { args: finalArgs, env } = applyLocalTsgoPolicy(
   resolveLocalHeavyCheckEnv(process.env),
 );
 
-const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
+const tsgoPath = path.resolve("node_modules", "@typescript", "native-preview", "bin", "tsgo.js");
 const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
 if (tsBuildInfoFile) {
   fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
@@ -45,10 +45,10 @@ try {
       process.exitCode = 1;
     }
   } else {
-    const result = spawnSync(tsgoPath, finalArgs, {
+    const result = spawnSync(process.execPath, [tsgoPath, ...finalArgs], {
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
+      shell: false,
     });
 
     if (result.error) {

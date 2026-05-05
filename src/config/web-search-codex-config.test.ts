@@ -54,6 +54,27 @@ describe("web search Codex native config validation", () => {
     }
   });
 
+  it("treats blank openaiCodex.userLocation strings as absent", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        web: {
+          search: {
+            openaiCodex: {
+              userLocation: {
+                country: "",
+                region: "   ",
+                city: "\t",
+                timezone: "\n",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects invalid openaiCodex.contextSize", () => {
     const result = validateConfigObjectRaw({
       tools: {

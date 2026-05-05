@@ -1,5 +1,6 @@
 import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
+import type { ControlUiBuildProvenance } from "../../../src/gateway/control-ui-contract.js";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import {
   handleChannelConfigReload as handleChannelConfigReloadInternal,
@@ -189,6 +190,7 @@ export class OpenClawApp extends LitElement {
   @state() assistantAgentId = bootAssistantIdentity.agentId ?? null;
   @state() userName = bootLocalUserIdentity.name;
   @state() userAvatar = bootLocalUserIdentity.avatar;
+  @state() buildProvenance: ControlUiBuildProvenance | null = null;
   @state() localMediaPreviewRoots: string[] = [];
   @state() embedSandboxMode: "strict" | "scripts" | "trusted" = "scripts";
   @state() allowExternalEmbedUrls = false;

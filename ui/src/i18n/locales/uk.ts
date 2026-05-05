@@ -46,6 +46,8 @@ export const uk: TranslationMap = {
     lastStart: "Останній запуск",
     lastProbe: "Остання перевірка",
     lastInbound: "Останній вхідний",
+    lastActivity: "Остання активність",
+    lastReadback: "Останнє зчитування",
     lastConnect: "Останнє підключення",
     lastMessage: "Останнє повідомлення",
     authAge: "Термін автентифікації",
@@ -85,9 +87,40 @@ export const uk: TranslationMap = {
       title: "Стан каналу",
       subtitle: "Знімки стану каналу з Gateway.",
       noSnapshotYet: "Ще немає знімка.",
+      noAttentionItems: "Немає елементів каналу, що потребують уваги.",
+      metrics: {
+        configured: "Налаштовано",
+        running: "Працює",
+        connected: "Підключено",
+      },
+      warnings: {
+        noActiveConnection: "{channel} працює, але активне з’єднання/зчитування не повідомляється.",
+        healthState: "Стан {channel}: {state}.",
+        reports: "{channel} повідомляє: {error}",
+        accountHealthState: "Стан {account}: {state}.",
+        accountReports: "{account} повідомляє: {error}",
+        accountReadback: "Зчитування {account}: {state}.",
+        accountReadbackWithError: "Зчитування {account}: {state}: {error}.",
+        accountMissingScopes: "{account} бракує областей історії/зчитування: {scopes}.",
+        accountDisconnected: "{account} працює, але відключено.",
+        accountStaleActivity: "Активність {account} застаріла.",
+      },
     },
     generic: {
       subtitle: "Стан каналу та конфігурація.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode працює, але активне з’єднання зчитування не повідомляється.",
+        healthState: "Стан Slack: {state}; вхідна історія/зчитування можуть бути застарілими.",
+        staleTransport:
+          "Транспортна активність Slack застаріла; перевірте Socket Mode і області історії.",
+        readbackWithError: "Зчитування повідомлень Slack: {state}: {error}.",
+        readbackMissingScopes:
+          "Зчитування повідомлень Slack: {state}; можливо, бракує областей історії/зчитування.",
+        missingScopes: "Slack бракує областей історії/зчитування: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Змінити URL Gateway",
@@ -305,6 +338,7 @@ export const uk: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "Походження збірки",
     status: "Статус",
     health: "Стан",
     lastHeartbeat: "Last heartbeat",

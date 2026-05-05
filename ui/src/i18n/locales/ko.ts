@@ -46,6 +46,8 @@ export const ko: TranslationMap = {
     lastStart: "마지막 시작",
     lastProbe: "마지막 프로브",
     lastInbound: "마지막 수신",
+    lastActivity: "마지막 활동",
+    lastReadback: "마지막 읽기 확인",
     lastConnect: "마지막 연결",
     lastMessage: "마지막 메시지",
     authAge: "인증 경과 시간",
@@ -85,9 +87,41 @@ export const ko: TranslationMap = {
       title: "채널 상태",
       subtitle: "Gateway의 채널 상태 스냅샷입니다.",
       noSnapshotYet: "아직 스냅샷이 없습니다.",
+      noAttentionItems: "주의가 필요한 채널 항목이 없습니다.",
+      metrics: {
+        configured: "구성됨",
+        running: "실행 중",
+        connected: "연결됨",
+      },
+      warnings: {
+        noActiveConnection:
+          "{channel}이(가) 실행 중이지만 활성 연결/읽기 확인이 보고되지 않았습니다.",
+        healthState: "{channel} 상태는 {state}입니다.",
+        reports: "{channel} 보고: {error}",
+        accountHealthState: "{account} 상태는 {state}입니다.",
+        accountReports: "{account} 보고: {error}",
+        accountReadback: "{account} 읽기 확인 상태는 {state}입니다.",
+        accountReadbackWithError: "{account} 읽기 확인 상태는 {state}: {error}.",
+        accountMissingScopes: "{account}에 기록/읽기 확인 범위가 없습니다: {scopes}.",
+        accountDisconnected: "{account}이(가) 실행 중이지만 연결이 끊겼습니다.",
+        accountStaleActivity: "{account} 활동이 오래되었습니다.",
+      },
     },
     generic: {
       subtitle: "채널 상태 및 구성.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode가 실행 중이지만 활성 읽기 확인 연결이 보고되지 않았습니다.",
+        healthState:
+          "Slack 상태는 {state}입니다. 인바운드 기록/읽기 확인이 오래되었을 수 있습니다.",
+        staleTransport: "Slack 전송 활동이 오래되었습니다. Socket Mode와 기록 범위를 확인하세요.",
+        readbackWithError: "Slack 메시지 읽기 확인 상태는 {state}: {error}.",
+        readbackMissingScopes:
+          "Slack 메시지 읽기 확인 상태는 {state}입니다. 기록/읽기 확인 범위가 누락되었을 수 있습니다.",
+        missingScopes: "Slack에 기록/읽기 확인 범위가 없습니다: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "Gateway URL 변경",
@@ -303,6 +337,7 @@ export const ko: TranslationMap = {
   debug: {
     snapshotsTitle: "Snapshots",
     snapshotsSubtitle: "Status, health, and heartbeat data.",
+    buildProvenance: "빌드 출처",
     status: "상태",
     health: "상태",
     lastHeartbeat: "Last heartbeat",

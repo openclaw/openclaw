@@ -351,7 +351,7 @@ describe("slackPlugin status", () => {
       cfg,
     });
 
-    expect(probeSpy).toHaveBeenCalledWith("xoxb-test", 2500);
+    expect(probeSpy).toHaveBeenCalledWith("xoxb-test", 2500, { includeScopes: true });
     expect(result).toEqual({
       ok: true,
       status: 200,
@@ -975,6 +975,42 @@ describe("slackPlugin config", () => {
     expect(snapshot?.configured).toBe(false);
     expect(snapshot?.botTokenStatus).toBe("configured_unavailable");
     expect(snapshot?.appTokenStatus).toBe("missing");
+  });
+
+  it("lets a healthy readback probe clear stale runtime readback warnings", async () => {
+    const snapshot = await slackPlugin.status?.buildAccountSnapshot?.({
+      account: {
+        accountId: "default",
+        name: "Default",
+        enabled: true,
+        configured: true,
+        botTokenStatus: "available",
+        appTokenStatus: "available",
+        botTokenSource: "config",
+        appTokenSource: "config",
+        config: {},
+      } as never,
+      cfg: {} as OpenClawConfig,
+      runtime: {
+        accountId: "default",
+        running: true,
+        readbackState: "mismatch",
+        lastReadbackError: "history scope missing",
+        readbackMissingScopes: ["channels:history"],
+      } as never,
+      probe: {
+        ok: true,
+        readbackState: "ok",
+        readbackError: null,
+        readbackMissingScopes: [],
+        readbackRequiredScopes: ["channels:history"],
+      },
+    });
+
+    expect(snapshot?.readbackState).toBe("ok");
+    expect(snapshot?.lastReadbackError).toBeNull();
+    expect(snapshot?.readbackMissingScopes).toEqual([]);
+    expect(snapshot?.readbackRequiredScopes).toEqual(["channels:history"]);
   });
 
   it("keeps HTTP mode signing-secret unavailable accounts configured in snapshots", async () => {

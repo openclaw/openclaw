@@ -827,6 +827,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             text: edit.text,
             ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
             threadTs: edit.threadTs,
+            onReadbackStatus: (status) => {
+              ctx.setStatus?.({
+                readbackState: status.state,
+                lastReadbackAt: Date.now(),
+                lastReadbackError: status.error ?? null,
+              });
+            },
           });
         },
         deliverNormally: async () => {

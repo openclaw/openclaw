@@ -1,6 +1,7 @@
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
+  type ControlUiBuildProvenance,
   type ControlUiEmbedSandboxMode,
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
@@ -19,6 +20,7 @@ export type ControlUiBootstrapState = {
   assistantAvatarReason?: string | null;
   assistantAgentId: string | null;
   serverVersion: string | null;
+  buildProvenance?: ControlUiBuildProvenance | null;
   localMediaPreviewRoots: string[];
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
@@ -121,6 +123,7 @@ export async function loadControlUiBootstrapConfig(
       applyLocalAssistantAvatarOverride(state);
     }
     state.serverVersion = parsed.serverVersion ?? null;
+    state.buildProvenance = parsed.buildProvenance ?? null;
     state.localMediaPreviewRoots = Array.isArray(parsed.localMediaPreviewRoots)
       ? parsed.localMediaPreviewRoots.filter((value): value is string => typeof value === "string")
       : [];

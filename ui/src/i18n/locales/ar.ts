@@ -46,6 +46,8 @@ export const ar: TranslationMap = {
     lastStart: "آخر بدء",
     lastProbe: "آخر فحص",
     lastInbound: "آخر وارد",
+    lastActivity: "آخر نشاط",
+    lastReadback: "آخر قراءة تحقق",
     lastConnect: "آخر اتصال",
     lastMessage: "آخر رسالة",
     authAge: "عمر المصادقة",
@@ -85,9 +87,39 @@ export const ar: TranslationMap = {
       title: "صحة القنوات",
       subtitle: "لقطات حالة القنوات من Gateway.",
       noSnapshotYet: "لا توجد لقطة بعد.",
+      noAttentionItems: "لا توجد عناصر قناة تحتاج إلى انتباه.",
+      metrics: {
+        configured: "مهيأ",
+        running: "قيد التشغيل",
+        connected: "متصل",
+      },
+      warnings: {
+        noActiveConnection: "{channel} قيد التشغيل، ولكن لم يتم الإبلاغ عن اتصال/قراءة تحقق نشطة.",
+        healthState: "حالة {channel} الصحية هي {state}.",
+        reports: "{channel} يبلغ: {error}",
+        accountHealthState: "حالة {account} الصحية هي {state}.",
+        accountReports: "{account} يبلغ: {error}",
+        accountReadback: "قراءة التحقق لـ {account} هي {state}.",
+        accountReadbackWithError: "قراءة التحقق لـ {account} هي {state}: {error}.",
+        accountMissingScopes: "يفتقد {account} نطاقات السجل/قراءة التحقق: {scopes}.",
+        accountDisconnected: "{account} قيد التشغيل ولكنه غير متصل.",
+        accountStaleActivity: "نشاط {account} قديم.",
+      },
     },
     generic: {
       subtitle: "حالة القناة وإعداداتها.",
+    },
+    slack: {
+      attention: {
+        noSocketModeReadback:
+          "Slack Socket Mode قيد التشغيل، ولكن لم يتم الإبلاغ عن اتصال قراءة تحقق نشط.",
+        healthState: "حالة Slack الصحية هي {state}؛ قد يكون السجل الوارد/قراءة التحقق قديمًا.",
+        staleTransport: "نشاط نقل Slack قديم؛ تحقق من Socket Mode ونطاقات السجل.",
+        readbackWithError: "قراءة تحقق رسائل Slack هي {state}: {error}.",
+        readbackMissingScopes:
+          "قراءة تحقق رسائل Slack هي {state}؛ قد تكون نطاقات السجل/قراءة التحقق مفقودة.",
+        missingScopes: "يفتقد Slack نطاقات السجل/قراءة التحقق: {scopes}.",
+      },
     },
     gatewayUrlConfirmation: {
       title: "تغيير عنوان URL الخاص بـ Gateway",
@@ -303,6 +335,7 @@ export const ar: TranslationMap = {
   debug: {
     snapshotsTitle: "اللقطات",
     snapshotsSubtitle: "بيانات الحالة والسلامة ونبضات القلب.",
+    buildProvenance: "مصدر البناء",
     status: "الحالة",
     health: "السلامة",
     lastHeartbeat: "آخر نبضة قلب",

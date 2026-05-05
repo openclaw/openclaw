@@ -1,10 +1,12 @@
 import { html, nothing } from "lit";
+import type { ControlUiBuildProvenance } from "../../../../src/gateway/control-ui-contract.js";
 import { t } from "../../i18n/index.ts";
 import type { EventLogEntry } from "../app-events.ts";
 import { formatEventPayload } from "../presenter.ts";
 
 export type DebugProps = {
   loading: boolean;
+  buildProvenance: ControlUiBuildProvenance | null;
   status: Record<string, unknown> | null;
   health: Record<string, unknown> | null;
   models: unknown[];
@@ -51,6 +53,10 @@ export function renderDebug(props: DebugProps) {
           </button>
         </div>
         <div class="stack" style="margin-top: 12px;">
+          <div>
+            <div class="muted">${t("debug.buildProvenance")}</div>
+            <pre class="code-block">${JSON.stringify(props.buildProvenance ?? {}, null, 2)}</pre>
+          </div>
           <div>
             <div class="muted">${t("debug.status")}</div>
             ${securitySummary

@@ -38,6 +38,8 @@ describe("finalizeSlackPreviewEdit", () => {
       historyMessages: [{ ts: "171234.567", text: "fair. poke harder then 🦞" }],
     });
 
+    const onReadbackStatus = vi.fn();
+
     await expect(
       finalizeSlackPreviewEdit({
         client,
@@ -45,10 +47,12 @@ describe("finalizeSlackPreviewEdit", () => {
         channelId: "C123",
         messageId: "171234.567",
         text: "fair. poke harder then 🦞",
+        onReadbackStatus,
       }),
     ).resolves.toBeUndefined();
 
     expect(client.conversations.history as unknown as ReturnType<typeof vi.fn>).toHaveBeenCalled();
+    expect(onReadbackStatus).toHaveBeenCalledWith({ state: "ok" });
   });
 
   it("checks threaded replies via conversations.replies", async () => {
@@ -85,6 +89,8 @@ describe("finalizeSlackPreviewEdit", () => {
       historyMessages: [{ ts: "171234.567", text: "partial draft" }],
     });
 
+    const onReadbackStatus = vi.fn();
+
     await expect(
       finalizeSlackPreviewEdit({
         client,
@@ -92,8 +98,14 @@ describe("finalizeSlackPreviewEdit", () => {
         channelId: "C123",
         messageId: "171234.567",
         text: "final answer",
+        onReadbackStatus,
       }),
     ).rejects.toThrow("socket closed");
+
+    expect(onReadbackStatus).toHaveBeenCalledWith({
+      state: "mismatch",
+      error: "Slack readback did not match final text",
+    });
   });
 
   it("requires matching blocks when finalizing a blocks-only edit", async () => {
@@ -133,16 +145,16 @@ describe("finalizeSlackPreviewEdit", () => {
 
     expect(expectedText).toHaveLength(8000);
     await expect(
-      __testing.didSlackPreviewEditApplyAfterError({
+      __testing.checkSlackPreviewEditReadbackAfterError({
         client,
         token: "xoxb-test",
         channelId: "C123",
         messageId: "171234.567",
         text: "",
         blocks: blocks as unknown as Parameters<
-          typeof __testing.didSlackPreviewEditApplyAfterError
+          typeof __testing.checkSlackPreviewEditReadbackAfterError
         >[0]["blocks"],
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({ state: "ok" });
   });
 });

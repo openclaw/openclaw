@@ -110,10 +110,11 @@ export function formatUnusedFileComparison(comparison) {
 
 export function runKnipUnusedFiles() {
   const result = spawnSync(
-    "pnpm",
+    process.platform === "win32" ? "pnpm.cmd" : "pnpm",
     ["--config.minimum-release-age=0", "dlx", `knip@${KNIP_VERSION}`, ...KNIP_ARGS],
     {
       encoding: "utf8",
+      shell: process.platform === "win32",
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
