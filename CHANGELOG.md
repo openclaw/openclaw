@@ -108,6 +108,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu: normalize synthetic reaction message IDs before adding or removing typing indicators, so reaction-triggered replies do not send suffixed IDs back to Feishu `message_id` fields. Fixes #34528. Thanks @yfge.
 - Onboard/channels: recover externalized channel plugins from stale `channels.<id>` config by falling back to `ensureChannelSetupPluginInstalled` via the trusted catalog when the plugin is missing on disk, so leftover `appId`/token entries no longer dead-end onboard with "<channel> plugin not available." (#78328) Thanks @sliverp.
 - Dependencies: override transitive `ip-address` to `10.2.0` so the runtime lockfile no longer includes the vulnerable `10.1.0` build flagged by Dependabot alert 109. Thanks @vincentkoc.
 - Feishu: hydrate missing native topic starter thread IDs before session routing so first turns and follow-ups stay in the same topic session. Fixes #78262. Thanks @joeyzenghuan.

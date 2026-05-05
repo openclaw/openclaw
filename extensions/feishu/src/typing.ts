@@ -1,6 +1,7 @@
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { normalizeFeishuOpenMessageId } from "./message-id.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 // Feishu emoji types for typing indicator
@@ -111,16 +112,17 @@ export async function addTypingIndicator(params: {
   runtime?: RuntimeEnv;
 }): Promise<TypingIndicatorState> {
   const { cfg, messageId, accountId, runtime } = params;
+  const normalizedMessageId = normalizeFeishuOpenMessageId(messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
-    return { messageId, reactionId: null };
+    return { messageId: normalizedMessageId, reactionId: null };
   }
 
   const client = createFeishuClient(account);
 
   try {
     const response = await client.im.messageReaction.create({
-      path: { message_id: messageId },
+      path: { message_id: normalizedMessageId },
       data: {
         reaction_type: { emoji_type: TYPING_EMOJI },
       },
@@ -140,7 +142,7 @@ export async function addTypingIndicator(params: {
 
     const typedResponse: FeishuMessageReactionCreateResponse = response;
     const reactionId = typedResponse.data?.reaction_id ?? null;
-    return { messageId, reactionId };
+    return { messageId: normalizedMessageId, reactionId };
   } catch (err) {
     if (isFeishuBackoffError(err)) {
       if (getFeishuRuntime().logging.shouldLogVerbose()) {
@@ -152,7 +154,7 @@ export async function addTypingIndicator(params: {
     if (getFeishuRuntime().logging.shouldLogVerbose()) {
       runtime?.log?.(`[feishu] failed to add typing indicator: ${String(err)}`);
     }
-    return { messageId, reactionId: null };
+    return { messageId: normalizedMessageId, reactionId: null };
   }
 }
 
