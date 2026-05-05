@@ -19,7 +19,10 @@ directives; server-side media fetchers still enforce their own network guards.
 
 Local `MEDIA:` attachments can use absolute paths, workspace-relative paths, or
 home-relative `~/` paths. They still pass through the agent file-read policy and
-media type checks before delivery.
+media type checks before delivery. Host-local JSON files are treated as sendable
+artifacts only when they parse as JSON text and do not look like config/secret
+files (for example `openclaw.json`, `credentials.json`, or JSON with keys such
+as `apiKey`, `token`, `password`, or `privateKey`).
 
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound

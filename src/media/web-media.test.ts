@@ -303,6 +303,73 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it("allows host-read JSON artifact files", async () => {
+    const result = await loadDocumentWithHostRead(
+      "report.json",
+      JSON.stringify(
+        {
+          generatedAt: "2026-05-05T14:37:49.342Z",
+          familyClassification: {
+            kimi: { status: "selected", selectedRoutes: ["opencode-go/kimi-k2.6"] },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/json");
+    expect(result.fileName).toBe("report.json");
+  });
+
+  it.each(["openclaw.json", "openclaw.config.json", "credentials-report.json"])(
+    "rejects host-read risky JSON filename %s even when it is valid JSON",
+    async (fileName) => {
+      const configFile = path.join(fixtureRoot, fileName);
+      await fs.writeFile(configFile, JSON.stringify({ channels: { telegram: {} } }), "utf8");
+      await expect(
+        loadWebMedia(configFile, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        }),
+      ).rejects.toMatchObject({
+        code: "path-not-allowed",
+      });
+    },
+  );
+
+  it("rejects host-read JSON files with secret-like keys", async () => {
+    const jsonFile = path.join(fixtureRoot, "service-response.json");
+    await fs.writeFile(jsonFile, JSON.stringify({ ok: true, apiKey: "sk-test" }), "utf8");
+    await expect(
+      loadWebMedia(jsonFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
+  it("rejects invalid host-read JSON files", async () => {
+    const jsonFile = path.join(fixtureRoot, "broken.json");
+    await fs.writeFile(jsonFile, "{not json", "utf8");
+    await expect(
+      loadWebMedia(jsonFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+    ).rejects.toMatchObject({
+      code: "path-not-allowed",
+    });
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
     // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),

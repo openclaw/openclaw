@@ -111,6 +111,53 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
 // Markdown, so host-read needs an explicit "this really decodes as text" fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 const MB = 1024 * 1024;
+const HOST_READ_JSON_MAX_BYTES = 16 * MB;
+const HOST_READ_JSON_MIME = "application/json";
+const HOST_READ_JSON_BLOCKED_BASENAMES = new Set([
+  "auth.json",
+  "client_secret.json",
+  "credentials.json",
+  "openclaw.json",
+  "secret.json",
+  "secrets.json",
+  "service-account.json",
+  "service_account.json",
+  "token.json",
+  "tokens.json",
+]);
+const HOST_READ_JSON_BLOCKED_BASENAME_PATTERNS = [
+  /^\.openclaw\.json$/i,
+  /^openclaw(?:[-_.].*)?\.json$/i,
+  /^client[-_]?secret(?:[-_.].*)?\.json$/i,
+  /^.*credentials?(?:[-_.].*)?\.json$/i,
+  /^.*secrets?(?:[-_.].*)?\.json$/i,
+  /^.*service[-_]?account(?:[-_.].*)?\.json$/i,
+  /^.*tokens?(?:[-_.].*)?\.json$/i,
+];
+const HOST_READ_JSON_SENSITIVE_KEYS = new Set([
+  "accesstoken",
+  "apikey",
+  "auth",
+  "authorization",
+  "bearer",
+  "bottoken",
+  "clientsecret",
+  "cookie",
+  "credential",
+  "credentials",
+  "idtoken",
+  "passphrase",
+  "password",
+  "privatekey",
+  "refreshtoken",
+  "secret",
+  "session",
+  "sessionsecret",
+  "signingsecret",
+  "token",
+  "webhooksecret",
+]);
+const HOST_READ_JSON_MAX_SCANNED_KEYS = 50_000;
 
 function getTextStats(text: string): { printableRatio: number } {
   if (!text) {
@@ -193,6 +240,131 @@ function isValidatedHostReadText(buffer?: Buffer): boolean {
   return printableRatio > 0.95;
 }
 
+function normalizeJsonKeyForSecretCheck(key: string): string {
+  return key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function isSensitiveJsonKey(key: string): boolean {
+  const normalized = normalizeJsonKeyForSecretCheck(key);
+  if (HOST_READ_JSON_SENSITIVE_KEYS.has(normalized)) {
+    return true;
+  }
+  if (normalized.endsWith("apikey") || normalized.endsWith("token")) {
+    return true;
+  }
+  return false;
+}
+
+function blockedHostReadJsonBasename(filePath?: string): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+  const basename = path.basename(filePath).toLowerCase();
+  if (HOST_READ_JSON_BLOCKED_BASENAMES.has(basename)) {
+    return basename;
+  }
+  if (HOST_READ_JSON_BLOCKED_BASENAME_PATTERNS.some((pattern) => pattern.test(basename))) {
+    return basename;
+  }
+  return undefined;
+}
+
+function findSensitiveJsonKeyPath(value: unknown): string | undefined {
+  const stack: Array<{ path: string; value: unknown }> = [{ path: "$", value }];
+  let scannedKeys = 0;
+
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current || current.value === null || typeof current.value !== "object") {
+      continue;
+    }
+    if (Array.isArray(current.value)) {
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        const child = current.value[index];
+        if (child !== null && typeof child === "object") {
+          stack.push({ path: `${current.path}[${index}]`, value: child });
+        }
+      }
+      continue;
+    }
+
+    for (const [key, child] of Object.entries(current.value as Record<string, unknown>)) {
+      scannedKeys += 1;
+      if (scannedKeys > HOST_READ_JSON_MAX_SCANNED_KEYS) {
+        return "<too-many-keys>";
+      }
+      const keyPath = `${current.path}.${key}`;
+      if (isSensitiveJsonKey(key)) {
+        return keyPath;
+      }
+      if (child !== null && typeof child === "object") {
+        stack.push({ path: keyPath, value: child });
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function assertHostReadJsonAllowed(params: {
+  sniffedContentType?: string;
+  filePath?: string;
+  buffer?: Buffer;
+}): void {
+  const blockedBasename = blockedHostReadJsonBasename(params.filePath);
+  if (blockedBasename) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Host-local JSON media sends block sensitive JSON filenames (got ${blockedBasename}).`,
+    );
+  }
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (sniffedMime && sniffedMime !== HOST_READ_JSON_MIME) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Host-local JSON media sends require plain JSON text without binary magic bytes (got ${sniffedMime}).`,
+    );
+  }
+  if (!params.buffer || !isValidatedHostReadText(params.buffer)) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      "Host-local JSON media sends require validated plain-text JSON documents.",
+    );
+  }
+  if (params.buffer.length > HOST_READ_JSON_MAX_BYTES) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      formatCapLimit("Host-local JSON document", HOST_READ_JSON_MAX_BYTES, params.buffer.length),
+    );
+  }
+
+  const decoded = decodeHostReadText(params.buffer);
+  if (decoded === undefined) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      "Host-local JSON media sends require decodable JSON text.",
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded.charCodeAt(0) === 0xfeff ? decoded.slice(1) : decoded);
+  } catch {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      "Host-local JSON media sends require valid JSON syntax.",
+    );
+  }
+
+  const sensitiveKeyPath = findSensitiveJsonKeyPath(parsed);
+  if (sensitiveKeyPath) {
+    throw new LocalMediaAccessError(
+      "path-not-allowed",
+      `Host-local JSON media sends block secret-like JSON keys (first match: ${sensitiveKeyPath}).`,
+    );
+  }
+}
+
 function formatMb(bytes: number, digits = 2): string {
   return (bytes / MB).toFixed(digits);
 }
@@ -241,6 +413,14 @@ function assertHostReadMediaAllowed(params: {
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
+  if (declaredMime === HOST_READ_JSON_MIME) {
+    assertHostReadJsonAllowed({
+      sniffedContentType: params.sniffedContentType,
+      filePath: params.filePath,
+      buffer: params.buffer,
+    });
+    return;
+  }
   // For extension-declared plain-text aliases such as .csv/.md, trust only the
   // text validator path. Some opaque blobs can still produce bogus binary MIME
   // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
@@ -298,7 +478,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, CSV, Markdown, and safe JSON artifacts (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
