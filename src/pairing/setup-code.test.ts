@@ -80,19 +80,7 @@ describe("pairing setup code", () => {
     }
     expect(resolved.authLabel).toBe(params.authLabel);
     expect(resolved.payload.bootstrapToken).toBeUndefined();
-    if (params.authLabel === "token") {
-      expect(typeof resolved.payload.token).toBe("string");
-      expect(resolved.payload.password).toBeUndefined();
-      if (params.authValue) {
-        expect(resolved.payload.token).toBe(params.authValue);
-      }
-    } else {
-      expect(typeof resolved.payload.password).toBe("string");
-      expect(resolved.payload.token).toBeUndefined();
-      if (params.authValue) {
-        expect(resolved.payload.password).toBe(params.authValue);
-      }
-    }
+    expectAuthField(resolved.payload, params.authLabel, params.authValue);
     if (params.url) {
       expect(resolved.payload.url).toBe(params.url);
     }
@@ -107,6 +95,27 @@ describe("pairing setup code", () => {
       throw new Error("expected setup resolution to fail");
     }
     expect(resolved.error).toContain(snippet);
+  }
+
+  function expectAuthField(
+    payload: { token?: string; password?: string },
+    label: string,
+    value?: string,
+  ) {
+    if (label === "token") {
+      expect(typeof payload.token).toBe("string");
+      expect(payload.password).toBeUndefined();
+      if (value) {
+        expect(payload.token).toBe(value);
+      }
+      return;
+    }
+
+    expect(typeof payload.password).toBe("string");
+    expect(payload.token).toBeUndefined();
+    if (value) {
+      expect(payload.password).toBe(value);
+    }
   }
 
   async function expectResolvedSetupSuccessCase(params: {

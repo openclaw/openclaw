@@ -374,12 +374,13 @@ export async function resolvePairingSetupFromConfig(
   if (!auth.label || !auth.value) {
     return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
+  const authField = auth.label === "token" ? { token: auth.value } : { password: auth.value };
 
   return {
     ok: true,
     payload: {
       url: urlResult.url,
-      ...(auth.label === "token" ? { token: auth.value } : { password: auth.value }),
+      ...authField,
     },
     authLabel: auth.label,
     urlSource: urlResult.source ?? "unknown",
