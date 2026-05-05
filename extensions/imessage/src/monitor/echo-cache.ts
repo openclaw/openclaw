@@ -22,17 +22,29 @@ export type SentMessageCache = {
 // duplicate delivery (noisy but not lossy) — never message loss.
 const SENT_MESSAGE_TEXT_TTL_MS = 4_000;
 const SENT_MESSAGE_ID_TTL_MS = 60_000;
-const LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS = /^[\u0000\uFEFF\uFFFD\uFFFE\uFFFF]+/u;
+const LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS = new Set([
+  "\u0000",
+  "\uFEFF",
+  "\uFFFD",
+  "\uFFFE",
+  "\uFFFF",
+]);
+
+function stripLeadingAttributedBodyCorruptionMarkers(text: string): string {
+  let start = 0;
+  while (start < text.length && LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS.has(text[start] ?? "")) {
+    start += 1;
+  }
+  return start === 0 ? text : text.slice(start);
+}
 
 function normalizeEchoTextKey(text: string | undefined): string | null {
   if (!text) {
     return null;
   }
-  const normalized = text
-    .replace(/\r\n?/g, "\n")
-    .trim()
-    .replace(LEADING_ATTRIBUTED_BODY_CORRUPTION_MARKERS, "")
-    .trim();
+  const normalized = stripLeadingAttributedBodyCorruptionMarkers(
+    text.replace(/\r\n?/g, "\n").trim(),
+  ).trim();
   return normalized ? normalized : null;
 }
 
