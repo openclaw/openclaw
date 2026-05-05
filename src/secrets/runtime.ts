@@ -322,6 +322,72 @@ function canUseSecretsRuntimeFastPath(params: {
   return !params.authStores.some((entry) => hasSecretRefCandidate(entry.store, defaults));
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasOwnKey(value: unknown, key: string): boolean {
+  return isPlainRecord(value) && Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function preserveOmittedRuntimeWebToolSurface(params: {
+  nextSourceConfig: OpenClawConfig;
+  previousSourceConfig: OpenClawConfig;
+}): OpenClawConfig {
+  if (!hasRuntimeWebToolConfigSurface(params.previousSourceConfig)) {
+    return params.nextSourceConfig;
+  }
+
+  let merged: OpenClawConfig | null = null;
+  const ensureMerged = (): OpenClawConfig => {
+    merged ??= structuredClone(params.nextSourceConfig);
+    return merged;
+  };
+
+  const previousWeb = params.previousSourceConfig.tools?.web;
+  if (isPlainRecord(previousWeb)) {
+    for (const key of ["search", "x_search", "fetch"] as const) {
+      if (!hasOwnKey(previousWeb, key) || hasOwnKey(params.nextSourceConfig.tools?.web, key)) {
+        continue;
+      }
+      const next = ensureMerged();
+      next.tools = isPlainRecord(next.tools) ? next.tools : {};
+      next.tools.web = isPlainRecord(next.tools.web) ? next.tools.web : {};
+      (next.tools.web as Record<string, unknown>)[key] = structuredClone(previousWeb[key]);
+    }
+  }
+
+  const previousEntries = params.previousSourceConfig.plugins?.entries;
+  if (isPlainRecord(previousEntries)) {
+    for (const [pluginId, previousEntry] of Object.entries(previousEntries)) {
+      if (!isPlainRecord(previousEntry) || !isPlainRecord(previousEntry.config)) {
+        continue;
+      }
+      for (const key of ["webSearch", "webFetch"] as const) {
+        if (!hasOwnKey(previousEntry.config, key)) {
+          continue;
+        }
+        const nextEntry = params.nextSourceConfig.plugins?.entries?.[pluginId];
+        const nextConfig = isPlainRecord(nextEntry) ? nextEntry.config : undefined;
+        if (hasOwnKey(nextConfig, key)) {
+          continue;
+        }
+        const next = ensureMerged();
+        next.plugins = isPlainRecord(next.plugins) ? next.plugins : {};
+        next.plugins.entries = isPlainRecord(next.plugins.entries) ? next.plugins.entries : {};
+        const mergedEntry = isPlainRecord(next.plugins.entries[pluginId])
+          ? next.plugins.entries[pluginId]
+          : structuredClone(previousEntry);
+        next.plugins.entries[pluginId] = mergedEntry;
+        mergedEntry.config = isPlainRecord(mergedEntry.config) ? mergedEntry.config : {};
+        mergedEntry.config[key] = structuredClone(previousEntry.config[key]);
+      }
+    }
+  }
+
+  return merged ?? params.nextSourceConfig;
+}
+
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -460,10 +526,14 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       if (!activeSnapshot || !activeRefreshContext) {
         return false;
       }
+      const refreshSourceConfig = preserveOmittedRuntimeWebToolSurface({
+        nextSourceConfig: sourceConfig,
+        previousSourceConfig: activeSnapshot.sourceConfig,
+      });
       const refreshed = await prepareSecretsRuntimeSnapshot({
-        config: sourceConfig,
+        config: refreshSourceConfig,
         env: activeRefreshContext.env,
-        agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
+        agentDirs: resolveRefreshAgentDirs(refreshSourceConfig, activeRefreshContext),
         loadAuthStore: activeRefreshContext.loadAuthStore,
         loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
       });
