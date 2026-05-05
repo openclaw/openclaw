@@ -37,7 +37,24 @@ export function resolveContextWindowInfo(params: {
       | undefined;
     const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
-    const match = models.find((m) => m?.id === params.modelId);
+    const match =
+      models.find((m) => m?.id === params.modelId) ??
+      models.find((m) => {
+        if (!m?.id) {
+          return false;
+        }
+        // Normalize both ids by stripping only the active provider prefix (e.g. "openrouter/")
+        // before comparing the full remaining namespace. This lets a runtime id like
+        // "openrouter/anthropic/claude-opus-4-6" match a configured id "anthropic/claude-opus-4-6"
+        // and vice versa, while preserving namespace specificity — two configured ids
+        // "anthropic/foo" and "x-ai/foo" that share only the final segment will not collide.
+        const prefix = `${params.provider}/`;
+        const normalizedConfig = m.id.startsWith(prefix) ? m.id.slice(prefix.length) : m.id;
+        const normalizedRuntime = params.modelId.startsWith(prefix)
+          ? params.modelId.slice(prefix.length)
+          : params.modelId;
+        return normalizedConfig === normalizedRuntime;
+      });
     return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
   })();
   const fromModel =
