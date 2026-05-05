@@ -4,10 +4,8 @@ import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-med
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
-function hasDataUrlMedia(payload: ReplyPayload): boolean {
-  return resolveSendableOutboundReplyParts(payload).mediaUrls.some((mediaUrl) =>
-    mediaUrl.trim().toLowerCase().startsWith("data:"),
-  );
+function isDataUrlMedia(mediaUrl: string): boolean {
+  return mediaUrl.trim().toLowerCase().startsWith("data:");
 }
 
 export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
@@ -34,11 +32,44 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
   });
   const normalized: ReplyPayload[] = [];
   for (const payload of params.payloads) {
-    if (payload.sensitiveMedia === true || hasDataUrlMedia(payload)) {
+    if (payload.sensitiveMedia === true) {
       normalized.push(payload);
       continue;
     }
-    normalized.push(await normalizeMediaPaths(payload));
+    const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+    if (!mediaUrls.some(isDataUrlMedia)) {
+      normalized.push(await normalizeMediaPaths(payload));
+      continue;
+    }
+    if (!mediaUrls.some((mediaUrl) => !isDataUrlMedia(mediaUrl))) {
+      normalized.push(payload);
+      continue;
+    }
+    const mergedMediaUrls: string[] = [];
+    let text = payload.text;
+    for (const mediaUrl of mediaUrls) {
+      if (isDataUrlMedia(mediaUrl)) {
+        mergedMediaUrls.push(mediaUrl);
+        continue;
+      }
+      const normalizedPayload = await normalizeMediaPaths({
+        ...payload,
+        mediaUrl,
+        mediaUrls: [mediaUrl],
+      });
+      const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
+      if (normalizedMediaUrls.length === 0) {
+        text = normalizedPayload.text;
+        continue;
+      }
+      mergedMediaUrls.push(...normalizedMediaUrls);
+    }
+    normalized.push({
+      ...payload,
+      text,
+      mediaUrl: mergedMediaUrls[0],
+      mediaUrls: mergedMediaUrls,
+    });
   }
   return normalized;
 }

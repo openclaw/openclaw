@@ -136,4 +136,33 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrls).toEqual([dataUrl]);
     await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
   });
+
+  it("preserves data images while staging mixed local image replies", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const sourcePath = await createCodexHomeImage({ agentDir });
+    const dataUrl = `data:image/png;base64,${PNG_BYTES.toString("base64")}`;
+    const cfg = createConfig({ agentDir, workspaceDir, allowRead: true });
+
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      sessionKey: "agent:main:webchat:direct:user",
+      agentId: "main",
+      payloads: [{ mediaUrls: [dataUrl, sourcePath] }],
+    });
+
+    const normalizedLocalPath = payload?.mediaUrls?.[1];
+    expect(payload?.mediaUrls?.[0]).toBe(dataUrl);
+    expect(normalizedLocalPath).toBeTruthy();
+    expect(normalizedLocalPath).not.toBe(sourcePath);
+    expect(normalizedLocalPath?.startsWith(path.join(stateDir, "media"))).toBe(true);
+    const blocks = await createManagedOutgoingImageBlocks({
+      sessionKey: "agent:main:webchat:direct:user",
+      mediaUrls: payload?.mediaUrls ?? [],
+      localRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+    });
+
+    expect(blocks).toHaveLength(2);
+  });
 });
