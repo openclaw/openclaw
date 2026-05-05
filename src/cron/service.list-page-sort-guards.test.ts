@@ -64,6 +64,33 @@ describe("cron listPage sort guards", () => {
     expect(page.jobs.map((job) => job.id)).toEqual(["job-ops"]);
   });
 
+  it("matches omitted job agent ids to the configured default agent when filtering", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
+      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
+      createBaseJob({ id: "job-unset", agentId: undefined, name: "unset" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+    state.deps.defaultAgentId = " Ops ";
+
+    const page = await listPage(state, { agentId: "ops" });
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-ops", "job-unset"]);
+  });
+
+  it("matches omitted job agent ids to main when no default agent is configured", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
+      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
+      createBaseJob({ id: "job-unset", agentId: undefined, name: "unset" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state, { agentId: "main" });
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-main", "job-unset"]);
+  });
+
   it("keeps listPage unfiltered when agent id is omitted", async () => {
     const jobs = [
       createBaseJob({ id: "job-main", agentId: "main", name: "main" }),

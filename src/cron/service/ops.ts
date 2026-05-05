@@ -1,5 +1,6 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -273,6 +274,14 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
   });
 }
 
+function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+  return (
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId) ??
+    DEFAULT_AGENT_ID
+  );
+}
+
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
@@ -289,7 +298,10 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
       }
-      if (requestedAgentId && job.agentId !== requestedAgentId) {
+      if (
+        requestedAgentId &&
+        resolveEffectiveJobAgentId(job, state.deps.defaultAgentId) !== requestedAgentId
+      ) {
         return false;
       }
       if (!query) {
