@@ -16,7 +16,6 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
-  resolveAgentDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
   resolveSandboxContext,
@@ -38,6 +37,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
