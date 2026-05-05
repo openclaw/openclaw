@@ -7,6 +7,7 @@ import { loadConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -178,6 +179,16 @@ export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: Runtim
 }
 
 export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv, deps?: CliDeps) {
+  // Defensively route all diagnostics to stderr when --json is active so stdout
+  // stays clean for the JSON envelope.  The preaction hook already calls
+  // routeLogsToStderr() when it detects JSON output mode, but plugin lifecycle
+  // logs forwarded from the gateway or emitted during embedded fallback can
+  // slip through if the flag was not yet set or was restored by an intermediate
+  // loader.  Setting it here gives the JSON-output contract a single owner at
+  // the command boundary.  See #71319.
+  if (opts.json) {
+    routeLogsToStderr();
+  }
   const localOpts = {
     ...opts,
     agentId: opts.agent,

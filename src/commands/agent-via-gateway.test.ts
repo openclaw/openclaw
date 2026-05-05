@@ -10,6 +10,7 @@ import type { agentCommand as AgentCommand } from "./agent.js";
 const loadConfig = vi.hoisted(() => vi.fn());
 const callGateway = vi.hoisted(() => vi.fn());
 const agentCommand = vi.hoisted(() => vi.fn());
+const routeLogsToStderr = vi.hoisted(() => vi.fn());
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -75,6 +76,7 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => "idem-1",
 }));
 vi.mock("./agent.js", () => ({ agentCommand }));
+vi.mock("../logging/console.js", () => ({ routeLogsToStderr }));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -151,6 +153,39 @@ describe("agentCliCommand", () => {
       expect(agentCommand.mock.calls[0]?.[0]).not.toMatchObject({
         cleanupBundleMcpOnRunEnd: true,
       });
+    });
+  });
+
+  it("routes logs to stderr when --json is set (gateway path)", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true }, runtime);
+
+      expect(routeLogsToStderr).toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("routes logs to stderr when --json is set (embedded fallback)", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(new Error("gateway not connected"));
+      mockLocalAgentReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true }, runtime);
+
+      expect(routeLogsToStderr).toHaveBeenCalled();
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("does not route logs to stderr without --json", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+
+      await agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+
+      expect(routeLogsToStderr).not.toHaveBeenCalled();
     });
   });
 });
