@@ -17,6 +17,7 @@ import {
 import { clearSessionResetRuntimeState } from "../auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
+  rewriteSessionFileForNewSessionId,
   snapshotSessionOrigin,
   type SessionEntry,
   updateSessionStore,
@@ -64,6 +65,19 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     contextTokens: undefined,
     systemPromptReport: undefined,
   };
+}
+
+function isDirectSessionStoreFile(params: { sessionFile: string; storePath: string }): boolean {
+  const storeDir = path.dirname(params.storePath);
+  const sessionFilePath = path.isAbsolute(params.sessionFile)
+    ? params.sessionFile
+    : path.join(storeDir, params.sessionFile);
+  const sessionFileDir = path.dirname(sessionFilePath);
+  try {
+    return fs.realpathSync.native(sessionFileDir) === fs.realpathSync.native(storeDir);
+  } catch {
+    return path.resolve(sessionFileDir) === path.resolve(storeDir);
+  }
 }
 
 export function archiveSessionTranscriptsForSession(params: {
@@ -558,9 +572,23 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
+    const rewrittenSessionFile =
+      oldSessionId &&
+      currentEntry?.sessionFile &&
+      isDirectSessionStoreFile({ sessionFile: currentEntry.sessionFile, storePath })
+        ? rewriteSessionFileForNewSessionId({
+            sessionFile: currentEntry.sessionFile,
+            previousSessionId: oldSessionId,
+            nextSessionId,
+          })
+        : undefined;
+    const sessionFileEntry =
+      rewrittenSessionFile || currentEntry?.sessionFile
+        ? { sessionFile: rewrittenSessionFile ?? currentEntry?.sessionFile }
+        : undefined;
     const sessionFile = resolveSessionFilePath(
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
+      sessionFileEntry,
       resolveSessionFilePathOptions({
         storePath,
         agentId: sessionAgentId,
