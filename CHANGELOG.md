@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Providers/retry: add opt-in `models.providers.<name>.retry` config (`attempts`, `minDelayMs`, `maxDelayMs`, `jitter`) so OpenAI-compatible transport calls (responses, azure-responses, completions) can absorb transient failures from self-hosted backends such as vLLM and Ollama without a process restart. Module-scoped runner registry rebuilt on every config-normalization pass so removing or changing a provider's `retry` block takes effect on reload. Abort-signal-aware backoff (cancellation short-circuits pending sleeps), provider-id normalization for case/alias variants, `Retry-After` header parsing on both plain-object and `Headers`-instance error shapes, and 422 in the non-retryable status set alongside 400/401/403/404. (#61443)
 - Providers/Amazon Bedrock Mantle: add a bundled OpenAI-compatible Mantle provider with bearer-token discovery, automatic OSS model catalog loading, and Bedrock Mantle region detection for hosted GPT-OSS, Qwen, Kimi, GLM, and similar routes. (#61296) Thanks @wirjo.
 - Providers/Amazon Bedrock: discover regional and global inference profiles, inherit their backing model capabilities, and inject the Bedrock request region automatically so cross-region Claude profiles work without manual provider overrides. (#61299) Thanks @wirjo.
 - Providers/Fireworks: add a bundled Fireworks AI provider plugin with `FIREWORKS_API_KEY` onboarding, Fire Pass Kimi defaults, and dynamic Fireworks model-id support.
