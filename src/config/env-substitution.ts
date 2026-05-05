@@ -26,6 +26,9 @@ import { isPlainObject } from "../utils.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
+/** Matches a string whose entire value (ignoring whitespace) is one `${VAR}` reference. */
+const SINGLE_VAR_REFERENCE = /^\s*\$\{[A-Z_][A-Z0-9_]*\}\s*$/;
+
 export class MissingEnvVarError extends Error {
   constructor(
     public readonly varName: string,
@@ -158,6 +161,29 @@ export function containsEnvVarReference(value: string): boolean {
   return false;
 }
 
+/**
+ * Parse an env var value as a JSON array of strings. Returns the parsed array
+ * when the value is a well-formed `["a", "b"]` literal, otherwise `null`. Array
+ * items must all be strings — objects/numbers/nested arrays are rejected so the
+ * resulting config type stays a plain string[].
+ */
+function tryParseJsonStringArray(value: string): string[] | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
+    return null;
+  }
+  return parsed;
+}
+
 function substituteAny(
   value: unknown,
   env: NodeJS.ProcessEnv,
@@ -165,7 +191,19 @@ function substituteAny(
   opts?: SubstituteOptions,
 ): unknown {
   if (typeof value === "string") {
-    return substituteString(value, env, path, opts);
+    const substituted = substituteString(value, env, path, opts);
+    // Opt-in array coercion: when a config value is exactly one `${VAR}` reference
+    // (no surrounding text) and the env var holds a JSON string array, coerce the
+    // result to a real array. This lets operators inject list-valued config (for
+    // example, allowlists) via a single env var in container/K8s deployments where
+    // array-typed env vars are inconvenient.
+    if (SINGLE_VAR_REFERENCE.test(value)) {
+      const asArray = tryParseJsonStringArray(substituted);
+      if (asArray !== null) {
+        return asArray;
+      }
+    }
+    return substituted;
   }
 
   if (Array.isArray(value)) {
