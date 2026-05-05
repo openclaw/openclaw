@@ -92,6 +92,7 @@ describe("resolveSlackThreadTargets", () => {
     for (const replyToMode of ["off", "first", "batched"] as const) {
       const context = resolveSlackThreadContext({
         replyToMode,
+        isDirectMessage: true,
         message: {
           type: "message",
           channel: "D1",
@@ -109,10 +110,33 @@ describe("resolveSlackThreadTargets", () => {
     }
   });
 
+  it("uses normalized direct-message state for DM assistant thread-root messages", () => {
+    for (const channelType of ["channel", undefined] as const) {
+      const message = {
+        type: "message",
+        channel: "D1",
+        ts: "123",
+        thread_ts: "123",
+        ...(channelType ? { channel_type: channelType } : {}),
+      } as const;
+
+      const context = resolveSlackThreadContext({
+        replyToMode: "off",
+        isDirectMessage: true,
+        message,
+      });
+
+      expect(context.isThreadReply).toBe(false);
+      expect(context.messageThreadId).toBe("123");
+      expect(context.replyToId).toBe("123");
+    }
+  });
+
   it("does not set messageThreadId for channel thread-root messages with non-all replyToMode", () => {
     for (const replyToMode of ["off", "first", "batched"] as const) {
       const context = resolveSlackThreadContext({
         replyToMode,
+        isDirectMessage: false,
         message: {
           type: "message",
           channel: "C1",

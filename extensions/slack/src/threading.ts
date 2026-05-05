@@ -12,6 +12,7 @@ type SlackThreadContext = {
 export function resolveSlackThreadContext(params: {
   message: SlackMessageEvent | SlackAppMentionEvent;
   replyToMode: ReplyToMode;
+  isDirectMessage?: boolean;
 }): SlackThreadContext {
   const incomingThreadTs = params.message.thread_ts;
   const eventTs = params.message.event_ts;
@@ -20,21 +21,13 @@ export function resolveSlackThreadContext(params: {
   const isThreadReply =
     hasThreadTs && (incomingThreadTs !== messageTs || Boolean(params.message.parent_user_id));
   const replyToId = incomingThreadTs ?? messageTs;
-  // Preserve thread context for DM assistant thread-root messages
-  // (Slack Agents & Assistants DMs where thread_ts == ts on the initial
-  // message). Without this, tool calls that run during the same turn (subagent
-  // results) lose the thread identifier after the first reply because
-  // hasRepliedRef gets marked true, causing subsequent sendMessage calls to fall
-  // through to the top-level channel.
-  // Only apply for DM (im) channels — in channels/groups, an auto-created
-  // thread_ts == ts must not force threaded mode, since downstream
-  // buildSlackThreadingToolContext treats any MessageThreadId as an explicit
-  // thread target and overrides replyToMode to "all".
-  const isDmAssistantThread =
-    hasThreadTs && !isThreadReply && params.message.channel_type === "im";
-  const messageThreadId = isThreadReply
-    ? incomingThreadTs
-    : isDmAssistantThread
+  // Preserve thread context for Slack Agents & Assistants DM root messages
+  // where thread_ts == ts. Non-DM self-thread roots must stay unset because
+  // downstream tool threading treats MessageThreadId as an explicit thread
+  // target and overrides replyToMode to "all".
+  const isAssistantDmThreadRoot = hasThreadTs && !isThreadReply && params.isDirectMessage === true;
+  const messageThreadId =
+    isThreadReply || isAssistantDmThreadRoot
       ? incomingThreadTs
       : params.replyToMode === "all"
         ? messageTs
