@@ -49,7 +49,55 @@ function normalizeSecretBackedField(params: {
   delete params.entry[params.valueField];
 }
 
-function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
+function normalizeStringFieldAlias(
+  entry: Record<string, unknown>,
+  canonicalField: string,
+  aliases: string[],
+): void {
+  if (canonicalField in entry) {
+    return;
+  }
+  for (const alias of aliases) {
+    const value = entry[alias];
+    if (typeof value === "string") {
+      entry[canonicalField] = value;
+      return;
+    }
+  }
+}
+
+function normalizeNumberFieldAlias(
+  entry: Record<string, unknown>,
+  canonicalField: string,
+  aliases: string[],
+): void {
+  if (canonicalField in entry) {
+    return;
+  }
+  for (const alias of aliases) {
+    const value = entry[alias];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      entry[canonicalField] = value;
+      return;
+    }
+    if (typeof value === "string" && value.trim().length > 0) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) {
+        entry[canonicalField] = parsed;
+        return;
+      }
+    }
+  }
+}
+
+function normalizeLegacyOpenAiCodexOAuthAliases(entry: Record<string, unknown>): void {
+  normalizeStringFieldAlias(entry, "access", ["access_token", "accessToken"]);
+  normalizeStringFieldAlias(entry, "refresh", ["refresh_token", "refreshToken"]);
+  normalizeNumberFieldAlias(entry, "expires", ["expires_at", "expiresAt"]);
+  normalizeStringFieldAlias(entry, "accountId", ["account_id", "accountID"]);
+}
+
+function normalizeRawCredentialEntry(raw: Record<string, unknown>): Record<string, unknown> {
   const entry = { ...raw } as Record<string, unknown>;
   if (!("type" in entry) && typeof entry["mode"] === "string") {
     entry["type"] = entry["mode"];
@@ -59,7 +107,7 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
   normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
-  return entry as Partial<AuthProfileCredential>;
+  return entry;
 }
 
 function parseCredentialEntry(
@@ -70,12 +118,16 @@ function parseCredentialEntry(
     return { ok: false, reason: "non_object" };
   }
   const typed = normalizeRawCredentialEntry(raw as Record<string, unknown>);
-  if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
+  const type = typed.type;
+  if (!AUTH_PROFILE_TYPES.has(type as AuthProfileCredential["type"])) {
     return { ok: false, reason: "invalid_type" };
   }
   const provider = typed.provider ?? fallbackProvider;
   if (typeof provider !== "string" || provider.trim().length === 0) {
     return { ok: false, reason: "missing_provider" };
+  }
+  if (type === "oauth" && normalizeProviderId(provider) === "openai-codex") {
+    normalizeLegacyOpenAiCodexOAuthAliases(typed);
   }
   return {
     ok: true,
