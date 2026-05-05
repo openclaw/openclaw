@@ -242,7 +242,7 @@ function buildExistingMainStoreEntry(overrides: Record<string, unknown> = {}) {
 }
 
 function setupNewYorkTimeConfig(isoDate: string) {
-  vi.useFakeTimers();
+  vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(isoDate)); // Wed Jan 28, 8:30 PM EST
   mocks.agentCommand.mockClear();
   mocks.loadConfigReturn = {
