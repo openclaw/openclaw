@@ -2,10 +2,15 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
 function isDataUrlMedia(mediaUrl: string): boolean {
   return mediaUrl.trim().toLowerCase().startsWith("data:");
+}
+
+function shouldPreserveDisplayMediaUrl(mediaUrl: string): boolean {
+  return isDataUrlMedia(mediaUrl) || isAudioFileName(mediaUrl);
 }
 
 export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
@@ -37,18 +42,18 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-    if (!mediaUrls.some(isDataUrlMedia)) {
+    if (!mediaUrls.some(shouldPreserveDisplayMediaUrl)) {
       normalized.push(await normalizeMediaPaths(payload));
       continue;
     }
-    if (!mediaUrls.some((mediaUrl) => !isDataUrlMedia(mediaUrl))) {
+    if (!mediaUrls.some((mediaUrl) => !shouldPreserveDisplayMediaUrl(mediaUrl))) {
       normalized.push(payload);
       continue;
     }
     const mergedMediaUrls: string[] = [];
     let text = payload.text;
     for (const mediaUrl of mediaUrls) {
-      if (isDataUrlMedia(mediaUrl)) {
+      if (shouldPreserveDisplayMediaUrl(mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
         continue;
       }

@@ -137,6 +137,29 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
   });
 
+  it("preserves local audio paths for WebChat audio embedding", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const audioPath = path.join(workspaceDir, "voice.mp3");
+    await fs.mkdir(path.dirname(audioPath), { recursive: true });
+    await fs.writeFile(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    const cfg = createConfig({ agentDir, workspaceDir, allowRead: false });
+
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      sessionKey: "agent:main:webchat:direct:user",
+      agentId: "main",
+      payloads: [{ mediaUrls: [audioPath], trustedLocalMedia: true, audioAsVoice: true }],
+    });
+
+    expect(payload?.mediaUrl).toBeUndefined();
+    expect(payload?.mediaUrls).toEqual([audioPath]);
+    expect(payload?.trustedLocalMedia).toBe(true);
+    expect(payload?.audioAsVoice).toBe(true);
+    await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+  });
+
   it("preserves data images while staging mixed local image replies", async () => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
     const agentDir = path.join(stateDir, "agents", "main", "agent");
