@@ -288,6 +288,14 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     sandbox: AgentSandboxSchema,
+    sessionTitle: z
+      .object({
+        enabled: z.boolean().optional(),
+        turnsBeforeTitle: z.number().int().min(1).max(20).optional(),
+        maxChars: z.number().int().min(10).max(200).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

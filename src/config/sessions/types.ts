@@ -312,6 +312,8 @@ export type SessionEntry = {
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;
+  /** AI-generated session title (auto-summarized after N turns). Not set if user manually renames (displayName takes precedence). */
+  aiTitle?: string;
   channel?: string;
   groupId?: string;
   subject?: string;

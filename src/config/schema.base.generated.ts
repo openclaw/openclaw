@@ -6267,6 +6267,37 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              sessionTitle: {
+                type: "object",
+                properties: {
+                  enabled: {
+                    type: "boolean",
+                    title: "Enable Auto-Title Generation",
+                    description:
+                      "When enabled, a concise AI-generated title replaces the truncated first-message default after enough turns.",
+                  },
+                  turnsBeforeTitle: {
+                    type: "integer",
+                    minimum: 1,
+                    maximum: 20,
+                    title: "Turns Before Title Generation",
+                    description:
+                      "Number of user turns before triggering AI title generation (1–20, default 3).",
+                  },
+                  maxChars: {
+                    type: "integer",
+                    minimum: 10,
+                    maximum: 200,
+                    title: "Max Title Characters",
+                    description:
+                      "Maximum character length for the generated title (10–200, default 50).",
+                  },
+                },
+                additionalProperties: false,
+                title: "Session Auto-Title",
+                description:
+                  "Auto-generate session titles via AI summarization after a configurable number of turns.",
+              },
             },
             additionalProperties: false,
             title: "Agent Defaults",
@@ -26536,6 +26567,26 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Envelope Elapsed",
       help: 'Include elapsed time in message envelopes ("on" or "off").',
       tags: ["advanced"],
+    },
+    "agents.defaults.sessionTitle": {
+      label: "Session Auto-Title",
+      help: "Auto-generate session titles via AI summarization after a configurable number of turns.",
+      tags: ["storage"],
+    },
+    "agents.defaults.sessionTitle.enabled": {
+      label: "Enable Auto-Title Generation",
+      help: "When enabled, a concise AI-generated title replaces the truncated first-message default after enough turns.",
+      tags: ["storage"],
+    },
+    "agents.defaults.sessionTitle.turnsBeforeTitle": {
+      label: "Turns Before Title Generation",
+      help: "Number of user turns before triggering AI title generation (1–20, default 3).",
+      tags: ["storage"],
+    },
+    "agents.defaults.sessionTitle.maxChars": {
+      label: "Max Title Characters",
+      help: "Maximum character length for the generated title (10–200, default 50).",
+      tags: ["performance", "storage"],
     },
     "agents.defaults.memorySearch": {
       label: "Memory Search",

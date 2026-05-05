@@ -229,6 +229,10 @@ export function deriveSessionTitle(
     return normalizeOptionalString(entry.subject);
   }
 
+  if (normalizeOptionalString(entry.aiTitle)) {
+    return normalizeOptionalString(entry.aiTitle);
+  }
+
   if (firstUserMessage?.trim()) {
     const normalized = firstUserMessage.replace(/\s+/g, " ").trim();
     return truncateTitle(normalized, DERIVED_TITLE_MAX_LEN);
@@ -1716,6 +1720,7 @@ export function buildGatewaySessionRow(params: {
     kind: classifySessionKey(key, entry),
     label: entry?.label,
     displayName,
+    aiTitle: entry?.aiTitle,
     derivedTitle,
     lastMessagePreview,
     channel,

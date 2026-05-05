@@ -19,6 +19,7 @@ import type {
 } from "./server-chat-state.js";
 import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.runtime.js";
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
+import { triggerAutoTitleGeneration, resolveSessionTitleConfig } from "./session-auto-title.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
@@ -175,6 +176,26 @@ export function createAgentEventHandler({
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     chatRunState.deltaLastBroadcastLen.delete(clientRunId);
+  };
+
+  const triggerAutoTitleAfterRunEnd = async (sessionKey: string) => {
+    try {
+      const entry = loadSessionEntry(sessionKey);
+      if (!entry.entry || !entry.storePath || !entry.entry.sessionId) { return; }
+      const cfg = await getRuntimeConfig();
+      const titleConfig = resolveSessionTitleConfig(cfg?.agents?.defaults?.sessionTitle);
+      await triggerAutoTitleGeneration({
+        sessionKey,
+        sessionEntry: entry.entry,
+        config: titleConfig,
+        storePath: entry.storePath,
+        sessionId: entry.entry.sessionId,
+        sessionFile: entry.entry.sessionFile,
+        cfg,
+      });
+    } catch {
+      // Non-critical; don't propagate errors
+    }
   };
 
   const clearPendingTerminalLifecycleError = (runId: string) => {
@@ -355,6 +376,11 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
+
+      // Trigger auto-title generation after successful run completion
+      if (lifecyclePhase === "end" && !isAborted) {
+        void triggerAutoTitleAfterRunEnd(sessionKey).catch(() => undefined);
+      }
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
