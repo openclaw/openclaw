@@ -117,6 +117,16 @@ This protects users from runaway token spend and lockups while preserving normal
 - Prefer warning and temporary suppression first.
 - Escalate only when repeated evidence accumulates.
 
+### Diagnostic mode (always-on)
+
+Even when `tools.loopDetection.enabled: false`, the detector still runs its analysis and emits an INFO-level diagnostic line whenever a loop _would_ have fired. The line is tagged `[loop-detection-diag]` and includes the detector kind, severity that would have applied, current count, and the deduplication key:
+
+```
+[loop-detection-diag] tool=read detector=generic_repeat would-fire=warning count=10 warningKey=generic:read:abc123 (detection disabled — set tools.loopDetection.enabled=true to enforce)
+```
+
+The dedupe cache is a bounded LRU of 256 distinct `warningKey` entries per process: each key is logged at most once until it is evicted (when the cache is full and a new key arrives, the oldest is dropped and could log again on its next occurrence). This makes silent loops visible in `journalctl` without enabling enforcement, so operators can audit how often detection would have fired before opting in.
+
 ## Notes
 
 - `tools.loopDetection` is merged with agent-level overrides.
