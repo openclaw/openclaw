@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+﻿import { html, nothing } from "lit";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -7,7 +7,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./role-normalizer.ts";
+import { isToolResultMessage } from "./message-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
@@ -47,18 +47,6 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (typeof item.content === "string") {
     return item.content;
-  }
-  if (Array.isArray(item.content)) {
-    const parts = item.content.flatMap((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return [];
-      }
-      const text = (entry as { text?: unknown }).text;
-      return typeof text === "string" ? [text] : [];
-    });
-    if (parts.length > 0) {
-      return parts.join("\n");
-    }
   }
   return undefined;
 }
@@ -149,6 +137,57 @@ function findLatestCard(cards: ToolCard[], id: string, name: string): ToolCard |
   return undefined;
 }
 
+function readToolTimeline(
+  value: unknown,
+): NonNullable<ToolCard["timeline"]> | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const steps = value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return null;
+      }
+      const item = entry as Record<string, unknown>;
+      const kind = typeof item.kind === "string" ? item.kind : "";
+      const label = typeof item.label === "string" ? item.label : "";
+      const at = typeof item.at === "number" ? item.at : null;
+      if (
+        !label ||
+        at == null ||
+        !["start", "update", "complete", "failed"].includes(kind)
+      ) {
+        return null;
+      }
+      return {
+        kind: kind as NonNullable<ToolCard["timeline"]>[number]["kind"],
+        label,
+        at,
+      };
+    })
+    .filter((entry): entry is NonNullable<ToolCard["timeline"]>[number] => Boolean(entry));
+  return steps.length > 0 ? steps : undefined;
+}
+
+function applyToolCardMetadata(card: ToolCard, message: Record<string, unknown>) {
+  const status = typeof message.toolStatus === "string" ? message.toolStatus : undefined;
+  if (status === "running" || status === "complete" || status === "failed") {
+    card.status = status;
+  }
+  if (typeof message.toolStartedAt === "number") {
+    card.startedAt = message.toolStartedAt;
+  }
+  if (typeof message.toolFinishedAt === "number") {
+    card.finishedAt = message.toolFinishedAt;
+  } else if (message.toolFinishedAt === null) {
+    card.finishedAt = null;
+  }
+  const timeline = readToolTimeline(message.toolTimeline);
+  if (timeline) {
+    card.timeline = timeline;
+  }
+}
+
 export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
@@ -214,6 +253,10 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     });
   }
 
+  for (const card of cards) {
+    applyToolCardMetadata(card, m);
+  }
+
   return cards;
 }
 
@@ -240,6 +283,14 @@ export function buildToolCardSidebarContent(card: ToolCard): string {
   }
 
   return sections.join("\n\n");
+}
+
+function resolveToolSidebarTitle(card: ToolCard): string {
+  if (card.preview?.kind === "canvas") {
+    return card.preview.title?.trim() || "Artifact";
+  }
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
+  return display.label;
 }
 
 function handleRawDetailsToggle(event: Event) {
@@ -315,14 +366,11 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(
-  value: string,
-  options?: { rawText?: string | null },
-): SidebarContent {
+export function buildSidebarContent(value: string, opts?: { title?: string }): SidebarContent {
   return {
     kind: "markdown",
     content: value,
-    ...(options?.rawText ? { rawText: options.rawText } : {}),
+    ...(opts?.title?.trim() ? { title: opts.title.trim() } : {}),
   };
 }
 
@@ -393,10 +441,13 @@ function renderToolDataBlock(params: {
 function renderCollapsedToolSummary(params: {
   label: string;
   name: string;
+  status?: ToolCard["status"];
+  timeline?: ToolCard["timeline"];
   expanded: boolean;
   onToggleExpanded: () => void;
 }) {
-  const { label, name, expanded, onToggleExpanded } = params;
+  const { label, name, status, timeline, expanded, onToggleExpanded } = params;
+  const latestStep = timeline?.[timeline.length - 1];
   return html`
     <button
       class="chat-tool-msg-summary"
@@ -407,7 +458,40 @@ function renderCollapsedToolSummary(params: {
       <span class="chat-tool-msg-summary__icon">${icons.zap}</span>
       <span class="chat-tool-msg-summary__label">${label}</span>
       <span class="chat-tool-msg-summary__names">${name}</span>
+      ${latestStep ? html`<span class="chat-tool-msg-summary__preview">${latestStep.label}</span>` : nothing}
+      ${status
+        ? html`<span class="chat-tool-status chat-tool-status--${status}"
+            >${status === "running" ? "Running" : status === "complete" ? "Completed" : "Failed"}</span
+          >`
+        : nothing}
     </button>
+  `;
+}
+
+function formatToolTimelineTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function renderToolTimeline(card: ToolCard) {
+  if (!card.timeline?.length) {
+    return nothing;
+  }
+  return html`
+    <div class="chat-tool-card__timeline" aria-label="Tool progress timeline">
+      ${card.timeline.map(
+        (step) => html`
+          <div class="chat-tool-card__timeline-step chat-tool-card__timeline-step--${step.kind}">
+            <span class="chat-tool-card__timeline-dot" aria-hidden="true"></span>
+            <span class="chat-tool-card__timeline-label">${step.label}</span>
+            <span class="chat-tool-card__timeline-time">${formatToolTimelineTime(step.at)}</span>
+          </div>
+        `,
+      )}
+    </div>
   `;
 }
 
@@ -434,6 +518,8 @@ export function renderToolCard(
       ${renderCollapsedToolSummary({
         label: previewLabel,
         name: card.name,
+        status: card.status,
+        timeline: card.timeline,
         expanded: opts.expanded,
         onToggleExpanded: () => opts.onToggleExpanded(card.id),
       })}
@@ -471,7 +557,10 @@ export function renderExpandedToolCardContent(
       ? buildPreviewSidebarContent(card.preview, card.outputText)
       : null;
   const sidebarActionContent =
-    previewSidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+    previewSidebarContent ??
+    buildSidebarContent(buildToolCardSidebarContent(card), {
+      title: resolveToolSidebarTitle(card),
+    });
   const visiblePreview = card.preview
     ? renderToolPreview(card.preview, "chat_tool", {
         onOpenSidebar,
@@ -489,23 +578,35 @@ export function renderExpandedToolCardContent(
           <span class="chat-tool-card__icon">${icons[display.icon]}</span>
           <span>${display.label}</span>
         </div>
-        ${canOpenSidebar
-          ? html`
-              <div class="chat-tool-card__actions">
+        <div class="chat-tool-card__actions">
+          ${card.status
+            ? html`<span class="chat-tool-status chat-tool-status--${card.status}"
+                >${card.status === "running"
+                  ? "Running"
+                  : card.status === "complete"
+                    ? "Completed"
+                    : "Failed"}</span
+              >`
+            : nothing}
+          ${canOpenSidebar
+            ? html`
                 <button
                   class="chat-tool-card__action-btn"
                   type="button"
                   @click=${() => onOpenSidebar?.(sidebarActionContent)}
-                  title="Open in the side panel"
-                  aria-label="Open tool details in side panel"
+                  title=${previewSidebarContent ? "Open artifact in the side panel" : "Open tool details in the side panel"}
+                  aria-label=${previewSidebarContent
+                    ? "Open artifact in side panel"
+                    : "Open tool details in side panel"}
                 >
                   <span class="chat-tool-card__action-icon">${icons.panelRightOpen}</span>
                 </button>
-              </div>
-            `
-          : nothing}
+              `
+            : nothing}
+        </div>
       </div>
       ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
+      ${renderToolTimeline(card)}
       ${hasInput
         ? renderToolDataBlock({
             label: "Tool input",
@@ -540,8 +641,14 @@ export function renderToolCardSidebar(
   const sidebarContent =
     preview?.kind === "canvas"
       ? buildPreviewSidebarContent(preview, card.outputText)
-      : buildSidebarContent(buildToolCardSidebarContent(card));
-  const actionContent = sidebarContent ?? buildSidebarContent(buildToolCardSidebarContent(card));
+      : buildSidebarContent(buildToolCardSidebarContent(card), {
+          title: resolveToolSidebarTitle(card),
+        });
+  const actionContent =
+    sidebarContent ??
+    buildSidebarContent(buildToolCardSidebarContent(card), {
+      title: resolveToolSidebarTitle(card),
+    });
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick ? () => onOpenSidebar?.(actionContent) : undefined;
   const isShort = hasText && !hasPreview && (card.outputText?.length ?? 0) <= 240;
@@ -600,3 +707,4 @@ export function renderToolCardSidebar(
     </div>
   `;
 }
+

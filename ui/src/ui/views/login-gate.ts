@@ -1,4 +1,4 @@
-import { html } from "lit";
+﻿import { html } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { icons } from "../icons.ts";
@@ -9,6 +9,12 @@ import { renderConnectCommand } from "./connect-command.ts";
 export function renderLoginGate(state: AppViewState) {
   const basePath = normalizeBasePath(state.basePath ?? "");
   const faviconSrc = agentLogoUrl(basePath);
+  const connectLabel =
+    state.connectionPhase === "reconnecting"
+      ? "Reconnecting…"
+      : state.connectionPhase === "connecting"
+        ? "Connecting…"
+        : t("common.connect");
 
   return html`
     <div class="login-gate">
@@ -52,8 +58,8 @@ export function renderLoginGate(state: AppViewState) {
               <button
                 type="button"
                 class="btn btn--icon ${state.loginShowGatewayToken ? "active" : ""}"
-                title=${state.loginShowGatewayToken ? t("login.hideToken") : t("login.showToken")}
-                aria-label=${t("login.toggleTokenVisibility")}
+                title=${state.loginShowGatewayToken ? "Hide token" : "Show token"}
+                aria-label="Toggle token visibility"
                 aria-pressed=${state.loginShowGatewayToken}
                 @click=${() => {
                   state.loginShowGatewayToken = !state.loginShowGatewayToken;
@@ -85,10 +91,8 @@ export function renderLoginGate(state: AppViewState) {
               <button
                 type="button"
                 class="btn btn--icon ${state.loginShowGatewayPassword ? "active" : ""}"
-                title=${state.loginShowGatewayPassword
-                  ? t("login.hidePassword")
-                  : t("login.showPassword")}
-                aria-label=${t("login.togglePasswordVisibility")}
+                title=${state.loginShowGatewayPassword ? "Hide password" : "Show password"}
+                aria-label="Toggle password visibility"
                 aria-pressed=${state.loginShowGatewayPassword}
                 @click=${() => {
                   state.loginShowGatewayPassword = !state.loginShowGatewayPassword;
@@ -99,7 +103,7 @@ export function renderLoginGate(state: AppViewState) {
             </div>
           </label>
           <button class="btn primary login-gate__connect" @click=${() => state.connect()}>
-            ${t("common.connect")}
+            ${connectLabel}
           </button>
         </div>
         ${state.lastError
@@ -130,3 +134,4 @@ export function renderLoginGate(state: AppViewState) {
     </div>
   `;
 }
+
