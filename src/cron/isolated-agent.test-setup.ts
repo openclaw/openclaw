@@ -172,6 +172,10 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
                 chatType: target.chatType === "unknown" ? undefined : target.chatType,
               };
             },
+            inferTargetChatType: ({ to }) => {
+              const target = parseTelegramTargetForTest(to);
+              return target.chatType === "unknown" ? undefined : target.chatType;
+            },
           },
         }),
         source: "test",
