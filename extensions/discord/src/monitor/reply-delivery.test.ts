@@ -3,7 +3,9 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
-const deliverOutboundPayloadsMock = vi.hoisted(() => vi.fn(async () => []));
+const deliverOutboundPayloadsMock = vi.hoisted(() =>
+  vi.fn(async () => [{ messageId: "msg-1", channelId: "channel-1" }]),
+);
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 
@@ -57,7 +59,7 @@ describe("deliverDiscordReply", () => {
 
   beforeEach(() => {
     deliverOutboundPayloadsMock.mockClear();
-    deliverOutboundPayloadsMock.mockResolvedValue([]);
+    deliverOutboundPayloadsMock.mockResolvedValue([{ messageId: "msg-1", channelId: "channel-1" }]);
     sendMessageDiscordMock.mockReset().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
@@ -103,6 +105,22 @@ describe("deliverDiscordReply", () => {
       "probe",
       expect.objectContaining({ cfg: firstDeliverParams().cfg, token: "token", rest }),
     );
+  });
+
+  it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValueOnce([]);
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "lost reply" }],
+        target: "channel:101",
+        token: "token",
+        accountId: "default",
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
   });
 
   it("strips internal execution trace lines at the final Discord send boundary", async () => {
