@@ -505,4 +505,82 @@ describe("browser tab routes", () => {
     expect(response.body).toEqual({ running: true, tabs: [publicTab()] });
     expect(profileCtx.listTabs).toHaveBeenCalledTimes(1);
   });
+
+  it("does not call listTabs on /tabs/action list when chrome-mcp is live-attached but cache is cold", async () => {
+    chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce({
+      level: "high" as const,
+      attached: true,
+      mcpPid: null,
+      port: 50211,
+      browserUuid: "abc",
+      reasons: ["file:devtools-active-port-detected", "owner:lsof-chrome-listener", "http:ok"],
+      emptyState: false,
+      cacheAttached: false,
+    });
+    const profileCtx = createExistingSessionProfileContext({
+      listTabs: vi.fn(async () => [publicTab()]),
+    });
+
+    const response = await callTabsAction({
+      body: { action: "list" },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true, tabs: [] });
+    expect(profileCtx.isReachable).not.toHaveBeenCalled();
+    expect(profileCtx.listTabs).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.probeChromeMcpHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns empty tabs on /tabs/action list when chrome-mcp is not attached", async () => {
+    chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce({
+      level: "low" as const,
+      attached: false,
+      mcpPid: null,
+      port: null,
+      browserUuid: null,
+      reasons: ["file:user-enabled-false"],
+      emptyState: true,
+      cacheAttached: false,
+    });
+    const profileCtx = createExistingSessionProfileContext({
+      listTabs: vi.fn(async () => [publicTab()]),
+    });
+
+    const response = await callTabsAction({
+      body: { action: "list" },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true, tabs: [] });
+    expect(profileCtx.isReachable).not.toHaveBeenCalled();
+    expect(profileCtx.listTabs).not.toHaveBeenCalled();
+  });
+
+  it("uses listTabs on /tabs/action list when chrome-mcp cache is attached", async () => {
+    chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce({
+      level: "high" as const,
+      attached: true,
+      mcpPid: 4321,
+      port: null,
+      browserUuid: null,
+      reasons: ["cache:mcp-session-ready"],
+      emptyState: false,
+      cacheAttached: true,
+    });
+    const profileCtx = createExistingSessionProfileContext({
+      listTabs: vi.fn(async () => [publicTab()]),
+    });
+
+    const response = await callTabsAction({
+      body: { action: "list" },
+      profileCtx,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ ok: true, tabs: [publicTab()] });
+    expect(profileCtx.listTabs).toHaveBeenCalledTimes(1);
+  });
 });

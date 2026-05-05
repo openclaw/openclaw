@@ -307,8 +307,15 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         mapTabError: true,
         run: async (profileCtx) => {
           if (action === "list") {
-            const reachable = await profileCtx.isReachable(300);
-            if (!reachable) {
+            const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+            if (capabilities.usesChromeMcp) {
+              const readiness = await probeChromeMcpTabListReadiness(profileCtx);
+              if (readiness !== "spawn-safe") {
+                // Avoid cold-spawning chrome-devtools-mcp on a passive list:
+                // skip listTabs() until the cache is warm.
+                return res.json({ ok: true, tabs: [] as unknown[] });
+              }
+            } else if (!(await profileCtx.isReachable(300))) {
               return res.json({ ok: true, tabs: [] as unknown[] });
             }
             const tabs = await redactBlockedTabUrls({
