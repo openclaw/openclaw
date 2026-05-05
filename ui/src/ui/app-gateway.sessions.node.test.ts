@@ -7,6 +7,7 @@ const applySessionsChangedEventMock = vi.fn();
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
+  CHAT_SESSIONS_REFRESH_LIMIT: 5,
   flushChatQueueForEvent: vi.fn(),
   refreshChatAvatar: vi.fn(),
 }));
