@@ -1,9 +1,19 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSentMessageCache } from "./echo-cache.js";
+import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
+  const tempDirs: string[] = [];
+
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
+    for (const dir of tempDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("matches recent text within the same scope", () => {
@@ -70,5 +80,22 @@ describe("iMessage sent-message echo cache", () => {
 
     expect(cache.has("acct:imessage:+1555", { text: "hello" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { messageId: "m-1" })).toBe(true);
+  });
+
+  it("matches persisted echoes written by another process", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-"));
+    tempDirs.push(stateDir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const cache = createSentMessageCache();
+
+    rememberPersistedIMessageEcho({
+      scope: "acct:imessage:+1555",
+      text: "OpenClaw imsg live test",
+      messageId: "guid-1",
+    });
+
+    expect(cache.has("acct:imessage:+1555", { text: "OpenClaw imsg live test" })).toBe(true);
+    expect(cache.has("acct:imessage:+1666", { text: "OpenClaw imsg live test" })).toBe(false);
+    expect(cache.has("acct:imessage:+1555", { messageId: "guid-1" })).toBe(true);
   });
 });

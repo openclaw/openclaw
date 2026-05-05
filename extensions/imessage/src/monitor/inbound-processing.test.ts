@@ -1,7 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { _resetIMessageShortIdState } from "../monitor-reply-cache.js";
 import {
+  buildIMessageInboundContext,
   describeIMessageEchoDropLog,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
@@ -354,5 +359,82 @@ describe("resolveIMessageInboundDecision command auth", () => {
       return;
     }
     expect(decision.commandAuthorized).toBe(true);
+  });
+});
+
+describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression)", () => {
+  let tempStateDir: string;
+  let priorStateDir: string | undefined;
+  beforeAll(() => {
+    tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-inbound-"));
+    priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  });
+  afterAll(() => {
+    if (priorStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = priorStateDir;
+    }
+    fs.rmSync(tempStateDir, { recursive: true, force: true });
+  });
+  beforeEach(() => {
+    _resetIMessageShortIdState();
+    try {
+      fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
+    } catch {
+      // best-effort
+    }
+  });
+
+  function buildParams(messageOverrides: Partial<{ id: number; guid: string }>) {
+    const decision = {
+      kind: "dispatch" as const,
+      route: { accountId: "default", agentId: "lobster", sessionKey: "k", mainSessionKey: "mk" },
+      isGroup: false,
+      sender: "+15555550123",
+      senderId: "+15555550123",
+      senderNormalized: "+15555550123",
+      historyKey: "h",
+      chatId: 3,
+      chatGuid: "any;-;+15555550123",
+      chatIdentifier: "+15555550123",
+      replyContext: undefined,
+      isCommand: false,
+      commandAuthorized: false,
+    };
+    return {
+      cfg: {} as OpenClawConfig,
+      decision: decision as unknown as Parameters<
+        typeof buildIMessageInboundContext
+      >[0]["decision"],
+      message: { sender: "+15555550123", text: "hi", ...messageOverrides },
+      historyLimit: 0,
+      groupHistories: new Map(),
+    } as unknown as Parameters<typeof buildIMessageInboundContext>[0];
+  }
+
+  it("uses the gateway-allocated shortId when the inbound has a guid", () => {
+    const { ctxPayload } = buildIMessageInboundContext(
+      buildParams({ id: 999, guid: "FAB-INBOUND-1" }),
+    );
+    // First inbound → shortId "1". The chat.db rowid 999 must NOT leak.
+    expect(ctxPayload.MessageSid).toBe("1");
+  });
+
+  it("does not leak chat.db ROWIDs as MessageSid when the guid is missing", () => {
+    // Pre-fix bug: when rememberedMessage was nil/empty, MessageSid fell
+    // back to `String(message.id)` — leaking chat.db ROWID into the agent's
+    // short-id namespace. Agent then tried to react to a phantom shortId
+    // that the resolver couldn't find ("13 is no longer available").
+    const { ctxPayload } = buildIMessageInboundContext(buildParams({ id: 13, guid: undefined }));
+    expect(ctxPayload.MessageSid).toBeUndefined();
+    // Critically: never the rowid as a string.
+    expect(ctxPayload.MessageSid).not.toBe("13");
+  });
+
+  it("does not leak chat.db ROWIDs even when the guid is whitespace", () => {
+    const { ctxPayload } = buildIMessageInboundContext(buildParams({ id: 13, guid: "   " }));
+    expect(ctxPayload.MessageSid).toBeUndefined();
   });
 });

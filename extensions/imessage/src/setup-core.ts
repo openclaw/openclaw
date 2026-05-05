@@ -169,7 +169,7 @@ export function createIMessageCliPathTextInput(
 export const imessageCompletionNote = {
   title: "iMessage next steps",
   lines: [
-    "This is still a work in progress.",
+    "Run `imsg launch`, then `openclaw channels status --probe` to verify private API actions.",
     "Ensure OpenClaw has Full Disk Access to Messages DB.",
     "Grant Automation permission for Messages when prompted.",
     "List chats with: imsg chats --limit 20",

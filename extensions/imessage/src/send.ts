@@ -13,6 +13,8 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
+import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
 type IMessageSendOpts = {
@@ -140,6 +142,22 @@ function createIMessageSendReceipt(params: {
   return createMessageReceiptFromOutboundResults(receiptParams);
 }
 
+function resolveOutboundEchoScope(params: {
+  accountId: string;
+  target: ReturnType<typeof parseIMessageTarget>;
+}): string | null {
+  if (params.target.kind === "chat_id") {
+    return `${params.accountId}:${formatIMessageChatTarget(params.target.chatId)}`;
+  }
+  if (params.target.kind === "chat_guid") {
+    return `${params.accountId}:chat_guid:${params.target.chatGuid}`;
+  }
+  if (params.target.kind === "chat_identifier") {
+    return `${params.accountId}:chat_identifier:${params.target.chatIdentifier}`;
+  }
+  return `${params.accountId}:imessage:${params.target.to}`;
+}
+
 export async function sendMessageIMessage(
   to: string,
   text: string,
@@ -194,6 +212,17 @@ export async function sendMessageIMessage(
   if (!message.trim() && !filePath) {
     throw new Error("iMessage send requires text or media");
   }
+  // Extract markdown bold/italic/underline/strikethrough into typed-run
+  // ranges that the imsg bridge applies via attributedBody. macOS 15+
+  // recipients render the runs natively; earlier macOS recipients still
+  // see the marker-stripped text without literal asterisks.
+  const formatted = message.trim()
+    ? extractMarkdownFormatRuns(message)
+    : { text: message, ranges: [] };
+  message = formatted.text;
+  if (!message.trim() && !filePath) {
+    throw new Error("iMessage send requires text or media");
+  }
   const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
   const params: Record<string, unknown> = {
     text: message,
@@ -202,6 +231,9 @@ export async function sendMessageIMessage(
   };
   if (resolvedReplyToId) {
     params.reply_to = resolvedReplyToId;
+  }
+  if (formatted.ranges.length > 0) {
+    params.formatting = formatted.ranges;
   }
   if (filePath) {
     params.file = filePath;
@@ -229,6 +261,14 @@ export async function sendMessageIMessage(
     });
     const resolvedId = resolveMessageId(result);
     const messageId = resolvedId ?? (result?.ok ? "ok" : "unknown");
+    const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
+    if (echoScope) {
+      rememberPersistedIMessageEcho({
+        scope: echoScope,
+        text: message,
+        messageId: resolvedId ?? undefined,
+      });
+    }
     return {
       messageId,
       sentText: message,

@@ -29,6 +29,20 @@ export type IMessageAccountConfig = {
   dbPath?: string;
   /** Remote SSH host token for SCP attachment fetches (`host` or `user@host`). */
   remoteHost?: string;
+  /** Enable or disable private API message actions. */
+  actions?: {
+    reactions?: boolean;
+    edit?: boolean;
+    unsend?: boolean;
+    reply?: boolean;
+    sendWithEffect?: boolean;
+    renameGroup?: boolean;
+    setGroupIcon?: boolean;
+    addParticipant?: boolean;
+    removeParticipant?: boolean;
+    leaveGroup?: boolean;
+    sendAttachment?: boolean;
+  };
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
   /** Optional default region (used when sending SMS). */
@@ -73,6 +87,8 @@ export type IMessageAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** When private API is available, mark inbound chats read before dispatch (default: true). */
+  sendReadReceipts?: boolean;
   groups?: Record<
     string,
     {
