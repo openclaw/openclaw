@@ -134,17 +134,8 @@ export function collectImageModelKeys(params: CollectImageModelKeysParams): Imag
       return;
     }
 
-    const trimmedSlash = trimmed.indexOf("/");
-
-    // Add provider-qualified raw strings directly
-    if (trimmedSlash > 0) {
-      keys.add(trimmed);
-    }
-
-    // Also add providerless model names directly for cross-provider matching.
-    if (trimmedSlash <= 0) {
-      keys.add(trimmed);
-    }
+    // Add raw model string directly for matching (both provider-qualified and providerless).
+    keys.add(trimmed);
 
     // Resolve alias and add canonical key.
     const providerContext = isPrimary

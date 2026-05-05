@@ -504,6 +504,7 @@ export async function resolveReplyDirectives(params: {
   const useFastModelSelection =
     useFastReplyRuntime &&
     !hasResolvedHeartbeatModelOverride &&
+    !hasAppliedImageModelOverride &&
     !(agentCfg?.models && Object.keys(agentCfg.models).length > 0) &&
     !normalizeOptionalString(targetSessionEntry?.modelOverride) &&
     !normalizeOptionalString(targetSessionEntry?.providerOverride) &&

@@ -348,8 +348,6 @@ type RunPreparedReplyParams = {
   storePath?: string;
   workspaceDir: string;
   abortedLastRun: boolean;
-  /** True when an image model override was applied, for cross-provider auth handling. */
-  hasAppliedImageModelOverride?: boolean;
 };
 
 export async function runPreparedReply(
@@ -390,7 +388,6 @@ export async function runPreparedReply(
     storePath,
     workspaceDir,
     sessionStore,
-    hasAppliedImageModelOverride,
   } = params;
   const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
     cfg,

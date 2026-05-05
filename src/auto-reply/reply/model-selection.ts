@@ -269,12 +269,12 @@ export async function createModelSelectionState(params: {
     parentSessionKey,
     defaultProvider,
   });
-  // Skip stored session model override only when an explicit heartbeat.model
-  // was resolved. Heartbeats without heartbeat.model still inherit normal
-  // overrides unless a direct auto fallback override is stale for the current
-  // configured default.
+  // Skip stored session model override when an explicit heartbeat.model was
+  // resolved, when an image model override was applied for this turn, or when
+  // a stale heartbeat auto fallback override is detected for the session.
   const skipStoredOverride =
     params.hasResolvedHeartbeatModelOverride === true ||
+    params.hasAppliedImageModelOverride === true ||
     (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session");
 
   if (storedOverride?.model && !skipStoredOverride) {
@@ -303,7 +303,19 @@ export async function createModelSelectionState(params: {
     model = allowedInitialSelection.model;
   }
 
-  if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
+  // When an image model override switched providers (e.g., anthropic -> openai),
+  // skip auth profile cleanup since the provider change was automatic, not a user directive.
+  const skipAuthProfileReset =
+    params.hasAppliedImageModelOverride === true &&
+    normalizeProviderId(provider) !== normalizeProviderId(defaultProvider);
+
+  if (
+    sessionEntry &&
+    sessionStore &&
+    sessionKey &&
+    sessionEntry.authProfileOverride &&
+    !skipAuthProfileReset
+  ) {
     const { ensureAuthProfileStore } = await import("../../agents/auth-profiles.runtime.js");
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
