@@ -1,7 +1,7 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
@@ -388,41 +388,52 @@ export class MediaAttachmentCache {
     filePath: string;
     maxBytes: number;
   }): Promise<LocalReadResult> {
-    const flags =
-      fsConstants.O_RDONLY | (process.platform === "win32" ? 0 : fsConstants.O_NOFOLLOW);
-    const handle = await fs.open(params.filePath, flags);
+    let opened: Awaited<ReturnType<typeof openLocalFileSafely>> | undefined;
     try {
-      const stat = await handle.stat();
-      if (!stat.isFile()) {
+      opened = await openLocalFileSafely({ filePath: params.filePath });
+      if (opened.stat.size > params.maxBytes) {
         throw new MediaUnderstandingSkipError(
-          "empty",
-          `Attachment ${params.attachmentIndex + 1} path is not a regular file.`,
-        );
-      }
-      const canonicalPath = await this.resolveCanonicalLocalPath(params.filePath);
-      if (!canonicalPath) {
-        throw new MediaUnderstandingSkipError(
-          "blocked",
-          `Attachment ${params.attachmentIndex + 1} could not be canonicalized.`,
+          "maxBytes",
+          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
         );
       }
       const canonicalRoots = await this.getCanonicalLocalPathRoots();
-      if (!isInboundPathAllowed({ filePath: canonicalPath, roots: canonicalRoots })) {
+      if (!isInboundPathAllowed({ filePath: opened.realPath, roots: canonicalRoots })) {
         throw new MediaUnderstandingSkipError(
           "blocked",
           `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
         );
       }
-      const buffer = await handle.readFile();
+      const buffer = await opened.handle.readFile();
       if (buffer.length > params.maxBytes) {
         throw new MediaUnderstandingSkipError(
           "maxBytes",
           `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
         );
       }
-      return { buffer, filePath: canonicalPath };
+      return { buffer, filePath: opened.realPath };
+    } catch (err) {
+      if (err instanceof FsSafeError) {
+        if (err.code === "too-large") {
+          throw new MediaUnderstandingSkipError(
+            "maxBytes",
+            `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
+          );
+        }
+        if (err.code === "not-file" || err.code === "not-found") {
+          throw new MediaUnderstandingSkipError(
+            "empty",
+            `Attachment ${params.attachmentIndex + 1} path is not a regular file.`,
+          );
+        }
+        throw new MediaUnderstandingSkipError(
+          "blocked",
+          `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
+        );
+      }
+      throw err;
     } finally {
-      await handle.close().catch(() => {});
+      await opened?.handle.close().catch(() => {});
     }
   }
 

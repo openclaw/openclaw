@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot, FsSafeError, type OpenResult } from "../infra/fs-safe.js";
 
@@ -34,17 +33,19 @@ export async function resolveFileWithinRoot(
     return await tryOpen(path.posix.join(rel, "index.html"));
   }
 
-  const candidate = path.join(rootReal, rel);
   try {
-    const st = await fs.lstat(candidate);
-    if (st.isSymbolicLink()) {
+    const st = await root.stat(rel);
+    if (st.isSymbolicLink) {
       return null;
     }
-    if (st.isDirectory()) {
+    if (st.isDirectory) {
       return await tryOpen(path.posix.join(rel, "index.html"));
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    if (err instanceof FsSafeError) {
+      return null;
+    }
+    throw err;
   }
 
   return await tryOpen(rel);
