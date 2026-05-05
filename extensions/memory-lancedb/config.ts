@@ -18,6 +18,7 @@ export type MemoryConfig = {
   recallMaxChars?: number;
   storageOptions?: Record<string, string>;
   triggers?: string[];
+  categoryRules?: Partial<Record<MemoryCategory, string>>;
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -87,7 +88,32 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function parseTriggers(raw: unknown): string[] | undefined {
+function resolveCategoryRules(raw: unknown): Partial<Record<MemoryCategory, string>> | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("categoryRules must be an object");
+  }
+  const result: Partial<Record<MemoryCategory, string>> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!MEMORY_CATEGORIES.includes(key as MemoryCategory)) {
+      throw new Error(`categoryRules key "${key}" must be one of: ${MEMORY_CATEGORIES.join(", ")}`);
+    }
+    if (typeof value !== "string") {
+      throw new Error(`categoryRules.${key} must be a string`);
+    }
+    try {
+      new RegExp(value);
+    } catch {
+      throw new Error(`categoryRules.${key} is not a valid regex: ${value}`);
+    }
+    result[key as MemoryCategory] = value;
+  }
+  return result;
+}
+
+function resolveTriggers(raw: unknown): string[] | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
@@ -133,6 +159,7 @@ export const memoryConfigSchema = {
         "recallMaxChars",
         "storageOptions",
         "triggers",
+        "categoryRules",
       ],
       "memory config",
     );
@@ -208,7 +235,8 @@ export const memoryConfigSchema = {
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
       recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
-      triggers: parseTriggers(cfg.triggers),
+      triggers: resolveTriggers(cfg.triggers),
+      categoryRules: resolveCategoryRules(cfg.categoryRules),
     };
   },
   uiHints: {
@@ -265,6 +293,11 @@ export const memoryConfigSchema = {
       help: "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
       advanced: true,
       placeholder: String(DEFAULT_RECALL_MAX_CHARS),
+    },
+    categoryRules: {
+      label: "Category Rules",
+      advanced: true,
+      help: 'Custom detection rules applied before built-in logic. Example: [{ "pattern": "mi jefe", "category": "entity" }]',
     },
     triggers: {
       label: "Custom Capture Triggers",

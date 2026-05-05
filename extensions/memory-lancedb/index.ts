@@ -556,8 +556,18 @@ export function shouldCapture(
   );
 }
 
-export function detectCategory(text: string): MemoryCategory {
+export function detectCategory(
+  text: string,
+  rules?: Array<{ pattern: RegExp; category: MemoryCategory }>,
+): MemoryCategory {
   const lower = normalizeLowercaseStringOrEmpty(text);
+  if (rules) {
+    for (const rule of rules) {
+      if (rule.pattern.test(lower)) {
+        return rule.category;
+      }
+    }
+  }
   if (/prefer|radši|like|love|hate|want/i.test(lower)) {
     return "preference";
   }
@@ -1067,7 +1077,17 @@ export default definePluginEntry({
                 continue;
               }
 
-              const category = detectCategory(text);
+              const category = detectCategory(
+                text,
+                currentCfg.categoryRules
+                  ? (
+                      Object.entries(currentCfg.categoryRules) as Array<[MemoryCategory, string]>
+                    ).map(([cat, pattern]) => ({
+                      pattern: new RegExp(pattern, "i"),
+                      category: cat,
+                    }))
+                  : undefined,
+              );
               const vector = await embeddings.embed(text);
 
               // Check for duplicates (high similarity threshold)
