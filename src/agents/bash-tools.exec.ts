@@ -12,7 +12,10 @@ import {
   requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
-import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeHostExecEnvWithDiagnostics,
+} from "../infra/host-env-security.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -52,6 +55,7 @@ import type {
   ExecToolDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
+import { loadWorkspaceDotEnvForExec } from "./bash-tools.exec.workspace-env.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -1405,11 +1409,37 @@ export function createExecTool(
       rejectUnsafeControlShellCommand(params.command);
 
       const inheritedBaseEnv = coerceEnv(process.env);
+      const workspaceEnv =
+        host === "gateway"
+          ? await loadWorkspaceDotEnvForExec({
+              workspaceDir: workdir,
+              baseEnv: inheritedBaseEnv,
+            })
+          : {};
+      const workspaceEnvOverrideDiagnostics =
+        host !== "gateway"
+          ? null
+          : inspectHostExecEnvOverrides({
+              overrides: workspaceEnv,
+              blockPathOverrides: true,
+            });
+      const safeWorkspaceEnv =
+        host !== "gateway"
+          ? {}
+          : Object.fromEntries(
+              Object.entries(workspaceEnv).filter(
+                ([key]) =>
+                  !workspaceEnvOverrideDiagnostics?.rejectedOverrideBlockedKeys.includes(
+                    key.toUpperCase(),
+                  ) && !workspaceEnvOverrideDiagnostics?.rejectedOverrideInvalidKeys.includes(key),
+              ),
+            );
+      const inheritedWithWorkspaceEnv = { ...inheritedBaseEnv, ...safeWorkspaceEnv };
       const hostEnvResult =
         host === "sandbox"
           ? null
           : sanitizeHostExecEnvWithDiagnostics({
-              baseEnv: inheritedBaseEnv,
+              baseEnv: inheritedWithWorkspaceEnv,
               overrides: params.env,
               blockPathOverrides: true,
             });
@@ -1456,7 +1486,7 @@ export function createExecTool(
               sandboxEnv: sandbox.env,
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
-          : (hostEnvResult?.env ?? inheritedBaseEnv);
+          : (hostEnvResult?.env ?? inheritedWithWorkspaceEnv);
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({

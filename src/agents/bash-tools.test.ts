@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -204,6 +205,9 @@ const shellEcho = (message: string) => (isWin ? `Write-Output ${message}` : `ech
 const COMMAND_NOOP = isWin ? "$null" : ":";
 const COMMAND_ECHO_HELLO = shellEcho("hello");
 const COMMAND_PRINT_PATH = isWin ? "Write-Output $env:PATH" : "echo $PATH";
+const COMMAND_PRINT_GH_CONFIG_DIR = isWin
+  ? "Write-Output $env:GH_CONFIG_DIR"
+  : "echo ${GH_CONFIG_DIR:-}";
 const COMMAND_EXIT_WITH_ERROR = "exit 1";
 const SCOPE_KEY_ALPHA = "agent:alpha";
 const SCOPE_KEY_BETA = "agent:beta";
@@ -817,6 +821,45 @@ describe("exec notifyOnExit", () => {
 
 describe("exec PATH handling", () => {
   useCapturedEnv([...PATH_SHELL_ENV_KEYS], applyDefaultShellEnv);
+
+  it("injects workspace .env vars per-request for host exec", async () => {
+    const cwd = process.cwd();
+    const marker = `gh-config-${Date.now()}`;
+    const envPath = path.join(cwd, ".env");
+
+    let previousEnvFile: string | null;
+    try {
+      previousEnvFile = await fs.promises.readFile(envPath, "utf-8");
+    } catch {
+      previousEnvFile = null;
+    }
+
+    const previousVar = process.env.GH_CONFIG_DIR;
+    delete process.env.GH_CONFIG_DIR;
+
+    try {
+      await fs.promises.writeFile(envPath, `GH_CONFIG_DIR=${marker}\n`, "utf-8");
+      const tool = createTestExecTool({ host: "gateway", security: "full", ask: "off", cwd });
+      const result = await executeExecCommand(tool, COMMAND_PRINT_GH_CONFIG_DIR);
+      expect(readNormalizedTextContent(result.content)).toContain(marker);
+    } finally {
+      if (previousEnvFile === null) {
+        try {
+          await fs.promises.unlink(envPath);
+        } catch {
+          // no-op
+        }
+      } else {
+        await fs.promises.writeFile(envPath, previousEnvFile, "utf-8");
+      }
+
+      if (previousVar === undefined) {
+        delete process.env.GH_CONFIG_DIR;
+      } else {
+        process.env.GH_CONFIG_DIR = previousVar;
+      }
+    }
+  });
 
   it("prepends configured path entries", async () => {
     const basePath = isWin ? "C:\\Windows\\System32" : "/usr/bin";
