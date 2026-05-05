@@ -4,6 +4,7 @@ import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   announceDeliveryMocks,
   createMediaCompletionFixture,
+  expectDirectMediaSend,
   expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
   expectRecordedTaskProgress,
@@ -218,7 +219,7 @@ describe("video generate background helpers", () => {
       }),
     });
 
-    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalled();
     expectFallbackMediaAnnouncement({
       deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
       requesterSessionKey: "agent:main:discord:direct:123",

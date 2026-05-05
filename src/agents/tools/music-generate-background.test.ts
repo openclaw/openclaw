@@ -3,6 +3,7 @@ import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   announceDeliveryMocks,
   createMediaCompletionFixture,
+  expectDirectMediaSend,
   expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
   expectRecordedTaskProgress,
@@ -145,7 +146,6 @@ describe("music generate background helpers", () => {
       messageId: "msg-1",
     });
 
-
     await wakeMusicGenerationTaskCompletion({
       ...createMediaCompletionFixture({
         directSend: true,
@@ -184,7 +184,7 @@ describe("music generate background helpers", () => {
       }),
     });
 
-    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalled();
     expectFallbackMediaAnnouncement({
       deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
       requesterSessionKey: "agent:main:discord:direct:123",
