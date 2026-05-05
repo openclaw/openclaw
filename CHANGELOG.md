@@ -605,6 +605,7 @@ Docs: https://docs.openclaw.ai
 - Agents/reply context: label replied-to messages as the current user message target in model-visible metadata, so short replies are grounded to their explicit reply target instead of nearby chat history. (#76817) Thanks @obviyus.
 - Doctor/plugins: install configured missing official plugins such as Discord and Brave during doctor/update repair, auto-enable repaired provider plugins, preserve config when a download fails, and stop auto-enable from inventing plugin entries when no manifest declares a configured channel. Fixes #76872. Thanks @jack-stormentswe.
 - Codex/app-server: stabilize transcript mirror dedupe across re-mirrored turns so reordered snapshots no longer drop reasoning entries or duplicate the assistant reply. Refs #77012. (#77046) Thanks @openperf.
+- Agents/auth-profiles: do not record request-shape (`format`) rejections as auth-profile health failures, so a single per-session transcript-shape error (such as a prefill-strict 400 "conversation must end with a user message") no longer triggers a profile-wide cooldown that blocks every other healthy session sharing the same auth profile. Refs #77228. (#77280) Thanks @openperf.
 
 ## 2026.5.2
 
