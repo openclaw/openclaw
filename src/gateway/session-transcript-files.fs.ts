@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveActiveCliTranscriptPath } from "../agents/cli-runner/claude-cli-paths.js";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -13,6 +14,19 @@ import {
 } from "../config/sessions/paths.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+
+/**
+ * Optional inputs that route candidate resolution through the Claude CLI
+ * project store when the session is bound to the `claude-cli` model provider.
+ * When `cliSessionId` and `workspaceDir` are both populated and the resolved
+ * file exists on disk, that path is added as the FIRST candidate so it wins
+ * over any openclaw-store candidate.
+ */
+export type CliTranscriptHint = {
+  modelProvider?: string;
+  cliSessionId?: string;
+  workspaceDir?: string;
+};
 
 type ArchiveFileReason = SessionArchiveReason;
 export type ArchivedSessionTranscript = {
@@ -73,6 +87,7 @@ export function resolveSessionTranscriptCandidates(
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
+  cliHint?: CliTranscriptHint,
 ): string[] {
   const candidates: string[] = [];
   const sessionFileState = classifySessionTranscriptCandidate(sessionId, sessionFile);
@@ -83,6 +98,23 @@ export function resolveSessionTranscriptCandidates(
       // Ignore invalid paths/IDs and keep scanning other safe candidates.
     }
   };
+
+  // Read-through to the Claude CLI project store: when the session is running
+  // under the claude-cli model provider and a CLI session id is bound to it,
+  // the canonical transcript lives in `~/.claude/projects/<workspace-slug>/`.
+  // We surface that path FIRST when it exists on disk so consumers (history
+  // reads, dashboard transcriptPath, sessions_history MCP tool, …) prefer the
+  // live file instead of the openclaw-store delivery-mirror sibling.
+  if (cliHint) {
+    const cliPath = resolveActiveCliTranscriptPath({
+      modelProvider: cliHint.modelProvider,
+      cliSessionId: cliHint.cliSessionId,
+      workspaceDir: cliHint.workspaceDir,
+    });
+    if (cliPath) {
+      candidates.push(cliPath);
+    }
+  }
 
   if (storePath) {
     const sessionsDir = path.dirname(storePath);

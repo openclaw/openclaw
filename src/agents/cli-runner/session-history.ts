@@ -11,6 +11,10 @@ import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
+import {
+  resolveActiveCliTranscriptPath,
+  resolveClaudeCliProjectDirForWorkspace,
+} from "./claude-cli-paths.js";
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
@@ -119,7 +123,10 @@ function resolveSafeCliSessionFile(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
-}): { sessionFile: string; sessionsDir: string } {
+  modelProvider?: string;
+  cliSessionId?: string;
+  workspaceDir?: string;
+}): { sessionFile: string; sessionsDirs: string[] } {
   const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
@@ -129,14 +136,32 @@ function resolveSafeCliSessionFile(params: {
     agentId: sessionAgentId ?? defaultAgentId,
     storePath: params.config?.session?.store,
   });
-  const sessionFile = resolveSessionFilePath(
+  const openclawSessionFile = resolveSessionFilePath(
     params.sessionId,
     { sessionFile: params.sessionFile },
     pathOptions,
   );
+  const openclawSessionsDir = pathOptions?.sessionsDir ?? path.dirname(openclawSessionFile);
+  // For sessions running under the claude-cli model provider, the canonical
+  // transcript is owned by the Claude CLI itself (under
+  // ~/.claude/projects/<workspace-slug>/<cliSessionId>.jsonl). Prefer that
+  // path when both inputs are populated and the file exists; fall back to the
+  // openclaw-store path otherwise. The within-base check below is widened so
+  // both directories are accepted as safe roots.
+  const claudeCliFile = resolveActiveCliTranscriptPath({
+    modelProvider: params.modelProvider,
+    cliSessionId: params.cliSessionId,
+    workspaceDir: params.workspaceDir,
+  });
+  const sessionsDirs = [openclawSessionsDir];
+  if (params.workspaceDir && params.modelProvider === "claude-cli") {
+    sessionsDirs.push(
+      resolveClaudeCliProjectDirForWorkspace({ workspaceDir: params.workspaceDir }),
+    );
+  }
   return {
-    sessionFile,
-    sessionsDir: pathOptions?.sessionsDir ?? path.dirname(sessionFile),
+    sessionFile: claudeCliFile ?? openclawSessionFile,
+    sessionsDirs,
   };
 }
 
@@ -146,16 +171,24 @@ async function loadCliSessionEntries(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  modelProvider?: string;
+  cliSessionId?: string;
+  workspaceDir?: string;
 }): Promise<unknown[]> {
   try {
-    const { sessionFile, sessionsDir } = resolveSafeCliSessionFile(params);
+    const { sessionFile, sessionsDirs } = resolveSafeCliSessionFile(params);
     const entryStat = await fsp.lstat(sessionFile);
     if (!entryStat.isFile() || entryStat.isSymbolicLink()) {
       return [];
     }
-    const realSessionsDir = (await safeRealpath(sessionsDir)) ?? path.resolve(sessionsDir);
     const realSessionFile = await safeRealpath(sessionFile);
-    if (!realSessionFile || !isPathWithinBase(realSessionsDir, realSessionFile)) {
+    if (!realSessionFile) {
+      return [];
+    }
+    const realSessionsDirs = await Promise.all(
+      sessionsDirs.map(async (dir) => (await safeRealpath(dir)) ?? path.resolve(dir)),
+    );
+    if (!realSessionsDirs.some((dir) => isPathWithinBase(dir, realSessionFile))) {
       return [];
     }
     const stat = await fsp.stat(realSessionFile);
@@ -176,6 +209,9 @@ export async function loadCliSessionHistoryMessages(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  modelProvider?: string;
+  cliSessionId?: string;
+  workspaceDir?: string;
 }): Promise<unknown[]> {
   const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
@@ -190,6 +226,9 @@ export async function loadCliSessionReseedMessages(params: {
   sessionKey?: string;
   agentId?: string;
   config?: OpenClawConfig;
+  modelProvider?: string;
+  cliSessionId?: string;
+  workspaceDir?: string;
 }): Promise<unknown[]> {
   const entries = await loadCliSessionEntries(params);
   const latestCompactionIndex = entries.findLastIndex((entry) => {

@@ -1762,6 +1762,8 @@ export function buildGatewaySessionRow(params: {
     responseUsage: entry?.responseUsage,
     modelProvider: rowModelProvider,
     model: rowModel,
+    cliSessionBindings: entry?.cliSessionBindings,
+    sessionFile: entry?.sessionFile,
     agentRuntime,
     contextTokens,
     deliveryContext: deliveryFields.deliveryContext,

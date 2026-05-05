@@ -303,6 +303,9 @@ export async function prepareCliRunContext(
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       config: params.config,
+      modelProvider: params.provider,
+      cliSessionId: params.cliSessionId ?? params.cliSessionBinding?.sessionId,
+      workspaceDir: params.workspaceDir,
     });
     return openClawHistoryMessages;
   };
@@ -409,6 +412,9 @@ export async function prepareCliRunContext(
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
+          modelProvider: params.provider,
+          cliSessionId: params.cliSessionId ?? params.cliSessionBinding?.sessionId,
+          workspaceDir: params.workspaceDir,
         }),
         prompt: preparedPrompt,
       });

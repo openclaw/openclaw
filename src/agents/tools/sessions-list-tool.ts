@@ -6,7 +6,7 @@ import {
   resolveSessionFilePathOptions,
   resolveStorePath,
 } from "../../config/sessions.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import {
@@ -15,6 +15,8 @@ import {
 } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { resolveAgentWorkspaceDir } from "../agent-scope.js";
+import { resolveActiveCliTranscriptPath } from "../cli-runner/claude-cli-paths.js";
 import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
@@ -217,31 +219,65 @@ export function createSessionsListTool(opts?: {
         const sessionFileRaw = (entry as { sessionFile?: unknown }).sessionFile;
         const sessionFile = readStringValue(sessionFileRaw);
         const resolvedAgentId = resolveAgentIdFromSessionKey(key);
+        const entryModelProvider = readStringValue(
+          (entry as { modelProvider?: unknown }).modelProvider,
+        );
+        const cliSessionBindings = (
+          entry as { cliSessionBindings?: Record<string, CliSessionBinding> }
+        ).cliSessionBindings;
+        const cliBoundSessionId = readStringValue(
+          cliSessionBindings?.[entryModelProvider ?? ""]?.sessionId,
+        );
+        const spawnedWorkspaceDir = readStringValue(
+          (entry as { spawnedWorkspaceDir?: unknown }).spawnedWorkspaceDir,
+        );
         let transcriptPath: string | undefined;
         if (sessionId) {
-          try {
-            const trimmedStorePath = storePath?.trim();
-            let effectiveStorePath: string | undefined;
-            if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
-              if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
-                effectiveStorePath = resolveStorePath(trimmedStorePath, {
-                  agentId: resolvedAgentId,
-                });
-              } else if (path.isAbsolute(trimmedStorePath)) {
-                effectiveStorePath = trimmedStorePath;
-              }
+          // For sessions running under a CLI model provider (claude-cli today),
+          // prefer the live transcript owned by the CLI itself. The
+          // openclaw-store sessionFile is a delivery-mirror surface for those
+          // sessions and may not even exist on disk; resolving to it produces
+          // the dashboard `transcriptPath: null` symptom this branch fixes.
+          if (entryModelProvider === "claude-cli" && cliBoundSessionId) {
+            try {
+              const workspaceDir =
+                spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, resolvedAgentId);
+              transcriptPath = resolveActiveCliTranscriptPath({
+                modelProvider: entryModelProvider,
+                cliSessionId: cliBoundSessionId,
+                workspaceDir,
+              });
+            } catch {
+              // resolveAgentWorkspaceDir can throw for unknown agent ids; fall
+              // through to the openclaw-store path resolution below.
+              transcriptPath = undefined;
             }
-            const filePathOpts = resolveSessionFilePathOptions({
-              agentId: resolvedAgentId,
-              storePath: effectiveStorePath,
-            });
-            transcriptPath = resolveSessionFilePath(
-              sessionId,
-              sessionFile ? { sessionFile } : undefined,
-              filePathOpts,
-            );
-          } catch {
-            transcriptPath = undefined;
+          }
+          if (!transcriptPath) {
+            try {
+              const trimmedStorePath = storePath?.trim();
+              let effectiveStorePath: string | undefined;
+              if (trimmedStorePath && trimmedStorePath !== "(multiple)") {
+                if (trimmedStorePath.includes("{agentId}") || trimmedStorePath.startsWith("~")) {
+                  effectiveStorePath = resolveStorePath(trimmedStorePath, {
+                    agentId: resolvedAgentId,
+                  });
+                } else if (path.isAbsolute(trimmedStorePath)) {
+                  effectiveStorePath = trimmedStorePath;
+                }
+              }
+              const filePathOpts = resolveSessionFilePathOptions({
+                agentId: resolvedAgentId,
+                storePath: effectiveStorePath,
+              });
+              transcriptPath = resolveSessionFilePath(
+                sessionId,
+                sessionFile ? { sessionFile } : undefined,
+                filePathOpts,
+              );
+            } catch {
+              transcriptPath = undefined;
+            }
           }
         }
 

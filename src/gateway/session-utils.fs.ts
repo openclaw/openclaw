@@ -13,6 +13,7 @@ import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  type CliTranscriptHint,
 } from "./session-transcript-files.fs.js";
 import {
   readSessionTranscriptIndex,
@@ -541,12 +542,25 @@ export async function readSessionMessagesAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   opts: ReadSessionMessagesAsyncOptions,
+  cliHint?: CliTranscriptHint,
 ): Promise<unknown[]> {
   if (opts.mode === "recent") {
     const { mode: _mode, ...recentOpts } = opts;
-    return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
+    return await readRecentSessionMessagesAsync(
+      sessionId,
+      storePath,
+      sessionFile,
+      recentOpts,
+      cliHint,
+    );
   }
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = findExistingTranscriptPath(
+    sessionId,
+    storePath,
+    sessionFile,
+    undefined,
+    cliHint,
+  );
   if (!filePath) {
     return [];
   }
@@ -582,8 +596,15 @@ export async function readSessionMessageCountAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
+  cliHint?: CliTranscriptHint,
 ): Promise<number> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = findExistingTranscriptPath(
+    sessionId,
+    storePath,
+    sessionFile,
+    undefined,
+    cliHint,
+  );
   if (!filePath) {
     return 0;
   }
@@ -625,13 +646,20 @@ export async function readRecentSessionMessagesAsync(
   storePath: string | undefined,
   sessionFile?: string,
   opts?: ReadRecentSessionMessagesOptions,
+  cliHint?: CliTranscriptHint,
 ): Promise<unknown[]> {
   const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
   if (maxMessages === 0) {
     return [];
   }
 
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = findExistingTranscriptPath(
+    sessionId,
+    storePath,
+    sessionFile,
+    undefined,
+    cliHint,
+  );
   if (!filePath) {
     return [];
   }
@@ -657,9 +685,21 @@ export async function readRecentSessionMessagesWithStatsAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   opts: ReadRecentSessionMessagesOptions,
+  cliHint?: CliTranscriptHint,
 ): Promise<ReadRecentSessionMessagesResult> {
-  const totalMessages = await readSessionMessageCountAsync(sessionId, storePath, sessionFile);
-  const messages = await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, opts);
+  const totalMessages = await readSessionMessageCountAsync(
+    sessionId,
+    storePath,
+    sessionFile,
+    cliHint,
+  );
+  const messages = await readRecentSessionMessagesAsync(
+    sessionId,
+    storePath,
+    sessionFile,
+    opts,
+    cliHint,
+  );
   const firstSeq = Math.max(1, totalMessages - messages.length + 1);
   const messagesWithSeq = messages.map((message, index) =>
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
@@ -991,8 +1031,15 @@ function findExistingTranscriptPath(
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
+  cliHint?: CliTranscriptHint,
 ): string | null {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const candidates = resolveSessionTranscriptCandidates(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+    cliHint,
+  );
   return candidates.find((p) => fs.existsSync(p)) ?? null;
 }
 
