@@ -1469,7 +1469,8 @@
                       "auth-credential-semantics",
                       "gateway/secrets",
                       "gateway/secrets-plan-contract",
-                      "gateway/trusted-proxy-auth"
+                      "gateway/trusted-proxy-auth",
+                      "gateway/external-auth-proxy"
                     ]
                   },
                   {
