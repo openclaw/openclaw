@@ -1,6 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
 
 const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
@@ -16,10 +18,13 @@ type PackageManifest = {
   dependencies?: Record<string, unknown>;
 };
 
-const selfManifest = requireFromHere("../package.json") as PackageManifest;
+function readSelfManifest(): PackageManifest {
+  const manifestPath = path.join(resolveAcpxPluginRoot(import.meta.url), "package.json");
+  return JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as PackageManifest;
+}
 
 function readManifestDependencyVersion(packageName: string): string {
-  const version = selfManifest.dependencies?.[packageName];
+  const version = readSelfManifest().dependencies?.[packageName];
   if (typeof version !== "string" || version.trim() === "") {
     throw new Error(`Missing ${packageName} dependency version in @openclaw/acpx manifest`);
   }
