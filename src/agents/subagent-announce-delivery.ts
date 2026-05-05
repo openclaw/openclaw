@@ -6,6 +6,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   mergeDeliveryContext,
@@ -694,7 +695,7 @@ function isGatewayAgentRunPending(response: unknown): boolean {
     return false;
   }
   const status = (response as { status?: unknown }).status;
-  return status === "accepted" || status === "in_flight" || status === "started";
+  return isNonTerminalAgentRunStatus(status);
 }
 
 function inferCompletionChatType(params: {
