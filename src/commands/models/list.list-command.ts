@@ -1,6 +1,7 @@
 /** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { exitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -244,8 +245,10 @@ export async function modelsListCommand(
 
   if (rows.length === 0) {
     runtime.log("No models found.");
+    exitAfterOneShotOutput(runtime);
     return;
   }
 
   printModelTable(rows, runtime, opts);
+  exitAfterOneShotOutput(runtime);
 }
