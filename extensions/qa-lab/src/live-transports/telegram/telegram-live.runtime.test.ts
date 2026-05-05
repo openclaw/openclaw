@@ -366,6 +366,7 @@ describe("telegram live qa runtime", () => {
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
       expectedSutMessageCount: 2,
+      replyToLatestSutMessage: true,
     });
     expect(
       scenarios
@@ -377,6 +378,7 @@ describe("telegram live qa runtime", () => {
         "TELEGRAM-LONG-FINAL-3CHUNK-END",
       ],
       expectedSutMessageCount: 3,
+      replyToLatestSutMessage: true,
     });
   });
 
