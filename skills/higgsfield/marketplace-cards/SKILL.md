@@ -12,6 +12,14 @@ description: |
   (use higgsfield-product-photoshoot), video generation or UGC ads (use
   higgsfield-generate), or Soul Character training (use higgsfield-soul-id).
 allowed-tools: Bash
+metadata:
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["higgsfield"] },
+        "homepage": "https://higgsfield.ai",
+      },
+  }
 ---
 
 # Marketplace Cards
@@ -21,7 +29,7 @@ The CLI first calls the backend enhancer, where marketplace rules and templates 
 
 ## Bootstrap
 
-1. If `higgsfield` is not on `$PATH`, install it by running the official installer with Bash: `curl -fsSL https://raw.githubusercontent.com/higgsfield-ai/cli/main/install.sh | sh`.
+1. If `higgsfield` is not on `$PATH`, stop and ask the user to install the official Higgsfield CLI manually. Do not run remote installer scripts from this skill.
 2. If `higgsfield account status` fails with authentication errors, ask the user to run `higgsfield auth login`.
 
 ## UX Rules

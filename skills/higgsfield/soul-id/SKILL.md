@@ -12,6 +12,14 @@ description: |
   NOT for: one-shot face swaps (use higgsfield-generate with --image),
   named-character / non-photo avatars (use higgsfield-generate with prompt).
 allowed-tools: Bash
+metadata:
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["higgsfield"] },
+        "homepage": "https://higgsfield.ai",
+      },
+  }
 ---
 
 # Higgsfield Soul Character
@@ -22,10 +30,7 @@ Train a face-faithful identity model. Reusable across all Soul-powered generatio
 
 Before any other command:
 
-1. If `higgsfield` is not on `$PATH`, install it:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/higgsfield-ai/cli/main/install.sh | sh
-   ```
+1. If `higgsfield` is not on `$PATH`, stop and ask the user to install the official Higgsfield CLI manually. Do not run remote installer scripts from this skill.
 2. If `higgsfield account status` fails with `Session expired` / `Not authenticated`, ask the user to run `higgsfield auth login` (interactive) and wait for confirmation.
 3. Soul training requires a paid plan (Basic+). If `higgsfield account status` shows free plan, tell the user before submitting.
 

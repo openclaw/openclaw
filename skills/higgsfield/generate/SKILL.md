@@ -8,6 +8,14 @@ description: |
   higgsfield-soul-id when the user wants their own face in generated output.
   Use higgsfield-product-photoshoot for professional product photography.
 allowed-tools: Bash
+metadata:
+  {
+    "openclaw":
+      {
+        "requires": { "bins": ["higgsfield"] },
+        "homepage": "https://higgsfield.ai",
+      },
+  }
 ---
 
 # Higgsfield Generate
@@ -16,12 +24,9 @@ Submit jobs to any Higgsfield model. Wraps the `higgsfield` CLI. Covers generic 
 
 ## Step 0 — Bootstrap
 
-Before any other command, make sure the CLI is installed and authenticated:
+Before any other command, make sure the CLI is already installed and authenticated:
 
-1. If `higgsfield` is not on `$PATH`, install it:
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/higgsfield-ai/cli/main/install.sh | sh
-   ```
+1. If `higgsfield` is not on `$PATH`, stop and ask the user to install the official Higgsfield CLI manually. Do not run remote installer scripts from this skill.
 2. If `higgsfield account status` fails with `Session expired` / `Not authenticated`, ask the user to run `higgsfield auth login` (interactive, opens a browser) and wait for them to confirm before continuing.
 
 Skip both checks if `higgsfield account status` already prints account info.
