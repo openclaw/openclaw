@@ -867,17 +867,17 @@ async function processMessageAfterDedupe(
   };
 
   if (message.fromMe) {
+    const cachedOutboundBeforeFromMe = cacheMessageId
+      ? resolveReplyContextFromCache({
+          accountId: account.accountId,
+          replyToId: cacheMessageId,
+          chatGuid: message.chatGuid,
+          chatIdentifier: message.chatIdentifier,
+          chatId: message.chatId,
+        })
+      : null;
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
-    // BlueBubbles self-chats can emit our outbound twice: first as `fromMe`,
-    // then as a reflected inbound copy from the same handle. Cache any explicit
-    // self-chat `fromMe` copy so the reflected duplicate does not become a new
-    // user turn. This is intentionally broader than assistant-only sends:
-    // outgoing messages are not inbound prompts, and letting their reflections
-    // through creates self-reply loops.
-    if (isSelfChatMessage) {
-      rememberBlueBubblesSelfChatCopy(selfChatLookup);
-    }
     if (cacheMessageId) {
       const pending = consumePendingOutboundMessageId({
         accountId: account.accountId,
@@ -886,6 +886,16 @@ async function processMessageAfterDedupe(
         chatId: message.chatId,
         body: rawBody,
       });
+      const matchesCachedAssistantOutbound =
+        cachedOutboundBeforeFromMe?.senderLabel === "me" &&
+        cachedOutboundBeforeFromMe.body === rawBody;
+      if (isSelfChatMessage && (pending || matchesCachedAssistantOutbound)) {
+        // BlueBubbles self-chats can emit assistant outbounds twice: first as
+        // `fromMe`, then as a reflected inbound copy from the same handle. Only
+        // mark confirmed pending/cached assistant sends; user-authored self-chat
+        // prompts must still dispatch when no assistant outbound matched.
+        rememberBlueBubblesSelfChatCopy(selfChatLookup);
+      }
       if (pending) {
         const displayId = getShortIdForUuid(cacheMessageId) || cacheMessageId;
         const previewSource = pending.snippetRaw || rawBody;

@@ -184,7 +184,7 @@ async function sendViaImsgFallback(params: {
         maxBuffer: 64 * 1024,
       },
     );
-    return { messageId: "imsg-fallback" };
+    return { messageId: "ok" };
   } catch {
     return null;
   }

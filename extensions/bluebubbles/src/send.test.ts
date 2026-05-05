@@ -847,7 +847,7 @@ describe("send", () => {
         password: "test",
       });
 
-      expect(result.messageId).toBe("imsg-fallback");
+      expect(result.messageId).toBe("ok");
       expect(mockExecFile).toHaveBeenCalledWith(
         "imsg",
         ["send", "--to", "+15550008888", "--service", "auto", "--text", "Hello"],
@@ -1003,7 +1003,7 @@ describe("send", () => {
         cfg: { channels: { bluebubbles: { serverUrl: "http://localhost:1234", password: "pw" } } },
       });
 
-      expect(result.messageId).toBe("imsg-fallback");
+      expect(result.messageId).toBe("ok");
       expect(mockExecFile).toHaveBeenCalledWith(
         "imsg",
         ["send", "--to", "+15551234567", "--service", "auto", "--text", "Hello fallback"],

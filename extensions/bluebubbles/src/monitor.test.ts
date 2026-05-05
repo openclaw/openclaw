@@ -2661,7 +2661,7 @@ describe("BlueBubbles webhook monitor", () => {
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
 
-    it("drops reflected self-chat prompts after an explicit fromMe copy", async () => {
+    it("preserves user-authored self-chat prompts after an explicit fromMe copy", async () => {
       setupWebhookTarget();
 
       const timestamp = Date.now();
@@ -2686,7 +2686,7 @@ describe("BlueBubbles webhook monitor", () => {
 
       await dispatchWebhookPayload(reflectedPayload);
 
-      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
 
     it("drops reflected self-chat copies when the send result only confirmed a pending text match", async () => {
