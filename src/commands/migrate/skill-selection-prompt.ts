@@ -67,6 +67,7 @@ function formatOption(
     case "inactive":
       return `${styleText("dim", S_CHECKBOX_INACTIVE)} ${styleText("dim", withHint)}`;
   }
+  return withHint;
 }
 
 export function promptMigrationSkillSelectionValues(
@@ -85,6 +86,7 @@ export function promptMigrationSkillSelectionValues(
       if (required && (value === undefined || value.length === 0)) {
         return "Please select at least one option.";
       }
+      return undefined;
     },
     render() {
       const withGuide = opts.withGuide ?? settings.withGuide;
