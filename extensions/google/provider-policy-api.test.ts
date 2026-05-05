@@ -44,4 +44,32 @@ describe("google provider policy public artifact", () => {
       api: "openai-completions",
     });
   });
+
+  it("forces explicit Gemma models onto native google-generative-ai transport", () => {
+    expect(
+      normalizeConfig({
+        provider: "google",
+        providerConfig: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+          api: "openai-completions",
+          models: [
+            {
+              id: "gemma-4-31b-it",
+              name: "Gemma 4 31B",
+              api: "openai-completions",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200000,
+              maxTokens: 8192,
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      api: "openai-completions",
+      models: [{ id: "gemma-4-31b-it", api: "google-generative-ai" }],
+    });
+  });
 });

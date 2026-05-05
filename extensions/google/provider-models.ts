@@ -172,8 +172,11 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
       googleTemplateIds: GEMMA_TEMPLATE_IDS,
       cliTemplateIds: GEMMA_TEMPLATE_IDS,
     };
+    // Gemma models only support the native Google Generative AI API;
+    // the OpenAI-compatible endpoint does not serve Gemma.
+    patch = { api: "google-generative-ai" as ProviderRuntimeModel["api"] };
     if (lower.startsWith("gemma-4")) {
-      patch = { reasoning: true };
+      patch.reasoning = true;
     }
   } else {
     return undefined;

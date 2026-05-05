@@ -108,6 +108,15 @@ export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   if (hasGoogleGenerativeAiModelApi) {
     return true;
   }
+  const hasExplicitGemmaModel =
+    provider.models?.some((model) =>
+      normalizeOptionalString((model as { id?: string | null })?.id)
+        ?.toLowerCase()
+        .startsWith("gemma-"),
+    ) ?? false;
+  if (hasExplicitGemmaModel) {
+    return true;
+  }
   if (providerKey !== "google" && providerKey !== "google-vertex") {
     return false;
   }
@@ -137,11 +146,17 @@ function normalizeProviderModels(
   let mutated = false;
   const nextModels = models.map((model) => {
     const nextId = normalizeId(model.id);
-    if (nextId === model.id) {
+    const lowerId = nextId.toLowerCase();
+    const shouldForceNativeGemmaApi =
+      lowerId.startsWith("gemma-") && model.api === "openai-completions";
+    if (nextId === model.id && !shouldForceNativeGemmaApi) {
       return model;
     }
     mutated = true;
-    return Object.assign({}, model, { id: nextId });
+    return Object.assign({}, model, {
+      id: nextId,
+      ...(shouldForceNativeGemmaApi ? { api: "google-generative-ai" } : {}),
+    });
   });
 
   return mutated ? { ...provider, models: nextModels } : provider;
