@@ -15,10 +15,17 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+  try {
+    if (start >= 0 && end > start) {
+      return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+    }
+    return JSON.parse(trimmed) as Record<string, unknown>;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`Failed to parse Tailscale JSON output: ${err.message}`);
+    }
+    throw err;
   }
-  return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
 /**

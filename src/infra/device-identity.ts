@@ -22,7 +22,38 @@ function resolveDefaultIdentityPath(): string {
 }
 
 function ensureDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  try {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  } catch (err) {
+    // Re-throw unless the directory already exists (EEXIST race with another process)
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+      throw err;
+    }
+  }
+}
+
+/**
+ * Write a file atomically using write-to-temp + rename.
+ * Prevents partial/corrupt files when the process crashes, disk fills, or
+ * permissions change mid-write — critical for cryptographic key material.
+ */
+function atomicWriteFileSync(
+  filePath: string,
+  content: string,
+  options: { mode?: number } = {},
+): void {
+  const tmpPath = `${filePath}.tmp.${process.pid}`;
+  try {
+    fs.writeFileSync(tmpPath, content, { mode: options.mode ?? 0o644 });
+    fs.renameSync(tmpPath, filePath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* best-effort cleanup */
+    }
+    throw err;
+  }
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -66,42 +97,40 @@ export function loadOrCreateDeviceIdentity(
   filePath: string = resolveDefaultIdentityPath(),
 ): DeviceIdentity {
   try {
-    if (fs.existsSync(filePath)) {
-      const raw = fs.readFileSync(filePath, "utf8");
-      const parsed = JSON.parse(raw) as StoredIdentity;
-      if (
-        parsed?.version === 1 &&
-        typeof parsed.deviceId === "string" &&
-        typeof parsed.publicKeyPem === "string" &&
-        typeof parsed.privateKeyPem === "string"
-      ) {
-        const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-        if (derivedId && derivedId !== parsed.deviceId) {
-          const updated: StoredIdentity = {
-            ...parsed,
-            deviceId: derivedId,
-          };
-          fs.writeFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
-          try {
-            fs.chmodSync(filePath, 0o600);
-          } catch {
-            // best-effort
-          }
-          return {
-            deviceId: derivedId,
-            publicKeyPem: parsed.publicKeyPem,
-            privateKeyPem: parsed.privateKeyPem,
-          };
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as StoredIdentity;
+    if (
+      parsed?.version === 1 &&
+      typeof parsed.deviceId === "string" &&
+      typeof parsed.publicKeyPem === "string" &&
+      typeof parsed.privateKeyPem === "string"
+    ) {
+      const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+      if (derivedId && derivedId !== parsed.deviceId) {
+        const updated: StoredIdentity = {
+          ...parsed,
+          deviceId: derivedId,
+        };
+        atomicWriteFileSync(filePath, `${JSON.stringify(updated, null, 2)}\n`, { mode: 0o600 });
+        try {
+          fs.chmodSync(filePath, 0o600);
+        } catch {
+          // best-effort
         }
         return {
-          deviceId: parsed.deviceId,
+          deviceId: derivedId,
           publicKeyPem: parsed.publicKeyPem,
           privateKeyPem: parsed.privateKeyPem,
         };
       }
+      return {
+        deviceId: parsed.deviceId,
+        publicKeyPem: parsed.publicKeyPem,
+        privateKeyPem: parsed.privateKeyPem,
+      };
     }
   } catch {
-    // fall through to regenerate
+    // fall through to regenerate (ENOENT = no file, other errors = corrupt/unreadable)
   }
 
   const identity = generateIdentity();
@@ -113,7 +142,7 @@ export function loadOrCreateDeviceIdentity(
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  fs.writeFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
+  atomicWriteFileSync(filePath, `${JSON.stringify(stored, null, 2)}\n`, { mode: 0o600 });
   try {
     fs.chmodSync(filePath, 0o600);
   } catch {

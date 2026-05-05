@@ -92,7 +92,15 @@ async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise
 }
 
 async function readQueueEntry(filePath: string): Promise<QueuedDelivery> {
-  return JSON.parse(await fs.promises.readFile(filePath, "utf-8")) as QueuedDelivery;
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  try {
+    return JSON.parse(raw) as QueuedDelivery;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`Failed to parse queue entry from ${filePath}: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {

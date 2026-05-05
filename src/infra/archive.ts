@@ -887,5 +887,12 @@ export async function fileExists(filePath: string): Promise<boolean> {
 
 export async function readJsonFile<T>(filePath: string): Promise<T> {
   const raw = await fs.readFile(filePath, "utf-8");
-  return JSON.parse(raw) as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      throw new Error(`Failed to parse JSON from ${filePath}: ${err.message}`);
+    }
+    throw err;
+  }
 }
