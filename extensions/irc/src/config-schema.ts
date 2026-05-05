@@ -60,6 +60,7 @@ const IrcAccountSchemaBase = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    neverReply: z.boolean().optional(),
     groups: z.record(z.string(), IrcGroupSchema.optional()).optional(),
     channels: z.array(z.string()).optional(),
     mentionPatterns: z.array(z.string()).optional(),

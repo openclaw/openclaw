@@ -493,14 +493,18 @@ export async function prepareSlackMessage(params: {
   ) {
     logVerbose("slack: group message stored for context (neverReply: true)");
     const pendingText = (message.text ?? "").trim();
+    const fallbackFile = message.files?.length
+      ? `[Slack file: ${formatSlackFileReference(message.files[0])}]`
+      : "";
+    const pendingBody = pendingText || fallbackFile;
     recordPendingHistoryEntryIfEnabled({
       historyMap: ctx.channelHistories,
       historyKey,
       limit: ctx.historyLimit,
-      entry: pendingText
+      entry: pendingBody
         ? {
             sender: await resolveSenderName(),
-            body: pendingText,
+            body: pendingBody,
             timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
             messageId: message.ts,
           }
