@@ -1,3 +1,8 @@
+---
+name: canvas
+description: Display HTML content on connected OpenClaw nodes (Mac app, iOS, Android). Use when the user asks to "show this on my phone", "display on canvas", "present HTML", "render this on a connected device", or needs to push interactive content to a node canvas view.
+---
+
 # Canvas Skill
 
 Display HTML content on connected OpenClaw nodes (Mac app, iOS, Android).
