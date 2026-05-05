@@ -13,6 +13,8 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
+import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
+import { collectExplicitAllowlist } from "./tool-policy.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 type CreateOpenClawToolsOptions = Parameters<
@@ -226,6 +228,37 @@ describe("optional media tool factory planning", () => {
       videoGenerate: true,
       musicGenerate: true,
       pdf: true,
+    });
+  });
+
+  it("preserves implicit allow-all media factories for alsoAllow-only tool policies", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+        },
+      },
+    };
+    installSnapshot(config, []);
+
+    const toolAllowlist = collectExplicitAllowlist([
+      pickSandboxToolPolicy({ alsoAllow: ["group:memory"] }),
+    ]);
+    expect(toolAllowlist).not.toContain("*");
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+        toolAllowlist,
+      }),
+    ).toEqual({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+      pdf: false,
     });
   });
 

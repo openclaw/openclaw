@@ -8,6 +8,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import {
   hasSnapshotCapabilityAvailability,
   hasSnapshotProviderEnvAvailability,
@@ -78,7 +79,11 @@ export function isToolExplicitlyAllowedByFactoryPolicy(params: {
 export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
-  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  const merged = lists.flatMap((list) =>
+    Array.isArray(list)
+      ? list.map((entry) => (entry === IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY ? "*" : entry))
+      : [],
+  );
   return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
 }
 

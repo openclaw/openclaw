@@ -11,6 +11,7 @@ import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
+  IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY,
   isOwnerOnlyToolName,
   normalizeToolName,
   resolveOwnerOnlyToolApprovalClass,
@@ -156,6 +157,7 @@ describe("tool-policy", () => {
   it("uses alsoAllow entries for plugin discovery without the synthetic allow-all", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: ["lobster"] })])).toEqual([
       "lobster",
+      IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY,
       DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
     ]);
     expect(
