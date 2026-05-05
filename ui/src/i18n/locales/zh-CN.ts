@@ -624,7 +624,7 @@ export const zh_CN: TranslationMap = {
       grounded: "已落地",
       signals: "信号",
       promoted: "已提升",
-      groundedLed: "接地指示灯",
+      groundedLed: "落地主导",
       emptyShortTerm: "当前没有活跃的短期项目。",
       emptyGrounded: "没有暂存的已落地项目。",
       emptySignals: "当前没有活跃的信号。",
