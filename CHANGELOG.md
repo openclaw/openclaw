@@ -354,6 +354,7 @@ Docs: https://docs.openclaw.ai
 - Agents/messaging: surface CLI subprocess watchdog/turn timeout messages to chat users when verbose failures are off, instead of collapsing them into generic external-run failure copy. Fixes #77007. (#77015) Thanks @neeravmakwana.
 - Agents/sessions: after embedded Pi runs, append assistant-visible reply text to session JSONL only when Pi did not already persist an equivalent tail assistant entry, without re-mirroring the user prompt Pi owns. Fixes #77823. (#77839) Thanks @neeravmakwana.
 - Plugins/CLI: load the install-records ledger when listing channel-catalog entries, so npm-installed third-party channel plugins resolve through `openclaw channels login`/`channels add` instead of failing with `Unsupported channel`. (#77269) Thanks @pumpkinxing1.
+- Security/exec allowlist: collapse `.` and `..` segments in wildcard exec allowlist match targets and canonicalize absolute executable path candidates before regex matching, so a target like `/usr/bin/../../bin/sh` no longer string-matches a `/usr/bin/**` allowlist entry while resolving outside the declared root. (#75723) Thanks @eleqtrizit and @zsxsoft.
 
 ## 2026.5.3-1
 
