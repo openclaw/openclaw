@@ -304,6 +304,47 @@ export type AgentRuntimeTransportPlan = {
   }): Record<string, unknown>;
 };
 
+export type PreparedRuntimeProviderHandle = {
+  providerId: string;
+  authProfileId?: string;
+};
+
+export type PreparedRuntimeModelCatalog = {
+  provider: string;
+  modelId: string;
+  modelApi?: string;
+};
+
+export type PreparedRuntimeChannelOutbound = {
+  channelId: string;
+  outboundAdapterId?: string;
+};
+
+export type PreparedRuntimeMediaHandle = {
+  providerId: string;
+};
+
+export type PreparedRuntimeSpeechTts = {
+  providerId: string;
+  voiceId?: string;
+};
+
+export type AgentRuntimePreparedFacts = {
+  providers?: PreparedRuntimeProviderHandle[];
+  models?: PreparedRuntimeModelCatalog[];
+  channels?: PreparedRuntimeChannelOutbound[];
+  media?: PreparedRuntimeMediaHandle[];
+  speech?: PreparedRuntimeSpeechTts[];
+};
+
+export type AgentRuntimePreparedRuntimePlan = {
+  buildPreparedFacts?(params?: {
+    workspaceDir?: string;
+    agentDir?: string;
+    config?: AgentRuntimeConfig;
+  }): AgentRuntimePreparedFacts;
+};
+
 export type AgentRuntimePlan = {
   resolvedRef: AgentRuntimeResolvedRef;
   auth: AgentRuntimeAuthPlan;
@@ -320,6 +361,7 @@ export type AgentRuntimePlan = {
   delivery: AgentRuntimeDeliveryPlan;
   outcome: AgentRuntimeOutcomePlan;
   transport: AgentRuntimeTransportPlan;
+  prepared?: AgentRuntimePreparedRuntimePlan;
   observability: {
     resolvedRef: string;
     provider: string;
