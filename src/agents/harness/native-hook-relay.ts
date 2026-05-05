@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { writePrivateTextAtomicSync } from "../../infra/private-file-store.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
@@ -815,11 +815,10 @@ function writeNativeHookRelayBridgeRecord(
   registryPath: string,
   record: NativeHookRelayBridgeRecord,
 ): void {
-  writePrivateTextAtomicSync({
-    rootDir: path.dirname(registryPath),
-    filePath: registryPath,
-    content: `${JSON.stringify(record)}\n`,
-  });
+  privateFileStoreSync(path.dirname(registryPath)).writeText(
+    path.basename(registryPath),
+    `${JSON.stringify(record)}\n`,
+  );
 }
 
 function nativeHookRelayBridgeRegistryPath(relayId: string): string {

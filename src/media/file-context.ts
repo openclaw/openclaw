@@ -1,4 +1,4 @@
-import { sanitizeUntrustedFileName } from "../infra/filename.js";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 const XML_ESCAPE_MAP: Record<string, string> = {

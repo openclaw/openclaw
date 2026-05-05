@@ -13,8 +13,8 @@ import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 const planOpenClawModelsJsonMock = vi.fn();
 const writePrivateTextAtomicMock = vi.fn();
-let actualWritePrivateTextAtomic:
-  | typeof import("../infra/private-file-store.js").writePrivateTextAtomic
+let actualPrivateFileStore:
+  | typeof import("../infra/private-file-store.js").privateFileStore
   | undefined;
 
 installModelsConfigTestHooks();
@@ -74,11 +74,21 @@ beforeAll(async () => {
     const actual = await vi.importActual<typeof import("../infra/private-file-store.js")>(
       "../infra/private-file-store.js",
     );
-    actualWritePrivateTextAtomic = actual.writePrivateTextAtomic;
+    actualPrivateFileStore = actual.privateFileStore;
     return {
       ...actual,
-      writePrivateTextAtomic: (...args: Parameters<typeof actual.writePrivateTextAtomic>) =>
-        writePrivateTextAtomicMock(...args),
+      privateFileStore: (rootDir: string) => {
+        const store = actual.privateFileStore(rootDir);
+        return {
+          ...store,
+          writeText: (relativePath: string, content: string | Uint8Array) =>
+            writePrivateTextAtomicMock({
+              rootDir,
+              filePath: path.join(rootDir, relativePath),
+              content,
+            }),
+        };
+      },
     };
   });
   ({ ensureOpenClawModelsJson } = await import("./models-config.js"));
@@ -91,11 +101,14 @@ beforeEach(() => {
   writePrivateTextAtomicMock
     .mockReset()
     .mockImplementation(
-      async (...args: Parameters<NonNullable<typeof actualWritePrivateTextAtomic>>) => {
-        if (!actualWritePrivateTextAtomic) {
+      async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
+        if (!actualPrivateFileStore) {
           throw new Error("private file store mock not initialized");
         }
-        return await actualWritePrivateTextAtomic(...args);
+        return await actualPrivateFileStore(params.rootDir).writeText(
+          path.basename(params.filePath),
+          params.content,
+        );
       },
     );
   planOpenClawModelsJsonMock
@@ -245,10 +258,13 @@ describe("models-config write serialization", () => {
             await new Promise((resolve) => setTimeout(resolve, 10));
           }
           try {
-            if (!actualWritePrivateTextAtomic) {
+            if (!actualPrivateFileStore) {
               throw new Error("private file store mock not initialized");
             }
-            return await actualWritePrivateTextAtomic(params);
+            return await actualPrivateFileStore(params.rootDir).writeText(
+              path.basename(params.filePath),
+              params.content,
+            );
           } finally {
             if (isModelsWrite) {
               inFlightWrites -= 1;

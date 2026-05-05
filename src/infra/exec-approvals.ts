@@ -12,10 +12,10 @@ import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
-import { writePrivateTextAtomicSync } from "./private-file-store.js";
-import { assertNoSymlinkParentsSync } from "./symlink-parents.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -500,7 +500,7 @@ export function saveExecApprovals(file: ExecApprovalsFile) {
 function writeExecApprovalsRaw(filePath: string, raw: string) {
   const dir = ensureDir(filePath);
   assertSafeExecApprovalsDestination(filePath);
-  writePrivateTextAtomicSync({ rootDir: dir, filePath, content: raw });
+  privateFileStoreSync(dir).writeText(path.basename(filePath), raw);
 }
 
 export function restoreExecApprovalsSnapshot(snapshot: ExecApprovalsSnapshot): void {

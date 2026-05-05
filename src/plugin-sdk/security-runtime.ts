@@ -91,7 +91,7 @@ export {
   type ResolvedAbsolutePath,
   type ResolvedWritableAbsolutePath,
 } from "../infra/fs-safe.js";
-export { sanitizeUntrustedFileName } from "../infra/filename.js";
+export { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 export {
   privateFileStore,
   writePrivateJsonAtomic,
@@ -101,18 +101,16 @@ export {
   type PrivateFileStore,
 } from "../infra/private-file-store.js";
 export {
+  movePathWithCopyFallback,
   replaceFileAtomic,
   replaceFileAtomicSync,
+  type MovePathWithCopyFallbackOptions,
   type ReplaceFileAtomicFileSystem,
   type ReplaceFileAtomicOptions,
   type ReplaceFileAtomicResult,
   type ReplaceFileAtomicSyncFileSystem,
   type ReplaceFileAtomicSyncOptions,
 } from "../infra/replace-file.js";
-export {
-  movePathWithCopyFallback,
-  type MovePathWithCopyFallbackOptions,
-} from "../infra/move-path.js";
 export {
   writeSiblingTempFile,
   type WriteSiblingTempFileOptions,
@@ -122,7 +120,7 @@ export {
   assertNoSymlinkParents,
   assertNoSymlinkParentsSync,
   type AssertNoSymlinkParentsOptions,
-} from "../infra/symlink-parents.js";
+} from "../infra/fs-safe-advanced.js";
 export { ensurePortAvailable } from "../infra/ports.js";
 export { generateSecureToken } from "../infra/secure-random.js";
 export {
@@ -133,7 +131,7 @@ export {
   resolveStrictExistingPathsWithinRoot,
   resolveWritablePathWithinRoot,
 } from "../infra/root-paths.js";
-export { writeViaSiblingTempPath } from "../infra/sibling-temp-write.js";
+export { writeViaSiblingTempPath } from "../infra/fs-safe-advanced.js";
 export { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 export { redactSensitiveText } from "../logging/redact.js";
 export { safeEqualSecret } from "../security/secret-equal.js";

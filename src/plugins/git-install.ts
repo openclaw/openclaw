@@ -1,8 +1,8 @@
 import "../infra/fs-safe-defaults.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { replaceDirectoryAtomic } from "@openclaw/fs-safe/atomic";
 import { withTempDir } from "../infra/install-source-utils.js";
+import { replaceDirectoryAtomic } from "../infra/replace-file.js";
 import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,

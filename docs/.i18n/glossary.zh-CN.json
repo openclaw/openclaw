@@ -60,6 +60,10 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Secure file operations",
+    "target": "安全文件操作"
+  },
+  {
     "source": "Sessions",
     "target": "会话"
   },

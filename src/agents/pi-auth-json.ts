@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
-import { readPrivateJson, writePrivateJsonAtomic } from "../infra/private-file-store.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -28,7 +28,7 @@ const AuthJsonShapeSchema = z.record(z.string(), z.unknown());
 
 async function readAuthJson(rootDir: string, filePath: string): Promise<AuthJsonShape> {
   try {
-    const parsed = await readPrivateJson({ rootDir, filePath });
+    const parsed = await privateFileStore(rootDir).readJson(path.relative(rootDir, filePath));
     return safeParseWithSchema(AuthJsonShapeSchema, parsed) ?? {};
   } catch {
     return {};
@@ -73,10 +73,7 @@ export async function ensurePiAuthJsonFromAuthProfiles(agentDir: string): Promis
     return { wrote: false, authPath };
   }
 
-  await writePrivateJsonAtomic({
-    rootDir: agentDir,
-    filePath: authPath,
-    value: existing,
+  await privateFileStore(agentDir).writeJson(path.basename(authPath), existing, {
     trailingNewline: true,
   });
 

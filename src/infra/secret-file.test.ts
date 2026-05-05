@@ -124,25 +124,25 @@ describe("readSecretFileSync", () => {
         }),
       label: "Telegram bot token",
       options: { rejectSymlink: true },
-      expected: () => undefined,
+      expected: undefined,
     },
     {
       name: "returns undefined from the non-throwing helper for blank file paths",
       pathValue: async () => "   ",
       label: "Telegram bot token",
       options: undefined,
-      expected: () => undefined,
+      expected: undefined,
     },
     {
       name: "returns undefined from the non-throwing helper for missing path values",
       pathValue: async () => undefined,
       label: "Telegram bot token",
       options: undefined,
-      expected: () => undefined,
+      expected: undefined,
     },
   ])("$name", async ({ pathValue, label, options, expected }) => {
     const file = await pathValue();
-    expect(tryReadSecretFileSync(file, label, options)).toBe((expected as () => undefined)());
+    expect(tryReadSecretFileSync(file, label, options)).toBe(expected);
   });
 });
 

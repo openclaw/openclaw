@@ -12,7 +12,7 @@ import {
   type SessionHeader,
 } from "@mariozechner/pi-coding-agent";
 import { appendRegularFile } from "../../infra/fs-safe.js";
-import { writePrivateTextAtomic } from "../../infra/private-file-store.js";
+import { privateFileStore } from "../../infra/private-file-store.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
@@ -295,11 +295,10 @@ export async function writeTranscriptFileAtomic(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): Promise<void> {
-  await writePrivateTextAtomic({
-    rootDir: path.dirname(filePath),
-    filePath,
-    content: serializeTranscriptFileEntries(entries),
-  });
+  await privateFileStore(path.dirname(filePath)).writeText(
+    path.basename(filePath),
+    serializeTranscriptFileEntries(entries),
+  );
 }
 
 export async function persistTranscriptStateMutation(params: {

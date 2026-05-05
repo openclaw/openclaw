@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { readPrivateJson, writePrivateJsonAtomic } from "../infra/private-file-store.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type { TuiSessionList } from "./tui-backend.js";
 import type { SessionScope } from "./tui-types.js";
@@ -32,10 +32,7 @@ export function buildTuiLastSessionScopeKey(params: {
 
 async function readStore(filePath: string): Promise<LastSessionStore> {
   try {
-    const parsed = await readPrivateJson({
-      rootDir: path.dirname(filePath),
-      filePath,
-    });
+    const parsed = await privateFileStore(path.dirname(filePath)).readJson(path.basename(filePath));
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as LastSessionStore)
       : {};
@@ -92,10 +89,7 @@ export async function writeTuiLastSessionKey(params: {
     sessionKey,
     updatedAt: Date.now(),
   };
-  await writePrivateJsonAtomic({
-    rootDir: path.dirname(filePath),
-    filePath,
-    value: store,
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), store, {
     trailingNewline: true,
   });
 }

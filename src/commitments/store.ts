@@ -3,7 +3,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { readPrivateJson, writePrivateJsonAtomic } from "../infra/private-file-store.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -111,10 +111,7 @@ function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile 
 async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
   const resolved = resolveCommitmentStorePath(storePath);
   try {
-    const parsed = await readPrivateJson({
-      rootDir: path.dirname(resolved),
-      filePath: resolved,
-    });
+    const parsed = await privateFileStore(path.dirname(resolved)).readJson(path.basename(resolved));
     if (
       !isRecord(parsed) ||
       parsed.version !== STORE_VERSION ||
@@ -151,11 +148,10 @@ export async function saveCommitmentStore(
   store: CommitmentStoreFile,
 ): Promise<void> {
   const resolved = resolveCommitmentStorePath(storePath);
-  await writePrivateJsonAtomic({
-    rootDir: path.dirname(resolved),
-    filePath: resolved,
-    value: sanitizeStoreForWrite(store),
-  });
+  await privateFileStore(path.dirname(resolved)).writeJson(
+    path.basename(resolved),
+    sanitizeStoreForWrite(store),
+  );
 }
 
 function generateCommitmentId(nowMs: number): string {

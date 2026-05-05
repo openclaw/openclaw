@@ -2,7 +2,7 @@ import "../infra/fs-safe-defaults.js";
 import type fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createSidecarLockManager } from "@openclaw/fs-safe/advanced";
+import { createSidecarLockManager } from "../infra/sidecar-lock.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 

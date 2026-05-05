@@ -19,7 +19,7 @@ import {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
-import { readJsonFileStrict } from "../infra/json-files.js";
+import { readJson } from "../infra/json-files.js";
 import { isPathInside, isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 export type { NpmIntegrityDrift, NpmSpecResolution };
@@ -32,7 +32,7 @@ export {
   installPackageDirWithManifestDeps,
   isPathInside,
   isPathInsideWithRealpath,
-  readJsonFileStrict as readJsonFile,
+  readJson as readJsonFile,
   resolveArchiveKind,
   resolveArchiveSourcePath,
   resolveCanonicalInstallTarget,

@@ -15,7 +15,7 @@ import {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
 } from "../infra/install-target.js";
-import { readJsonFileStrict } from "../infra/json-files.js";
+import { readJson } from "../infra/json-files.js";
 import {
   finalizeNpmSpecArchiveInstall,
   installFromNpmSpecArchiveWithInstaller,
@@ -52,7 +52,7 @@ export {
   isPathInside,
   loadBundleManifest,
   loadPluginManifest,
-  readJsonFileStrict as readJsonFile,
+  readJson as readJsonFile,
   resolveArchiveKind,
   resolveArchiveSourcePath,
   resolveCanonicalInstallTarget,

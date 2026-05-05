@@ -1,6 +1,9 @@
 import "../infra/fs-safe-defaults.js";
-import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
-import { readLocalFileSafely as readLocalFileSafelyImpl } from "@openclaw/fs-safe/root";
+import {
+  FsSafeError,
+  readLocalFileSafely as readLocalFileSafelyImpl,
+  type FsSafeErrorCode,
+} from "../infra/fs-safe.js";
 
 export type FsSafeLikeError = {
   code: FsSafeErrorCode;

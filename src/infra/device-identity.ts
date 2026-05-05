@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { writePrivateJsonAtomicSync } from "./private-file-store.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -78,10 +78,7 @@ export function loadOrCreateDeviceIdentity(
             ...parsed,
             deviceId: derivedId,
           };
-          writePrivateJsonAtomicSync({
-            rootDir: path.dirname(filePath),
-            filePath,
-            value: updated,
+          privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), updated, {
             trailingNewline: true,
           });
           return {
@@ -109,10 +106,7 @@ export function loadOrCreateDeviceIdentity(
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  writePrivateJsonAtomicSync({
-    rootDir: path.dirname(filePath),
-    filePath,
-    value: stored,
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stored, {
     trailingNewline: true,
   });
   return identity;

@@ -7,7 +7,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
-import { readPrivateText, writePrivateTextAtomic } from "../infra/private-file-store.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -86,10 +86,7 @@ async function readExistingModelsFile(pathname: string): Promise<{
   parsed: unknown;
 }> {
   try {
-    const raw = await readPrivateText({
-      rootDir: path.dirname(pathname),
-      filePath: pathname,
-    });
+    const raw = await privateFileStore(path.dirname(pathname)).readText(path.basename(pathname));
     if (raw === null) {
       return {
         raw: "",
@@ -118,11 +115,7 @@ export async function writeModelsFileAtomicForModelsJson(
   targetPath: string,
   contents: string,
 ): Promise<void> {
-  await writePrivateTextAtomic({
-    rootDir: path.dirname(targetPath),
-    filePath: targetPath,
-    content: contents,
-  });
+  await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
 }
 
 function resolveModelsConfigInput(config?: OpenClawConfig): {

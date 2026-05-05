@@ -366,5 +366,5 @@ async function resolveCanonicalCandidate(targetPath: string): Promise<string> {
 export function setReadOpenFlagsResolverForTest(
   _resolver: (() => { flags: number; supportsNoFollow: boolean }) | undefined,
 ): void {
-  // Retained for older OpenShell tests; pinned reads now delegate to @openclaw/fs-safe.
+  // Retained for older OpenShell tests; pinned reads now delegate to fs-safe.
 }

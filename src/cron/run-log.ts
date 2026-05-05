@@ -4,7 +4,7 @@ import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
-import { writePrivateTextAtomic } from "../infra/private-file-store.js";
+import { privateFileStore } from "../infra/private-file-store.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -148,11 +148,10 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
     .map((l) => l.trim())
     .filter(Boolean);
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
-  await writePrivateTextAtomic({
-    rootDir: path.dirname(filePath),
-    filePath,
-    content: `${kept.join("\n")}\n`,
-  });
+  await privateFileStore(path.dirname(filePath)).writeText(
+    path.basename(filePath),
+    `${kept.join("\n")}\n`,
+  );
 }
 
 export async function appendCronRunLog(

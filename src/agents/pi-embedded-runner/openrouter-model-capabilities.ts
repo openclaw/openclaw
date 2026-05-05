@@ -19,11 +19,11 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
-import { writePrivateJsonAtomicSync } from "../../infra/private-file-store.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
@@ -94,11 +94,7 @@ function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
     const payload: DiskCachePayload = {
       models: Object.fromEntries(map),
     };
-    writePrivateJsonAtomicSync({
-      rootDir: dirname(cachePath),
-      filePath: cachePath,
-      value: payload,
-    });
+    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);

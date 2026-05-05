@@ -10,7 +10,7 @@ import {
 } from "../shared/device-auth-store.js";
 import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
-import { writePrivateJsonAtomicSync } from "./private-file-store.js";
+import { privateFileStoreSync } from "./private-file-store.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
 const DeviceAuthStoreSchema = z.object({
@@ -36,10 +36,7 @@ function readStore(filePath: string): DeviceAuthStore | null {
 }
 
 function writeStore(filePath: string, store: DeviceAuthStore): void {
-  writePrivateJsonAtomicSync({
-    rootDir: path.dirname(filePath),
-    filePath,
-    value: store,
+  privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), store, {
     trailingNewline: true,
   });
 }

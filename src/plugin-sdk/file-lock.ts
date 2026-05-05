@@ -1,5 +1,5 @@
 import "../infra/fs-safe-defaults.js";
-import { createSidecarLockManager } from "@openclaw/fs-safe/advanced";
+import { createSidecarLockManager } from "../infra/sidecar-lock.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {

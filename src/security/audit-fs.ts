@@ -1,4 +1,3 @@
-import "../infra/fs-safe-defaults.js";
 export {
   formatPermissionDetail,
   formatPermissionRemediation,
@@ -6,4 +5,4 @@ export {
   safeStat,
   type PermissionCheck,
   type PermissionCheckOptions,
-} from "@openclaw/fs-safe/permissions";
+} from "../infra/permissions.js";

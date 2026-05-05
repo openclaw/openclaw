@@ -1,4 +1,3 @@
-import "../infra/fs-safe-defaults.js";
 export {
   createIcaclsResetCommand,
   formatIcaclsResetCommand,
@@ -7,7 +6,7 @@ export {
   parseIcaclsOutput,
   resolveWindowsUserPrincipal,
   summarizeWindowsAcl,
-  type PermissionExec as ExecFn,
+  type ExecFn,
   type WindowsAclEntry,
   type WindowsAclSummary,
-} from "@openclaw/fs-safe/advanced";
+} from "../infra/permissions.js";

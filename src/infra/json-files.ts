@@ -8,9 +8,11 @@ export {
   readJsonSync,
   tryReadJson,
   tryReadJson as readJsonFile,
+  tryReadJsonSync,
   tryReadJsonSync as readJsonFileSync,
   writeJson,
   writeJson as writeJsonAtomic,
+  writeJsonSync,
 } from "@openclaw/fs-safe/json";
 export { writeTextAtomic } from "@openclaw/fs-safe/atomic";
 export { createAsyncLock } from "@openclaw/fs-safe/advanced";
