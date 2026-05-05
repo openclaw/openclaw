@@ -57,16 +57,16 @@ jobs:
 
       - name: Install opengrep
         env:
-          # Pin both the install script (by commit SHA) and the binary version.
-          # The script SHA must match the v1.19.0 release tag in opengrep/opengrep
-          # so a compromised or force-pushed `main` cannot RCE in our CI runner.
-          # Bump both together when upgrading.
           OPENGREP_VERSION: v1.19.0
-          OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
+          OPENGREP_ASSET: opengrep_manylinux_x86
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
-            | bash -s -- -v "$OPENGREP_VERSION"
-          echo "$HOME/.opengrep/cli/latest" >> "$GITHUB_PATH"
+          install_dir="$HOME/.opengrep/cli/latest"
+          mkdir -p "$install_dir"
+          curl -fsSL --retry 3 \
+            "https://github.com/opengrep/opengrep/releases/download/${OPENGREP_VERSION}/${OPENGREP_ASSET}" \
+            -o "$install_dir/opengrep"
+          chmod +x "$install_dir/opengrep"
+          echo "$install_dir" >> "$GITHUB_PATH"
 
       - name: Verify opengrep
         run: opengrep --version
