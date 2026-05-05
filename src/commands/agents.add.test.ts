@@ -81,6 +81,47 @@ describe("agents add command", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("suggests a sibling workspace for a non-default agent when defaults.workspace is configured", async () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-agents-add-state");
+    const textMock = vi.fn().mockRejectedValue(new WizardCancelledError());
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        ...baseConfigSnapshot.config,
+        agents: {
+          defaults: { workspace: "/tmp/openclaw-main-workspace" },
+          list: [{ id: "main", default: true }],
+        },
+      },
+      sourceConfig: {
+        ...baseConfigSnapshot.config,
+        agents: {
+          defaults: { workspace: "/tmp/openclaw-main-workspace" },
+          list: [{ id: "main", default: true }],
+        },
+      },
+    });
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn().mockResolvedValue(undefined),
+      text: textMock,
+      confirm: vi.fn(),
+      note: vi.fn(),
+      outro: vi.fn(),
+    });
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    await agentsAddCommand({ name: "New Bot" }, runtime);
+
+    expect(textMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Workspace directory",
+        initialValue: path.join(stateDir, "workspace-new-bot"),
+      }),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("copies only portable auth profiles when seeding a new agent store", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-auth-copy-"));
     try {
