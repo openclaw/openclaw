@@ -1590,7 +1590,7 @@
     "test:install:e2e:openai": "OPENCLAW_E2E_MODELS=openai bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:live": "node scripts/test-live.mjs",
-    "test:live:cache": "bun scripts/check-live-cache.ts",
+    "test:live:cache": "node --import tsx scripts/check-live-cache.ts",
     "test:live:codex-harness": "OPENCLAW_LIVE_CODEX_HARNESS=1 node scripts/test-live.mjs -- src/gateway/gateway-codex-harness.live.test.ts",
     "test:live:crestodian-rescue-channel": "OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL=1 node scripts/test-live.mjs -- src/crestodian/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
