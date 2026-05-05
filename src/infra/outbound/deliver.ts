@@ -768,7 +768,7 @@ async function applyMessageSendingHook(params: {
         replyToId: params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
         metadata: {
-          ...(params.metadata ?? {}),
+          ...params.metadata,
           channel: params.channel,
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
