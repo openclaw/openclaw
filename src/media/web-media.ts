@@ -106,6 +106,10 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   "text/csv",
   "text/markdown",
+  "application/gzip",
+  "application/x-tar",
+  "application/x-7z-compressed",
+  "application/zip",
 ]);
 // file-type returns undefined (no magic bytes) for plain-text formats like CSV and
 // Markdown, so host-read needs an explicit "this really decodes as text" fallback.
@@ -298,7 +302,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, and Office documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, and archives (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
