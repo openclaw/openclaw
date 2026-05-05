@@ -2429,7 +2429,7 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
-): Promise<void> {
+): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
   const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
@@ -2512,4 +2512,5 @@ export async function writeConfigFile(
         { cause },
       ),
   });
+  return { persistedHash: writeResult.persistedHash, persistedConfig: canonicalSourceConfig };
 }
