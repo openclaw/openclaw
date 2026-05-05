@@ -840,7 +840,7 @@ function assertTelegramScenarioMessageSet(params: {
       byMessageId.set(message.messageId, message);
     }
   }
-  const messages = [...byMessageId.values()].sort((a, b) => a.messageId - b.messageId);
+  const messages = [...byMessageId.values()].toSorted((a, b) => a.messageId - b.messageId);
   if (
     params.expectedSutMessageCount !== undefined &&
     messages.length !== params.expectedSutMessageCount
