@@ -20,7 +20,7 @@ import {
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
 const LIVE_CACHE_LANE_RETRIES = 1;
-const LIVE_CACHE_RESPONSE_RETRIES = 1;
+const LIVE_CACHE_RESPONSE_RETRIES = 2;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
@@ -59,6 +59,15 @@ type LiveCacheRegressionResult = {
   summary: Record<string, Record<string, unknown>>;
   warnings: string[];
 };
+
+class CacheProbeTextMismatchError extends Error {
+  constructor(
+    readonly suffix: string,
+    readonly text: string,
+  ) {
+    super(`expected response to contain CACHE-OK ${suffix}, got ${JSON.stringify(text)}`);
+  }
+}
 
 const NOOP_TOOL: Tool = {
   name: "noop",
@@ -242,17 +251,16 @@ async function completeCacheProbe(params: {
     const text = extractAssistantText(response);
     if (shouldRetryCacheProbeText({ attempt, suffix: params.suffix, text })) {
       logLiveCache(
-        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying once: ${JSON.stringify(text)}`,
+        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)}`,
       );
       continue;
     }
     const responseTextLower = normalizeLowercaseStringOrEmpty(text);
     const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
     const markerLower = `cache-ok ${suffixLower}`;
-    assert(
-      responseTextLower.includes(markerLower),
-      `expected response to contain CACHE-OK ${params.suffix}, got ${JSON.stringify(text)}`,
-    );
+    if (!responseTextLower.includes(markerLower)) {
+      throw new CacheProbeTextMismatchError(params.suffix, text);
+    }
     const usage = normalizeCacheUsage(response.usage);
     return {
       suffix: params.suffix,
@@ -499,12 +507,22 @@ async function runRepeatedLaneWithBaselineRetry(params: {
   let attempts = 0;
   for (let attempt = 1; attempt <= 1 + LIVE_CACHE_LANE_RETRIES; attempt += 1) {
     attempts = attempt;
-    result = await runRepeatedLane({
-      ...params,
-      sessionId: `live-cache-regression-${params.runToken}-${params.providerTag}-${params.lane}${
-        attempt > 1 ? `-retry-${attempt}` : ""
-      }`,
-    });
+    try {
+      result = await runRepeatedLane({
+        ...params,
+        sessionId: `live-cache-regression-${params.runToken}-${params.providerTag}-${params.lane}${
+          attempt > 1 ? `-retry-${attempt}` : ""
+        }`,
+      });
+    } catch (error) {
+      if (error instanceof CacheProbeTextMismatchError && attempt <= LIVE_CACHE_LANE_RETRIES) {
+        logLiveCache(
+          `${params.providerTag} ${params.lane} response mismatch; retrying lane once: ${error.message}`,
+        );
+        continue;
+      }
+      throw error;
+    }
     findings = evaluateAgainstBaseline({
       lane: params.lane,
       provider: params.providerTag,
