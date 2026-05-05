@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: resolve the runtime model for spawned subagent runs from the configured subagent default (`agents.list[<id>].subagents.model` -> `agents.defaults.subagents.model` -> `agents.list[<id>].model`) instead of the parent agent's primary, in both the gateway-side fallback (`resolveSessionModelRef`) and a new reply-time helper (`resolveSubagentSessionDefaultModel`) that overrides `getReplyFromConfig` defaults once the session entry is loaded; both fallbacks reuse the alias-aware resolver so configured subagent aliases (for example `gpt`) continue to resolve through `agents.defaults.models`, matching the spawn-side resolver and the existing `sessions.json` write-side fix. (#72984) Thanks @joeykrug.
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.

@@ -17,13 +17,16 @@ import {
   type ModelCatalogEntry,
 } from "../agents/model-catalog.js";
 import {
+  buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolvePersistedSelectedModelRef,
+  resolveSubagentConfiguredModelSelection,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
@@ -1284,7 +1287,15 @@ export function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<
+        SessionEntry,
+        | "model"
+        | "modelProvider"
+        | "modelOverride"
+        | "providerOverride"
+        | "spawnDepth"
+        | "subagentRole"
+      >,
   agentId?: string,
 ): { provider: string; model: string } {
   const resolved = agentId
@@ -1310,6 +1321,42 @@ export function resolveSessionModelRef(
   if (persisted) {
     return persisted;
   }
+
+  // Subagent runtime fallback: when entry.model is empty (race between the
+  // spawn-side write and the gateway-side read), fall back to the configured
+  // subagent default for this agent so we never silently run a child on the
+  // parent's primary model.
+  if (agentId) {
+    const isSubagent =
+      (typeof entry?.spawnDepth === "number" && entry.spawnDepth >= 1) ||
+      Boolean(entry?.subagentRole);
+    if (isSubagent) {
+      const subagentSelection = resolveSubagentConfiguredModelSelection({ cfg, agentId });
+      if (subagentSelection) {
+        // Use alias-aware resolution so a configured alias such as `gpt`
+        // resolves through the model alias index instead of being parsed as a
+        // bare model under the default provider. This keeps the gateway
+        // fallback consistent with `resolveSubagentSpawnModelSelection`.
+        const aliasIndex = buildModelAliasIndex({
+          cfg,
+          defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+        });
+        const aliasResolved = resolveModelRefFromString({
+          cfg,
+          raw: subagentSelection,
+          defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+          aliasIndex,
+        });
+        if (aliasResolved) {
+          return {
+            provider: aliasResolved.ref.provider,
+            model: aliasResolved.ref.model,
+          };
+        }
+      }
+    }
+  }
+
   return resolved;
 }
 
