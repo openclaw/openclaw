@@ -38,3 +38,19 @@ export function normalizeConfig({
 
   return next;
 }
+
+export function resolveThinkingProfile({
+  reasoning,
+}: {
+  provider: string;
+  modelId: string;
+  reasoning?: boolean;
+}) {
+  if (reasoning !== true) {
+    return { levels: [{ id: "off" }], defaultLevel: "off" };
+  }
+  return {
+    levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }],
+    defaultLevel: "off",
+  };
+}
