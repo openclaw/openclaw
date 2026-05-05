@@ -872,7 +872,9 @@ export async function runEmbeddedAttempt(
             },
           });
           corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
-          const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
+          const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+            toolMeta: (tool) => getPluginToolMeta(tool),
+          });
           corePluginToolStages.mark("attempt:tools-allow");
           return filteredTools;
         })();

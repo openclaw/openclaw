@@ -1,7 +1,12 @@
 import { TOOL_NAME_SEPARATOR } from "../../pi-bundle-mcp-names.js";
 import type { OpenClawCodingToolConstructionPlan } from "../../pi-tools.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
-import { expandToolGroups, normalizeToolName } from "../../tool-policy.js";
+import {
+  buildPluginToolGroups,
+  expandPolicyWithPluginGroups,
+  expandToolGroups,
+  normalizeToolName,
+} from "../../tool-policy.js";
 
 const BASE_CODING_TOOL_FACTORY_NAMES = new Set(["edit", "read", "write"]);
 
@@ -82,6 +87,9 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
+  options?: {
+    toolMeta?: (tool: T) => { pluginId: string } | undefined;
+  },
 ): T[] {
   if (!toolsAllow) {
     return tools;
@@ -92,7 +100,13 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (hasWildcardToolAllowlist(toolsAllow)) {
     return tools;
   }
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, { allow: toolsAllow }));
+  const pluginGroups = options?.toolMeta
+    ? buildPluginToolGroups({ tools, toolMeta: options.toolMeta })
+    : undefined;
+  const policy = pluginGroups
+    ? expandPolicyWithPluginGroups({ allow: toolsAllow }, pluginGroups)
+    : { allow: toolsAllow };
+  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(

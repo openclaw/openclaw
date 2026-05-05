@@ -46,6 +46,35 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ).toEqual(["memory_search"]);
   });
 
+  it("expands plugin group and plugin-id allowlists before the final filter", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "memory_search" },
+      { name: "memory_get" },
+      { name: "browser" },
+    ];
+    const toolMeta = (tool: { name: string }) => {
+      if (tool.name.startsWith("memory_")) {
+        return { pluginId: "active-memory" };
+      }
+      if (tool.name === "browser") {
+        return { pluginId: "browser" };
+      }
+      return undefined;
+    };
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["group:plugins"], { toolMeta }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["memory_search", "memory_get", "browser"]);
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["active-memory"], { toolMeta }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["memory_search", "memory_get"]);
+  });
+
   it("treats an explicit empty toolsAllow as no tools", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
 
