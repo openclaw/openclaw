@@ -104,4 +104,32 @@ describe("cron listPage agentId filter (#77118)", () => {
     ]);
     expect(mainPage.total).toBe(2);
   });
+
+  it("normalizes the agentId filter so case-only mismatches still match (#77118)", async () => {
+    // Regression for the codex follow-up on PR #77191: cron job ownership is
+    // normalized via `normalizeOptionalAgentId`/`normalizeAgentId` (lowercased
+    // + path-safe) on create/update paths. Before the fix, the filter
+    // compared raw trimmed strings, so requests like
+    // `cron.list({ agentId: "MAIN" })` against jobs stored as `"main"` (or
+    // implicit default-agent jobs whose default-agent id was uppercase)
+    // dropped valid jobs even though the same IDs are treated as equivalent
+    // elsewhere.
+    const jobs = [
+      createBaseJob({ id: "main-1", name: "lowercase main", agentId: "main" }),
+      createBaseJob({ id: "default-implicit", name: "implicit default", agentId: undefined }),
+      createBaseJob({ id: "alpha-only", name: "alpha", agentId: "alpha" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs, defaultAgentId: "MAIN" });
+
+    // Caller uses uppercase but the filter normalizes through the same
+    // `normalizeAgentId` used by job create paths, so `MAIN` matches `main`
+    // and the implicit default-agent job (since defaultAgentId normalizes the
+    // same way).
+    const upperPage = await listPage(state, { agentId: "MAIN" });
+    expect(upperPage.jobs.map((j) => j.id).toSorted()).toEqual(["default-implicit", "main-1"]);
+
+    // Whitespace+casing variant resolves the same way.
+    const messyPage = await listPage(state, { agentId: "  Main  " });
+    expect(messyPage.jobs.map((j) => j.id).toSorted()).toEqual(["default-implicit", "main-1"]);
+  });
 });
