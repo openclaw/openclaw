@@ -55,7 +55,7 @@ Before building a package, reviewers should confirm:
 Run the narrow Telegram test set first:
 
 ```bash
-corepack pnpm exec vitest run --config test/vitest/vitest.extension-telegram.config.ts \
+corepack pnpm test \
   extensions/telegram/src/bot-message-dispatch.test.ts \
   extensions/telegram/src/bot.create-telegram-bot.test.ts
 ```
