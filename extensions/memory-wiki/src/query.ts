@@ -969,9 +969,42 @@ function shouldEnforceSessionVisibility(params: {
   return params.sandboxed === true || Boolean(params.agentSessionKey?.trim());
 }
 
-function isSessionMemoryPath(relPath: string): boolean {
+function shouldSearchSharedMemoryCorpus(config: ResolvedMemoryWikiConfig): boolean {
+  return config.search.corpus === "memory" || config.search.corpus === "all";
+}
+
+function shouldUseSharedMemory(config: ResolvedMemoryWikiConfig): boolean {
+  return config.search.backend === "shared" && shouldSearchSharedMemoryCorpus(config);
+}
+
+function assertSessionVisibilityAppConfig(params: {
+  config: ResolvedMemoryWikiConfig;
+  appConfig?: OpenClawConfig;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  operation: string;
+}): void {
+  if (
+    shouldUseSharedMemory(params.config) &&
+    shouldEnforceSessionVisibility(params) &&
+    !params.appConfig
+  ) {
+    throw new Error(
+      `${params.operation} requires appConfig to enforce session visibility for session-bound shared memory calls.`,
+    );
+  }
+}
+
+const SESSION_MEMORY_PATH_PREFIXES = ["sessions/", "qmd/sessions/", "qmd/sessions-"] as const;
+const SESSION_MEMORY_ROOT_PATHS = ["qmd/sessions"] as const;
+
+// Keep these path shapes aligned with source: "sessions" hits in session-search-visibility and session-transcript-hit.
+export function isSessionMemoryPath(relPath: string): boolean {
   const normalized = relPath.replace(/\\/g, "/");
-  return normalized.startsWith("sessions/") || /^qmd\/sessions(?:[-/]|$)/.test(normalized);
+  return (
+    SESSION_MEMORY_PATH_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    SESSION_MEMORY_ROOT_PATHS.some((rootPath) => normalized === rootPath)
+  );
 }
 
 function shouldSearchWiki(config: ResolvedMemoryWikiConfig): boolean {
@@ -982,11 +1015,7 @@ function shouldSearchSharedMemory(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
 ): boolean {
-  return (
-    config.search.backend === "shared" &&
-    appConfig !== undefined &&
-    (config.search.corpus === "memory" || config.search.corpus === "all")
-  );
+  return shouldUseSharedMemory(config) && appConfig !== undefined;
 }
 
 function resolveActiveMemoryAgentId(params: {
@@ -1230,6 +1259,7 @@ async function canReadSessionMemoryPath(params: {
   sandboxed: boolean;
   relPath: string;
 }): Promise<boolean> {
+  // Reuses the search filter with a synthetic hit; update this if the filter needs more than path/source.
   const filtered = await filterMemoryWikiSearchHitsBySessionVisibility({
     cfg: params.cfg,
     requesterSessionKey: params.requesterSessionKey,
@@ -1327,6 +1357,13 @@ export async function searchMemoryWiki(params: {
   mode?: WikiSearchMode;
 }): Promise<WikiSearchResult[]> {
   const effectiveConfig = applySearchOverrides(params.config, params);
+  assertSessionVisibilityAppConfig({
+    config: effectiveConfig,
+    appConfig: params.appConfig,
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
+    operation: "wiki_search",
+  });
   await initializeMemoryWikiVault(effectiveConfig);
   const maxResults = Math.max(1, params.maxResults ?? 10);
   const mode = params.mode ?? "auto";
@@ -1385,6 +1422,13 @@ export async function getMemoryWikiPage(params: {
   searchCorpus?: WikiSearchCorpus;
 }): Promise<WikiGetResult | null> {
   const effectiveConfig = applySearchOverrides(params.config, params);
+  assertSessionVisibilityAppConfig({
+    config: effectiveConfig,
+    appConfig: params.appConfig,
+    agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
+    operation: "wiki_get",
+  });
   await initializeMemoryWikiVault(effectiveConfig);
   const fromLine = Math.max(1, params.fromLine ?? 1);
   const lineCount = Math.max(1, params.lineCount ?? 200);

@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
 import { renderWikiMarkdown } from "./markdown.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import { getMemoryWikiPage, isSessionMemoryPath, searchMemoryWiki } from "./query.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const {
@@ -140,6 +140,27 @@ function createMemoryManager(overrides?: {
     close: vi.fn().mockResolvedValue(undefined),
   };
 }
+
+describe("isSessionMemoryPath", () => {
+  it("classifies all current session storage layouts", () => {
+    for (const relPath of [
+      "sessions/child-session.jsonl",
+      "qmd/sessions/child-session.md",
+      "qmd/sessions-main/child-session.md",
+      "qmd/sessions",
+    ]) {
+      expect(isSessionMemoryPath(relPath)).toBe(true);
+    }
+
+    for (const relPath of [
+      "sessionsx/child-session.jsonl",
+      "qmd/sessionsxxx",
+      "wiki/sessions/foo.md",
+    ]) {
+      expect(isSessionMemoryPath(relPath)).toBe(false);
+    }
+  });
+});
 
 describe("searchMemoryWiki", () => {
   it("finds wiki pages by title and body", async () => {
@@ -734,6 +755,78 @@ describe("searchMemoryWiki", () => {
     expect(results.some((result) => result.path.includes("sibling-session"))).toBe(false);
   });
 
+  it("filters session memory hits for session-bound non-sandboxed callers", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+    mockSessionTranscriptStore();
+    const manager = createMemoryManager({
+      searchResults: [
+        {
+          path: "sessions/child-session.jsonl",
+          startLine: 1,
+          endLine: 2,
+          score: 30,
+          snippet: "caller transcript",
+          source: "sessions",
+        },
+        {
+          path: "qmd/sessions-main/sibling-session.md",
+          startLine: 3,
+          endLine: 4,
+          score: 20,
+          snippet: "sibling transcript",
+          source: "sessions",
+        },
+        {
+          path: "MEMORY.md",
+          startLine: 5,
+          endLine: 6,
+          score: 10,
+          snippet: "durable memory",
+          source: "memory",
+        },
+      ],
+    });
+    getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
+
+    const results = await searchMemoryWiki({
+      config,
+      appConfig: createSessionVisibilityAppConfig(),
+      agentSessionKey: "agent:main:child-session",
+      sandboxed: false,
+      query: "transcript",
+      maxResults: 10,
+    });
+
+    expect(results.map((result) => result.path)).toEqual([
+      "sessions/child-session.jsonl",
+      "MEMORY.md",
+    ]);
+    expect(results.some((result) => result.path.includes("sibling-session"))).toBe(false);
+  });
+
+  it("requires appConfig for session-bound shared memory searches", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+
+    await expect(
+      searchMemoryWiki({
+        config,
+        agentSessionKey: "agent:main:child-session",
+        sandboxed: true,
+        query: "transcript",
+      }),
+    ).rejects.toThrow(/wiki_search requires appConfig/);
+  });
+
   it("uses the active session agent for shared memory search", async () => {
     const { config } = await createQueryVault({
       initialize: true,
@@ -1028,6 +1121,24 @@ describe("getMemoryWikiPage", () => {
 
     expect(result).toBeNull();
     expect(manager.readFile).not.toHaveBeenCalled();
+  });
+
+  it("requires appConfig for session-bound shared memory reads", async () => {
+    const { config } = await createQueryVault({
+      initialize: true,
+      config: {
+        search: { backend: "shared", corpus: "memory" },
+      },
+    });
+
+    await expect(
+      getMemoryWikiPage({
+        config,
+        agentSessionKey: "agent:main:child-session",
+        sandboxed: true,
+        lookup: "sessions/child-session.jsonl",
+      }),
+    ).rejects.toThrow(/wiki_get requires appConfig/);
   });
 
   it("uses the active session agent for shared memory reads", async () => {
