@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildCliRespawnPlan,
   EXPERIMENTAL_WARNING_FLAG,
   OPENCLAW_NODE_EXTRA_CA_CERTS_READY,
   OPENCLAW_NODE_OPTIONS_READY,
   resolveCliRespawnCommand,
+  runCliRespawnPlan,
 } from "./entry.respawn.js";
 
 describe("buildCliRespawnPlan", () => {
@@ -105,5 +108,88 @@ describe("resolveCliRespawnCommand", () => {
         platform: "linux",
       }),
     ).toBe("node");
+  });
+});
+
+describe("runCliRespawnPlan", () => {
+  it("spawns and bridges the respawn child", () => {
+    const child = new EventEmitter() as ChildProcess;
+    const spawn = vi.fn(() => child);
+    const attachChildProcessBridge = vi.fn();
+    const exit = vi.fn();
+    const writeError = vi.fn();
+
+    runCliRespawnPlan(
+      {
+        command: "/usr/bin/node",
+        argv: ["/repo/openclaw/dist/entry.js", "status"],
+        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+      },
+      {
+        spawn: spawn as unknown as typeof import("node:child_process").spawn,
+        attachChildProcessBridge,
+        exit: exit as unknown as (code?: number) => never,
+        writeError,
+      },
+    );
+
+    expect(spawn).toHaveBeenCalledWith(
+      "/usr/bin/node",
+      ["/repo/openclaw/dist/entry.js", "status"],
+      {
+        stdio: "inherit",
+        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+      },
+    );
+    expect(attachChildProcessBridge).toHaveBeenCalledWith(child, {
+      onSignal: expect.any(Function),
+    });
+
+    child.emit("exit", 0, null);
+
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(writeError).not.toHaveBeenCalled();
+  });
+
+  it("force-kills a signaled respawn child that does not exit", () => {
+    vi.useFakeTimers();
+    const child = new EventEmitter() as ChildProcess;
+    const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
+    child.kill = kill as ChildProcess["kill"];
+    const spawn = vi.fn(() => child);
+    const exit = vi.fn();
+    let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
+
+    try {
+      runCliRespawnPlan(
+        {
+          command: "/usr/bin/node",
+          argv: ["/repo/openclaw/dist/entry.js", "tui"],
+          env: {},
+        },
+        {
+          spawn: spawn as unknown as typeof import("node:child_process").spawn,
+          attachChildProcessBridge: vi.fn((_child, options) => {
+            onSignal = options?.onSignal;
+            return { detach: vi.fn() };
+          }),
+          exit: exit as unknown as (code?: number) => never,
+          writeError: vi.fn(),
+        },
+      );
+
+      onSignal?.("SIGTERM");
+      vi.advanceTimersByTime(1_000);
+
+      expect(kill).toHaveBeenCalledWith("SIGTERM");
+      expect(exit).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1_000);
+
+      expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

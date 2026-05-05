@@ -21,6 +21,9 @@ describe("shouldSkipRespawnForArgv", () => {
   it.each([
     { argv: ["node", "openclaw", "--help"] },
     { argv: ["node", "openclaw", "-V"] },
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
     { argv: ["node", "openclaw", "gateway"] },
     { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
     { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },

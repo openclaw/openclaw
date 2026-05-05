@@ -14,6 +14,7 @@ import {
 } from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
 import { loggingState } from "../logging/state.js";
 import {
@@ -250,6 +251,61 @@ export function stopTuiSafely(stop: () => void): void {
       throw error;
     }
   }
+}
+
+type TerminalLossEmitter = {
+  on(event: "close" | "end", listener: () => void): unknown;
+  off(event: "close" | "end", listener: () => void): unknown;
+};
+
+export function isTuiTerminalLossError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { code?: unknown; message?: unknown; syscall?: unknown };
+  const code = typeof err.code === "string" ? err.code : "";
+  const message = typeof err.message === "string" ? err.message : "";
+  const syscall = typeof err.syscall === "string" ? err.syscall : "";
+  if (code === "EIO" || code === "EPIPE") {
+    return true;
+  }
+  return (
+    /\b(EIO|EPIPE)\b/i.test(message) && /\b(read|write|TTY|stdin|stdout)\b/i.test(message + syscall)
+  );
+}
+
+export function installTuiTerminalLossExitHandler(
+  requestExit: () => void,
+  targets: { stdin?: TerminalLossEmitter; stdout?: TerminalLossEmitter } = {
+    stdin: process.stdin,
+    stdout: process.stdout,
+  },
+): () => void {
+  let requested = false;
+  const requestOnce = (): void => {
+    if (requested) {
+      return;
+    }
+    requested = true;
+    requestExit();
+  };
+  const removeUncaughtExceptionHandler = registerUncaughtExceptionHandler((error) => {
+    if (!isTuiTerminalLossError(error)) {
+      return false;
+    }
+    requestOnce();
+    return true;
+  });
+  const onClose = (): void => requestOnce();
+  targets.stdin?.on("end", onClose);
+  targets.stdin?.on("close", onClose);
+  targets.stdout?.on("close", onClose);
+  return () => {
+    removeUncaughtExceptionHandler();
+    targets.stdin?.off("end", onClose);
+    targets.stdin?.off("close", onClose);
+    targets.stdout?.off("close", onClose);
+  };
 }
 
 type DrainableTui = {
@@ -1012,9 +1068,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
     client.stop();
-    void drainAndStopTuiSafely(tui).then(() => {
-      finishTui?.();
-    });
+    void drainAndStopTuiSafely(tui)
+      .catch((err) => {
+        if (!isTuiTerminalLossError(err)) {
+          try {
+            process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
+          } catch {
+            // Best effort only; exit must still complete.
+          }
+        }
+      })
+      .finally(() => {
+        finishTui?.();
+      });
   };
   const exitAwareClient = client as TuiBackend & {
     setRequestExitHandler?: (handler: () => void) => void;
@@ -1172,7 +1238,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       }
       updateFooter();
       tui.requestRender();
-    })();
+    })().catch((err) => {
+      chatLog.addSystem(`startup failed: ${String(err)}`);
+      setConnectionStatus("startup failed", 5000);
+      tui.requestRender();
+    });
   };
 
   client.onDisconnected = (reason) => {
@@ -1213,6 +1283,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
   process.on("SIGINT", sigintHandler);
   process.on("SIGTERM", sigtermHandler);
+  let cleanupTerminalLossHandler: (() => void) | null = installTuiTerminalLossExitHandler(() =>
+    requestExit(),
+  );
   tui.start();
   client.start();
   await new Promise<void>((resolve) => {
@@ -1220,6 +1293,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }
+      cleanupTerminalLossHandler?.();
+      cleanupTerminalLossHandler = null;
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
       process.removeListener("exit", finish);

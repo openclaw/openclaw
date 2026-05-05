@@ -89,6 +89,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI: skip the generic CLI respawn wrapper for interactive launches, exit cleanly on terminal loss, and refuse to restore heartbeat sessions as the remembered chat session, preventing stale heartbeat history and orphaned `openclaw-tui` processes on first boot. Thanks @vincentkoc.
 - Gateway/shutdown: cancel delayed post-ready maintenance during close and suppress maintenance/cron startup after quick restarts, preventing orphaned background timers. Thanks @vincentkoc.
 - Agents/generated media: treat attachment-style message tool actions as completed chat sends, preventing duplicate fallback media posts when generated files were already uploaded.
 - Control UI/sessions: show each session's agent runtime in the Sessions table and allow filtering by runtime labels, matching the Agents panel runtime wording. Thanks @vincentkoc.
