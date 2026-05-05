@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: resolve spawned subagent runtime models from configured subagent defaults (`agents.list[<id>].subagents.model` -> `agents.defaults.subagents.model` -> `agents.list[<id>].model`) instead of the parent agent primary, and keep gateway/reply fallbacks alias-aware. (#72984) Thanks @joeykrug.
 - OpenAI/realtime voice: accept Codex-compatible legacy audio and transcript event aliases so provider protocol drift does not drop assistant audio or captions.
 - Discord/voice: keep default agent-proxy realtime sessions from auto-speaking filler before the forced OpenClaw consult answer, finish Discord playback on realtime response completion, and queue later exact-speech answers until playback idles to avoid mid-sentence replacement.
 - Gateway: return deterministic `400 invalid_request_error` responses for malformed encoded session-kill HTTP paths instead of letting route-shaped requests fall through to later Gateway handlers. (#72439) Thanks @rubencu.

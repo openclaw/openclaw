@@ -1,8 +1,8 @@
 import {
   buildModelAliasIndex,
   type ModelAliasIndex,
-  parseModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveSubagentConfiguredModelSelection,
 } from "../../agents/model-selection.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -53,6 +53,19 @@ export function resolveSubagentSessionDefaultModel(params: {
   if (!subagentSelection) {
     return null;
   }
-  const ref = parseModelRef(subagentSelection, params.defaultProvider);
-  return ref ? { provider: ref.provider, model: ref.model } : null;
+  // Use alias-aware resolution so a configured alias such as `gpt` resolves
+  // through the model alias index instead of being parsed as a bare model
+  // under the default provider. This keeps the reply-time fallback in sync
+  // with `resolveSubagentSpawnModelSelection`.
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw: subagentSelection,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  return resolved ? { provider: resolved.ref.provider, model: resolved.ref.model } : null;
 }

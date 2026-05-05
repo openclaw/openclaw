@@ -103,4 +103,32 @@ describe("resolveSubagentSessionDefaultModel", () => {
     });
     expect(ref).toEqual({ provider: "openai-codex", model: "gpt-5.5" });
   });
+
+  it("resolves a configured subagent model alias through the alias index", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "openai/gpt-5.4": { alias: "gpt" },
+          },
+          subagents: { model: "gpt" },
+        },
+        list: {
+          main: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const ref = resolveSubagentSessionDefaultModel({
+      cfg,
+      agentId: "main",
+      sessionEntry: { subagentRole: "orchestrator", spawnDepth: 1 },
+      defaultProvider: "anthropic",
+    });
+
+    expect(ref).toEqual({ provider: "openai", model: "gpt-5.4" });
+  });
 });
