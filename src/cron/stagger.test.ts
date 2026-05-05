@@ -13,6 +13,27 @@ describe("cron stagger helpers", () => {
     expect(isRecurringTopOfHourCronExpr("0 0 */3 * * *")).toBe(true);
     expect(isRecurringTopOfHourCronExpr("0 7 * * *")).toBe(false);
     expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
+
+    // Step expressions that include minute 0
+    expect(isRecurringTopOfHourCronExpr("*/15 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("*/30 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0/15 * * * *")).toBe(true);
+
+    // List expressions that include minute 0
+    expect(isRecurringTopOfHourCronExpr("0,30 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0,15,30,45 * * * *")).toBe(true);
+    // List without minute 0
+    expect(isRecurringTopOfHourCronExpr("15,30 * * * *")).toBe(false);
+    expect(isRecurringTopOfHourCronExpr("10,20 * * * *")).toBe(false);
+
+    // Range expressions starting at 0
+    expect(isRecurringTopOfHourCronExpr("0-5 * * * *")).toBe(true);
+    expect(isRecurringTopOfHourCronExpr("0-30/5 * * * *")).toBe(true);
+    // Range not starting at 0
+    expect(isRecurringTopOfHourCronExpr("5-30 * * * *")).toBe(false);
+
+    // Wildcard minute field
+    expect(isRecurringTopOfHourCronExpr("* * * * *")).toBe(true);
   });
 
   it("normalizes explicit stagger values", () => {
