@@ -1,11 +1,13 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
@@ -29,6 +31,7 @@ import type {
   CronSortDir,
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
+import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -160,8 +163,8 @@ export async function start(state: CronServiceState) {
         markedAnyInterruptedRun = true;
       }
     }
-    if (markedAnyInterruptedRun) {
-      await persist(state);
+    if (markedAnyInterruptedRun || jobs.length > 0) {
+      await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
     }
   });
 
@@ -271,6 +274,14 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
   });
 }
 
+function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+  return (
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId) ??
+    DEFAULT_AGENT_ID
+  );
+}
+
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
@@ -278,12 +289,19 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
       if (enabledFilter === "enabled" && !isJobEnabled(job)) {
         return false;
       }
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
+        return false;
+      }
+      if (
+        requestedAgentId &&
+        resolveEffectiveJobAgentId(job, state.deps.defaultAgentId) !== requestedAgentId
+      ) {
         return false;
       }
       if (!query) {
@@ -439,6 +457,7 @@ type PreparedManualRun =
       ok: true;
       ran: true;
       jobId: string;
+      runId?: string;
       taskRunId?: string;
       startedAt: number;
       executionJob: CronJob;
@@ -469,12 +488,17 @@ async function skipInvalidPersistedManualRun(params: {
 }) {
   const endedAt = params.state.deps.nowMs();
   const errorText = normalizeCronRunErrorText(params.error);
+  const diagnostics = createCronRunDiagnosticsFromError("cron-preflight", errorText, {
+    severity: "warn",
+    nowMs: params.state.deps.nowMs,
+  });
   const shouldDelete = applyJobResult(
     params.state,
     params.job,
     {
       status: "skipped",
       error: errorText,
+      diagnostics,
       startedAt: endedAt,
       endedAt,
     },
@@ -486,6 +510,7 @@ async function skipInvalidPersistedManualRun(params: {
     action: "finished",
     status: "skipped",
     error: errorText,
+    diagnostics,
     runAtMs: endedAt,
     durationMs: params.job.state.lastDurationMs,
     nextRunAtMs: params.job.state.nextRunAtMs,
@@ -630,6 +655,7 @@ async function prepareManualRun(
   state: CronServiceState,
   id: string,
   mode?: "due" | "force",
+  opts?: { runId?: string },
 ): Promise<PreparedManualRun> {
   const preflight = await inspectManualRunPreflight(state, id, mode);
   if (!preflight.ok) {
@@ -665,6 +691,7 @@ async function prepareManualRun(
       ok: true,
       ran: true,
       jobId: job.id,
+      runId: opts?.runId ?? taskRunId,
       taskRunId,
       startedAt: preflight.now,
       executionJob,
@@ -681,6 +708,7 @@ async function finishPreparedManualRun(
   const startedAt = prepared.startedAt;
   const jobId = prepared.jobId;
   const taskRunId = prepared.taskRunId;
+  const runId = prepared.runId;
 
   let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
   try {
@@ -708,6 +736,7 @@ async function finishPreparedManualRun(
       {
         status: coreResult.status,
         error: coreResult.error,
+        diagnostics: coreResult.diagnostics,
         delivered: coreResult.delivered,
         startedAt,
         endedAt,
@@ -722,12 +751,14 @@ async function finishPreparedManualRun(
       status: coreResult.status,
       error: coreResult.error,
       summary: coreResult.summary,
+      diagnostics: coreResult.diagnostics,
       delivered: coreResult.delivered,
       deliveryStatus: job.state.lastDeliveryStatus,
       deliveryError: job.state.lastDeliveryError,
       delivery: coreResult.delivery,
       sessionId: coreResult.sessionId,
       sessionKey: coreResult.sessionKey,
+      runId,
       runAtMs: startedAt,
       durationMs: job.state.lastDurationMs,
       nextRunAtMs: job.state.nextRunAtMs,
@@ -767,8 +798,13 @@ async function finishPreparedManualRun(
   });
 }
 
-export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  const prepared = await prepareManualRun(state, id, mode);
+export async function run(
+  state: CronServiceState,
+  id: string,
+  mode?: "due" | "force",
+  opts?: { runId?: string },
+) {
+  const prepared = await prepareManualRun(state, id, mode, opts);
   if (!prepared.ok || !prepared.ran) {
     return prepared;
   }
@@ -786,7 +822,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
   void enqueueCommandInLane(
     CommandLane.Cron,
     async () => {
-      const result = await run(state, id, mode);
+      const result = await run(state, id, mode, { runId });
       if (result.ok && "ran" in result && !result.ran) {
         state.deps.log.info(
           { jobId: id, runId, reason: result.reason },

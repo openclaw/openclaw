@@ -11,7 +11,11 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../../agents/auth-profiles.js";
-import { listProfilesForProvider, upsertAuthProfile } from "../../agents/auth-profiles/profiles.js";
+import {
+  listProfilesForProvider,
+  promoteAuthProfileInOrder,
+  upsertAuthProfile,
+} from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { clearAuthProfileCooldown } from "../../agents/auth-profiles/usage.js";
@@ -21,7 +25,14 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  applyProviderAuthConfigPatch,
+  applyDefaultModel,
+  pickAuthMethod,
+  resolveProviderMatch,
+} from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
+import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
 import type {
   ProviderAuthMethod,
@@ -37,13 +48,6 @@ import { stylePromptHint, stylePromptMessage } from "../../terminal/prompt-style
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
-import { createVpsAwareOAuthHandlers } from "../oauth-flow.js";
-import {
-  applyProviderAuthConfigPatch,
-  applyDefaultModel,
-  pickAuthMethod,
-  resolveProviderMatch,
-} from "../provider-auth-helpers.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
 
 function guardCancel<T>(value: T | symbol): T {
@@ -246,6 +250,11 @@ async function persistProviderAuthResult(params: {
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir: params.agentDir,
+    });
+    await promoteAuthProfileInOrder({
+      agentDir: params.agentDir,
+      provider: profile.credential.provider,
+      profileId: profile.profileId,
     });
   }
 

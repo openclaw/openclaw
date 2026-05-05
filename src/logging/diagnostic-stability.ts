@@ -4,8 +4,8 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 
-export const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
-export const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
+const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
+const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -24,9 +24,11 @@ export type DiagnosticStabilityEventRecord = {
   outcome?: string;
   mode?: string;
   level?: string;
+  phase?: string;
   detector?: string;
   deliveryKind?: string;
   toolName?: string;
+  activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
   model?: string;
@@ -103,19 +105,13 @@ export type DiagnosticStabilitySnapshot = {
   };
 };
 
-export type DiagnosticStabilityQuery = {
-  limit?: number;
-  type?: string;
-  sinceSeq?: number;
-};
-
-export type DiagnosticStabilityQueryInput = {
+type DiagnosticStabilityQueryInput = {
   limit?: unknown;
   type?: unknown;
   sinceSeq?: unknown;
 };
 
-export type NormalizedDiagnosticStabilityQuery = {
+type NormalizedDiagnosticStabilityQuery = {
   limit: number;
   type: string | undefined;
   sinceSeq: number | undefined;
@@ -237,11 +233,43 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       record.queueDepth = event.queueDepth;
       break;
+    case "session.long_running":
+    case "session.stalled":
     case "session.stuck":
       record.outcome = event.state;
+      if (event.type === "session.stuck") {
+        record.level = "warning";
+      }
       assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      if (event.activeToolName) {
+        record.toolName = event.activeToolName;
+      }
+      break;
+    case "session.recovery.requested":
+      record.outcome = event.state;
+      record.action = event.allowActiveAbort ? "abort" : "recover";
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.reason);
+      break;
+    case "session.recovery.completed":
+      record.outcome = event.status;
+      record.action = event.action;
+      record.ageMs = event.ageMs;
+      record.queueDepth = event.queueDepth;
+      record.count = event.released;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      assignReasonCode(record, event.outcomeReason ?? event.reason);
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;
@@ -254,6 +282,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "run.attempt":
       record.count = event.attempt;
+      break;
+    case "run.progress":
+      assignReasonCode(record, event.reason);
       break;
     case "context.assembled":
       record.channel = event.channel;
@@ -272,7 +303,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.queued = event.queued;
       break;
     case "diagnostic.liveness.warning":
-      record.level = "warning";
+      record.level = event.active > 0 || event.waiting > 0 || event.queued > 0 ? "warning" : "info";
       record.durationMs = event.intervalMs;
       record.count = event.reasons.length;
       assignReasonCode(record, event.reasons[0]);
@@ -283,6 +314,17 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.active = event.active;
       record.waiting = event.waiting;
       record.queued = event.queued;
+      record.phase = event.phase;
+      if (event.activeWorkLabels?.length) {
+        record.source = event.activeWorkLabels[0];
+      } else if (event.queuedWorkLabels?.length) {
+        record.source = event.queuedWorkLabels[0];
+      }
+      break;
+    case "diagnostic.phase.completed":
+      record.phase = event.name;
+      record.durationMs = event.durationMs;
+      record.cpuCoreRatio = event.cpuCoreRatio;
       break;
     case "tool.loop":
       record.toolName = event.toolName;

@@ -2,11 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveExecutable } from "../infra/executable-path.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
+let gcloudBin: string | undefined;
 const MAX_OUTPUT_CHARS = 800;
 
 export function resetGmailSetupUtilsCachesForTest(): void {
@@ -145,14 +147,10 @@ export async function resolvePythonExecutablePath(): Promise<string | undefined>
   return undefined;
 }
 
-async function gcloudEnv(): Promise<NodeJS.ProcessEnv | undefined> {
-  if (process.env.CLOUDSDK_PYTHON) {
-    return undefined;
-  }
+async function gcloudEnv(): Promise<NodeJS.ProcessEnv> {
   const pythonPath = await resolvePythonExecutablePath();
-  if (!pythonPath) {
-    return undefined;
-  }
+  // Always override inherited CLOUDSDK_PYTHON so gcloud cannot select a
+  // workspace-controlled interpreter.
   return { CLOUDSDK_PYTHON: pythonPath };
 }
 
@@ -160,7 +158,7 @@ async function runGcloudCommand(
   args: string[],
   timeoutMs: number,
 ): Promise<Awaited<ReturnType<typeof runCommandWithTimeout>>> {
-  return await runCommandWithTimeout(["gcloud", ...args], {
+  return await runCommandWithTimeout([(gcloudBin ??= resolveExecutable("gcloud")), ...args], {
     timeoutMs,
     env: await gcloudEnv(),
   });
@@ -273,9 +271,10 @@ export async function ensureTailscaleEndpoint(params: {
     return "";
   }
 
+  const tailscaleBin = resolveExecutable("tailscale");
   const statusArgs = ["status", "--json"];
   const statusCommand = formatCommand("tailscale", statusArgs);
-  const status = await runCommandWithTimeout(["tailscale", ...statusArgs], {
+  const status = await runCommandWithTimeout([tailscaleBin, ...statusArgs], {
     timeoutMs: 30_000,
   });
   if (status.code !== 0) {
@@ -304,7 +303,7 @@ export async function ensureTailscaleEndpoint(params: {
   const pathArg = normalizeServePath(params.path);
   const funnelArgs = [params.mode, "--bg", "--set-path", pathArg, "--yes", target];
   const funnelCommand = formatCommand("tailscale", funnelArgs);
-  const funnelResult = await runCommandWithTimeout(["tailscale", ...funnelArgs], {
+  const funnelResult = await runCommandWithTimeout([tailscaleBin, ...funnelArgs], {
     timeoutMs: 30_000,
   });
   if (funnelResult.code !== 0) {

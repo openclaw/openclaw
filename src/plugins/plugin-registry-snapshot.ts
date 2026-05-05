@@ -1,7 +1,10 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -109,6 +112,85 @@ function hasMismatchedPersistedBundledPluginRoot(
   );
 }
 
+function hashExistingFile(filePath: string): string | null {
+  try {
+    return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): string | null {
+  const packageJsonPath = plugin.packageJson?.path;
+  if (!packageJsonPath) {
+    return null;
+  }
+  const rootDir = plugin.rootDir || path.dirname(plugin.manifestPath);
+  const resolved = path.resolve(rootDir, packageJsonPath);
+  const relative = path.relative(rootDir, resolved);
+  return relative.startsWith("..") || path.isAbsolute(relative) ? null : resolved;
+}
+
+function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
+  return index.plugins.some((plugin) => {
+    if (!hasOptionalMissingPluginManifestFile(plugin)) {
+      const manifestSignatureMatches = fileSignatureMatches(
+        plugin.manifestPath,
+        plugin.manifestFile,
+      );
+      if (manifestSignatureMatches !== true) {
+        const manifestHash = hashExistingFile(plugin.manifestPath);
+        if (manifestHash && manifestHash !== plugin.manifestHash) {
+          return true;
+        }
+      }
+    }
+    const packageJsonPath = resolveRecordPackageJsonPath(plugin);
+    if (!plugin.packageJson?.hash) {
+      return false;
+    }
+    if (!packageJsonPath) {
+      return true;
+    }
+    const packageJsonSignatureMatches = fileSignatureMatches(
+      packageJsonPath,
+      plugin.packageJson.fileSignature,
+    );
+    if (packageJsonSignatureMatches === true && plugin.origin === "bundled") {
+      return false;
+    }
+    if (packageJsonSignatureMatches === false) {
+      return hashExistingFile(packageJsonPath) !== plugin.packageJson.hash;
+    }
+    // Fast same-size rewrites can preserve observable stat fields on some filesystems.
+    const packageJsonHash = hashExistingFile(packageJsonPath);
+    return packageJsonHash !== plugin.packageJson.hash;
+  });
+}
+
+function loadSnapshotInstallRecords(params: LoadPluginRegistryParams, env: NodeJS.ProcessEnv) {
+  return loadInstalledPluginIndexInstallRecordsSync({
+    env,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    ...(params.filePath
+      ? { filePath: params.filePath }
+      : params.pluginIndexFilePath
+        ? { filePath: params.pluginIndexFilePath }
+        : {}),
+  });
+}
+
+function hasRecoveredInstallRecordsMissingFromPersistedIndex(
+  index: InstalledPluginIndex,
+  installRecords: ReturnType<typeof loadInstalledPluginIndexInstallRecordsSync>,
+): boolean {
+  const persistedRecords = extractPluginInstallRecordsFromInstalledPluginIndex(index);
+  const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+  return Object.keys(installRecords).some(
+    (pluginId) => !persistedRecords[pluginId] || !persistedPluginIds.has(pluginId),
+  );
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -154,6 +236,25 @@ export function loadPluginRegistrySnapshotWithMetadata(
           message:
             "Persisted plugin registry points at a different bundled plugin tree; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
+      } else if (hasStalePersistedPluginMetadata(persistedIndex)) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry metadata no longer matches plugin manifest or package files; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (
+        hasRecoveredInstallRecordsMissingFromPersistedIndex(
+          persistedIndex,
+          loadSnapshotInstallRecords(params, env),
+        )
+      ) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
       } else {
         return {
           snapshot: persistedIndex,
@@ -181,9 +282,9 @@ export function loadPluginRegistrySnapshotWithMetadata(
   return {
     snapshot: loadInstalledPluginIndex({
       ...params,
-      installRecords:
-        params.installRecords ??
-        extractPluginInstallRecordsFromInstalledPluginIndex(persistedIndex),
+      ...(persistedInstallRecordReadsEnabled
+        ? {}
+        : { installRecords: params.installRecords ?? {} }),
     }),
     source: "derived",
     diagnostics,
