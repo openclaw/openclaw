@@ -1204,6 +1204,9 @@ importers:
       '@openclaw/slack':
         specifier: workspace:*
         version: link:../slack
+      '@openclaw/whatsapp':
+        specifier: workspace:*
+        version: link:../whatsapp
       openclaw:
         specifier: workspace:*
         version: link:../..

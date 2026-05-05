@@ -34,8 +34,11 @@ import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveRunModelFallbacksOverride, resolveSessionAgentIds } from "../agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveRunModelFallbacksOverride,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -481,7 +484,12 @@ async function compactEmbeddedPiSessionDirectOnce(
         : undefined,
     };
   };
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const earlyAgentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const agentDir =
+    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
   await ensureOpenClawModelsJson(params.config, agentDir, {
     workspaceDir: resolvedWorkspace,
   });

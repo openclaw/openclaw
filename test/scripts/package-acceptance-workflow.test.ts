@@ -610,16 +610,21 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("keeps Slack live QA disabled in CI until credentials are provisioned", () => {
+  it("runs live transport lanes nightly while release checks stay gated", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
 
-    expect(releaseWorkflow).toContain("qa_live_slack_enabled=false");
-    expect(releaseWorkflow).toContain(
-      "RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED || 'false' }}",
-    );
-    expect(releaseWorkflow).toContain("vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
-    expect(qaWorkflow).toContain("if: vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
+    for (const channel of ["DISCORD", "WHATSAPP", "SLACK"]) {
+      const lower = channel.toLowerCase();
+      expect(releaseWorkflow).toContain(
+        `RELEASE_QA_${channel}_LIVE_CI_ENABLED: \${{ vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED || 'false' }}`,
+      );
+      expect(releaseWorkflow).toContain(`qa_live_${lower}_enabled="$qa_live_${lower}_ci_enabled"`);
+      expect(releaseWorkflow).toContain(
+        `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
+      );
+      expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
   });
 
   it("names package acceptance Telegram as artifact-backed package validation", () => {

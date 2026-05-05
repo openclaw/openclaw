@@ -133,10 +133,21 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 That command leases a Crabbox desktop/browser machine, runs the Slack live lane
 inside the VM, opens Slack Web in the VNC browser, captures the desktop, and
 copies `slack-qa/`, `slack-desktop-smoke.png`, and `slack-desktop-smoke.mp4`
-when video capture is available back to the Mantis artifact directory. Reuse `--lease-id <cbx_...>` after logging in to Slack Web manually
-through VNC. With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack
-gateway running inside the VM on port `38973`; without it, the command runs the
-normal bot-to-bot Slack QA lane and exits after artifact capture.
+when video capture is available back to the Mantis artifact directory. Crabbox
+desktop/browser leases provide the capture tools and browser/native-build helper
+packages up front, so the scenario should only install fallbacks on older
+leases. Mantis reports total and per-phase timings in
+`mantis-slack-desktop-smoke-report.md` so slow runs show whether time went into
+lease warmup, credential acquisition, remote setup, or artifact copy. Reuse
+`--lease-id <cbx_...>` after logging in to Slack Web manually through VNC;
+reused leases also keep Crabbox's pnpm store cache warm. The default
+`--hydrate-mode source` verifies from a source checkout and runs install/build
+inside the VM. Use `--hydrate-mode prehydrated` only when the reused remote
+workspace already has `node_modules` and a built `dist/`; that mode skips the
+expensive install/build step and fails closed when the workspace is not ready.
+With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack gateway
+running inside the VM on port `38973`; without it, the command runs the normal
+bot-to-bot Slack QA lane and exits after artifact capture.
 
 For an agent/CV style desktop task, run:
 

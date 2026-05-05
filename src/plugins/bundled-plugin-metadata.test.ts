@@ -51,7 +51,6 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "acpx",
   "browser",
   "device-pair",
-  "discord",
   "file-transfer",
   "memory-core",
   "phone-control",
@@ -470,7 +469,7 @@ describe("bundled plugin metadata", () => {
     expect(
       resolveGatewayStartupPluginIdsFromRegistry({
         config: {},
-        env: process.env,
+        env: {},
         index,
         manifestRegistry,
         platform: "linux",

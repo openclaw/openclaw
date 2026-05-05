@@ -5,8 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -1425,7 +1424,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   process.env.OPENCLAW_GATEWAY_TOKEN = token;
   const agentId = "dev";
 
-  const hostAgentDir = resolveOpenClawAgentDir();
+  const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
   const hostStore = ensureAuthProfileStore(hostAgentDir, {
     allowKeychainPrompt: false,
   });
@@ -1469,7 +1468,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const toolProbePath = path.join(workspaceDir, `.openclaw-live-tool-probe.${nonceA}.txt`);
   await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(params.cfg);
   const sanitizedCfg: OpenClawConfig = {
     ...params.cfg,
     auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
@@ -2169,7 +2168,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const cfg = getRuntimeConfig();
         await ensureOpenClawModelsJson(cfg);
 
-        const agentDir = resolveOpenClawAgentDir();
+        const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
         const all = modelRegistry.getAll();
@@ -2319,7 +2318,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const cfg = getRuntimeConfig();
     await ensureOpenClawModelsJson(cfg);
 
-    const agentDir = resolveOpenClawAgentDir();
+    const agentDir = resolveDefaultAgentDir(cfg);
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
     const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;

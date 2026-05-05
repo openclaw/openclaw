@@ -4,12 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-### Highlights
-
-- Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
-
 ### Changes
 
+- Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, same-session agent consult routing, duplicate-consult coalescing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
+- Voice Call/realtime: add opt-in OpenClaw agent voice context capsules and consult-cadence guidance so Gemini/OpenAI realtime calls can sound like the configured agent without consulting the full agent on every ordinary turn. Thanks @scoootscooob.
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
@@ -27,6 +25,21 @@ Docs: https://docs.openclaw.ai
 - Channels/streaming: cap progress-draft tool lines by default so edited progress boxes avoid jumpy reflow from long wrapped lines.
 - Control UI/chat: add an agent-first filter to the chat session picker, keep chat controls/composer responsive across phone/tablet/desktop widths, keep desktop chat controls on one row, avoid duplicate avatar refreshes during initial chat load, and hide that row while scrolling down the transcript. Thanks @BunsDev.
 - Control UI/chat: collapse consecutive duplicate text messages into one bubble with a count so repeated text-only messages stay compact without hiding nearby context.
+- Agents/subagents: preserve every grouped child result when direct completion fallback has to bypass the requester-agent announce turn. Thanks @vincentkoc.
+- TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
+- Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.
+- Docs: clarify that IRC uses raw TCP/TLS sockets outside operator-managed forward proxy routing, so direct IRC egress should be explicitly approved before enabling IRC. Thanks @jesse-merhi.
+- Gateway/performance: defer non-readiness sidecars until after the ready signal, avoid hot-path channel plugin barrel imports, and fast-path trusted bundled plugin metadata during Gateway startup.
+- Gateway/performance: avoid importing `jiti` on native-loadable plugin startup paths, so compiled bundled plugin surfaces do not pay source-transform loader cost unless fallback loading is actually needed.
+- Gateway/diagnostics: add startup phase spans, active work labels, stale terminal bridge markers, and default sync-I/O tracing in `pnpm gateway:watch` so slow Gateway turns are easier to attribute from logs and stability diagnostics.
+- Plugins/loader: preserve real compiled plugin module evaluation errors on the native fast path instead of treating every thrown `.js` module as a source-transform fallback miss. Thanks @vincentkoc.
+- QA/Mantis: add `pnpm openclaw qa mantis slack-desktop-smoke` to run Slack live QA inside a Crabbox VNC desktop, open Slack Web, and capture desktop screenshots beside the Slack QA artifacts.
+- QA/Mantis: add visual desktop tasks with Crabbox MP4 recording, screenshot capture, and optional image-understanding assertions, and preserve video artifacts in Mantis before/after reports.
+- QA/WhatsApp: add `pnpm openclaw qa whatsapp` for live DM canary and pairing-gate coverage using two pre-linked WhatsApp Web sessions from the QA credential pool.
+- QA/Mantis: pass the runtime env through desktop-browser Crabbox and artifact-copy child commands, so embedded Mantis callers can provide Crabbox credentials without mutating the parent process. Thanks @vincentkoc.
+- QA/Mantis: return the copied Slack desktop screenshot path even when remote Slack QA fails, so the CLI still prints the failure screenshot artifact. Thanks @vincentkoc.
+- QA/Mantis: accept Blacksmith Testbox `tbx_...` lease ids from desktop smoke warmup, so provider overrides do not fail before inspect/run. Thanks @vincentkoc.
+- QA/Codex harness: add targeted live Docker/Testbox diagnostics, auth preflight checks, cache mount fixes, and app-server protocol checkout discovery so maintainer harness failures are easier to reproduce. Thanks @vincentkoc.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.
@@ -59,6 +72,8 @@ Docs: https://docs.openclaw.ai
 - QA/Codex harness: add targeted live Docker/Testbox diagnostics, auth preflight checks, cache mount fixes, and app-server protocol checkout discovery so maintainer harness failures are easier to reproduce. Thanks @vincentkoc.
 - QA/Mantis: add `pnpm openclaw qa mantis slack-desktop-smoke` to run Slack live QA inside a Crabbox VNC desktop, open Slack Web, and capture desktop screenshots beside the Slack QA artifacts.
 - QA/Mantis: add visual desktop tasks with Crabbox MP4 recording, screenshot capture, and optional image-understanding assertions, and preserve video artifacts in Mantis before/after reports.
+- QA/Mantis: reuse Crabbox desktop/browser capture tooling and pnpm store caches during Slack desktop smoke runs, reducing per-scenario setup work before screenshots and videos are captured.
+- QA/Mantis: add Slack desktop hydrate modes and per-phase timing reports so warm prehydrated VNC leases can skip source install/build while cold runs still prove the full source checkout.
 - QA/Mantis: pass the runtime env through desktop-browser Crabbox and artifact-copy child commands, so embedded Mantis callers can provide Crabbox credentials without mutating the parent process. Thanks @vincentkoc.
 - QA/Mantis: return the copied Slack desktop screenshot path even when remote Slack QA fails, so the CLI still prints the failure screenshot artifact. Thanks @vincentkoc.
 - QA/Mantis: accept Blacksmith Testbox `tbx_...` lease ids from desktop smoke warmup, so provider overrides do not fail before inspect/run. Thanks @vincentkoc.
@@ -68,9 +83,11 @@ Docs: https://docs.openclaw.ai
 - Dependencies: refresh runtime and provider packages including Pi 0.73.0, ACPX adapters, OpenAI, Anthropic, Slack, and TypeScript native preview, while keeping the Bedrock runtime installer override pinned below the Windows ARM Node 24 npm resolver failure.
 - Contributor PRs: require external pull requests to include after-fix real behavior proof from a real OpenClaw setup, with terminal screenshots, console output, redacted runtime logs, linked artifacts, and copied live output treated as valid evidence while unit tests, mocks, lint, typechecks, snapshots, and CI remain supplemental only.
 - Plugins/catalog: add an `@tencent-weixin/openclaw-weixin` external entry pinned to `2.4.1` so onboarding and `openclaw channels add` can install the Tencent Weixin (personal WeChat) channel by default. (#77269) Thanks @pumpkinxing1.
+- Developer tooling: add checked-in VS Code Gateway debugging configs and an opt-in `OUTPUT_SOURCE_MAPS=1` source-map build path for breakpoints in TypeScript source. (#45710) Thanks @SwissArmyBud.
 
 ### Fixes
 
+- Doctor/status: warn when `OPENCLAW_GATEWAY_TOKEN` would shadow a different active `gateway.auth.token` source for local CLI commands, while avoiding false positives when config points at the same env token. Fixes #74271. Thanks @yelog.
 - Gateway/OpenAI-compatible: send the assistant role SSE chunk as soon as streaming chat-completion headers are accepted, so cold agent setup cannot leave `/v1/chat/completions` clients with a bodyless 200 response until their idle timeout fires.
 - Agents/media: avoid direct generated-media completion fallback while the announce-agent run is still pending, so async video and music completions do not duplicate raw media messages. (#77754)
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
@@ -79,6 +96,7 @@ Docs: https://docs.openclaw.ai
 - Providers/Fireworks: expose Kimi models as thinking-off-only and keep K2.5/K2.6 requests on `thinking: disabled`, so manual model switches do not send Fireworks-rejected `reasoning*` parameters. Refs #74289. Thanks @frankekn.
 - WhatsApp responsiveness: stop only verified stale local TUI clients when they degrade the Gateway event loop and delay replies. Thanks @vincentkoc.
 - Hooks/session-memory: add collision suffixes to fallback memory filenames so repeated `/new` or `/reset` captures in the same minute do not overwrite the earlier session archive. Thanks @vincentkoc.
+- Agents/config: remove the ambiguous legacy `main` agent dir helper from runtime paths; model, auth, gateway, bundled plugin, and test helpers now resolve default/session agent dirs through `agents.list`/agent-scope helpers while plugin SDK keeps a deprecated compatibility export.
 - Video generation: wait up to 20 minutes for slow fal/MiniMax queue-backed jobs, stop forwarding unsupported Google Veo generated-audio options, and normalize MiniMax `720P` requests to its supported `768P` resolution with the usual override warning/details instead of failing fallback.
 - Video generation: accept provider-specific aspect-ratio and resolution hints at the tool boundary, normalize `720P` to MiniMax's supported `768P`, and stop sending Google `generateAudio` on Gemini video requests so provider fallback can recover from model-specific parameter differences. Thanks @vincentkoc.
 - OpenAI/Google Meet: fail realtime voice connection attempts when the socket closes before `session.updated`, avoiding stuck Meet joins waiting on a bridge that never became ready. Thanks @vincentkoc.
