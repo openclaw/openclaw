@@ -5,6 +5,7 @@ import { createInternalHookEvent, triggerInternalHook } from "../../hooks/intern
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveHookMessageProvider } from "../../utils/hook-message-provider.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -155,6 +156,10 @@ export async function emitResetCommandHooks(params: {
             sessionKey: params.sessionKey,
             sessionId: prevEntry?.sessionId,
             workspaceDir: params.workspaceDir,
+            messageProvider: resolveHookMessageProvider({
+              sessionKey: params.sessionKey,
+              provider: params.ctx.OriginatingChannel || params.command.channel,
+            }),
           },
         );
       } catch (err: unknown) {

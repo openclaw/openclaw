@@ -37,13 +37,13 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
 
 describe("emitResetCommandHooks", () => {
-  async function runBeforeResetContext(sessionKey?: string) {
+  async function runBeforeResetContext(sessionKey?: string, channel = "discord") {
     const command = {
-      surface: "discord",
+      surface: channel,
       senderId: "rai",
-      channel: "discord",
-      from: "discord:rai",
-      to: "discord:bot",
+      channel,
+      from: `${channel}:rai`,
+      to: `${channel}:bot`,
       resetHookTriggered: false,
     } as HandleCommandsParams["command"];
 
@@ -86,6 +86,36 @@ describe("emitResetCommandHooks", () => {
       sessionKey: "agent:navi:main",
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
+      messageProvider: "discord",
+    });
+  });
+
+  it("normalizes OriginatingChannel before emitting before_reset hook context", async () => {
+    const command = {
+      surface: "telegram",
+      senderId: "rai",
+      channel: "telegram",
+      from: "telegram:rai",
+      to: "telegram:bot",
+      resetHookTriggered: false,
+    } as HandleCommandsParams["command"];
+
+    await emitResetCommandHooks({
+      action: "new",
+      ctx: { OriginatingChannel: "Telegram" } as HandleCommandsParams["ctx"],
+      cfg: {} as HandleCommandsParams["cfg"],
+      command,
+      sessionKey: "agent:main:telegram:direct:123",
+      previousSessionEntry: {
+        sessionId: "prev-session",
+      } as HandleCommandsParams["previousSessionEntry"],
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(hookRunnerMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+    const [, ctx] = hookRunnerMocks.runBeforeReset.mock.calls[0] ?? [];
+    expect(ctx).toMatchObject({
+      messageProvider: "telegram",
     });
   });
 
@@ -96,6 +126,7 @@ describe("emitResetCommandHooks", () => {
       sessionKey: undefined,
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
+      messageProvider: "discord",
     });
   });
 
@@ -106,6 +137,7 @@ describe("emitResetCommandHooks", () => {
       sessionKey: "agent:main:main",
       sessionId: "prev-session",
       workspaceDir: "/tmp/openclaw-workspace",
+      messageProvider: "discord",
     });
   });
 
@@ -150,6 +182,7 @@ describe("emitResetCommandHooks", () => {
       }),
       expect.objectContaining({
         sessionId: "prev-session",
+        messageProvider: "telegram",
       }),
     );
   });

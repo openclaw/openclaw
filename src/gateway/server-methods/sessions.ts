@@ -1892,15 +1892,20 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           }
           delete entryToUpdate.inputTokens;
           delete entryToUpdate.outputTokens;
+          delete entryToUpdate.cacheRead;
+          delete entryToUpdate.cacheWrite;
           if (
             typeof result.result?.tokensAfter === "number" &&
-            Number.isFinite(result.result.tokensAfter)
+            Number.isFinite(result.result.tokensAfter) &&
+            result.result.tokensAfter >= 0
           ) {
             entryToUpdate.totalTokens = result.result.tokensAfter;
             entryToUpdate.totalTokensFresh = true;
+            entryToUpdate.estimatedCostUsd = result.result.tokensAfter === 0 ? 0 : undefined;
           } else {
             delete entryToUpdate.totalTokens;
             delete entryToUpdate.totalTokensFresh;
+            delete entryToUpdate.estimatedCostUsd;
           }
         });
       }
@@ -1960,6 +1965,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
       delete entryToUpdate.inputTokens;
       delete entryToUpdate.outputTokens;
+      delete entryToUpdate.cacheRead;
+      delete entryToUpdate.cacheWrite;
+      delete entryToUpdate.estimatedCostUsd;
       delete entryToUpdate.totalTokens;
       delete entryToUpdate.totalTokensFresh;
       entryToUpdate.updatedAt = Date.now();

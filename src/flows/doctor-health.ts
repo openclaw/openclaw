@@ -53,6 +53,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options: DoctorOptions
   const { CONFIG_PATH } = await import("../config/config.js");
   const ctx = {
     runtime: effectiveRuntime,
+    env: process.env,
     options,
     prompter,
     configResult,

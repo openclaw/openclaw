@@ -32,6 +32,7 @@ import {
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
+import { resolveHookMessageProvider } from "../../utils/hook-message-provider.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -603,6 +604,10 @@ async function compactEmbeddedPiSessionDirectOnce(
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
+    const hookMessageProvider = resolveHookMessageProvider({
+      sessionKey: params.sessionKey,
+      provider: resolvedMessageProvider,
+    });
     const contextInjectionMode = resolveContextInjectionMode(params.config);
     const { contextFiles } =
       contextInjectionMode === "never"
@@ -1136,7 +1141,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             sessionKey: params.sessionKey,
             sessionAgentId,
             workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
+            messageProvider: hookMessageProvider,
             metrics: beforeHookMetrics,
             onHookMessages: params.onCompactionHookMessages,
           });
@@ -1315,7 +1320,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             hookSessionKey,
             missingSessionKey,
             workspaceDir: effectiveWorkspace,
-            messageProvider: resolvedMessageProvider,
+            messageProvider: hookMessageProvider,
             messageCountAfter,
             tokensAfter,
             compactedCount,

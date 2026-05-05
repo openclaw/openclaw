@@ -1,8 +1,16 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { resolveHookMessageProvider } from "../utils/hook-message-provider.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
+
+function resolveCompactionHookMessageProvider(ctx: EmbeddedPiSubscribeContext): string | undefined {
+  return resolveHookMessageProvider({
+    sessionKey: ctx.params.sessionKey,
+    provider: ctx.params.messageChannel ?? ctx.params.messageProvider,
+  });
+}
 
 export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
@@ -31,6 +39,7 @@ export function handleCompactionStart(ctx: EmbeddedPiSubscribeContext) {
         },
         {
           sessionKey: ctx.params.sessionKey,
+          messageProvider: resolveCompactionHookMessageProvider(ctx),
         },
       )
       .catch((err) => {
@@ -100,7 +109,10 @@ export function handleCompactionEnd(
             compactedCount: ctx.getCompactionCount(),
             sessionFile: ctx.params.session.sessionFile,
           },
-          { sessionKey: ctx.params.sessionKey },
+          {
+            sessionKey: ctx.params.sessionKey,
+            messageProvider: resolveCompactionHookMessageProvider(ctx),
+          },
         )
         .catch((err) => {
           ctx.log.warn(`after_compaction hook failed: ${String(err)}`);

@@ -1199,6 +1199,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
+  it("prefers messageChannel when wiring the embedded subscription provider", async () => {
+    await createContextEngineAttemptRunner({
+      sessionKey,
+      tempPaths,
+      contextEngine: {
+        assemble: async ({ messages }) => ({
+          messages,
+          estimatedTokens: 1,
+        }),
+      },
+      attemptOverrides: {
+        messageChannel: "slack",
+        messageProvider: undefined,
+      },
+    });
+
+    expect(hoisted.subscribeEmbeddedPiSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageProvider: "slack",
+      }),
+    );
+  });
+
   it("skips maintenance when ingestBatch fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const ingestBatch = vi.fn(async () => {

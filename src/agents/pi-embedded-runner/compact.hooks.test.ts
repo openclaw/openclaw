@@ -607,6 +607,33 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     );
   });
 
+  it("infers hook messageProvider from channel-scoped session keys", async () => {
+    hookRunner.hasHooks.mockReturnValue(true);
+    const sessionKey = "agent:main:telegram:direct:123";
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey,
+        messageProvider: "telegram",
+      }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey,
+        messageProvider: "telegram",
+      }),
+    );
+  });
+
   it("uses sessionId as hook session key fallback when sessionKey is missing", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     await runCompactionHooks({});

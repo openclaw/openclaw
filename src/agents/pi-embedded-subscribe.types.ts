@@ -55,6 +55,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /** Channel/provider identity forwarded into subscribe-time hook contexts. */
+  messageProvider?: string;
+  /** Channel identity fallback forwarded into subscribe-time hook contexts. */
+  messageChannel?: string;
   /**
    * Exact raw names of non-plugin OpenClaw tools registered for this run.
    * When provided, MEDIA: passthrough requires an exact match instead of only

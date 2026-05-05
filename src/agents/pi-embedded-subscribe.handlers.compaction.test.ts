@@ -1,14 +1,31 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
+import type { HookRunner } from "../plugins/hooks.js";
 import {
   readCompactionCount,
   seedSessionStore,
   waitForCompactionCount,
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
+const hookRunnerMocks = vi.hoisted(() => ({
+  hasHooks: vi.fn<HookRunner["hasHooks"]>(),
+  runBeforeCompaction: vi.fn<HookRunner["runBeforeCompaction"]>(),
+  runAfterCompaction: vi.fn<HookRunner["runAfterCompaction"]>(),
+}));
+
+vi.mock("../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () =>
+    ({
+      hasHooks: hookRunnerMocks.hasHooks,
+      runBeforeCompaction: hookRunnerMocks.runBeforeCompaction,
+      runAfterCompaction: hookRunnerMocks.runAfterCompaction,
+    }) as unknown as HookRunner,
+}));
+
 import {
+  handleCompactionStart,
   handleCompactionEnd,
   reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
@@ -19,6 +36,8 @@ function createCompactionContext(params: {
   sessionKey: string;
   agentId?: string;
   initialCount: number;
+  messageProvider?: string;
+  messageChannel?: string;
 }): EmbeddedPiSubscribeContext {
   let compactionCount = params.initialCount;
   return {
@@ -29,6 +48,8 @@ function createCompactionContext(params: {
       sessionKey: params.sessionKey,
       sessionId: "session-1",
       agentId: params.agentId ?? "test-agent",
+      messageProvider: params.messageProvider,
+      messageChannel: params.messageChannel,
       onAgentEvent: undefined,
     },
     state: {
@@ -52,6 +73,14 @@ function createCompactionContext(params: {
     getLastCompactionTokensAfter: vi.fn(() => undefined),
   } as unknown as EmbeddedPiSubscribeContext;
 }
+
+beforeEach(() => {
+  hookRunnerMocks.hasHooks.mockReset();
+  hookRunnerMocks.runBeforeCompaction.mockReset();
+  hookRunnerMocks.runAfterCompaction.mockReset();
+  hookRunnerMocks.runBeforeCompaction.mockResolvedValue(undefined);
+  hookRunnerMocks.runAfterCompaction.mockResolvedValue(undefined);
+});
 
 afterEach(async () => {
   await drainSessionStoreWriterQueuesForTest();
@@ -100,6 +129,69 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
 
     expect(nextCount).toBe(3);
     expect(await readCompactionCount(storePath, sessionKey)).toBe(3);
+  });
+});
+
+describe("handleCompactionStart", () => {
+  it("passes messageProvider into before_compaction hook context", async () => {
+    hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_compaction");
+    const ctx = createCompactionContext({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:feishu:default:direct:ou_test",
+      initialCount: 1,
+      messageProvider: "feishu",
+    });
+
+    handleCompactionStart(ctx);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageCount: 0 }),
+      expect.objectContaining({
+        sessionKey: "agent:main:feishu:default:direct:ou_test",
+        messageProvider: "feishu",
+      }),
+    );
+  });
+
+  it("normalizes messageProvider before emitting compaction hook context", async () => {
+    hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_compaction");
+    const ctx = createCompactionContext({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:telegram:direct:ou_test",
+      initialCount: 1,
+      messageProvider: "Telegram",
+    });
+
+    handleCompactionStart(ctx);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageCount: 0 }),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:ou_test",
+        messageProvider: "telegram",
+      }),
+    );
+  });
+
+  it("prefers messageChannel fallback over the provider identity for hook context", async () => {
+    hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_compaction");
+    const ctx = createCompactionContext({
+      storePath: "/tmp/sessions.json",
+      sessionKey: "agent:main:telegram:direct:ou_test",
+      initialCount: 1,
+      messageProvider: "internal",
+      messageChannel: "Telegram",
+    });
+
+    handleCompactionStart(ctx);
+    await vi.waitFor(() => expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledTimes(1));
+    expect(hookRunnerMocks.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({ messageCount: 0 }),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:ou_test",
+        messageProvider: "telegram",
+      }),
+    );
   });
 });
 

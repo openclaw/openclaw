@@ -493,7 +493,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     compactionCount += 1;
   };
   const noteCompactionTokensAfter = (value: unknown) => {
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
       return;
     }
     state.lastCompactionTokensAfter = Math.floor(value);

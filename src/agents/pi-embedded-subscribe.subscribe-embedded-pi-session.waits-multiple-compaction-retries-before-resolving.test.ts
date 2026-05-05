@@ -57,6 +57,21 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getLastCompactionTokensAfter()).toBe(6_789);
   });
 
+  it("keeps zero-token compaction results as the latest token snapshot", async () => {
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-compaction-zero-tokens",
+    });
+
+    emit({
+      type: "compaction_end",
+      willRetry: false,
+      result: { summary: "empty", tokensAfter: 0 },
+    });
+
+    expect(subscription.getCompactionCount()).toBe(1);
+    expect(subscription.getLastCompactionTokensAfter()).toBe(0);
+  });
+
   it("does not count compaction when result is absent", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-compaction-no-result",
