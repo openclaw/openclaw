@@ -28,6 +28,7 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   opts?: { local?: boolean };
+  currentSessionId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
@@ -55,8 +56,10 @@ function createHarness(params?: {
   const state = {
     currentAgentId: "main",
     currentSessionKey: "agent:main:main",
+    currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
+    pendingChatRunId: null as string | null,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
@@ -153,6 +156,22 @@ describe("tui command handlers", () => {
       }),
     );
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("passes the current backing session id when sending to the gateway", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      currentSessionId: "session-before-relaunch",
+    });
+
+    await handleCommand("/status");
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-before-relaunch",
+        message: "/status",
+      }),
+    );
   });
 
   it("opens a context mode selector for /context without sending immediately", async () => {
@@ -274,6 +293,29 @@ describe("tui command handlers", () => {
     expect(state.pendingOptimisticUserMessage).toBe(true);
   });
 
+  it("tracks the in-flight runId so escape can abort during the wait", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "ignored" });
+    const { handleCommand, state } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    const sentRunId = (sendChat.mock.calls[0]?.[0] as { runId: string }).runId;
+    expect(typeof sentRunId).toBe("string");
+    expect(sentRunId.length).toBeGreaterThan(0);
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingChatRunId).toBe(sentRunId);
+  });
+
+  it("clears the pending runId if sendChat fails", async () => {
+    const sendChat = vi.fn().mockRejectedValue(new Error("boom"));
+    const { handleCommand, state } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+  });
+
   it("sends /btw without hijacking the active main run", async () => {
     const setActivityStatus = vi.fn();
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
@@ -293,6 +335,25 @@ describe("tui command handlers", () => {
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "/btw what changed?",
+      }),
+    );
+  });
+
+  it("sends /side without hijacking the active main run", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
+      createHarness({
+        activeChatRunId: "run-main",
+      });
+
+    await handleCommand("/side what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "/side what changed?",
       }),
     );
   });

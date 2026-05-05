@@ -6,14 +6,14 @@ import { isPlainObject } from "../utils.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
-export type LoopDetectorKind =
+type LoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
   | "ping_pong";
 
-export type LoopDetectionResult =
+type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;
@@ -58,7 +58,7 @@ type ResolvedLoopDetectionConfig = {
   };
 };
 
-export type ToolLoopDetectionScope = {
+type ToolLoopDetectionScope = {
   runId?: string;
 };
 
@@ -678,13 +678,13 @@ export function recordToolCallOutcome(
     config?: ToolLoopDetectionConfig;
     runId?: string;
   },
-): void {
+): ToolCallRecord | undefined {
   const resolvedConfig = resolveLoopDetectionConfig(params.config);
   const runId = normalizeRunId(params.runId);
   const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
   const resultHash = outcome.resultHash;
   if (!resultHash) {
-    return;
+    return undefined;
   }
 
   if (!state.toolCallHistory) {
@@ -693,6 +693,7 @@ export function recordToolCallOutcome(
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   let matched = false;
+  let recordedOutcome: ToolCallRecord | undefined;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
     if (!call) {
@@ -713,11 +714,12 @@ export function recordToolCallOutcome(
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
+    recordedOutcome = call;
     break;
   }
 
   if (!matched) {
-    state.toolCallHistory.push({
+    const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
@@ -725,12 +727,15 @@ export function recordToolCallOutcome(
       resultHash,
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
-    });
+    };
+    state.toolCallHistory.push(record);
+    recordedOutcome = record;
   }
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
     state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
+  return recordedOutcome;
 }
 
 /**

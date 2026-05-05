@@ -62,7 +62,9 @@ session:
 1. OpenClaw submits the request to the provider and immediately returns a task id.
 2. The provider processes the job in the background (typically 30 seconds to 5 minutes depending on the provider and resolution).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
-4. The agent posts the finished video back into the original conversation.
+4. The agent tells the user and attaches the finished video. In group/channel
+   chats that use message-tool-only visible delivery, the agent relays the
+   result through the message tool instead of OpenClaw posting it directly.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another

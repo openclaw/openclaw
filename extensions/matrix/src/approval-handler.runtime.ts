@@ -408,7 +408,7 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           : null,
       );
     },
-    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload }) => {
+    deliverPending: async ({ cfg, accountId, context, preparedTarget, pendingPayload, view }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return null;
@@ -447,6 +447,13 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       );
       const reactionEventId =
         result.primaryMessageId?.trim() || messageIds[0] || result.messageId.trim();
+      registerMatrixApprovalReactionTarget({
+        roomId: result.roomId,
+        eventId: reactionEventId,
+        approvalId: pendingPayload.approvalId,
+        allowedDecisions: pendingPayload.allowedDecisions,
+        ttlMs: view.expiresAtMs - Date.now(),
+      });
       await Promise.allSettled(
         listMatrixApprovalReactionBindings(pendingPayload.allowedDecisions).map(
           async ({ emoji }) => {
@@ -511,10 +518,10 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, pendingPayload }) => {
+    bindPending: (params) => {
       const target = normalizeReactionTargetRef({
-        roomId: entry.roomId,
-        eventId: entry.reactionEventId,
+        roomId: params.entry.roomId,
+        eventId: params.entry.reactionEventId,
       });
       if (!target) {
         return null;
@@ -522,13 +529,14 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       registerMatrixApprovalReactionTarget({
         roomId: target.roomId,
         eventId: target.eventId,
-        approvalId: pendingPayload.approvalId,
-        allowedDecisions: pendingPayload.allowedDecisions,
+        approvalId: params.pendingPayload.approvalId,
+        allowedDecisions: params.pendingPayload.allowedDecisions,
+        ttlMs: params.view.expiresAtMs - Date.now(),
       });
       return target;
     },
-    unbindPending: ({ binding }) => {
-      const target = normalizeReactionTargetRef(binding);
+    unbindPending: (params) => {
+      const target = normalizeReactionTargetRef(params.binding);
       if (!target) {
         return;
       }

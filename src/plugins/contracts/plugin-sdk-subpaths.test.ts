@@ -541,6 +541,14 @@ describe("plugin-sdk subpath exports", () => {
       "clearHistoryEntriesIfEnabled",
       "recordPendingHistoryEntryIfEnabled",
     ]);
+    expectSourceMentions("mattermost", [
+      "buildPendingHistoryContextFromMap",
+      "clearHistoryEntriesIfEnabled",
+      "formatPairingApproveHint",
+      "recordPendingHistoryEntryIfEnabled",
+      "resolveControlCommandGate",
+    ]);
+    expectSourceMentions("matrix", ["runPluginCommandWithTimeout"]);
     expectSourceContract("reply-runtime", {
       omits: [
         "buildPendingHistoryContextFromMap",
@@ -1116,6 +1124,7 @@ describe("plugin-sdk subpath exports", () => {
       "createPinnedDispatcher",
       "resolvePinnedHostnameWithPolicy",
       "formatErrorMessage",
+      "isPrivateIpAddress",
       "assertHttpUrlTargetsPrivateNetwork",
       "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
