@@ -9,6 +9,7 @@ import { handleContextCommand } from "./commands-context-command.js";
 import { handleCrestodianCommand } from "./commands-crestodian.js";
 import { handleDiagnosticsCommand } from "./commands-diagnostics.js";
 import { handleDockCommand } from "./commands-dock.js";
+import { handleHandoffCommand } from "./commands-handoff.js";
 import {
   handleCommandsListCommand,
   handleExportTrajectoryCommand,
@@ -55,6 +56,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleToolsCommand,
     handleStatusCommand,
     handleDiagnosticsCommand,
+    handleHandoffCommand,
     handleTasksCommand,
     handleAllowlistCommand,
     handleApproveCommand,

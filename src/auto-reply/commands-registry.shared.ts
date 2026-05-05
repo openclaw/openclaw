@@ -252,6 +252,40 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
       tier: "standard",
     }),
     defineChatCommand({
+      key: "handoff",
+      nativeName: "handoff",
+      description: "Save a lightweight handoff packet for a fresh session.",
+      textAlias: "/handoff",
+      acceptsArgs: true,
+      category: "status",
+      tier: "standard",
+      args: [
+        {
+          name: "note",
+          description: "Optional handoff note",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
+      key: "resume",
+      nativeName: "resume",
+      description: "Resume from the latest handoff packet.",
+      textAlias: "/resume",
+      acceptsArgs: true,
+      category: "status",
+      tier: "standard",
+      args: [
+        {
+          name: "mode",
+          description: "Use latest to load the newest handoff",
+          type: "string",
+          choices: ["latest"],
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "btw",
       nativeName: "btw",
       description: "Ask a side question without changing future session context.",
