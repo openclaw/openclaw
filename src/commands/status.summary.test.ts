@@ -61,9 +61,9 @@ vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
-  configureTaskRegistryMaintenance: vi.fn(),
-  getInspectableTaskRegistrySummary: vi.fn(() => ({
+const taskMaintenanceMocks = vi.hoisted(() => ({
+  reconcileInspectableTasks: vi.fn(() => [] as Array<Record<string, unknown>>),
+  getInspectableTaskRegistrySummary: vi.fn((_reconciledTasks?: Array<Record<string, unknown>>) => ({
     total: 0,
     active: 0,
     terminal: 0,
@@ -84,7 +84,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
       cron: 0,
     },
   })),
-  getInspectableTaskAuditSummary: vi.fn(() => ({
+  getInspectableTaskAuditSummary: vi.fn((_reconciledTasks?: Array<Record<string, unknown>>) => ({
     total: 1,
     warnings: 1,
     errors: 0,
@@ -97,6 +97,13 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
       inconsistent_timestamps: 0,
     },
   })),
+}));
+
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  configureTaskRegistryMaintenance: vi.fn(),
+  reconcileInspectableTasks: taskMaintenanceMocks.reconcileInspectableTasks,
+  getInspectableTaskRegistrySummary: taskMaintenanceMocks.getInspectableTaskRegistrySummary,
+  getInspectableTaskAuditSummary: taskMaintenanceMocks.getInspectableTaskAuditSummary,
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -173,6 +180,23 @@ describe("getStatusSummary", () => {
 
     expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
       expect.objectContaining({ allowAsyncLoad: false }),
+    );
+  });
+
+  it("reconciles inspectable tasks once and shares the snapshot across summaries", async () => {
+    const sentinelTasks: Array<Record<string, unknown>> = [{ taskId: "shared-snapshot" }];
+    taskMaintenanceMocks.reconcileInspectableTasks.mockReturnValueOnce(sentinelTasks);
+
+    await getStatusSummary();
+
+    expect(taskMaintenanceMocks.reconcileInspectableTasks).toHaveBeenCalledTimes(1);
+    expect(taskMaintenanceMocks.getInspectableTaskRegistrySummary).toHaveBeenCalledTimes(1);
+    expect(taskMaintenanceMocks.getInspectableTaskAuditSummary).toHaveBeenCalledTimes(1);
+    expect(taskMaintenanceMocks.getInspectableTaskRegistrySummary.mock.calls[0]?.[0]).toBe(
+      sentinelTasks,
+    );
+    expect(taskMaintenanceMocks.getInspectableTaskAuditSummary.mock.calls[0]?.[0]).toBe(
+      sentinelTasks,
     );
   });
 });
