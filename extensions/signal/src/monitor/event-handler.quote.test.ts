@@ -54,7 +54,6 @@ vi.mock("../../../../src/pairing/pairing-store.js", () => ({
 function createQuoteHandler(overrides: Partial<SignalEventHandlerDeps> = {}) {
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
-      // oxlint-disable-next-line typescript/no-explicit-any
       cfg: { messages: { inbound: { debounceMs: 0 } } } as any,
       historyLimit: 0,
       ...overrides,
@@ -97,15 +96,14 @@ describe("signal quote reply handling", () => {
     expect(ctx?.ReplyToBody).toBe("The meeting is at 3pm");
     expect(ctx?.ReplyToSender).toBe("+15550003333");
     expect(ctx?.ReplyToIsQuote).toBe(true);
-    expect(String(ctx?.Body ?? "")).toContain("Thanks for the info!");
-    expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
+    expect((ctx?.Body ?? "")).toContain("Thanks for the info!");
+    expect((ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
   });
 
   it("uses the latest quote target when debouncing rapid quoted Signal replies", async () => {
     vi.useFakeTimers();
     try {
       const handler = createQuoteHandler({
-        // oxlint-disable-next-line typescript/no-explicit-any
         cfg: { messages: { inbound: { debounceMs: 25 } } } as any,
       });
 
@@ -152,8 +150,8 @@ describe("signal quote reply handling", () => {
       expect(ctx?.ReplyToId).toBe("1700000000009");
       expect(ctx?.ReplyToBody).toBe("Second quoted message");
       expect(ctx?.ReplyToSender).toBe("+15550004444");
-      expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550004444 id:1700000000009]");
-      expect(String(ctx?.Body ?? "")).not.toContain("[Quoting +15550003333 id:1700000000000]");
+      expect((ctx?.Body ?? "")).toContain("[Quoting +15550004444 id:1700000000009]");
+      expect((ctx?.Body ?? "")).not.toContain("[Quoting +15550003333 id:1700000000000]");
     } finally {
       vi.useRealTimers();
     }
@@ -180,7 +178,7 @@ describe("signal quote reply handling", () => {
     expect(ctx?.BodyForAgent).toBe("");
     expect(ctx?.ReplyToBody).toBe("Original message to quote");
     const userContext = buildInboundUserContextPrefix(ctx as MsgContext);
-    expect(userContext).toContain("Replied message (untrusted, for context):");
+    expect(userContext).toContain("Reply target of current user message (untrusted, for context):");
     expect(userContext).toContain('"body": "Original message to quote"');
     expect(userContext).toContain('"sender_label": "+15550002222"');
   });
@@ -204,7 +202,7 @@ describe("signal quote reply handling", () => {
 
     const ctx = getCapturedCtx();
     expect(ctx?.ReplyToBody).toBe("@123e4567 can you check this?");
-    expect(String(ctx?.Body ?? "")).toContain('"@123e4567 can you check this?"');
+    expect((ctx?.Body ?? "")).toContain('"@123e4567 can you check this?"');
   });
 
   it("uses quoted attachment placeholders for media replies without text", async () => {
@@ -269,7 +267,7 @@ describe("signal quote reply handling", () => {
     const ctx = getCapturedCtx();
     expect(ctx?.ReplyToId).toBeUndefined();
     expect(ctx?.ReplyToBody).toBe("Original text");
-    expect(String(ctx?.Body ?? "")).not.toContain("id:1700000000000abc");
+    expect((ctx?.Body ?? "")).not.toContain("id:1700000000000abc");
   });
 
   it("does not synthesize quote-only context from invalid negative ids", async () => {
@@ -400,7 +398,7 @@ describe("signal quote reply handling", () => {
 
     const ctx = getCapturedCtx();
     expect(ctx?.ReplyToSender).toBe("+15550002222");
-    expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550002222 id:1700000000001]");
+    expect((ctx?.Body ?? "")).toContain("[Quoting +15550002222 id:1700000000001]");
   });
 
   it("does not poison the quote-author cache from attacker-controlled quote metadata", async () => {
@@ -443,7 +441,7 @@ describe("signal quote reply handling", () => {
 
     const ctx = getCapturedCtx();
     expect(ctx?.ReplyToSender).toBe("+15550002222");
-    expect(String(ctx?.Body ?? "")).toContain("[Quoting +15550002222 id:1700000000001]");
+    expect((ctx?.Body ?? "")).toContain("[Quoting +15550002222 id:1700000000001]");
   });
 
   it("resolves cached uuid senders with a uuid: prefix", async () => {
@@ -483,7 +481,7 @@ describe("signal quote reply handling", () => {
 
     const ctx = getCapturedCtx();
     expect(ctx?.ReplyToSender).toBe(`uuid:${senderUuid}`);
-    expect(String(ctx?.Body ?? "")).toContain(`[Quoting uuid:${senderUuid} id:1700000000001]`);
+    expect((ctx?.Body ?? "")).toContain(`[Quoting uuid:${senderUuid} id:1700000000001]`);
   });
 
   it("preserves uuid: prefix in quote author normalization", async () => {
@@ -508,7 +506,7 @@ describe("signal quote reply handling", () => {
 
     const ctx = getCapturedCtx();
     expect(ctx?.ReplyToSender).toBe("uuid:01234567-89ab-cdef-0123-456789abcdef");
-    expect(String(ctx?.Body ?? "")).toContain(
+    expect((ctx?.Body ?? "")).toContain(
       "[Quoting uuid:01234567-89ab-cdef-0123-456789abcdef id:1700000000000]",
     );
   });

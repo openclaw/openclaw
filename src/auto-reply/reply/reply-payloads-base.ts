@@ -37,14 +37,38 @@ function resolveReplyThreadingForPayload(params: {
     params.replyThreading,
   );
 
+  // Distinguish between (a) explicit null = "do not reply" suppression, (b) a
+  // trimmed non-empty explicit replyToId, and (c) blank/whitespace strings that
+  // should fall through to implicit threading.
+  const explicitReplyToIdRaw = params.payload.replyToId;
+  const isExplicitNull = explicitReplyToIdRaw === null;
+  const trimmedExplicitReplyToId =
+    typeof explicitReplyToIdRaw === "string"
+      ? (normalizeOptionalString(explicitReplyToIdRaw) ?? undefined)
+      : undefined;
+
+  // Normalize the payload up-front so downstream logic sees the trimmed string
+  // (or null preserved as suppression). Whitespace-only strings are dropped so
+  // implicit threading can still apply below.
+  const normalizedPayload: ReplyPayload =
+    typeof explicitReplyToIdRaw === "string" &&
+    explicitReplyToIdRaw !== (trimmedExplicitReplyToId ?? "")
+      ? copyReplyPayloadMetadata(params.payload, {
+          ...params.payload,
+          replyToId: trimmedExplicitReplyToId,
+        })
+      : params.payload;
+
+  const hasExplicitReplyToId = isExplicitNull || trimmedExplicitReplyToId !== undefined;
+
   let resolved: ReplyPayload =
-    params.payload.replyToId ||
-    params.payload.replyToCurrent === false ||
+    hasExplicitReplyToId ||
+    normalizedPayload.replyToCurrent === false ||
     !implicitReplyToId ||
     !allowImplicitReplyToCurrentMessage
-      ? params.payload
-      : copyReplyPayloadMetadata(params.payload, {
-          ...params.payload,
+      ? normalizedPayload
+      : copyReplyPayloadMetadata(normalizedPayload, {
+          ...normalizedPayload,
           replyToId: implicitReplyToId,
         });
 
