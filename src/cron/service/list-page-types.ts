@@ -12,6 +12,13 @@ export type CronListPageOptions = {
   enabled?: CronJobsEnabledFilter;
   sortBy?: CronJobsSortBy;
   sortDir?: CronSortDir;
+  /**
+   * Restrict the result set to jobs owned by the given agent.
+   * When omitted (the default), all jobs across all agents are returned —
+   * preserving the historical behavior. Empty/whitespace strings are treated
+   * as omitted. See #77118.
+   */
+  agentId?: string;
 };
 
 export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {

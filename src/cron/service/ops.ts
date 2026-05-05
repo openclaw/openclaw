@@ -30,6 +30,7 @@ import type {
   CronSortDir,
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
+import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -277,6 +278,18 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     await ensureLoadedForRead(state);
     const query = normalizeLowercaseStringOrEmpty(opts?.query);
     const enabledFilter = resolveEnabledFilter(opts);
+    // Normalize the requested agentId through the same agent-id normalizer
+    // used by job create/update paths (`normalizeOptionalAgentId` →
+    // `normalizeAgentId`) so case-only mismatches like
+    // `cron.list({ agentId: "MAIN" })` against jobs stored as `"main"` are
+    // treated as equivalent. Returns `undefined` when no filter was requested.
+    const agentIdFilter = normalizeOptionalAgentId(opts?.agentId) ?? null;
+    // Cron jobs are allowed to omit `agentId` for the default agent — delivery
+    // and session-cleanup code already treats missing agentId as the default.
+    // Mirror that here so `cron.list({ agentId: defaultAgentId })` returns
+    // default-agent jobs that omit the field, not an empty page. Normalize the
+    // default-agent id too so the comparison is symmetric. See #77118.
+    const defaultAgentId = normalizeOptionalAgentId(state.deps.defaultAgentId);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
     const source = state.store?.jobs ?? [];
@@ -286,6 +299,13 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       }
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
+      }
+      if (agentIdFilter !== null) {
+        const normalizedJobOwner = normalizeOptionalAgentId(job.agentId);
+        const effectiveOwner = normalizedJobOwner ?? defaultAgentId ?? "";
+        if (effectiveOwner !== agentIdFilter) {
+          return false;
+        }
       }
       if (!query) {
         return true;
