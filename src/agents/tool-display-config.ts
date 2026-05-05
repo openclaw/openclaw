@@ -267,7 +267,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
     exec: {
       emoji: "🛠️",
       title: "Exec",
-      detailKeys: ["command"],
+      detailKeys: ["command", "node", "nodeId", "cwd", "workdir"],
     },
     tool_call: {
       emoji: "🧰",

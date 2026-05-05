@@ -292,4 +292,36 @@ describe("tool display details", () => {
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
   });
+
+  // ==================== NEW TESTS FOR NODE DISPLAY ====================
+  it("exec display includes node name when present", () => {
+    const result = resolveToolDisplay({
+      name: "exec",
+      args: {
+        command: "docker pull pihole/pihole:latest",
+        node: "raspberrypi",
+      },
+    });
+
+    const detail = formatToolDetail(result);
+
+    expect(detail).toContain("(raspberrypi)");
+    expect(detail).toContain("docker pull");
+  });
+
+  it("exec display includes node name with cwd", () => {
+    const result = resolveToolDisplay({
+      name: "exec",
+      args: {
+        command: "ls -la",
+        node: "myserver",
+        cwd: "/home/user",
+      },
+    });
+
+    const detail = formatToolDetail(result);
+
+    expect(detail).toContain("(myserver)");
+    expect(detail).toContain("ls -la");
+  });
 });
