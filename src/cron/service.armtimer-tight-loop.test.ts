@@ -32,7 +32,7 @@ function createStuckPastDueJob(params: { id: string; nowMs: number; pastDueMs: n
     state: {
       nextRunAtMs: pastDueAt,
       // Stuck: set from a previous execution that was interrupted.
-      // Not yet old enough for STUCK_RUN_MS (2 h) to clear it.
+      // Not yet old enough for the per-job stuck threshold to clear it.
       runningAtMs: pastDueAt + 1,
     },
   };
