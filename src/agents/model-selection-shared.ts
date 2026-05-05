@@ -336,7 +336,7 @@ export function buildConfiguredAllowlistKeys(params: {
   cfg: OpenClawConfig | undefined;
   defaultProvider: string;
 }): Set<string> | null {
-  const rawAllowlist = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
+  const rawAllowlist = collectAgentDefaultModelRefs(params.cfg);
   if (rawAllowlist.length === 0) {
     return null;
   }
@@ -353,6 +353,25 @@ export function buildConfiguredAllowlistKeys(params: {
     }
   }
   return keys.size > 0 ? keys : null;
+}
+
+function collectAgentDefaultModelRefs(cfg: OpenClawConfig | undefined): string[] {
+  const modelMap = cfg?.agents?.defaults?.models;
+  if (!modelMap || typeof modelMap !== "object" || Array.isArray(modelMap)) {
+    return [];
+  }
+
+  const refs: string[] = [];
+  for (const [key, value] of Object.entries(modelMap as Record<string, unknown>)) {
+    if (key === "allowlist") {
+      if (Array.isArray(value)) {
+        refs.push(...value.filter((entry): entry is string => typeof entry === "string"));
+      }
+      continue;
+    }
+    refs.push(key);
+  }
+  return refs;
 }
 
 export function buildModelAliasIndex(
@@ -612,10 +631,7 @@ export function buildAllowedModelSetWithFallbacks(params: {
     primary: params.catalog,
     secondary: configuredCatalog,
   }).map((entry) => applyModelCatalogMetadata({ entry, metadata }));
-  const rawAllowlist = (() => {
-    const modelMap = params.cfg.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
+  const rawAllowlist = collectAgentDefaultModelRefs(params.cfg);
   const allowAny = rawAllowlist.length === 0;
   const defaultModel = params.defaultModel?.trim();
   const defaultRef =

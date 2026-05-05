@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
@@ -797,6 +798,7 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
+  const lenientChannelConfig = isTruthyEnvValue(opts.env?.OPENCLAW_LENIENT_CHANNEL_CONFIG);
   const hasExplicitPluginsConfig =
     isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
 
@@ -1201,6 +1203,19 @@ function validateConfigObjectWithPluginsBase(
     (mutatedConfig.channels as Record<string, unknown>)[channelId] = nextValue;
   };
 
+  const removeChannelConfig = (channelId: string) => {
+    if (!channelsCloned) {
+      mutatedConfig = {
+        ...mutatedConfig,
+        channels: {
+          ...mutatedConfig.channels,
+        },
+      };
+      channelsCloned = true;
+    }
+    delete (mutatedConfig.channels as Record<string, unknown>)[channelId];
+  };
+
   const replacePluginEntryConfig = (pluginId: string, nextValue: Record<string, unknown>) => {
     if (!pluginsCloned) {
       mutatedConfig = {
@@ -1253,6 +1268,12 @@ function validateConfigObjectWithPluginsBase(
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
           });
+        } else if (lenientChannelConfig) {
+          warnings.push({
+            ...issue,
+            message: `${issue.message} (ignored because OPENCLAW_LENIENT_CHANNEL_CONFIG is enabled)`,
+          });
+          removeChannelConfig(trimmed);
         } else {
           issues.push(issue);
         }
@@ -1272,13 +1293,24 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
-          issues.push({
+          const issue = {
             path:
               error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`,
             message: `invalid config: ${error.message}`,
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
-          });
+          };
+          if (lenientChannelConfig) {
+            warnings.push({
+              ...issue,
+              message: `${issue.message} (channel disabled because OPENCLAW_LENIENT_CHANNEL_CONFIG is enabled)`,
+            });
+          } else {
+            issues.push(issue);
+          }
+        }
+        if (lenientChannelConfig) {
+          replaceChannelConfig(trimmed, { enabled: false });
         }
         continue;
       }

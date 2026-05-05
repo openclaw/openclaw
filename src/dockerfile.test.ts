@@ -6,10 +6,47 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerComposePath = join(repoRoot, "docker-compose.yml");
+const dockerSetupPath = join(repoRoot, "scripts/docker/setup.sh");
 const packageJsonPath = join(repoRoot, "package.json");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
+}
+
+const hostedAgentRuntimePackages = [
+  "ca-certificates",
+  "curl",
+  "file",
+  "gh",
+  "git",
+  "hostname",
+  "jq",
+  "lsof",
+  "openssh-client",
+  "openssl",
+  "procps",
+  "python-is-python3",
+  "python3",
+  "python3-bs4",
+  "python3-pip",
+  "python3-requests",
+  "python3-venv",
+  "ripgrep",
+  "sqlite3",
+  "unzip",
+  "wget",
+  "zip",
+];
+
+function runtimeInstallSection(dockerfile: string): string {
+  const runtimeIndex = dockerfile.indexOf(
+    "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+  );
+  const userCreateIndex = dockerfile.indexOf("RUN groupadd --gid 1001 openclaw");
+  expect(runtimeIndex).toBeGreaterThan(-1);
+  expect(userCreateIndex).toBeGreaterThan(runtimeIndex);
+  return dockerfile.slice(runtimeIndex, userCreateIndex);
 }
 
 describe("Dockerfile", () => {
@@ -36,13 +73,11 @@ describe("Dockerfile", () => {
     const runtimeIndex = collapsed.indexOf(
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
-    const caInstallIndex = collapsed.indexOf(
-      "ca-certificates procps hostname curl git lsof openssl python3",
-    );
+    const section = runtimeInstallSection(collapsed);
+    const caInstallIndex = section.indexOf("ca-certificates");
 
     expect(runtimeIndex).toBeGreaterThan(-1);
-    expect(caInstallIndex).toBeGreaterThan(runtimeIndex);
-    expect(caInstallIndex).toBeLessThan(collapsed.indexOf("RUN chown node:node /app"));
+    expect(caInstallIndex).toBeGreaterThan(-1);
     expect(collapsed).toMatch(/apt-get install -y --no-install-recommends\s+ca-certificates/);
     expect(collapsed).toContain("update-ca-certificates");
   });
@@ -52,14 +87,93 @@ describe("Dockerfile", () => {
     const runtimeIndex = dockerfile.indexOf(
       "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
     );
-    const pythonInstallIndex = dockerfile.indexOf(
-      "ca-certificates procps hostname curl git lsof openssl python3",
-    );
+    const section = runtimeInstallSection(dockerfile);
+    const pythonInstallIndex = section.indexOf("python3");
 
     expect(runtimeIndex).toBeGreaterThan(-1);
-    expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
-    expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
-    expect(dockerfile).toContain("ca-certificates procps hostname curl git lsof openssl python3");
+    expect(pythonInstallIndex).toBeGreaterThan(-1);
+    expect(dockerfile).toContain("python-is-python3");
+    expect(dockerfile).toContain("python3-pip");
+    expect(dockerfile).toContain("python3-venv");
+  });
+
+  it("installs practical hosted-agent runtime tools in the slim runtime stage", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+
+    for (const pkg of hostedAgentRuntimePackages) {
+      expect(dockerfile).toContain(pkg);
+    }
+  });
+
+  it("pre-creates writable package manager homes for the non-root runtime user", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    expect(dockerfile).toContain("NPM_CONFIG_PREFIX=/home/openclaw/.local");
+    expect(dockerfile).toContain("NPM_CONFIG_CACHE=/home/openclaw/.npm");
+    expect(dockerfile).toContain("PIP_CACHE_DIR=/home/openclaw/.cache/pip");
+    expect(dockerfile).toContain("install -d -m 0755 -o openclaw -g openclaw");
+    expect(dockerfile).toContain("/home/openclaw/.npm");
+    expect(dockerfile).toContain("install -d -m 0700 -o openclaw -g openclaw /home/openclaw/.ssh");
+  });
+
+  it("runs hosted containers as openclaw uid 1001 with root-home compatibility", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    expect(dockerfile).toContain("groupadd --gid 1001 openclaw");
+    expect(dockerfile).toContain("useradd --uid 1001 --gid 1001");
+    expect(dockerfile).toContain("/home/openclaw --create-home");
+    expect(dockerfile).toContain("USER openclaw");
+    expect(dockerfile).not.toContain("USER node");
+    expect(dockerfile).toContain(
+      "install -d -m 0700 -o openclaw -g openclaw /home/openclaw/.openclaw",
+    );
+    expect(dockerfile).toContain("grep -qx 'openclaw:openclaw 1001:1001 700'");
+    expect(dockerfile).toContain("chmod 711 /root");
+    expect(dockerfile).toContain("ln -s /home/openclaw/.openclaw /root/.openclaw");
+  });
+
+  it("keeps Docker Compose paths aligned with the openclaw uid-1001 home", async () => {
+    const compose = await readFile(dockerComposePath, "utf8");
+
+    expect(compose).toContain("HOME: /home/openclaw");
+    expect(compose).toContain(":/home/openclaw/.openclaw");
+    expect(compose).toContain(":/home/openclaw/.openclaw/workspace");
+    expect(compose).not.toContain("/home/node");
+  });
+
+  it("keeps Docker Compose gateway resource guardrails enabled by default", async () => {
+    const compose = await readFile(dockerComposePath, "utf8");
+
+    expect(compose).toContain("NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-none}");
+    expect(compose).toContain("cap_drop:\n      - NET_RAW\n      - NET_ADMIN");
+    expect(compose).toContain("security_opt:\n      - no-new-privileges:true");
+    expect(compose).toContain("mem_limit: ${OPENCLAW_GATEWAY_MEMORY:-3g}");
+    expect(compose).toContain("memswap_limit: ${OPENCLAW_GATEWAY_MEMORY_SWAP:-6g}");
+    expect(compose).toContain('cpus: "${OPENCLAW_GATEWAY_CPUS:-1.5}"');
+    expect(compose).toContain("pids_limit: ${OPENCLAW_GATEWAY_PIDS_LIMIT:-384}");
+    expect(compose).toContain("max-size: ${OPENCLAW_GATEWAY_LOG_MAX_SIZE:-10m}");
+    expect(compose).toContain('max-file: "${OPENCLAW_GATEWAY_LOG_MAX_FILE:-3}"');
+  });
+
+  it("keeps Docker setup chown repair aligned with the openclaw uid-1001 home", async () => {
+    const setup = await readFile(dockerSetupPath, "utf8");
+
+    expect(setup).toContain("user (uid 1001)");
+    expect(setup).toContain("${home_volume}:/home/openclaw");
+    expect(setup).toContain("${OPENCLAW_CONFIG_DIR}:/home/openclaw/.openclaw");
+    expect(setup).toContain("find /home/openclaw/.openclaw -xdev -exec chown openclaw:openclaw");
+    expect(setup).not.toContain("/home/node");
+    expect(setup).not.toContain("node:node");
+    expect(setup).not.toContain("uid 1000");
+  });
+
+  it("enables hosted runtime guards in the slim runtime image", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+
+    expect(dockerfile).toContain("OPENCLAW_DISABLE_BONJOUR=1");
+    expect(dockerfile).toContain("OPENCLAW_LENIENT_CHANNEL_CONFIG=1");
+    expect(dockerfile).toContain("OPENCLAW_NO_AUTO_UPDATE=1");
+    expect(dockerfile).toContain("OPENCLAW_NO_UPDATE_CHECK=1");
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
@@ -74,6 +188,7 @@ describe("Dockerfile", () => {
       "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
     );
     expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
+    expect(dockerfile).toContain("PLAYWRIGHT_BROWSERS_PATH=/home/openclaw/.cache/ms-playwright");
   });
 
   it("verifies matrix-sdk-crypto native addons without hardcoded pnpm virtual-store paths", async () => {
@@ -128,10 +243,10 @@ describe("Dockerfile", () => {
       `npm install --prefix "${BUNDLED_PLUGIN_ROOT_DIR}/$ext" --omit=dev --silent`,
     );
     expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
+      "COPY --from=runtime-assets --chown=openclaw:openclaw /app/node_modules ./node_modules",
     );
     expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+      "COPY --from=runtime-assets --chown=openclaw:openclaw /app/patches ./patches",
     );
   });
 
@@ -143,7 +258,7 @@ describe("Dockerfile", () => {
 
     expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
     expect(dockerfile).toContain(
-      "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
+      "COPY --from=runtime-assets --chown=openclaw:openclaw /app/patches ./patches",
     );
   });
 
@@ -194,23 +309,23 @@ describe("Dockerfile", () => {
     );
   });
 
-  it("pre-creates the OpenClaw home before switching to the node user", async () => {
+  it("pre-creates the OpenClaw home before switching to the openclaw user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
     const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      "RUN install -d -m 0700 -o openclaw -g openclaw /home/openclaw/.openclaw && \\",
       runtimeStageIndex,
     );
-    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
+    const userIndex = dockerfile.indexOf("USER openclaw", runtimeStageIndex);
 
     expect(runtimeStageIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(-1);
     expect(userIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
-    expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
+    expect(dockerfile).not.toContain("mkdir -p /home/openclaw/.openclaw");
     expect(dockerfile).toContain(
-      "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
+      "stat -c '%U:%G %u:%g %a' /home/openclaw/.openclaw | grep -qx 'openclaw:openclaw 1001:1001 700'",
     );
   });
 });

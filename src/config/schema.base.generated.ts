@@ -3608,8 +3608,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               },
               models: {
                 type: "object",
-                propertyNames: {
-                  type: "string",
+                properties: {
+                  allowlist: {
+                    anyOf: [
+                      {
+                        type: "array",
+                        items: {
+                          type: "string",
+                        },
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
                 },
                 additionalProperties: {
                   type: "object",

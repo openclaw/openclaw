@@ -47,6 +47,28 @@ export const SilentReplyRewriteConfigSchema = z
   })
   .strict();
 
+const AgentDefaultModelEntrySchema = z
+  .object({
+    alias: z.string().optional(),
+    /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
+    params: z.record(z.string(), z.unknown()).optional(),
+    /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
+    streaming: z.boolean().optional(),
+  })
+  .strict();
+
+const AgentDefaultModelsSchema = z
+  .object({
+    /**
+     * Legacy/hosted-image compatibility: some generated configs wrote
+     * agents.defaults.models.allowlist. The canonical shape is still a map
+     * keyed by provider/model, but accepting this prevents cron model
+     * validation from breaking on already-provisioned hosted images.
+     */
+    allowlist: z.union([z.array(z.string()), z.null()]).optional(),
+  })
+  .catchall(AgentDefaultModelEntrySchema);
+
 export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
@@ -62,20 +84,7 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
-            params: z.record(z.string(), z.unknown()).optional(),
-            /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: AgentDefaultModelsSchema.optional(),
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),

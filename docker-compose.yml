@@ -6,7 +6,7 @@ services:
       - path: .env
         required: false
     environment:
-      HOME: /home/node
+      HOME: /home/openclaw
       TERM: xterm-256color
       # Pin container-side workspace and config paths so host values written to
       # `.env` (used by Compose for the bind-mount source below) cannot leak
@@ -34,10 +34,25 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-none}
       TZ: ${OPENCLAW_TZ:-UTC}
+    cap_drop:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: ${OPENCLAW_GATEWAY_MEMORY:-3g}
+    memswap_limit: ${OPENCLAW_GATEWAY_MEMORY_SWAP:-6g}
+    cpus: "${OPENCLAW_GATEWAY_CPUS:-1.5}"
+    pids_limit: ${OPENCLAW_GATEWAY_PIDS_LIMIT:-384}
+    logging:
+      driver: json-file
+      options:
+        max-size: ${OPENCLAW_GATEWAY_LOG_MAX_SIZE:-10m}
+        max-file: "${OPENCLAW_GATEWAY_LOG_MAX_FILE:-3}"
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/openclaw/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/openclaw/.openclaw/workspace
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -96,7 +111,7 @@ services:
     security_opt:
       - no-new-privileges:true
     environment:
-      HOME: /home/node
+      HOME: /home/openclaw
       TERM: xterm-256color
       # Pin container-side workspace and config paths so host values written to
       # `.env` cannot leak into runtime code via the env_file import (#77436).
@@ -110,8 +125,8 @@ services:
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
       TZ: ${OPENCLAW_TZ:-UTC}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR:-${HOME:-/tmp}/.openclaw}:/home/openclaw/.openclaw
+      - ${OPENCLAW_WORKSPACE_DIR:-${HOME:-/tmp}/.openclaw/workspace}:/home/openclaw/.openclaw/workspace
     stdin_open: true
     tty: true
     init: true

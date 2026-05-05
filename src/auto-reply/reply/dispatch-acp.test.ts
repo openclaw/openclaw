@@ -88,6 +88,10 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
 }));
 
+const preAgentHookMocks = vi.hoisted(() => ({
+  emitPreAgentMessageHooks: vi.fn(),
+}));
+
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),
@@ -179,6 +183,10 @@ vi.mock("../../logging/diagnostic.js", () => ({
 vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
+}));
+
+vi.mock("./message-preprocess-hooks.js", () => ({
+  emitPreAgentMessageHooks: (params: unknown) => preAgentHookMocks.emitPreAgentMessageHooks(params),
 }));
 
 const sessionKey = "agent:codex-acp:session-1";
@@ -386,6 +394,7 @@ describe("tryDispatchAcpReply", () => {
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
     transcriptMocks.persistAcpDispatchTranscript.mockClear();
+    preAgentHookMocks.emitPreAgentMessageHooks.mockClear();
     bindingServiceMocks.listBySession.mockReset();
     bindingServiceMocks.listBySession.mockReturnValue([]);
     bindingServiceMocks.unbind.mockReset();
@@ -448,6 +457,39 @@ describe("tryDispatchAcpReply", () => {
     expect(call?.text).toContain("message(action=send)");
     expect(call?.text).toContain("The target defaults to the current source channel");
     expect(call?.text).toContain("reply privately unless you send explicitly");
+  });
+
+  it("emits pre-agent message hooks before ACP runTurn handles the turn", async () => {
+    setReadyAcpResolution();
+
+    const cfg = createAcpTestConfig();
+    await runDispatch({
+      bodyForAgent: "run acp",
+      cfg,
+      ctxOverrides: {
+        MessageSid: "discord-msg-1",
+        SenderId: "discord-user-1",
+      },
+    });
+
+    expect(preAgentHookMocks.emitPreAgentMessageHooks).toHaveBeenCalledOnce();
+    expect(preAgentHookMocks.emitPreAgentMessageHooks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+        ctx: expect.objectContaining({
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+          BodyForAgent: "run acp",
+          MessageSid: "discord-msg-1",
+          SenderId: "discord-user-1",
+        }),
+      }),
+    );
+    expect(preAgentHookMocks.emitPreAgentMessageHooks.mock.invocationCallOrder[0]).toBeLessThan(
+      managerMocks.runTurn.mock.invocationCallOrder[0],
+    );
   });
 
   it("starts reply lifecycle for tool-only ACP turns while suppressing automatic delivery", async () => {
