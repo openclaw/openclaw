@@ -7,6 +7,17 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
 
+vi.mock("openclaw/plugin-sdk/security-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+    "openclaw/plugin-sdk/security-runtime",
+  );
+  return {
+    ...actual,
+    privateFileStore: vi.fn((rootDir: string) => actual.privateFileStore(rootDir)),
+  };
+});
+
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   applyShortTermPromotions,
   auditShortTermPromotionArtifacts,
@@ -1101,6 +1112,100 @@ describe("short-term promotion", () => {
       expect(staleSignalRank).toHaveLength(1);
       expect(freshSignalRank).toHaveLength(1);
       expect(freshSignalRank[0].score).toBeGreaterThan(staleSignalRank[0].score);
+    });
+  });
+
+  it("propagates unreadable phase-signal store errors without overwriting existing signals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "glacier cadence",
+        nowMs: Date.parse("2026-04-01T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      const key = ranked[0]?.key;
+      expect(key).toBeTruthy();
+      if (!key) {
+        throw new Error("expected ranked candidate key");
+      }
+
+      const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const existingRaw = `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-01T10:00:00.000Z",
+          entries: {
+            [key]: {
+              key,
+              lightHits: 2,
+              remHits: 1,
+              lastLightAt: "2026-04-01T10:00:00.000Z",
+              lastRemAt: "2026-04-02T10:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(phaseStorePath, existingRaw, "utf-8");
+
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/security-runtime")>(
+        "openclaw/plugin-sdk/security-runtime",
+      );
+      const mockedPrivateFileStore = vi.mocked(privateFileStore);
+      mockedPrivateFileStore.mockImplementation((rootDir: string) => {
+        const store = actual.privateFileStore(rootDir);
+        return {
+          ...store,
+          readJsonIfExists: (async <T = unknown>(
+            relativePath: string,
+            options?: Parameters<typeof store.readJsonIfExists>[1],
+          ): Promise<T | null> => {
+            if (rootDir === workspaceDir && store.path(relativePath) === phaseStorePath) {
+              const err = new Error("permission denied") as NodeJS.ErrnoException;
+              err.code = "EACCES";
+              throw err;
+            }
+            return store.readJsonIfExists<T>(relativePath, options);
+          }) as typeof store.readJsonIfExists,
+        };
+      });
+
+      try {
+        await expect(
+          recordDreamingPhaseSignals({
+            workspaceDir,
+            phase: "rem",
+            keys: [key],
+            nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+          }),
+        ).rejects.toMatchObject({
+          code: "EACCES",
+        });
+      } finally {
+        mockedPrivateFileStore.mockImplementation((rootDir: string) =>
+          actual.privateFileStore(rootDir),
+        );
+      }
+
+      expect(await fs.readFile(phaseStorePath, "utf-8")).toBe(existingRaw);
     });
   });
 

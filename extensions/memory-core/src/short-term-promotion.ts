@@ -953,8 +953,11 @@ async function readPhaseSignalStore(
       await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
       nowIso,
     );
-  } catch {
-    return emptyPhaseSignalStore(nowIso);
+  } catch (err) {
+    if (err instanceof SyntaxError) {
+      return emptyPhaseSignalStore(nowIso);
+    }
+    throw err;
   }
 }
 
