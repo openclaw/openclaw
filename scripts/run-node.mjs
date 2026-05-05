@@ -32,10 +32,7 @@ import {
   runNodeSourceRoots,
   runNodeWatchedPaths,
 } from "./run-node-watch-paths.mjs";
-import {
-  listCoreRuntimePostBuildOutputs,
-  runRuntimePostBuild,
-} from "./runtime-postbuild.mjs";
+import { listCoreRuntimePostBuildOutputs, runRuntimePostBuild } from "./runtime-postbuild.mjs";
 
 export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
@@ -405,6 +402,10 @@ const listRequiredBundledPluginRuntimeOverlayOutputs = (pluginEntries, deps) => 
 
 const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const distExtensionsRoot = path.join(distRoot, "extensions");
+  if (!deps.fs.existsSync(distExtensionsRoot)) {
+    return [];
+  }
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
   let dirents = [];
   try {
@@ -1070,7 +1071,8 @@ const writeBuildStamp = (deps) => {
 const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   deps.env.OPENCLAW_WATCH_MODE === "1" &&
   requirement.reason === "missing_runtime_postbuild_stamp" &&
-  hasDirtyRuntimePostBuildInputs(deps) !== true;
+  hasDirtyRuntimePostBuildInputs(deps) !== true &&
+  !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
   args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
