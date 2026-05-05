@@ -251,6 +251,9 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           timeoutMs: usageSummaryTimeoutMs,
           providers: [currentUsageProvider],
           agentDir: statusAgentDir,
+          preferredProfileIds: sessionEntry?.authProfileOverride
+            ? { [currentUsageProvider]: sessionEntry.authProfileOverride }
+            : undefined,
         }),
         new Promise<never>((_, reject) => {
           usageTimeout = setTimeout(
