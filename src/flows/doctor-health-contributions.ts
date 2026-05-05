@@ -142,6 +142,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await import("../config/types.secrets.js");
   const { resolveGatewayAuth } = await import("../gateway/auth.js");
+  const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
   const { note } = await import("../terminal/note.js");
   const { randomToken } = await import("../commands/onboard-helpers.js");
   if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
@@ -168,9 +169,21 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     return;
   }
   if (gatewayTokenRef) {
+    const resolved = await resolveGatewayAuthToken({
+      cfg: ctx.cfg,
+      env: process.env,
+      envFallback: "never",
+    });
+    if (resolved.token) {
+      // SecretRef resolves successfully — no action needed.
+      return;
+    }
+    const reason = resolved.unresolvedRefReason
+      ? `Gateway token SecretRef could not be resolved: ${resolved.unresolvedRefReason}`
+      : "Gateway token is managed via SecretRef and is currently unavailable.";
     note(
       [
-        "Gateway token is managed via SecretRef and is currently unavailable.",
+        reason,
         "Doctor will not overwrite gateway.auth.token with a plaintext value.",
         "Resolve/rotate the external secret source, then rerun doctor.",
       ].join("\n"),
