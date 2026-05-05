@@ -232,6 +232,23 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
     expect(history[0]?.body).toBe("new msg in room1");
   });
 
+  it("clears legacy room watermarks when an evicted room is recreated", () => {
+    const tracker = createRoomHistoryTrackerForTests(200, 1);
+    const room1 = "!room1:test";
+    const room2 = "!room2:test";
+
+    tracker.recordPending(room1, entry("old msg in room1"));
+    tracker.recordLegacyWatermarkForTests(AGENT, room1, 100);
+
+    // room2 creation evicts room1 and should clear both JSON and legacy watermark keys.
+    tracker.recordPending(room2, entry("msg in room2"));
+
+    tracker.recordPending(room1, entry("new msg in room1"));
+    const history = tracker.getPendingHistory(AGENT, room1, 100);
+    expect(history).toHaveLength(1);
+    expect(history[0]?.body).toBe("new msg in room1");
+  });
+
   it("ignores late consumeHistory calls after the room queue was evicted", () => {
     const tracker = createRoomHistoryTrackerForTests(200, 1);
     const room1 = "!room1:test";
@@ -298,5 +315,31 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
     const history = tracker.getPendingHistory(AGENT, room1, 100);
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toBe("fresh msg after consume");
+  });
+
+  it("rejects stale thread consumes after a thread subqueue is evicted and recreated", () => {
+    const tracker = createRoomHistoryTrackerForTests();
+
+    const staleSnapshot = tracker.prepareTrigger(
+      AGENT,
+      ROOM,
+      100,
+      {
+        sender: "user",
+        body: "old trigger",
+        messageId: "$old-trigger",
+      },
+      "$thread-0",
+    );
+
+    for (let i = 1; i <= 50; i += 1) {
+      tracker.recordPending(ROOM, entry(`thread ${i}`), `$thread-${i}`);
+    }
+
+    tracker.recordPending(ROOM, entry("fresh thread 0"), "$thread-0");
+    tracker.consumeHistory(AGENT, ROOM, staleSnapshot, "$old-trigger", "$thread-0");
+
+    const history = tracker.getPendingHistory(AGENT, ROOM, 100, "$thread-0");
+    expect(history).toEqual([entry("fresh thread 0")]);
   });
 });
