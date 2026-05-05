@@ -106,6 +106,53 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.isAllowed("main", "ops-a")).toBe(true);
     expect(policy.isAllowed("guest", "ops-a")).toBe(false);
   });
+
+  it("applies requester-owned per-agent outbound allowlists after global participation", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "ops", "support"],
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", tools: { agentToAgent: { allow: ["Ops"] } } },
+          { id: "ops", tools: { agentToAgent: { allow: [] } } },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "ops")).toEqual({ allowed: true });
+    expect(policy.evaluateAccess("main", "support")).toEqual({
+      allowed: false,
+      reason: "per_agent_outbound",
+    });
+    expect(policy.evaluateAccess("support", "ops")).toEqual({ allowed: true });
+    expect(policy.evaluateAccess("ops", "main")).toEqual({
+      allowed: false,
+      reason: "per_agent_outbound",
+    });
+  });
+
+  it("reports global participation denials before per-agent outbound denials", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main"],
+        },
+      },
+      agents: {
+        list: [{ id: "main", tools: { agentToAgent: { allow: ["ops"] } } }],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "ops")).toEqual({
+      allowed: false,
+      reason: "global_participation",
+    });
+  });
 });
 
 describe("createSessionVisibilityGuard", () => {

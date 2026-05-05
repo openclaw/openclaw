@@ -687,6 +687,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent additive allowlist for tools on top of global and profile policy. Keep narrow to avoid accidental privilege expansion on specialized agents.",
   "agents.list[].tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
+  "agents.list[].tools.agentToAgent":
+    "Outbound agent-to-agent policy for this requester agent. It narrows cross-agent session access after the global tools.agentToAgent gate allows both agents to participate.",
+  "agents.list[].tools.agentToAgent.allow":
+    "Target agent ids or wildcard patterns this requester agent may contact with session tools. An empty array denies all outbound agent-to-agent access for this requester.",
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
   "tools.links.enabled":

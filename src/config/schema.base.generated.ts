@@ -8353,6 +8353,24 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       },
                       additionalProperties: false,
                     },
+                    agentToAgent: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                          title: "Agent Outbound A2A Allowlist",
+                          description:
+                            "Target agent ids or wildcard patterns this requester agent may contact with session tools. An empty array denies all outbound agent-to-agent access for this requester.",
+                        },
+                      },
+                      additionalProperties: false,
+                      title: "Agent Outbound A2A Access",
+                      description:
+                        "Outbound agent-to-agent policy for this requester agent. It narrows cross-agent session access after the global tools.agentToAgent gate allows both agents to participate.",
+                    },
                     sandbox: {
                       type: "object",
                       properties: {
@@ -25607,6 +25625,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Tool Policy by Provider",
       help: "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
       tags: ["advanced"],
+    },
+    "agents.list[].tools.agentToAgent": {
+      label: "Agent Outbound A2A Access",
+      help: "Outbound agent-to-agent policy for this requester agent. It narrows cross-agent session access after the global tools.agentToAgent gate allows both agents to participate.",
+      tags: ["advanced"],
+    },
+    "agents.list[].tools.agentToAgent.allow": {
+      label: "Agent Outbound A2A Allowlist",
+      help: "Target agent ids or wildcard patterns this requester agent may contact with session tools. An empty array denies all outbound agent-to-agent access for this requester.",
+      tags: ["access"],
     },
     "tools.exec.applyPatch.enabled": {
       label: "Enable apply_patch",

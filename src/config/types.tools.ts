@@ -334,6 +334,11 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Outbound agent-to-agent access restrictions for this requester agent. */
+  agentToAgent?: {
+    /** Target agent ids or patterns this agent may contact. Empty array denies all outbound A2A. */
+    allow?: string[];
+  };
   sandbox?: {
     tools?: {
       allow?: string[];
