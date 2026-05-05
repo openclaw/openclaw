@@ -17,25 +17,28 @@ import {
 } from "./usage-format.js";
 
 describe("usage-format", () => {
-  const originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
+  const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+  let stateDir: string;
   let agentDir: string;
 
   beforeEach(async () => {
-    agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
-    process.env.OPENCLAW_AGENT_DIR = agentDir;
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-usage-format-"));
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    agentDir = path.join(stateDir, "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
     __resetUsageFormatCachesForTest();
     __resetGatewayModelPricingCacheForTest();
   });
 
   afterEach(async () => {
-    if (originalAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
+    if (originalStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
     } else {
-      process.env.OPENCLAW_AGENT_DIR = originalAgentDir;
+      process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
     __resetUsageFormatCachesForTest();
     __resetGatewayModelPricingCacheForTest();
-    await fs.rm(agentDir, { recursive: true, force: true });
+    await fs.rm(stateDir, { recursive: true, force: true });
   });
 
   it("formats token counts", () => {
