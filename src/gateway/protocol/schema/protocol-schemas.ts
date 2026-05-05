@@ -121,6 +121,14 @@ import {
   DeviceTokenRotateParamsSchema,
 } from "./devices.js";
 import {
+  EnvironmentSummarySchema,
+  EnvironmentsListParamsSchema,
+  EnvironmentsListResultSchema,
+  EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResultSchema,
+  EnvironmentStatusSchema,
+} from "./environments.js";
+import {
   ExecApprovalsGetParamsSchema,
   ExecApprovalsNodeGetParamsSchema,
   ExecApprovalsNodeSetParamsSchema,
@@ -240,6 +248,12 @@ export const ProtocolSchemas = {
   StateVersion: StateVersionSchema,
   Snapshot: SnapshotSchema,
   ErrorShape: ErrorShapeSchema,
+  EnvironmentStatus: EnvironmentStatusSchema,
+  EnvironmentSummary: EnvironmentSummarySchema,
+  EnvironmentsListParams: EnvironmentsListParamsSchema,
+  EnvironmentsListResult: EnvironmentsListResultSchema,
+  EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResult: EnvironmentsStatusResultSchema,
   AgentEvent: AgentEventSchema,
   MessageActionParams: MessageActionParamsSchema,
   SendParams: SendParamsSchema,

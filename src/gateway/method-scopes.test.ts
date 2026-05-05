@@ -36,6 +36,8 @@ describe("method scope resolution", () => {
     ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["environments.list", ["operator.read"]],
+    ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
