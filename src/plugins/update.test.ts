@@ -1111,6 +1111,115 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("updates disabled trusted official npm installs from the channel spec when requested", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.4",
+      integrity: "sha512-next",
+      shasum: "next",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.5.4",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.4",
+          resolvedSpec: "@openclaw/codex@2026.5.4",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          entries: {
+            codex: {
+              enabled: false,
+              config: { preserved: true },
+            },
+          },
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex@2026.5.3",
+              installPath,
+              resolvedName: "@openclaw/codex",
+              resolvedVersion: "2026.5.3",
+              resolvedSpec: "@openclaw/codex@2026.5.3",
+            },
+          },
+        },
+      },
+      skipDisabledPlugins: true,
+      syncOfficialNpmPluginInstalls: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex",
+        expectedPluginId: "codex",
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.entries?.codex).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+    expect(result.config.plugins?.installs?.codex).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/codex",
+      version: "2026.5.4",
+      resolvedName: "@openclaw/codex",
+      resolvedVersion: "2026.5.4",
+      resolvedSpec: "@openclaw/codex@2026.5.4",
+    });
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "codex",
+      status: "updated",
+      currentVersion: "2026.5.3",
+      nextVersion: "2026.5.4",
+    });
+  });
+
+  it("keeps third-party exact pinned npm specs pinned during official install sync", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "demo",
+        targetDir: installPath,
+        version: "1.2.3",
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+      dryRun: true,
+      syncOfficialNpmPluginInstalls: true,
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@acme/demo@1.2.3",
+        expectedPluginId: "demo",
+      }),
+    );
+  });
+
   it("keeps enabled tracked plugin update failures fatal when disabled skipping is enabled", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue({
       ok: false,
