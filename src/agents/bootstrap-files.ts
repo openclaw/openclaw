@@ -288,27 +288,44 @@ export async function resolveBootstrapFilesForRun(params: {
   // workspace bootstrap files into the system prompt (#75184). The flag is
   // already respected at workspace-creation time in agent-command.ts; this
   // ensures the runtime injection path also skips when set.
-  if (params.config?.agents?.defaults?.skipBootstrap === true) {
-    return [];
-  }
+  //
+  // Important: skipBootstrap suppresses the WORKSPACE bootstrap files only —
+  // agent:bootstrap hooks (e.g. the bundled `bootstrap-extra-files` handler in
+  // src/hooks/bundled/bootstrap-extra-files/handler.ts) are still expected to
+  // run so installations that opt out of default workspace files but rely on
+  // hook-injected context still have those files reach prompt assembly. This
+  // path therefore skips the workspace file load and feeds an empty file list
+  // into applyBootstrapHookOverrides; hooks can return their own files which
+  // we then sanitize and return like any other bootstrap result.
+  const skipBootstrap = params.config?.agents?.defaults?.skipBootstrap === true;
   const excludeHeartbeatBootstrapFile = shouldExcludeHeartbeatBootstrapFile(params);
   const sessionKey = params.sessionKey ?? params.sessionId;
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(params.workspaceDir);
-  const rawFiles = params.sessionKey
-    ? await getOrLoadBootstrapFiles({
-        workspaceDir: params.workspaceDir,
-        sessionKey: params.sessionKey,
-      })
-    : await loadWorkspaceBootstrapFiles(params.workspaceDir);
-  const bootstrapFiles = applyContextModeFilter({
-    files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
-      workspaceSetupCompleted,
+  let bootstrapFiles: WorkspaceBootstrapFile[];
+  if (skipBootstrap) {
+    // Honor skipBootstrap (#75184): drop existing workspace files so they do
+    // not reach the runtime resolver. Hooks still run below so installations
+    // that rely on hook-injected context retain those files.
+    bootstrapFiles = [];
+  } else {
+    const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
       params.workspaceDir,
-    ),
-    contextMode: params.contextMode,
-    runKind: params.runKind,
-  });
+    );
+    const rawFiles = params.sessionKey
+      ? await getOrLoadBootstrapFiles({
+          workspaceDir: params.workspaceDir,
+          sessionKey: params.sessionKey,
+        })
+      : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+    bootstrapFiles = applyContextModeFilter({
+      files: filterCompletedWorkspaceBootstrapFile(
+        filterBootstrapFilesForSession(rawFiles, sessionKey),
+        workspaceSetupCompleted,
+        params.workspaceDir,
+      ),
+      contextMode: params.contextMode,
+      runKind: params.runKind,
+    });
+  }
 
   const updated = await applyBootstrapHookOverrides({
     files: bootstrapFiles,
