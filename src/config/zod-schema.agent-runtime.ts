@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
+import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
@@ -160,16 +161,15 @@ const SandboxDockerSchema = z
           continue;
         }
 
-        const windowsPrefix = /^[A-Za-z]:/;
         const parsed = splitSandboxBindSpec(bind);
         const source = (parsed ? parsed.host : bind).trim();
-        if (!source.startsWith("/") && !windowsPrefix.test(source)) {
+        if (!isSandboxHostPathAbsolute(source)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: ["binds", i],
             message:
               `Sandbox security: bind mount "${bind}" uses a non-absolute source path "${source}". ` +
-              "Only absolute POSIX paths are supported for sandbox binds.",
+              "Only absolute POSIX or Windows drive-letter paths are supported for sandbox binds.",
           });
         }
       }
