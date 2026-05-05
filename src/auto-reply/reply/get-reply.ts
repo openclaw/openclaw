@@ -6,7 +6,12 @@ import {
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
@@ -41,6 +46,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import { resolveChannelModelSupportsVision } from "./image-model-helpers.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
@@ -253,7 +259,103 @@ export async function getReplyFromConfig(
   let provider = defaultProvider;
   let model = defaultModel;
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  // Handle modelOverride from Gateway (e.g., image model when images detected)
+  let hasAppliedImageModelOverride = false;
+  // Track if a fallback was used when primary override was blocked by allowlist
+  let fallbackAppliedForImageModel = false;
+  if (opts?.modelOverride?.trim()) {
+    const modelRef = resolveModelRefFromString({
+      raw: opts.modelOverride.trim(),
+      defaultProvider,
+      aliasIndex,
+    });
+    if (modelRef) {
+      // Check if the model is allowed by the agent's allowlist
+      // Use buildAllowedModelSet to include models + fallbacks + default model
+      const { allowAny, allowedKeys } = buildAllowedModelSet({
+        cfg,
+        catalog: [], // Empty catalog; we only need allowedKeys
+        defaultProvider,
+        defaultModel,
+        agentId,
+      });
+      if (!allowAny) {
+        const modelKeyStr = modelKey(modelRef.ref.provider, modelRef.ref.model);
+        if (!allowedKeys.has(modelKeyStr)) {
+          // Model not in allowlist, try fallbacks before skipping
+          if (opts?.modelOverrideFallbacks?.length) {
+            // Determine provider context for resolving providerless fallbacks.
+            // When modelOverride has explicit provider (e.g., "openai/gpt-4o"),
+            // providerless fallbacks should resolve against that provider, not defaultProvider.
+            // This matches the allowlist check logic in chat.ts.
+            const overrideProvider = modelRef.ref.provider;
+            const providerContext = overrideProvider ?? defaultProvider;
+            // Rebuild alias index with the correct provider context
+            const fallbackAliasIndex =
+              overrideProvider && overrideProvider !== defaultProvider
+                ? buildModelAliasIndex({ cfg, defaultProvider: providerContext })
+                : aliasIndex;
+            for (const fallbackRaw of opts.modelOverrideFallbacks) {
+              if (typeof fallbackRaw !== "string") {
+                continue;
+              }
+              const trimmed = fallbackRaw.trim();
+              if (!trimmed) {
+                continue;
+              }
+              const fallbackRef = resolveModelRefFromString({
+                raw: trimmed,
+                defaultProvider: providerContext,
+                aliasIndex: fallbackAliasIndex,
+              });
+              if (fallbackRef) {
+                const fallbackKeyStr = modelKey(fallbackRef.ref.provider, fallbackRef.ref.model);
+                if (allowedKeys.has(fallbackKeyStr)) {
+                  provider = fallbackRef.ref.provider;
+                  model = fallbackRef.ref.model;
+                  hasAppliedImageModelOverride = true;
+                  fallbackAppliedForImageModel = true;
+                  break;
+                }
+              }
+            }
+          }
+          if (!fallbackAppliedForImageModel) {
+            // No allowlisted fallback, skip the override and let default model be used
+            // This prevents Dashboard images from bypassing agent model restrictions
+            defaultRuntime.log?.(
+              `[image-model-switch] Model override ${opts.modelOverride} not in agent allowlist and no fallback available, using default model ${defaultProvider}/${defaultModel}`,
+            );
+            if (opts?.images?.length) {
+              defaultRuntime.log?.(
+                `[image-model-switch] WARNING: Images are present but the default model ${defaultProvider}/${defaultModel} may not support vision; images will still be passed to the agent`,
+              );
+            }
+          }
+        } else {
+          provider = modelRef.ref.provider;
+          model = modelRef.ref.model;
+          hasAppliedImageModelOverride = true;
+        }
+      } else {
+        // No allowlist, allow any model
+        provider = modelRef.ref.provider;
+        model = modelRef.ref.model;
+        hasAppliedImageModelOverride = true;
+      }
+    } else {
+      // modelOverride was configured but alias resolution failed;
+      // log a warning and fall through to default model.
+      defaultRuntime.log?.(
+        `[image-model-switch] Failed to resolve modelOverride "${opts.modelOverride}" against alias index, using default model ${defaultProvider}/${defaultModel}`,
+      );
+      if (opts?.images?.length) {
+        defaultRuntime.log?.(
+          `[image-model-switch] WARNING: Images are present but modelOverride could not be resolved; the default model ${defaultProvider}/${defaultModel} may not support vision`,
+        );
+      }
+    }
+  } else if (opts?.isHeartbeat) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
@@ -530,6 +632,7 @@ export async function getReplyFromConfig(
   if (
     storedModelOverride?.model &&
     !hasResolvedHeartbeatModelOverride &&
+    !hasAppliedImageModelOverride &&
     !staleHeartbeatAutoFallbackOverride
   ) {
     provider = storedModelOverride.provider ?? defaultProvider;
@@ -539,11 +642,13 @@ export async function getReplyFromConfig(
     hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
   if (
     !hasResolvedHeartbeatModelOverride &&
+    !hasAppliedImageModelOverride &&
     !hasEffectiveSessionModelOverride &&
     resolvedChannelModelOverride
   ) {
     provider = resolvedChannelModelOverride.ref.provider;
     model = resolvedChannelModelOverride.ref.model;
+  }
   }
 
   if (
@@ -650,6 +755,7 @@ export async function getReplyFromConfig(
       provider,
       model,
       hasResolvedHeartbeatModelOverride,
+      hasAppliedImageModelOverride,
       typing,
       opts: resolvedOpts,
       skillFilter: mergedSkillFilter,

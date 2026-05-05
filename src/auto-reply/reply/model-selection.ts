@@ -107,6 +107,8 @@ export async function createModelSelectionState(params: {
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
   isHeartbeat?: boolean;
+  /** True when an image model override was applied for this turn. */
+  hasAppliedImageModelOverride?: boolean;
 }): Promise<ModelSelectionState> {
   const timingEnabled = shouldLogModelSelectionTiming();
   const startMs = timingEnabled ? Date.now() : 0;

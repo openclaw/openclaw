@@ -1,6 +1,16 @@
 import { vi } from "vitest";
 import { createMockTypingController } from "./reply.test-helpers.js";
 
+export const modelSelectionMockFns = {
+  resolveModelRefFromString: vi.fn<
+    (args: {
+      raw: string;
+      defaultProvider?: string;
+      aliasIndex?: unknown;
+    }) => { ref: { provider: string; model: string }; alias?: boolean } | null
+  >(() => null),
+};
+
 vi.mock("../../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
     "../../agents/agent-scope.js",
@@ -20,7 +30,7 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    resolveModelRefFromString: vi.fn(() => null),
+    resolveModelRefFromString: modelSelectionMockFns.resolveModelRefFromString,
   };
 });
 
@@ -38,6 +48,7 @@ vi.mock("../../channels/model-overrides.js", () => ({
 }));
 
 vi.mock("../../config/config.js", () => ({
+  loadConfig: vi.fn(() => ({})),
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 

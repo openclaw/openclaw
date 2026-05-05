@@ -196,4 +196,8 @@ export type GetReplyOptions = {
   hasRepliedRef?: { value: boolean };
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
+  /** Model override for vision-capable model when message contains images. */
+  modelOverride?: string;
+  /** Filtered and canonicalized fallbacks for the model override. */
+  modelOverrideFallbacks?: string[];
 };
