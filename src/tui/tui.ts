@@ -210,6 +210,25 @@ export function resolveGatewayDisconnectState(reason?: string): {
   };
 }
 
+export function formatStartupConversationSummary(summaryText?: string): string[] {
+  const normalized = (summaryText ?? "").trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  if (lines.length === 0) {
+    return [];
+  }
+
+  return ["startup summary from your last conversation:", ...lines.map((line) => `• ${line}`)];
+}
+
 export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?: () => number }) {
   const dedupeWindowMs = Math.max(0, Math.floor(params?.dedupeWindowMs ?? 8));
   const now = params?.now ?? (() => Date.now());
@@ -1161,6 +1180,29 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       await restoreRememberedSession();
       updateHeader();
       await loadHistory();
+      if (!isLocalMode) {
+        try {
+          const sessionsRes = await client.listSessions({
+            limit: 10,
+            includeDerivedTitles: true,
+            includeLastMessage: true,
+          });
+          const activeNonCurrent = sessionsRes.sessions?.find((s) => s.key !== currentSessionKey);
+          if (activeNonCurrent) {
+            const summaryStr =
+              activeNonCurrent.derivedTitle || activeNonCurrent.lastMessagePreview || "";
+            const dynamicLines = formatStartupConversationSummary(summaryStr);
+            if (dynamicLines.length > 0) {
+              chatLog.addSystem("");
+              for (const line of dynamicLines) {
+                chatLog.addSystem(line);
+              }
+            }
+          }
+        } catch {
+          // Best effort, ignore fetch failures
+        }
+      }
       setConnectionStatus(
         isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
         4000,
