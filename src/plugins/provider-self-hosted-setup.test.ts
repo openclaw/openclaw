@@ -146,7 +146,129 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(propsRelease).toHaveBeenCalledOnce();
   });
 
-  it("uses llama.cpp /props n_ctx as the runtime context cap", async () => {
+  it("uses llama.cpp nested /props n_ctx as the runtime context cap", async () => {
+    const modelsRelease = vi.fn(async () => undefined);
+    const propsRelease = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "qwen3.6-mxfp4-moe",
+              meta: { n_ctx_train: 262_144 },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release: modelsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
+        status: 200,
+      }),
+      finalUrl: "http://127.0.0.1:8080/props",
+      release: propsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "qwen3.6-mxfp4-moe",
+        contextWindow: 262_144,
+        contextTokens: 65_536,
+      }),
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props",
+      }),
+    );
+    expect(modelsRelease).toHaveBeenCalledOnce();
+    expect(propsRelease).toHaveBeenCalledOnce();
+  });
+
+  it("scopes llama.cpp /props runtime caps to each discovered model", async () => {
+    const modelsRelease = vi.fn(async () => undefined);
+    const firstPropsRelease = vi.fn(async () => undefined);
+    const secondPropsRelease = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "qwen/router-a",
+              meta: { n_ctx_train: 262_144 },
+            },
+            {
+              id: "qwen/router-b",
+              meta: { n_ctx_train: 131_072 },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release: modelsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
+        status: 200,
+      }),
+      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a",
+      release: firstPropsRelease,
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 32_768 } }), {
+        status: 200,
+      }),
+      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b",
+      release: secondPropsRelease,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "llama.cpp",
+      env: {},
+    });
+
+    expect(models).toEqual([
+      expect.objectContaining({
+        id: "qwen/router-a",
+        contextWindow: 262_144,
+        contextTokens: 65_536,
+      }),
+      expect.objectContaining({
+        id: "qwen/router-b",
+        contextWindow: 131_072,
+        contextTokens: 32_768,
+      }),
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a",
+      }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b",
+      }),
+    );
+    expect(modelsRelease).toHaveBeenCalledOnce();
+    expect(firstPropsRelease).toHaveBeenCalledOnce();
+    expect(secondPropsRelease).toHaveBeenCalledOnce();
+  });
+
+  it("keeps top-level llama.cpp /props n_ctx as a compatibility fallback", async () => {
     const modelsRelease = vi.fn(async () => undefined);
     const propsRelease = vi.fn(async () => undefined);
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
@@ -183,12 +305,6 @@ describe("discoverOpenAICompatibleLocalModels", () => {
         contextTokens: 65_536,
       }),
     ]);
-    expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        url: "http://127.0.0.1:8080/props",
-      }),
-    );
     expect(modelsRelease).toHaveBeenCalledOnce();
     expect(propsRelease).toHaveBeenCalledOnce();
   });

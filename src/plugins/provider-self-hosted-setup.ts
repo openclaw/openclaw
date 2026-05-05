@@ -42,6 +42,9 @@ type OpenAICompatModelsResponse = {
 };
 
 type LlamaCppPropsResponse = {
+  default_generation_settings?: {
+    n_ctx?: unknown;
+  };
   n_ctx?: unknown;
 };
 
@@ -76,23 +79,28 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.trunc(value);
 }
 
-function resolveLlamaCppPropsUrl(baseUrl: string): string {
+function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
   const parsed = new URL(baseUrl);
   const pathname = parsed.pathname.replace(/\/+$/, "");
-  parsed.pathname = pathname.endsWith("/v1") ? pathname.slice(0, -3) || "/" : pathname;
+  const rootPathname = pathname.endsWith("/v1") ? pathname.slice(0, -3) || "/" : pathname;
+  parsed.pathname = `${rootPathname.replace(/\/+$/, "")}/props`;
   parsed.search = "";
   parsed.hash = "";
-  const root = parsed.toString().replace(/\/+$/, "");
-  return `${root}/props`;
+  const normalizedModelId = normalizeOptionalString(modelId);
+  if (normalizedModelId) {
+    parsed.searchParams.set("model", normalizedModelId);
+  }
+  return parsed.toString();
 }
 
 async function discoverLlamaCppRuntimeContextTokens(params: {
   baseUrl: string;
   apiKey?: string;
+  modelId?: string;
 }): Promise<number | undefined> {
   let url: string;
   try {
-    url = resolveLlamaCppPropsUrl(params.baseUrl);
+    url = resolveLlamaCppPropsUrl(params.baseUrl, params.modelId);
   } catch {
     return undefined;
   }
@@ -111,7 +119,10 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
         return undefined;
       }
       const data = (await response.json()) as LlamaCppPropsResponse;
-      return readPositiveInteger(data.n_ctx);
+      return (
+        readPositiveInteger(data.default_generation_settings?.n_ctx) ??
+        readPositiveInteger(data.n_ctx)
+      );
     } finally {
       await release();
     }
@@ -158,23 +169,41 @@ export async function discoverOpenAICompatibleLocalModels(params: {
         return [];
       }
 
-      const runtimeContextTokens =
-        params.contextWindow === undefined
-          ? await discoverLlamaCppRuntimeContextTokens({
-              baseUrl: trimmedBaseUrl,
-              apiKey: params.apiKey,
-            })
-          : undefined;
-
-      return models.flatMap((model) => {
+      const discoveredModels = models.flatMap((model) => {
         const modelId = normalizeOptionalString(model.id);
         if (!modelId) {
           return [];
         }
+        return [{ id: modelId, meta: model.meta }];
+      });
+      const runtimeContextTokensByModelId = new Map<string, number>();
+      if (params.contextWindow === undefined) {
+        const uniqueModelIds = [...new Set(discoveredModels.map((model) => model.id))];
+        const runtimeContextTokenResults = await Promise.all(
+          uniqueModelIds.map(
+            async (modelId) =>
+              [
+                modelId,
+                await discoverLlamaCppRuntimeContextTokens({
+                  baseUrl: trimmedBaseUrl,
+                  apiKey: params.apiKey,
+                  modelId: uniqueModelIds.length > 1 ? modelId : undefined,
+                }),
+              ] as const,
+          ),
+        );
+        for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
+          if (runtimeContextTokens) {
+            runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
+          }
+        }
+      }
+
+      return discoveredModels.map((model) => {
         const modelConfig: ModelDefinitionConfig = {
-          id: modelId,
-          name: modelId,
-          reasoning: isReasoningModelHeuristic(modelId),
+          id: model.id,
+          name: model.id,
+          reasoning: isReasoningModelHeuristic(model.id),
           input: ["text"],
           cost: SELF_HOSTED_DEFAULT_COST,
           contextWindow:
@@ -183,10 +212,11 @@ export async function discoverOpenAICompatibleLocalModels(params: {
             SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
           maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
         };
+        const runtimeContextTokens = runtimeContextTokensByModelId.get(model.id);
         if (runtimeContextTokens) {
           modelConfig.contextTokens = runtimeContextTokens;
         }
-        return [modelConfig];
+        return modelConfig;
       });
     } finally {
       await release();
