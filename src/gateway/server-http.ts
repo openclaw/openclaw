@@ -62,6 +62,9 @@ let embeddingsHttpModulePromise: Promise<typeof import("./embeddings-http.js")> 
 let managedImageAttachmentsModulePromise:
   | Promise<typeof import("./managed-image-attachments.js")>
   | undefined;
+let managedDocumentAttachmentsModulePromise:
+  | Promise<typeof import("./managed-document-attachments.js")>
+  | undefined;
 let modelsHttpModulePromise: Promise<typeof import("./models-http.js")> | undefined;
 let openAiHttpModulePromise: Promise<typeof import("./openai-http.js")> | undefined;
 let openResponsesHttpModulePromise: Promise<typeof import("./openresponses-http.js")> | undefined;
@@ -97,6 +100,11 @@ function getEmbeddingsHttpModule() {
 function getManagedImageAttachmentsModule() {
   managedImageAttachmentsModulePromise ??= import("./managed-image-attachments.js");
   return managedImageAttachmentsModulePromise;
+}
+
+function getManagedDocumentAttachmentsModule() {
+  managedDocumentAttachmentsModulePromise ??= import("./managed-document-attachments.js");
+  return managedDocumentAttachmentsModulePromise;
 }
 
 function getModelsHttpModule() {
@@ -728,6 +736,24 @@ export function createGatewayHttpServer(opts: {
         name: "chat-managed-image-media",
         run: async () =>
           (await getManagedImageAttachmentsModule()).handleManagedOutgoingImageHttpRequest(
+            req,
+            res,
+            {
+              auth: resolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            },
+          ),
+      });
+
+      // Sibling document download route — Bug #9. Mirrors the image stage so a
+      // .xlsx / .docx / .pdf produced by the assistant gets a stable signed URL
+      // with the right Content-Type and `Content-Disposition: attachment`.
+      requestStages.push({
+        name: "chat-managed-document-media",
+        run: async () =>
+          (await getManagedDocumentAttachmentsModule()).handleManagedOutgoingDocumentHttpRequest(
             req,
             res,
             {
