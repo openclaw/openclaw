@@ -131,6 +131,39 @@ export function pruneExecApprovalQueue(queue: ExecApprovalRequest[]): ExecApprov
   return queue.filter((entry) => entry.expiresAtMs > now);
 }
 
+export function parsePendingApprovalList(
+  payload: unknown,
+  kind: "exec" | "plugin",
+): ExecApprovalRequest[] {
+  if (!Array.isArray(payload)) {
+    return [];
+  }
+  return payload
+    .map((entry) =>
+      kind === "plugin" ? parsePluginApprovalRequested(entry) : parseExecApprovalRequested(entry),
+    )
+    .filter((entry): entry is ExecApprovalRequest => entry !== null);
+}
+
+export function mergeExecApprovalQueue(
+  current: ExecApprovalRequest[],
+  incoming: ExecApprovalRequest[],
+  options?: { replace?: boolean },
+): ExecApprovalRequest[] {
+  const byId = new Map<string, ExecApprovalRequest>();
+  if (!options?.replace) {
+    for (const entry of pruneExecApprovalQueue(current)) {
+      byId.set(entry.id, entry);
+    }
+  }
+  for (const entry of incoming) {
+    byId.set(entry.id, entry);
+  }
+  return pruneExecApprovalQueue(Array.from(byId.values())).toSorted(
+    (a, b) => b.createdAtMs - a.createdAtMs,
+  );
+}
+
 export function addExecApproval(
   queue: ExecApprovalRequest[],
   entry: ExecApprovalRequest,

@@ -28,6 +28,7 @@ prompting even if session or config defaults request `ask: "on-miss"`.
 | Command                                                          | What it shows                                                                          |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `openclaw approvals get` / `--gateway` / `--node <id\|name\|ip>` | Requested policy, host policy sources, and the effective result.                       |
+| `openclaw approvals list --gateway`                              | Pending gateway runtime exec approval requests.                                        |
 | `openclaw exec-policy show`                                      | Local-machine merged view.                                                             |
 | `openclaw exec-policy set` / `preset`                            | Synchronize the local requested policy with the local host approvals file in one step. |
 

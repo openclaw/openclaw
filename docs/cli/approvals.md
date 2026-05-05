@@ -63,6 +63,7 @@ or `openclaw approvals set --node <id|name|ip>`.
 openclaw approvals get
 openclaw approvals get --node <id|name|ip>
 openclaw approvals get --gateway
+openclaw approvals list --gateway
 ```
 
 `openclaw approvals get` now shows the effective exec policy for local, gateway, and node targets:
@@ -77,6 +78,8 @@ Precedence is intentional:
 - requested `tools.exec` policy can narrow or broaden intent, but the effective result is still derived from the host rules
 - `--node` combines the node host approvals file with gateway `tools.exec` policy, because both still apply at runtime
 - if gateway config is unavailable, the CLI falls back to the node approvals snapshot and notes that the final runtime policy could not be computed
+
+`openclaw approvals list --gateway` lists pending runtime exec approval requests on the gateway. Use `get` for policy snapshots and allowlists; use `list` when an agent is waiting for an approval id.
 
 ## Replace approvals from a file
 

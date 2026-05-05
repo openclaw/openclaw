@@ -50,6 +50,18 @@ describe("parseSlashCommand", () => {
     });
   });
 
+  it("keeps /approve on the backend command path", () => {
+    const approve = SLASH_COMMANDS.find((entry) => entry.name === "approve");
+    expect(approve).toMatchObject({
+      key: "approve",
+    });
+    expect(approve?.executeLocal).not.toBe(true);
+    expect(parseSlashCommand("/approve abc allow-once")).toMatchObject({
+      command: { key: "approve" },
+      args: "abc allow-once",
+    });
+  });
+
   it("includes shared /tools with shared arg hints", () => {
     const tools = SLASH_COMMANDS.find((entry) => entry.name === "tools");
     expect(tools).toMatchObject({

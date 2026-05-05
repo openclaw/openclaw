@@ -445,6 +445,46 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
   });
 
+  it("hydrates pending approvals after hello", async () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: "approval-2",
+            request: {
+              command: "ls -la",
+              host: "gateway",
+              agentId: "main",
+              sessionKey: "agent:main:main",
+            },
+            createdAtMs: Date.now(),
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ];
+      }
+      if (method === "plugin.approval.list") {
+        return [];
+      }
+      return {};
+    });
+
+    client.emitHello();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(host.execApprovalQueue).toHaveLength(1);
+    expect(host.execApprovalQueue[0]).toMatchObject({
+      id: "approval-2",
+      kind: "exec",
+      request: { command: "ls -la" },
+    });
+  });
+
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {
     const host = createHost();
 

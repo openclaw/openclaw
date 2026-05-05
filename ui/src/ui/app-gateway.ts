@@ -37,8 +37,10 @@ import { loadDevices, type DevicesState } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import {
   addExecApproval,
+  mergeExecApprovalQueue,
   parseExecApprovalRequested,
   parseExecApprovalResolved,
+  parsePendingApprovalList,
   parsePluginApprovalRequested,
   pruneExecApprovalQueue,
   removeExecApproval,
@@ -148,6 +150,29 @@ function removeResolvedApprovalRequest(host: GatewayHost, payload: unknown) {
   if (resolved) {
     host.execApprovalQueue = removeExecApproval(host.execApprovalQueue, resolved.id);
   }
+}
+
+async function loadPendingApprovals(host: GatewayHost, client: GatewayBrowserClient) {
+  const [execResult, pluginResult] = await Promise.allSettled([
+    client.request("exec.approval.list", {}),
+    client.request("plugin.approval.list", {}),
+  ]);
+  if (host.client !== client) {
+    return;
+  }
+  const loadedExec = execResult.status === "fulfilled";
+  const loadedPlugin = pluginResult.status === "fulfilled";
+  const pending = [
+    ...(loadedExec ? parsePendingApprovalList(execResult.value, "exec") : []),
+    ...(loadedPlugin ? parsePendingApprovalList(pluginResult.value, "plugin") : []),
+  ];
+  if (!loadedExec && !loadedPlugin) {
+    return;
+  }
+  host.execApprovalQueue = mergeExecApprovalQueue(host.execApprovalQueue, pending, {
+    replace: loadedExec && loadedPlugin,
+  });
+  host.execApprovalError = null;
 }
 
 function isTerminalChatState(
@@ -466,6 +491,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
             console.warn("[openclaw] pending abort failed:", err);
           });
       }
+      void loadPendingApprovals(host, client).catch((err) => {
+        console.warn("[openclaw] pending approval load failed:", err);
+      });
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       host.chatRunId = null;

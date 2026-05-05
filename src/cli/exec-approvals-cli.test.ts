@@ -24,29 +24,31 @@ const mocks = vi.hoisted(() => {
     }),
   };
   return {
-    callGatewayFromCli: vi.fn(async (method: string, _opts: unknown, params?: unknown) => {
-      if (method.endsWith(".get")) {
-        if (method === "config.get") {
-          return {
-            config: {
-              tools: {
-                exec: {
-                  security: "full",
-                  ask: "off",
+    callGatewayFromCli: vi.fn(
+      async (method: string, _opts: unknown, params?: unknown): Promise<unknown> => {
+        if (method.endsWith(".get")) {
+          if (method === "config.get") {
+            return {
+              config: {
+                tools: {
+                  exec: {
+                    security: "full",
+                    ask: "off",
+                  },
                 },
               },
-            },
+            };
+          }
+          return {
+            path: "/tmp/exec-approvals.json",
+            exists: true,
+            hash: "hash-1",
+            file: { version: 1, agents: {} },
           };
         }
-        return {
-          path: "/tmp/exec-approvals.json",
-          exists: true,
-          hash: "hash-1",
-          file: { version: 1, agents: {} },
-        };
-      }
-      return { method, params };
-    }),
+        return { method, params };
+      },
+    ),
     defaultRuntime,
     readBestEffortConfig,
     runtimeErrors,
@@ -168,6 +170,41 @@ describe("exec approvals CLI", () => {
       {},
     );
     expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("lists pending gateway exec approvals", async () => {
+    callGatewayFromCli.mockImplementationOnce(async () => [
+      {
+        id: "approval-1",
+        request: {
+          command: "ls -la",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          host: "gateway",
+        },
+        createdAtMs: 1000,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    ]);
+
+    await runApprovalsCommand(["approvals", "list", "--gateway", "--json"]);
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "exec.approval.list",
+      expect.objectContaining({ timeout: "60000", gateway: true }),
+      {},
+    );
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        count: 1,
+        approvals: [
+          expect.objectContaining({
+            id: "approval-1",
+          }),
+        ],
+      }),
+      0,
+    );
   });
 
   it("adds effective policy to json output", async () => {

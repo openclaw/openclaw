@@ -36,6 +36,31 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
   return parsed;
 }
 
+type SessionsListOpts = {
+  json?: boolean;
+  verbose?: boolean;
+  store?: string;
+  agent?: string;
+  allAgents?: boolean;
+  active?: string;
+  limit?: string;
+};
+
+async function runSessionsList(opts: SessionsListOpts): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  await sessionsCommand(
+    {
+      json: Boolean(opts.json),
+      store: opts.store,
+      agent: opts.agent,
+      allAgents: Boolean(opts.allAgents),
+      active: opts.active,
+      limit: opts.limit,
+    },
+    defaultRuntime,
+  );
+}
+
 async function runWithVerboseAndTimeout(
   opts: { verbose?: boolean; debug?: boolean; timeout?: unknown },
   action: (params: { verbose: boolean; timeoutMs: number | undefined }) => Promise<void>,
@@ -142,6 +167,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw sessions --all-agents", "Aggregate sessions across agents."],
           ["openclaw sessions --active 120", "Only last 2 hours."],
           ["openclaw sessions --limit 25", "Show the newest 25 sessions."],
+          ["openclaw sessions list --json", "Machine-readable output."],
           ["openclaw sessions --json", "Machine-readable output."],
           ["openclaw sessions --store ./tmp/sessions.json", "Use a specific session store."],
         ])}\n\n${theme.muted(
@@ -154,20 +180,40 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      await sessionsCommand(
-        {
-          json: Boolean(opts.json),
-          store: opts.store as string | undefined,
-          agent: opts.agent as string | undefined,
-          allAgents: Boolean(opts.allAgents),
-          active: opts.active as string | undefined,
-          limit: opts.limit as string | undefined,
-        },
-        defaultRuntime,
-      );
+      await runSessionsList({
+        json: Boolean(opts.json),
+        verbose: Boolean(opts.verbose),
+        store: opts.store as string | undefined,
+        agent: opts.agent as string | undefined,
+        allAgents: Boolean(opts.allAgents),
+        active: opts.active as string | undefined,
+        limit: opts.limit as string | undefined,
+      });
     });
   sessionsCmd.enablePositionalOptions();
+
+  sessionsCmd
+    .command("list")
+    .description("List stored conversation sessions")
+    .option("--json", "Output as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
+    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)')
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as SessionsListOpts | undefined;
+      await runSessionsList({
+        json: Boolean(opts.json || parentOpts?.json),
+        verbose: Boolean(opts.verbose || parentOpts?.verbose),
+        store: (opts.store as string | undefined) ?? parentOpts?.store,
+        agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+        allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+        active: (opts.active as string | undefined) ?? parentOpts?.active,
+        limit: (opts.limit as string | undefined) ?? parentOpts?.limit,
+      });
+    });
 
   sessionsCmd
     .command("cleanup")

@@ -44,6 +44,18 @@ type EffectivePolicyReport = {
   scopes: ExecPolicyScopeSnapshot[];
   note?: string;
 };
+type PendingExecApproval = {
+  id?: string;
+  request?: {
+    command?: string;
+    agentId?: string | null;
+    sessionKey?: string | null;
+    host?: string | null;
+    nodeId?: string | null;
+  };
+  createdAtMs?: number;
+  expiresAtMs?: number;
+};
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
@@ -360,6 +372,49 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
   );
 }
 
+function renderPendingApprovals(approvals: PendingExecApproval[]) {
+  const rich = isRich();
+  const heading = (text: string) => (rich ? theme.heading(text) : text);
+  const muted = (text: string) => (rich ? theme.muted(text) : text);
+  const now = Date.now();
+  defaultRuntime.log(heading("Pending exec approvals"));
+  if (approvals.length === 0) {
+    defaultRuntime.log(muted("No pending exec approvals."));
+    return;
+  }
+  const rows = approvals.map((approval) => {
+    const request = approval.request ?? {};
+    const expiresAtMs = typeof approval.expiresAtMs === "number" ? approval.expiresAtMs : null;
+    return {
+      ID: approval.id ?? "",
+      Agent: request.agentId ?? "",
+      Session: request.sessionKey ?? "",
+      Host: request.nodeId ? `node:${request.nodeId}` : (request.host ?? ""),
+      Expires: expiresAtMs ? formatTimeAgo(Math.max(0, expiresAtMs - now), { suffix: false }) : "",
+      Command: request.command ?? "",
+    };
+  });
+  defaultRuntime.log(
+    renderTable({
+      width: getTerminalTableWidth(),
+      columns: [
+        { key: "ID", header: "ID", minWidth: 12 },
+        { key: "Agent", header: "Agent", minWidth: 8 },
+        { key: "Session", header: "Session", minWidth: 12 },
+        { key: "Host", header: "Host", minWidth: 8 },
+        { key: "Expires", header: "Expires", minWidth: 10 },
+        { key: "Command", header: "Command", minWidth: 24, flex: true },
+      ],
+      rows,
+    }).trimEnd(),
+  );
+}
+
+async function listPendingApprovals(opts: ExecApprovalsCliOpts): Promise<PendingExecApproval[]> {
+  const result = await callGatewayFromCli("exec.approval.list", opts, {});
+  return Array.isArray(result) ? (result as PendingExecApproval[]) : [];
+}
+
 async function saveSnapshot(
   opts: ExecApprovalsCliOpts,
   nodeId: string | null,
@@ -520,6 +575,25 @@ export function registerExecApprovalsCli(program: Command) {
       }
     });
   nodesCallOpts(getCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
+
+  const listCmd = approvals
+    .command("list")
+    .description("List pending exec approval requests from the gateway")
+    .option("--gateway", "Force gateway approvals", false)
+    .action(async (opts: ExecApprovalsCliOpts) => {
+      try {
+        const pending = await listPendingApprovals(opts);
+        if (opts.json) {
+          defaultRuntime.writeJson({ count: pending.length, approvals: pending }, 0);
+          return;
+        }
+        renderPendingApprovals(pending);
+      } catch (err) {
+        defaultRuntime.error(formatCliError(err));
+        defaultRuntime.exit(1);
+      }
+    });
+  nodesCallOpts(listCmd, { timeoutMs: APPROVALS_GET_DEFAULT_TIMEOUT_MS });
 
   const setCmd = approvals
     .command("set")

@@ -742,6 +742,37 @@ describe("handleSendChat", () => {
     expect(host.chatRunId).toBe("run-main");
   });
 
+  it("sends /approve to the backend command path while a run is waiting", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Waiting for approval...",
+      chatMessage: "/approve abc123 allow",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "agent:main",
+        message: "/approve abc123 allow",
+        deliver: false,
+        idempotencyKey: expect.any(String),
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
+    expect(host.chatStream).toBe("Waiting for approval...");
+    expect(host.chatMessages).toEqual([]);
+  });
+
   it("sends /btw without adopting a main chat run when idle", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {

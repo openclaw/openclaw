@@ -271,7 +271,11 @@ describe("program routes", () => {
     await expectRunFalse(["sessions"], ["node", "openclaw", "sessions", "--agent"]);
   });
 
-  it("does not fast-route sessions subcommands", () => {
+  it("fast-routes sessions list alias", () => {
+    expect(findRoutedCommand(["sessions", "list"])).not.toBeNull();
+  });
+
+  it("does not fast-route sessions maintenance subcommands", () => {
     expect(findRoutedCommand(["sessions", "cleanup"])).toBeNull();
   });
 

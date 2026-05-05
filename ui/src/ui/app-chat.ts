@@ -280,7 +280,7 @@ function attachmentSubmitSignature(attachment: ChatAttachment): string {
 
 function chatSubmitKey(
   host: ChatHost,
-  kind: "btw" | "message",
+  kind: "approval" | "btw" | "message",
   message: string,
   attachments: ChatAttachment[],
 ): string {
@@ -316,7 +316,7 @@ async function withChatSubmitGuard<T>(
   }
 }
 
-async function sendDetachedBtwMessage(
+async function sendDetachedCommandMessage(
   host: ChatHost,
   message: string,
   opts?: {
@@ -345,6 +345,30 @@ async function sendDetachedBtwMessage(
     releaseChatAttachmentPayloads(opts?.attachments);
   }
   return ok;
+}
+
+async function sendDetachedBtwMessage(
+  host: ChatHost,
+  message: string,
+  opts?: {
+    previousDraft?: string;
+    attachments?: ChatAttachment[];
+    previousAttachments?: ChatAttachment[];
+  },
+) {
+  return sendDetachedCommandMessage(host, message, opts);
+}
+
+async function sendDetachedApprovalCommand(
+  host: ChatHost,
+  message: string,
+  opts?: {
+    previousDraft?: string;
+    attachments?: ChatAttachment[];
+    previousAttachments?: ChatAttachment[];
+  },
+) {
+  return sendDetachedCommandMessage(host, message, opts);
 }
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string) {
@@ -486,6 +510,23 @@ export async function handleSendChat(
 
   // Intercept local slash commands (/status, /model, /compact, etc.)
   const parsed = parseSlashCommand(message);
+  if (parsed?.command.key === "approve") {
+    const submitKey = chatSubmitKey(host, "approval", message, attachmentsToSend);
+    await withChatSubmitGuard(host, submitKey, async () => {
+      if (messageOverride == null) {
+        recordNonTranscriptInputHistory(host, message);
+        host.chatMessage = "";
+        host.chatAttachments = [];
+        resetChatInputHistoryNavigation(host);
+      }
+      await sendDetachedApprovalCommand(host, message, {
+        previousDraft: messageOverride == null ? previousDraft : undefined,
+        attachments: hasAttachments ? attachmentsToSend : undefined,
+        previousAttachments: messageOverride == null ? attachments : undefined,
+      });
+    });
+    return;
+  }
   if (parsed?.command.executeLocal) {
     if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
       if (messageOverride == null) {

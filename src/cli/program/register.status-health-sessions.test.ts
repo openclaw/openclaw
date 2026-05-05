@@ -219,6 +219,19 @@ describe("registerStatusHealthSessionsCommands", () => {
     );
   });
 
+  it("runs sessions list alias with forwarded options", async () => {
+    await runCli(["sessions", "list", "--json", "--store", "/tmp/sessions.json", "--limit", "10"]);
+
+    expect(sessionsCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        store: "/tmp/sessions.json",
+        limit: "10",
+      }),
+      runtime,
+    );
+  });
+
   it("runs sessions command with --all-agents forwarding", async () => {
     await runCli(["sessions", "--all-agents"]);
 

@@ -166,6 +166,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "sessions" },
   },
   {
+    commandPath: ["sessions", "list"],
+    exact: true,
+    policy: { ensureCliPath: false, networkProxy: "bypass" },
+    route: { id: "sessions" },
+  },
+  {
     commandPath: ["commitments"],
     policy: {
       ensureCliPath: false,

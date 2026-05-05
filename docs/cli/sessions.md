@@ -31,6 +31,7 @@ openclaw sessions --active 120
 openclaw sessions --limit 25
 openclaw sessions --verbose
 openclaw sessions --json
+openclaw sessions list --json
 ```
 
 Scope selection:
