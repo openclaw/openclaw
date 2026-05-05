@@ -466,6 +466,21 @@ describe("memory index", () => {
     );
   });
 
+  it("reopens a cached sqlite handle that was closed underneath the manager", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-reopen.sqlite") });
+    const manager = await getPersistentManager(cfg);
+
+    await manager.sync({ reason: "test", force: true });
+    expect(manager.status().chunks).toBeGreaterThan(0);
+
+    (manager as unknown as { db: { close: () => void } }).db.close();
+
+    expect(manager.status().chunks).toBeGreaterThan(0);
+    const results = await manager.search("zebra");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]?.path).toContain("memory/2026-01-12.md");
+  });
+
   it("streams embedding cache rows during safe reindex", async () => {
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     type EmbeddingCacheRow = {
