@@ -107,13 +107,13 @@ function resolveDisplaySessionKey(params: {
 /**
  * Save session context to memory when /new or /reset command is triggered
  */
-const saveSessionToMemory: HookHandler = async (event) => {
-  // Only trigger on reset/new commands
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
-    return;
-  }
+const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
+export async function flushSessionMemoryWritesForTest(): Promise<void> {
+  await Promise.allSettled(pendingSessionMemoryWrites);
+}
+
+async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<void> {
   try {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
@@ -277,6 +277,21 @@ const saveSessionToMemory: HookHandler = async (event) => {
       log.error("Failed to save session memory", { error: String(err) });
     }
   }
+}
+
+const saveSessionToMemory: HookHandler = (event) => {
+  // Only trigger on reset/new commands. This is silent housekeeping, so keep it
+  // off the command reply path.
+  const isResetCommand = event.action === "new" || event.action === "reset";
+  if (event.type !== "command" || !isResetCommand) {
+    return;
+  }
+
+  const writePromise = saveSessionMemoryNow(event);
+  pendingSessionMemoryWrites.add(writePromise);
+  void writePromise.finally(() => {
+    pendingSessionMemoryWrites.delete(writePromise);
+  });
 };
 
 export default saveSessionToMemory;

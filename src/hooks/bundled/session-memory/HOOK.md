@@ -25,7 +25,7 @@ When you run `/new` or `/reset` to start a fresh session:
 1. **Finds the previous session** - Uses the pre-reset session entry to locate the correct transcript
 2. **Extracts conversation** - Reads the last N user/assistant messages from the session (default: 15, configurable)
 3. **Chooses filename slug** - Uses a local timestamp by default, or an LLM-generated description when `llmSlug` is enabled
-4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default
+4. **Saves to memory** - Creates a new file at `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default without delaying the `/new` or `/reset` reply
 
 ## Output Format
 
@@ -88,6 +88,7 @@ The hook automatically:
 
 - Uses your workspace directory (`~/.openclaw/workspace` by default)
 - Uses timestamp slugs by default so `/new` and `/reset` stay fast on message channels
+- Runs memory capture in the background so reset acknowledgements can return immediately
 - Uses your configured LLM for slug generation only when `llmSlug` is `true`
 - Falls back to timestamp slugs if LLM slug generation is unavailable
 

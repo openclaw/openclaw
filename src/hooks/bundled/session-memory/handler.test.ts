@@ -19,6 +19,7 @@ vi.mock("../../llm-slug-generator.js", () => ({
 }));
 
 let handler: typeof import("./handler.js").default;
+let flushSessionMemoryWritesForTest: typeof import("./handler.js").flushSessionMemoryWritesForTest;
 let suiteWorkspaceRoot = "";
 let workspaceCaseCounter = 0;
 
@@ -30,7 +31,7 @@ async function createCaseWorkspace(prefix = "case"): Promise<string> {
 }
 
 beforeAll(async () => {
-  ({ default: handler } = await import("./handler.js"));
+  ({ default: handler, flushSessionMemoryWritesForTest } = await import("./handler.js"));
   suiteWorkspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-memory-"));
 });
 
@@ -94,6 +95,7 @@ async function runNewWithPreviousSessionEntry(params: {
   }
 
   await handler(event);
+  await flushSessionMemoryWritesForTest();
 
   const memoryDir = path.join(params.tempDir, "memory");
   const files = await fs.readdir(memoryDir);
@@ -188,6 +190,16 @@ function expectMemoryConversation(params: {
   expect(params.memoryContent).toContain(`assistant: ${params.assistant}`);
   if (params.absent) {
     expect(params.memoryContent).not.toContain(params.absent);
+  }
+}
+
+async function waitUntil(condition: () => boolean, timeoutMs = 500): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) {
+      throw new Error("condition was not met before timeout");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
@@ -301,6 +313,71 @@ describe("session-memory hook", () => {
     );
 
     expect(generateSlug).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not block reset command handling on opt-in model slug generation", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const sessionsDir = path.join(tempDir, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const sessionFile = await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl",
+      content: createMockSessionContent([
+        { role: "user", content: "Investigate slow WhatsApp reset" },
+        { role: "assistant", content: "Checking reset hooks" },
+      ]),
+    });
+
+    let resolveSlug: ((slug: string | null) => void) | undefined;
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSlug = resolve;
+        }),
+    );
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const event = createHookEvent("command", "new", "agent:main:main", {
+          cfg: {
+            agents: { defaults: { workspace: tempDir } },
+            hooks: {
+              internal: {
+                entries: {
+                  "session-memory": {
+                    enabled: true,
+                    llmSlug: true,
+                  },
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
+          previousSessionEntry: {
+            sessionId: "test-123",
+            sessionFile,
+          },
+        });
+
+        const startedAt = Date.now();
+        await handler(event);
+        expect(Date.now() - startedAt).toBeLessThan(100);
+
+        await waitUntil(() => generateSlug.mock.calls.length === 1);
+        resolveSlug?.("slow-reset");
+        await flushSessionMemoryWritesForTest();
+
+        const files = await fs.readdir(path.join(tempDir, "memory"));
+        expect(files).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}-slow-reset\.md$/)]);
+      },
+    );
   });
 
   it("creates memory file with session content on /reset command", async () => {
