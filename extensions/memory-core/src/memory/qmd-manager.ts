@@ -1366,6 +1366,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       vector: {
         enabled: qmdUsesVectors(this.qmd.searchMode),
         available: this.vectorAvailable ?? undefined,
+        semanticAvailable: this.vectorAvailable ?? undefined,
         loadError: this.vectorStatusDetail ?? undefined,
       },
       batch: {

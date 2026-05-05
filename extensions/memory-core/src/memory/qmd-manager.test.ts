@@ -4891,6 +4891,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
+      semanticAvailable: false,
       loadError: "QMD index has 0 vectors; semantic search is unavailable until embeddings finish",
     });
     await manager.close();
@@ -4924,6 +4925,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: true,
+      semanticAvailable: true,
       loadError: undefined,
     });
     await manager.close();
@@ -4982,6 +4984,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: true,
       available: false,
+      semanticAvailable: false,
       loadError: "Could not determine QMD vector status from `qmd status`",
     });
     await manager.close();
@@ -5008,6 +5011,7 @@ describe("QmdMemoryManager", () => {
     expect(manager.status().vector).toEqual({
       enabled: false,
       available: false,
+      semanticAvailable: false,
       loadError: undefined,
     });
     await manager.close();

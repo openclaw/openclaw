@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -16,7 +15,6 @@ import type {
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
-const providerPolicyPluginIdsByProviderId = new Map<string, string | null>();
 
 export type BundledProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
@@ -48,7 +46,6 @@ function tryLoadBundledProviderPolicySurface(
       const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
         dirName: pluginId,
         artifactBasename,
-        installRuntimeDeps: false,
       });
       if (hasProviderPolicyHook(mod)) {
         return mod;
@@ -66,54 +63,40 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-function resolveBundledProviderPolicyPluginId(providerId: string): string | null {
+function resolveBundledProviderPolicyPluginId(
+  providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
+): string | null {
   const normalizedProviderId = normalizeProviderId(providerId);
   if (!normalizedProviderId) {
     return null;
   }
   const bundledPluginsDir = resolveBundledPluginsDir();
-  const cacheKey = `${bundledPluginsDir ?? "<none>"}::${normalizedProviderId}`;
-  if (providerPolicyPluginIdsByProviderId.has(cacheKey)) {
-    return providerPolicyPluginIdsByProviderId.get(cacheKey) ?? null;
-  }
-
-  if (!bundledPluginsDir || !fs.existsSync(bundledPluginsDir)) {
-    providerPolicyPluginIdsByProviderId.set(cacheKey, null);
+  if (!bundledPluginsDir) {
     return null;
   }
 
-  for (const entry of fs
-    .readdirSync(bundledPluginsDir, { withFileTypes: true })
-    .filter((candidate) => candidate.isDirectory())
-    .map((candidate) => candidate.name)
-    .toSorted((left, right) => left.localeCompare(right))) {
-    const manifestPath = path.join(bundledPluginsDir, entry, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
+  const registry = options.manifestRegistry ?? loadPluginManifestRegistry();
+  for (const plugin of registry.plugins.toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    if (plugin.origin !== "bundled") {
       continue;
     }
-    let manifest: { providers?: unknown };
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as { providers?: unknown };
-    } catch {
-      continue;
-    }
-    const providers = Array.isArray(manifest.providers) ? manifest.providers : [];
-    const ownsProvider = providers.some(
-      (candidate) =>
-        typeof candidate === "string" && normalizeProviderId(candidate) === normalizedProviderId,
+    const ownsProvider = plugin.providers.some(
+      (provider) => normalizeProviderId(provider) === normalizedProviderId,
     );
     if (ownsProvider) {
-      providerPolicyPluginIdsByProviderId.set(cacheKey, entry);
-      return entry;
+      return plugin.id;
     }
   }
 
-  providerPolicyPluginIdsByProviderId.set(cacheKey, null);
   return null;
 }
 
 export function resolveBundledProviderPolicySurface(
   providerId: string,
+  options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
 ): BundledProviderPolicySurface | null {
   const normalizedProviderId = normalizeProviderId(providerId);
   if (!normalizedProviderId) {
@@ -122,7 +105,7 @@ export function resolveBundledProviderPolicySurface(
   return (
     tryLoadBundledProviderPolicySurface(normalizedProviderId) ??
     tryLoadBundledProviderPolicySurface(
-      resolveBundledProviderPolicyPluginId(normalizedProviderId) ?? normalizedProviderId,
+      resolveBundledProviderPolicyPluginId(normalizedProviderId, options) ?? normalizedProviderId,
     )
   );
 }

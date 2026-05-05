@@ -6,7 +6,6 @@ import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
-  resetFacadeActivationCheckRuntimeStateForTest,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
   throwForBundledPluginPublicSurfaceAccess,
 } from "./facade-activation-check.runtime.js";
@@ -37,11 +36,15 @@ function createTrustedBundledFixtureRoot(prefix: string): string {
   return rootDir;
 }
 
-function writePluginPackageJson(pluginDir: string, name = "demo"): void {
+function writePluginPackageJson(
+  pluginDir: string,
+  name = "demo",
+  type: "commonjs" | "module" = "module",
+): void {
   writeJsonFile(path.join(pluginDir, "package.json"), {
     name: `@openclaw/plugin-${name}`,
     version: "0.0.0",
-    type: "module",
+    type,
   });
 }
 
@@ -67,7 +70,7 @@ function createThrowingPluginDir(prefix: string): string {
   const rootDir = createTrustedBundledFixtureRoot(prefix);
   const pluginDir = path.join(rootDir, "bad");
   fs.mkdirSync(pluginDir, { recursive: true });
-  writePluginPackageJson(pluginDir, "bad");
+  writePluginPackageJson(pluginDir, "bad", "commonjs");
   fs.writeFileSync(
     path.join(pluginDir, "api.js"),
     `throw new Error("plugin load failure");\n`,
@@ -89,7 +92,6 @@ afterEach(() => {
   }
   clearRuntimeConfigSnapshot();
   resetFacadeRuntimeStateForTest();
-  resetFacadeActivationCheckRuntimeStateForTest();
   setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
   if (originalBundledPluginsDir === undefined) {

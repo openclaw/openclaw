@@ -11,13 +11,16 @@ QQ Bot connects to OpenClaw via the official QQ Bot API (WebSocket gateway). The
 plugin supports C2C private chat, group @messages, and guild channel messages with
 rich media (images, voice, video, files).
 
-Status: bundled plugin. Direct messages, group chats, guild channels, and
+Status: downloadable plugin. Direct messages, group chats, guild channels, and
 media are supported. Reactions and threads are not supported.
 
-## Bundled plugin
+## Install
 
-Current OpenClaw releases bundle QQ Bot, so normal packaged builds do not need
-a separate `openclaw plugins install` step.
+Install QQ Bot before setup:
+
+```bash
+openclaw plugins install @openclaw/qqbot
+```
 
 ## Setup
 
@@ -79,12 +82,28 @@ File-backed AppSecret:
 }
 ```
 
+Env SecretRef AppSecret:
+
+```json5
+{
+  channels: {
+    qqbot: {
+      enabled: true,
+      appId: "YOUR_APP_ID",
+      clientSecret: { source: "env", provider: "default", id: "QQBOT_CLIENT_SECRET" },
+    },
+  },
+}
+```
+
 Notes:
 
 - Env fallback applies to the default QQ Bot account only.
 - `openclaw channels add --channel qqbot --token-file ...` provides the
   AppSecret only; the AppID must already be set in config or `QQBOT_APP_ID`.
 - `clientSecret` also accepts SecretRef input, not just a plaintext string.
+- Legacy `secretref:/...` marker strings are not valid `clientSecret` values;
+  use structured SecretRef objects like the example above.
 
 ### Multi-account setup
 
@@ -190,7 +209,7 @@ STT and TTS support two-level configuration with priority fallback:
         voice: "your-voice",
       },
       accounts: {
-        qq-main: {
+        "qq-main": {
           tts: {
             providers: {
               openai: { voice: "shimmer" },

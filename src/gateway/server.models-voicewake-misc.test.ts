@@ -518,7 +518,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list configured view includes auth-backed provider catalog entries", async () => {
+  test("models.list configured view does not run runtime discovery without a read-only catalog", async () => {
     await withEnvAsync(
       {
         ANTHROPIC_API_KEY: undefined,
@@ -528,21 +528,11 @@ describe("gateway server models + voicewake", () => {
       async () => {
         await withModelsConfig({}, async () => {
           await seedPiCatalog();
+          const discoverCallsBefore = piSdkMock.discoverCalls;
           const res = await listModels({ view: "configured" });
           expect(res.ok).toBe(true);
-          expect(res.payload?.models).toEqual([
-            {
-              id: "gpt-test-a",
-              name: "A-Model",
-              provider: "openai",
-              contextWindow: 8000,
-            },
-            {
-              id: "gpt-test-z",
-              name: "gpt-test-z",
-              provider: "openai",
-            },
-          ]);
+          expect(res.payload?.models).toEqual([]);
+          expect(piSdkMock.discoverCalls).toBe(discoverCallsBefore);
         });
       },
     );
@@ -654,9 +644,8 @@ describe("gateway server models + voicewake", () => {
       expected: [
         {
           id: "claude-test-a",
-          name: "A-Model",
+          name: "claude-test-a",
           provider: "anthropic",
-          contextWindow: 200_000,
         },
         {
           id: "gpt-test-z",
@@ -843,50 +832,6 @@ describe("gateway server misc", () => {
       await dedicatedServer?.close();
       resetTestPluginRegistry();
     }
-  });
-
-  test("auto-enables configured channel plugins on startup", async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Missing OPENCLAW_CONFIG_PATH");
-    }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          channels: {
-            discord: {
-              token: "token-123",
-            },
-          },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-
-    await withEnvAsync(
-      {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      },
-      async () => {
-        const autoPort = await getFreePort();
-        const autoServer = await startGatewayServer(autoPort);
-        await autoServer.close();
-      },
-    );
-
-    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    const channels = updated.channels as Record<string, unknown> | undefined;
-    const discord = channels?.discord as Record<string, unknown> | undefined;
-    expect(discord).toMatchObject({
-      token: "token-123",
-      enabled: true,
-    });
   });
 
   test("releases port after close", async () => {

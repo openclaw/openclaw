@@ -161,8 +161,18 @@ export const uk: TranslationMap = {
     store: "Сховище: {path}",
     active: "Активно",
     limit: "Обмеження",
+    filters: "Фільтри",
+    showFilters: "Показати фільтри",
+    hideFilters: "Приховати фільтри",
+    sourceFilters: "Фільтри джерела сеансів",
     global: "Глобально",
     unknown: "Невідомо",
+    showArchived: "Показати архівовані",
+    activeTooltip: "Оновлено за останні {count} хвилин.",
+    limitTooltip: "Максимальна кількість сеансів для завантаження.",
+    globalTooltip: "Включити глобальні сеанси.",
+    unknownTooltip: "Включити невідомі сеанси.",
+    showArchivedTooltip: "Включити архівовані сеанси.",
     minutesPlaceholder: "хв",
     searchPlaceholder: "Фільтрувати за ключем, агентом, міткою, типом…",
     selected: "Вибрано: {count}",
@@ -181,6 +191,8 @@ export const uk: TranslationMap = {
     verbose: "Докладно",
     reasoning: "Міркування",
     noSessions: "Сеансів не знайдено.",
+    noSessionsMatchFilters: "Немає сеансів, що відповідають вашим фільтрам.",
+    showAll: "Показати все",
     inherit: "успадковувати",
     defaultOption: "За замовчуванням ({value})",
     offExplicit: "вимкнено (явно)",
@@ -729,6 +741,16 @@ export const uk: TranslationMap = {
       dailyCsv: "Щоденний CSV",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Кеш використання перебудовується у фоновому режимі. Відображені підсумки можуть бути застарілими.",
+      title: "{status}: {pending} очікує, {stale} застаріло, {cached} кешовано",
+      status: {
+        refreshing: "оновлення",
+        stale: "застаріло",
+        partial: "частково",
+      },
+    },
     empty: {
       title: "Почніть із діапазону дат",
       subtitle:
@@ -917,6 +939,7 @@ export const uk: TranslationMap = {
     updating: "Оновлення…",
     updateNow: "Оновити зараз",
     dismissUpdateBanner: "Закрити банер оновлення",
+    switchedSession: "Перемкнуто на {session}",
   },
   languages: {
     en: "Англійська",
