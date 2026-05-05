@@ -35,6 +35,7 @@ import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
 import type { ToolsConfig } from "./types.tools.js";
+import type { TrajectoryConfig } from "./types.trajectory.js";
 import type { ProxyConfig } from "./zod-schema.proxy.js";
 
 export type SurfaceConfigEntry = {
@@ -116,6 +117,7 @@ export type OpenClawConfig = {
   nodeHost?: NodeHostConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;
+  trajectory?: TrajectoryConfig;
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;
