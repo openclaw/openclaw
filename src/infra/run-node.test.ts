@@ -35,7 +35,10 @@ const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
 const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
 const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
 const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
+const DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT = "dist/model-catalog.runtime-EfGh5678.js";
 const DIST_STABLE_ROOT_RUNTIME_ALIAS = "dist/model-catalog.runtime.js";
+const DIST_LEGACY_ROOT_RUNTIME_TARGET = "dist/abort.runtime.js";
+const DIST_LEGACY_ROOT_RUNTIME_COMPAT = "dist/abort.runtime-DX6vo4yJ.js";
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
@@ -1911,6 +1914,7 @@ describe("run-node script", () => {
       DIST_CHANNEL_CATALOG,
       DIST_LEGACY_CLI_EXIT_COMPAT,
       DIST_STABLE_ROOT_RUNTIME_ALIAS,
+      DIST_LEGACY_ROOT_RUNTIME_COMPAT,
     ]) {
       await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
         await setupTrackedProject(tmp, {
@@ -1919,6 +1923,8 @@ describe("run-node script", () => {
             [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
             [DIST_STABLE_ROOT_RUNTIME_ALIAS]:
               "export * from './model-catalog.runtime-AbCd1234.js';\n",
+            [DIST_LEGACY_ROOT_RUNTIME_TARGET]: "export const aborted = true;\n",
+            [DIST_LEGACY_ROOT_RUNTIME_COMPAT]: "export * from './abort.runtime.js';\n",
             [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
           },
           buildPaths: [
@@ -1926,6 +1932,8 @@ describe("run-node script", () => {
             DIST_ENTRY,
             DIST_STABLE_ROOT_RUNTIME_SOURCE,
             DIST_STABLE_ROOT_RUNTIME_ALIAS,
+            DIST_LEGACY_ROOT_RUNTIME_TARGET,
+            DIST_LEGACY_ROOT_RUNTIME_COMPAT,
             BUILD_STAMP,
             RUNTIME_POSTBUILD_STAMP,
           ],
@@ -1945,6 +1953,39 @@ describe("run-node script", () => {
         });
       });
     }
+  });
+
+  it("does not require ambiguous stable runtime aliases that postbuild cannot create", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
+          [DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT]: "export const value = 2;\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          DIST_ENTRY,
+          DIST_STABLE_ROOT_RUNTIME_SOURCE,
+          DIST_STABLE_ROOT_RUNTIME_SOURCE_ALT,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: false,
+        reason: "clean",
+      });
+    });
   });
 
   it("reports missing runtime skill outputs even when stamps match HEAD", async () => {
