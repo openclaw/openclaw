@@ -62,6 +62,16 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, local);
 }
 
+export function clearSkillsSnapshotVersionForWorkspace(workspaceDir: string): void {
+  const local = workspaceVersions.get(workspaceDir);
+  if (typeof local === "number" && local > globalVersion) {
+    // Keep pending workspace invalidation visible after dropping the workspace
+    // key; otherwise teardown can hide a skill change from cached snapshots.
+    globalVersion = local;
+  }
+  workspaceVersions.delete(workspaceDir);
+}
+
 export function shouldRefreshSnapshotForVersion(
   cachedVersion?: number,
   nextVersion?: number,

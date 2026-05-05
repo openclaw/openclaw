@@ -9,6 +9,7 @@ import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
 import {
   bumpSkillsSnapshotVersion,
+  clearSkillsSnapshotVersionForWorkspace,
   resetSkillsRefreshStateForTest,
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
@@ -540,6 +541,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
       workspaceWatchTargets.delete(workspaceDir);
       workspaceWatchTargetCache.delete(workspaceDir);
     }
+    clearSkillsSnapshotVersionForWorkspace(workspaceDir);
     return;
   }
 
