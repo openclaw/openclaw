@@ -1,4 +1,6 @@
 import "./fs-safe-defaults.js";
+import { root as fsSafeRoot, type ReadResult } from "@openclaw/fs-safe/root";
+
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
@@ -49,3 +51,36 @@ export {
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
+
+/** @deprecated Use root(rootDir).read(relativePath, options). */
+export async function readFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
+  maxBytes?: number;
+}): Promise<ReadResult> {
+  const root = await fsSafeRoot(params.rootDir);
+  return await root.read(params.relativePath, {
+    hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
+    maxBytes: params.maxBytes,
+    nonBlockingRead: params.nonBlockingRead,
+    symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
+  });
+}
+
+/** @deprecated Use root(rootDir).write(relativePath, data, options). */
+export async function writeFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  data: string | Buffer;
+  encoding?: BufferEncoding;
+  mkdir?: boolean;
+}): Promise<void> {
+  const root = await fsSafeRoot(params.rootDir);
+  await root.write(params.relativePath, params.data, {
+    encoding: params.encoding,
+    mkdir: params.mkdir,
+  });
+}
