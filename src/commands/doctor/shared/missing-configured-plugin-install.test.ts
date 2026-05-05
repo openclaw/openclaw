@@ -917,7 +917,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
     expect(result).toEqual({
       changes: [
-        'Deferred missing configured plugin "discord" install repair until post-update doctor.',
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
     });
@@ -969,7 +969,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     );
     expect(result).toEqual({
       changes: [
-        'Deferred missing configured plugin "discord" install repair until post-update doctor.',
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
     });

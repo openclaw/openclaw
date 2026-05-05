@@ -84,7 +84,7 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
-  it("retries a cache probe once when provider text misses the sentinel", () => {
+  it("retries a cache probe twice when provider text misses the sentinel", () => {
     expect(
       __testing.shouldRetryCacheProbeText({
         attempt: 1,
@@ -95,6 +95,13 @@ describe("live cache regression runner", () => {
     expect(
       __testing.shouldRetryCacheProbeText({
         attempt: 2,
+        suffix: "openai-stable-hit-a",
+        text: "",
+      }),
+    ).toBe(true);
+    expect(
+      __testing.shouldRetryCacheProbeText({
+        attempt: 3,
         suffix: "openai-stable-hit-a",
         text: "",
       }),
