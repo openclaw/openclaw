@@ -2,6 +2,7 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 const CODEX_LIMIT_ID = "codex";
 const LIMIT_WINDOW_KEYS = ["primary", "secondary"] as const;
+const ONE_SECOND_MS = 1000;
 const ONE_MINUTE_MS = 60_000;
 const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -92,7 +93,7 @@ function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string
   });
   const reachedType = readString(snapshot, "rateLimitReachedType");
   const suffix = reachedType ? ` (${formatReachedType(reachedType)})` : "";
-  return `${label}: ${windows.join(", ") || "available"}${suffix}`;
+  return `${label}: ${windows.join(" · ") || "available"}${suffix}`;
 }
 
 function collectCodexRateLimitSnapshots(value: JsonValue | undefined): JsonObject[] {
@@ -194,11 +195,13 @@ function readOptionalNumberField(record: JsonObject, key: string): { usedPercent
 }
 
 function formatRateLimitWindow(key: LimitWindowKey, window: RateLimitReset, nowMs: number): string {
-  const usedPercent =
-    window.usedPercent === undefined ? "usage unknown" : `${Math.round(window.usedPercent)}%`;
+  const remainingPercent =
+    window.usedPercent === undefined
+      ? "usage unknown"
+      : `${Math.max(0, 100 - Math.round(window.usedPercent))}% left`;
   const reset =
-    window.resetsAtMs > nowMs ? `, resets ${formatResetTime(window.resetsAtMs, nowMs)}` : "";
-  return `${key} ${usedPercent}${reset}`;
+    window.resetsAtMs > nowMs ? ` ⏱${formatResetDuration(window.resetsAtMs, nowMs)}` : "";
+  return `${key} ${remainingPercent}${reset}`;
 }
 
 function formatLimitLabel(snapshot: JsonObject): string {
@@ -215,7 +218,7 @@ function formatReachedType(value: string): string {
 }
 
 function formatResetTime(resetsAtMs: number, nowMs: number): string {
-  return `in ${formatRelativeDuration(resetsAtMs - nowMs)} (${new Date(resetsAtMs).toISOString()})`;
+  return `in ${formatRelativeDuration(resetsAtMs - nowMs)}`;
 }
 
 function formatRelativeDuration(durationMs: number): string {
@@ -233,6 +236,25 @@ function formatRelativeDuration(durationMs: number): string {
   }
   const days = Math.ceil(safeMs / ONE_DAY_MS);
   return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function formatResetDuration(resetsAtMs: number, nowMs: number): string {
+  const safeMs = Math.max(ONE_SECOND_MS, resetsAtMs - nowMs);
+  const totalSeconds = Math.round(safeMs / ONE_SECOND_MS);
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  return `${seconds}s`;
 }
 
 function formatWindowSignature(value: JsonValue | undefined): string {
