@@ -91,6 +91,10 @@ export function createWebSearchTool(options?: {
           lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
           runtimeWebSearch: options?.runtimeWebSearch,
         });
+      const configuredProviderId =
+        typeof config?.tools?.web?.search?.provider === "string"
+          ? config.tools.web.search.provider.trim().toLowerCase()
+          : "";
       if (isWebSearchDisabled(config)) {
         throw new Error("web_search is disabled.");
       }
@@ -98,6 +102,7 @@ export function createWebSearchTool(options?: {
         config,
         sandboxed: options?.sandboxed,
         runtimeWebSearch,
+        providerId: configuredProviderId || undefined,
         preferRuntimeProviders,
         args: asToolParamsRecord(args),
         signal,

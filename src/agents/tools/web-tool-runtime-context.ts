@@ -67,8 +67,8 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
       ? (getActiveSecretsRuntimeSnapshot()?.config ?? params.capturedConfig)
       : params.capturedConfig;
   const providerSelectionId =
-    resolveRuntimeWebProviderId(runtimeMetadata) ||
-    resolveConfiguredWebProviderId(config, params.kind);
+    resolveConfiguredWebProviderId(config, params.kind) ||
+    resolveRuntimeWebProviderId(runtimeMetadata);
   return {
     config,
     preferRuntimeProviders: shouldPreferRuntimeProviders({
