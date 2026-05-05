@@ -135,7 +135,7 @@ describe("handleControlUiHttpRequest", () => {
     trustedProxies?: string[];
     remoteAddress?: string;
   }) {
-    const { res, end } = makeMockHttpResponse();
+    const { res, end, setHeader } = makeMockHttpResponse();
     const handled = await handleControlUiAssistantMediaRequest(
       {
         url: params.url,
@@ -150,7 +150,7 @@ describe("handleControlUiHttpRequest", () => {
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
     );
-    return { res, end, handled };
+    return { res, end, setHeader, handled };
   }
 
   function createTrustedProxyAuth(): ResolvedGatewayAuth {
@@ -330,6 +330,142 @@ describe("handleControlUiHttpRequest", () => {
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
       },
+    });
+  });
+
+  // Bug #9b: documents (xlsx/csv/pdf/zip/etc.) and any non-image/non-audio/
+  // non-video local attachment must be served with `Content-Disposition:
+  // attachment` so the browser triggers a binary download instead of
+  // rendering the file as a webpage and offering Save As "Webpage Complete".
+  // Images/audio/video keep the default inline disposition because the chat
+  // surface inlines them.
+  describe("assistant-media Content-Disposition (Bug #9b)", () => {
+    it("serves .xlsx with Content-Disposition: attachment and a sanitized filename", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-xlsx-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "pricing.xlsx");
+          await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-xlsx"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="pricing.xlsx"');
+        },
+      });
+    });
+
+    it("serves .csv with Content-Disposition: attachment", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-csv-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "export.csv");
+          await fs.writeFile(filePath, "a,b,c\n1,2,3\n");
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="export.csv"');
+        },
+      });
+    });
+
+    it("serves .pdf with Content-Disposition: attachment", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-pdf-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "report.pdf");
+          await fs.writeFile(filePath, Buffer.from("%PDF-1.4\nfake\n%%EOF"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="report.pdf"');
+        },
+      });
+    });
+
+    it("serves .zip with Content-Disposition: attachment", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-zip-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "bundle.zip");
+          await fs.writeFile(filePath, Buffer.from("PK\u0003\u0004fake-zip"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          expect(disposition).toBe('attachment; filename="bundle.zip"');
+        },
+      });
+    });
+
+    it("does not set Content-Disposition for image attachments (kept inline)", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-image-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          );
+          expect(disposition).toBeUndefined();
+        },
+      });
+    });
+
+    it("sanitizes CR/LF/quote/backslash from filename in Content-Disposition", async () => {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-doc-sanitize-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, 'weird"name.csv');
+          await fs.writeFile(filePath, "a,b\n1,2\n");
+          const { res, setHeader, handled } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const disposition = setHeader.mock.calls.find(
+            (call) => call[0] === "Content-Disposition",
+          )?.[1];
+          // The double quote is replaced with `_` so the header value stays
+          // safely quoted.
+          expect(disposition).toBe('attachment; filename="weird_name.csv"');
+        },
+      });
     });
   });
 

@@ -1187,7 +1187,71 @@ describe("grouped chat rendering", () => {
     expect(docLink?.getAttribute("href")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&mediaTicket=ticket-local",
     );
+    // Bug #9b: document anchors render with `download=<filename>` so clicks
+    // trigger a binary save-to-disk instead of opening the file in a new tab
+    // (which lets Safari fall back to "Save as Webpage Complete").
+    expect(docLink?.getAttribute("download")).toBe("test-doc.pdf");
     expect(container.textContent).not.toContain("test image.png");
+    vi.unstubAllGlobals();
+  });
+
+  it("renders binary document attachments (xlsx/csv/zip) with a download attribute (Bug #9b)", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => mediaTicketPayload("ticket-binary"),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-binary-attachments",
+          role: "assistant",
+          content: [
+            "Binary docs",
+            "MEDIA:/tmp/openclaw/pricing.xlsx",
+            "MEDIA:/tmp/openclaw/export.csv",
+            "MEDIA:/tmp/openclaw/bundle.zip",
+          ].join("\n"),
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    const links = [
+      ...container.querySelectorAll<HTMLAnchorElement>(".chat-assistant-attachment-card__link"),
+    ];
+    expect(links.map((link) => link.getAttribute("download"))).toEqual([
+      "pricing.xlsx",
+      "export.csv",
+      "bundle.zip",
+    ]);
+    for (const link of links) {
+      // The download triggers same-origin save-to-disk; target=_blank is kept
+      // as a graceful fallback for browsers that ignore the download
+      // attribute on cross-origin or sandboxed responses.
+      expect(link.getAttribute("target")).toBe("_blank");
+      expect(link.getAttribute("rel")).toBe("noreferrer");
+      expect(link.getAttribute("href")).toMatch(
+        /\/openclaw\/__openclaw__\/assistant-media\?source=%2Ftmp%2Fopenclaw%2F.+&mediaTicket=ticket-binary/,
+      );
+    }
     vi.unstubAllGlobals();
   });
 
@@ -1336,6 +1400,52 @@ describe("grouped chat rendering", () => {
     );
     expect(image?.getAttribute("src")).toBe("/media/inbound/test-image.png");
     expect(docLink?.getAttribute("href")).toBe("/__openclaw__/media/test-doc.pdf");
+    // Bug #9b: same-origin documents still render as a download anchor so the
+    // browser saves the binary instead of trying to render it inline.
+    expect(docLink?.getAttribute("download")).toBe("test-doc.pdf");
+    expect(container.textContent).not.toContain("Unavailable");
+  });
+
+  it("preserves managed outgoing-doc URLs without re-wrapping them through assistant-media (Bug #9b)", () => {
+    // Documents emitted by the gateway-managed outgoing-document pipeline
+    // already carry the right Content-Type and `Content-Disposition: attachment`.
+    // The chat surface must not double-wrap them through the
+    // /__openclaw__/assistant-media route — that endpoint is for raw local
+    // files and would discard the managed serving guarantees.
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-managed-outgoing-doc",
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "/api/chat/media/outgoing-doc/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+              kind: "document",
+              label: "pricing.xlsx",
+              mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            },
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        localMediaPreviewRoots: ["/tmp/openclaw"],
+      },
+    );
+
+    const docLink = container.querySelector<HTMLAnchorElement>(
+      ".chat-assistant-attachment-card__link",
+    );
+    expect(docLink?.getAttribute("href")).toBe(
+      "/api/chat/media/outgoing-doc/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+    );
+    expect(docLink?.getAttribute("download")).toBe("pricing.xlsx");
     expect(container.textContent).not.toContain("Unavailable");
   });
 
