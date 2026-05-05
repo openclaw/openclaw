@@ -1869,6 +1869,47 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins).toEqual([]);
   });
 
+  it("shares plugin state across repeated register calls", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "shared-register-state",
+      filename: "shared-register-state.cjs",
+      body: `module.exports = {
+        id: "shared-register-state",
+        register(api) {
+          const state = api.getSharedState();
+          state.registerCalls = Number(state.registerCalls || 0) + 1;
+          api.on("before_prompt_build", () => ({
+            appendSystemContext: "registerCalls:" + state.registerCalls,
+          }));
+        },
+      };`,
+    });
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["shared-register-state"],
+        },
+      },
+    };
+
+    const active = loadOpenClawPlugins({ ...options, cache: false });
+    loadOpenClawPlugins({
+      ...options,
+      cache: false,
+      activate: false,
+      onlyPluginIds: ["shared-register-state"],
+    });
+
+    const result = await createHookRunner(active).runBeforePromptBuild(
+      { prompt: "test", messages: [] },
+      {},
+    );
+    expect(result?.appendSystemContext).toBe("registerCalls:2");
+  });
+
   it("skips discovery and manifest registry loading entirely when onlyPluginIds is an explicit empty array", async () => {
     useNoBundledPlugins();
     const allowed = writePlugin({

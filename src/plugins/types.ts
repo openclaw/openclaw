@@ -2528,6 +2528,14 @@ export type OpenClawPluginApi = {
   registerDetachedTaskRuntime: (
     runtime: import("./runtime/runtime-tasks.types.js").DetachedTaskLifecycleRuntime,
   ) => void;
+  /**
+   * Return the plugin's process-local shared state object.
+   *
+   * Plugin entrypoints may be registered more than once for discovery, scoped
+   * runtime loads, and tool materialization. Store ephemeral coordination state
+   * here instead of relying on closure variables inside one `register(api)` call.
+   */
+  getSharedState: () => Record<string, unknown>;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (
     capability: import("./memory-state.js").MemoryPluginCapability,
