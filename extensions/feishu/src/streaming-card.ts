@@ -5,6 +5,7 @@
 import type { Client } from "@larksuiteoapi/node-sdk";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
+import { normalizeFeishuOpenMessageId } from "./message-id.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -271,7 +272,7 @@ export class FeishuStreamingSession {
     const sendMode = resolveStreamingCardSendMode(sendOptions);
     if (sendMode === "reply") {
       sendRes = await this.client.im.message.reply({
-        path: { message_id: sendOptions.replyToMessageId! },
+        path: { message_id: normalizeFeishuOpenMessageId(sendOptions.replyToMessageId!) },
         data: {
           msg_type: "interactive",
           content: cardContent,

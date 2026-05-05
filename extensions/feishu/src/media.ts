@@ -14,6 +14,7 @@ import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
+import { normalizeFeishuOpenMessageId } from "./message-id.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
@@ -509,7 +510,10 @@ export async function sendImageFeishu(params: {
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, imageKey, replyInThread, accountId } = params;
+  const replyToMessageId = params.replyToMessageId
+    ? normalizeFeishuOpenMessageId(params.replyToMessageId)
+    : undefined;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
@@ -565,7 +569,10 @@ export async function sendFileFeishu(params: {
   replyInThread?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const { cfg, to, fileKey, replyInThread, accountId } = params;
+  const replyToMessageId = params.replyToMessageId
+    ? normalizeFeishuOpenMessageId(params.replyToMessageId)
+    : undefined;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
