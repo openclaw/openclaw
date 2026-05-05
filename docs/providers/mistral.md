@@ -64,6 +64,7 @@ OpenClaw currently ships this bundled Mistral catalog:
 | -------------------------------- | ----------- | ------- | ---------- | ---------------------------------------------------------------- |
 | `mistral/mistral-large-latest`   | text, image | 262,144 | 16,384     | Default model                                                    |
 | `mistral/mistral-medium-2508`    | text, image | 262,144 | 8,192      | Mistral Medium 3.1                                               |
+| `mistral/mistral-medium-3-5`     | text, image | 262,144 | 8,192      | Mistral Medium 3.5                                               |
 | `mistral/mistral-small-latest`   | text, image | 128,000 | 16,384     | Mistral Small 4; adjustable reasoning via API `reasoning_effort` |
 | `mistral/pixtral-large-latest`   | text, image | 128,000 | 32,768     | Pixtral                                                          |
 | `mistral/codestral-latest`       | text        | 256,000 | 4,096      | Coding                                                           |
@@ -137,8 +138,8 @@ matching `sampleRate` only if your upstream stream is already raw PCM.
 ## Advanced configuration
 
 <AccordionGroup>
-  <Accordion title="Adjustable reasoning (mistral-small-latest)">
-    `mistral/mistral-small-latest` maps to Mistral Small 4 and supports [adjustable reasoning](https://docs.mistral.ai/capabilities/reasoning/adjustable) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
+  <Accordion title="Adjustable reasoning">
+    `mistral/mistral-small-latest` (Mistral Small 4) and `mistral/mistral-medium-3-5` support [adjustable reasoning](https://docs.mistral.ai/capabilities/reasoning/adjustable) on the Chat Completions API via `reasoning_effort` (`none` minimizes extra thinking in the output; `high` surfaces full thinking traces before the final answer).
 
     OpenClaw maps the session **thinking** level to Mistral's API:
 
