@@ -147,11 +147,27 @@ function wrapLine(line: string, maxWidth: number): string[] {
   return lines;
 }
 
+function coerceNoteMessage(message: unknown): string {
+  if (typeof message === "string") {
+    return message;
+  }
+  if (message == null) {
+    return "";
+  }
+  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
+    return String(message);
+  }
+  if (message instanceof Error) {
+    return message.message ? `${message.name}: ${message.message}` : message.name;
+  }
+  return "";
+}
+
 export function wrapNoteMessage(
   message: unknown,
   options: { maxWidth?: number; columns?: number } = {},
 ): string {
-  const text = typeof message === "string" ? message : message == null ? "" : String(message);
+  const text = coerceNoteMessage(message);
   const columns = options.columns ?? resolveNoteColumns(process.stdout.columns);
   const maxWidth = options.maxWidth ?? Math.max(40, Math.min(88, columns - 10));
   return text

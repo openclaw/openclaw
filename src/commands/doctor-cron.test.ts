@@ -445,6 +445,14 @@ describe("noteLegacyWhatsAppCrontabHealthCheck", () => {
         }),
       }),
     ).resolves.toBeUndefined();
+    await expect(
+      noteLegacyWhatsAppCrontabHealthCheck({
+        platform: "linux",
+        readCrontab: async () => ({
+          stdout: { lines: ["*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh"] },
+        }),
+      }),
+    ).resolves.toBeUndefined();
 
     expect(noteMock).not.toHaveBeenCalled();
   });

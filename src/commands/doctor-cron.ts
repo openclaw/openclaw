@@ -155,7 +155,10 @@ function coerceCrontabText(crontab: unknown): string {
   if (crontab == null) {
     return "";
   }
-  return String(crontab);
+  if (typeof crontab === "number" || typeof crontab === "boolean" || typeof crontab === "bigint") {
+    return String(crontab);
+  }
+  return "";
 }
 
 function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
