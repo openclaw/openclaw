@@ -427,10 +427,10 @@ describe("codex command", () => {
     });
 
     await expect(handleCodexCommand(createContext("status"), { deps })).resolves.toMatchObject({
-      text: expect.stringContaining("Rate limits: Codex: primary 42%"),
+      text: expect.stringContaining("Rate limits: Codex: primary 58% left"),
     });
     await expect(handleCodexCommand(createContext("account"), { deps })).resolves.toMatchObject({
-      text: expect.stringContaining("Rate limits: Codex: primary 42%"),
+      text: expect.stringContaining("Rate limits: Codex: primary 58% left"),
     });
   });
 
@@ -512,7 +512,7 @@ describe("codex command", () => {
     });
 
     expect(result.text).toContain("Account: codex@example.com");
-    expect(result.text).toContain("Rate limits: Codex: primary 50%, resets in");
+    expect(result.text).toContain("Rate limits: Codex: primary 50% left ⏱");
     expect(readRecentCodexRateLimits()).toMatchObject({
       rateLimits: { limitId: "codex" },
     });
