@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
+import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
 /**
  * Resolved Teams SDK modules loaded lazily to avoid importing when the
@@ -108,7 +109,13 @@ export async function createMSTeamsApp(
   options?: CreateMSTeamsAppOptions,
 ): Promise<MSTeamsApp> {
   const { App } = await loadSdkModules();
+  // Tag outbound SDK HTTP calls with a User-Agent fragment so the Teams
+  // backend can identify OpenClaw traffic for usage telemetry. The SDK's
+  // Client.clone merges this with its own `teams.ts[apps]/<sdk-version>` so
+  // we only pass the OpenClaw piece; the final UA looks like
+  // "OpenClaw/<openclaw-version> teams.ts[apps]/<sdk-version>".
   const appOptions: Record<string, unknown> = {
+    client: { headers: { "User-Agent": buildOpenClawUserAgentFragment() } },
     ...(options?.httpServerAdapter ? { httpServerAdapter: options.httpServerAdapter } : {}),
     ...(options?.messagingEndpoint ? { messagingEndpoint: options.messagingEndpoint } : {}),
   };
