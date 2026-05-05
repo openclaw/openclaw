@@ -413,6 +413,41 @@ describe("session-memory hook", () => {
     });
   });
 
+  it("keeps same-minute fallback timestamp captures by adding a filename suffix", async () => {
+    await withEnvAsync({ TZ: "UTC" }, async () => {
+      const tempDir = await createCaseWorkspace("workspace");
+      const timestamp = new Date("2026-01-01T04:30:15.000Z");
+
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        timestamp,
+        previousSessionEntry: {
+          sessionId: "first-session",
+        },
+      });
+      await runNewWithPreviousSessionEntry({
+        tempDir,
+        timestamp,
+        previousSessionEntry: {
+          sessionId: "second-session",
+        },
+      });
+
+      const memoryDir = path.join(tempDir, "memory");
+      const files = await fs.readdir(memoryDir);
+      expect(files).toHaveLength(2);
+      expect(files).toContain("2026-01-01-0430.md");
+      expect(files).toContain("2026-01-01-0430-2.md");
+
+      await expect(
+        fs.readFile(path.join(memoryDir, "2026-01-01-0430.md"), "utf-8"),
+      ).resolves.toContain("- **Session ID**: first-session");
+      await expect(
+        fs.readFile(path.join(memoryDir, "2026-01-01-0430-2.md"), "utf-8"),
+      ).resolves.toContain("- **Session ID**: second-session");
+    });
+  });
+
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {
     const mainWorkspace = await createCaseWorkspace("workspace-main");
     const naviWorkspace = await createCaseWorkspace("workspace-navi");
