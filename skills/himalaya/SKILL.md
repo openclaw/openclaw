@@ -169,13 +169,13 @@ himalaya message write -H "To:recipient@example.com" -H "Subject:Test" "Message 
 Move to folder:
 
 ```bash
-himalaya message move 42 "Archive"
+himalaya message move "Archive" 42
 ```
 
 Copy to folder:
 
 ```bash
-himalaya message copy 42 "Important"
+himalaya message copy "Important" 42
 ```
 
 ### Delete an Email

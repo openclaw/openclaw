@@ -196,4 +196,4 @@ himalaya message write \
 - The editor opens with a template; fill in headers and body.
 - Save and exit the editor to send; exit without saving to cancel.
 - MML parts are compiled to proper MIME when sending.
-- Use `himalaya message export --full` to inspect the raw MIME structure of received emails.
+- Use `himalaya message export 42 --full` to inspect the raw MIME structure of received emails.
