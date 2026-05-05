@@ -90,16 +90,12 @@ function resolveEntryForSessionKey(params: {
     return findEntryBySessionId(params.store, params.sessionKey);
   }
 
-  if (!params.cfg) {
-    return undefined;
-  }
-
   for (const key of candidates) {
     const parsed = parseAgentSessionKey(key);
     if (!parsed?.agentId) {
       continue;
     }
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
+    const storePath = resolveStorePath(params.cfg?.session?.store, { agentId: parsed.agentId });
     let store = params.cache.get(storePath);
     if (!store) {
       store = readSessionStore(storePath);
