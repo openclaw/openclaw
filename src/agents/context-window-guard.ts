@@ -37,7 +37,24 @@ export function resolveContextWindowInfo(params: {
       | undefined;
     const providerEntry = findNormalizedProviderValue(providers, params.provider);
     const models = Array.isArray(providerEntry?.models) ? providerEntry.models : [];
-    const match = models.find((m) => m?.id === params.modelId);
+    const match =
+      models.find((m) => m?.id === params.modelId) ??
+      models.find((m) => {
+        if (!m?.id) {
+          return false;
+        }
+        // Handle provider-scoped model ids: "openrouter/anthropic/claude-opus-4-6" should
+        // match a configured entry with id "anthropic/claude-opus-4-6" and vice versa.
+        const configBare = m.id.includes("/") ? m.id.split("/").slice(-1)[0] : m.id;
+        const runtimeBare = params.modelId.includes("/")
+          ? params.modelId.split("/").slice(-1)[0]
+          : params.modelId;
+        return (
+          configBare === runtimeBare ||
+          m.id === params.modelId.split("/").slice(1).join("/") ||
+          params.modelId === `${params.provider}/${m.id}`
+        );
+      });
     return normalizePositiveInt(match?.contextTokens) ?? normalizePositiveInt(match?.contextWindow);
   })();
   const fromModel =

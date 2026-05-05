@@ -279,6 +279,76 @@ describe("context-window-guard", () => {
     ).toContain("Raise contextWindow/contextTokens or choose a larger model.");
   });
 
+  it("matches provider-scoped runtime modelId against bare config id", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "anthropic/claude-opus-4-6",
+                name: "opus",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextTokens: 100_000,
+                contextWindow: 200_000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "openrouter/anthropic/claude-opus-4-6",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("modelsConfig");
+    expect(info.tokens).toBe(100_000);
+  });
+
+  it("matches bare runtime modelId against provider-scoped config id", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "http://localhost",
+            apiKey: "x",
+            models: [
+              {
+                id: "openrouter/anthropic/claude-opus-4-6",
+                name: "opus",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextTokens: 80_000,
+                contextWindow: 200_000,
+                maxTokens: 4096,
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const info = resolveContextWindowInfo({
+      cfg,
+      provider: "openrouter",
+      modelId: "anthropic/claude-opus-4-6",
+      modelContextWindow: 200_000,
+      defaultTokens: 200_000,
+    });
+    expect(info.source).toBe("modelsConfig");
+    expect(info.tokens).toBe(80_000);
+  });
+
   it("keeps block messages concise for public providers", () => {
     const guard = evaluateContextWindowGuard({
       info: { tokens: 8_000, source: "model" },
