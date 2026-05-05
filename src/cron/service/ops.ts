@@ -30,6 +30,7 @@ import type {
   CronSortDir,
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
+import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -279,6 +280,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
       if (enabledFilter === "enabled" && !isJobEnabled(job)) {
@@ -287,7 +289,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
         return false;
       }
-      if (opts?.agentId && job.agentId !== opts.agentId) {
+      if (requestedAgentId && job.agentId !== requestedAgentId) {
         return false;
       }
       if (!query) {

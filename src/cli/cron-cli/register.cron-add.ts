@@ -52,8 +52,9 @@ export function registerCronListCommand(cron: Command) {
           const listParams: Record<string, unknown> = {
             includeDisabled: Boolean(opts.all),
           };
-          if (opts.agent) {
-            listParams.agentId = opts.agent;
+          const agentId = normalizeOptionalString(opts.agent);
+          if (agentId) {
+            listParams.agentId = sanitizeAgentId(agentId);
           }
           const res = await callGatewayFromCli("cron.list", opts, listParams);
           if (opts.json) {

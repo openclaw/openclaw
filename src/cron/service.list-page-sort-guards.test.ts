@@ -50,4 +50,29 @@ describe("cron listPage sort guards", () => {
     const page = await listPage(state, { sortBy: "nextRunAtMs", sortDir: "asc" });
     expect(page.jobs).toHaveLength(2);
   });
+
+  it("normalizes requested agent ids before filtering", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
+      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
+      createBaseJob({ id: "job-unset", agentId: undefined, name: "unset" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state, { agentId: " Ops " });
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-ops"]);
+  });
+
+  it("keeps listPage unfiltered when agent id is omitted", async () => {
+    const jobs = [
+      createBaseJob({ id: "job-main", agentId: "main", name: "main" }),
+      createBaseJob({ id: "job-ops", agentId: "ops", name: "ops" }),
+    ];
+    const state = createMockCronStateForJobs({ jobs });
+
+    const page = await listPage(state);
+
+    expect(page.jobs.map((job) => job.id)).toEqual(["job-main", "job-ops"]);
+  });
 });
