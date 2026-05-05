@@ -1,1 +1,11 @@
-export * from "@openclaw/fs-safe";
+export {
+  appendRegularFile,
+  appendRegularFileSync,
+  readRegularFile,
+  readRegularFileSync,
+  resolveRegularFileAppendFlags,
+  statRegularFile,
+  statRegularFileSync,
+  type AppendRegularFileOptions,
+  type RegularFileStatResult,
+} from "@openclaw/fs-safe/regular-file";

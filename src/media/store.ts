@@ -6,9 +6,9 @@ import { request as httpsRequest } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { sanitizeUntrustedFileName } from "../infra/filename.js";
+import { isPathInside, root as fsRoot } from "../infra/fs-safe.js";
 import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
-import { statRegularFile } from "../infra/regular-file.js";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -64,11 +64,18 @@ function resolveMediaScopedDir(subdir: string, caller: string): string {
   const mediaDir = resolveMediaDir();
   const safeSubdir = resolveMediaSubdir(subdir, caller);
   const dir = safeSubdir ? path.join(mediaDir, safeSubdir) : mediaDir;
-  const relative = path.relative(mediaDir, dir);
-  if (relative && (relative === ".." || relative.startsWith(`..${path.sep}`))) {
+  if (!isPathInside(mediaDir, dir)) {
     throw new Error(`${caller}: media subdir escapes media directory: ${JSON.stringify(subdir)}`);
   }
   return dir;
+}
+
+function resolveMediaRelativePath(id: string, subdir: string, caller: string): string {
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0") || id === "..") {
+    throw new Error(`${caller}: unsafe media ID: ${JSON.stringify(id)}`);
+  }
+  const safeSubdir = resolveMediaSubdir(subdir, caller);
+  return safeSubdir ? path.join(safeSubdir, id) : id;
 }
 
 let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
@@ -511,44 +518,70 @@ export async function saveMediaBuffer(
  * @returns       Absolute path to the file on disk.
  * @throws        If the ID is unsafe, the file does not exist, or is not a
  *                regular file.
+ *
+ * Prefer readMediaBuffer when the caller needs the bytes; this path-returning
+ * helper is for channel surfaces that need a stable local attachment path.
  */
 export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Promise<string> {
-  // Guard against path traversal and null-byte injection.
-  //
-  // - Separator checks: reject any ID containing "/" or "\" (covers all
-  //   relative traversal sequences such as "../foo" or "..\\foo").
-  // - Exact ".." check: reject the bare traversal operator in case a caller
-  //   strips separators but keeps the dots.
-  // - Null-byte check: reject "\0" which can truncate paths on some platforms
-  //   and cause the OS to open a different file than intended.
-  //
-  // We allow consecutive dots in legitimate filenames (e.g. "report..draft.png"),
-  // so we only reject the exact two-character string "..".
-  //
-  // JSON.stringify is used in the error message so that control characters
-  // (including \0) are rendered visibly in logs rather than silently dropped.
-  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0") || id === "..") {
-    throw new Error(`resolveMediaBufferPath: unsafe media ID: ${JSON.stringify(id)}`);
-  }
-
-  const dir = resolveMediaScopedDir(subdir, "resolveMediaBufferPath");
-  const resolved = path.join(dir, id);
-
-  // Double-check that path.join didn't escape the intended directory.
-  // This should be unreachable after the separator check above, but be
-  // explicit about the invariant.
-  if (!resolved.startsWith(dir + path.sep) && resolved !== dir) {
-    throw new Error(`resolveMediaBufferPath: path escapes media directory: ${JSON.stringify(id)}`);
-  }
-
-  const stat = await statRegularFile(resolved);
-  if (stat.missing) {
+  const relativePath = resolveMediaRelativePath(id, subdir, "resolveMediaBufferPath");
+  const mediaRoot = await fsRoot(resolveMediaDir()).catch(() => null);
+  if (!mediaRoot) {
     throw new Error(
       `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
     );
   }
 
-  return resolved;
+  const opened = await mediaRoot.open(relativePath).catch(() => null);
+  if (!opened?.stat.isFile()) {
+    throw new Error(
+      `resolveMediaBufferPath: media ID does not resolve to a file: ${JSON.stringify(id)}`,
+    );
+  }
+  try {
+    return opened.realPath;
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
+}
+
+export type ReadMediaBufferResult = {
+  id: string;
+  path: string;
+  buffer: Buffer;
+  size: number;
+};
+
+export async function readMediaBuffer(
+  id: string,
+  subdir = "inbound",
+  maxBytes = MAX_BYTES,
+): Promise<ReadMediaBufferResult> {
+  const relativePath = resolveMediaRelativePath(id, subdir, "readMediaBuffer");
+  const mediaRoot = await fsRoot(resolveMediaDir()).catch(() => null);
+  if (!mediaRoot) {
+    throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
+  }
+
+  const opened = await mediaRoot.open(relativePath).catch(() => null);
+  if (!opened?.stat.isFile()) {
+    throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
+  }
+  try {
+    if (opened.stat.size > maxBytes) {
+      throw new Error(
+        `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
+      );
+    }
+    const buffer = await opened.handle.readFile();
+    if (buffer.byteLength > maxBytes) {
+      throw new Error(
+        `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
+      );
+    }
+    return { id, path: opened.realPath, buffer, size: buffer.byteLength };
+  } finally {
+    await opened.handle.close().catch(() => undefined);
+  }
 }
 
 /**
@@ -559,8 +592,8 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
  * fails validation and the entire parse is aborted, preventing orphaned files
  * from accumulating on disk ahead of the periodic TTL sweep.
  *
- * Uses resolveMediaBufferPath to apply the same path-safety guards as the
- * read path (separator checks, symlink rejection, etc.) before unlinking.
+ * Uses a media-root handle to apply the same path-safety guards as the read
+ * path while removing the file under the pinned media root.
  *
  * Errors are intentionally not suppressed — callers that want best-effort
  * cleanup should catch and discard exceptions themselves (e.g. via
@@ -570,6 +603,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
  * @param subdir The subdirectory the file was saved into (default "inbound").
  */
 export async function deleteMediaBuffer(id: string, subdir: "inbound" = "inbound"): Promise<void> {
-  const physicalPath = await resolveMediaBufferPath(id, subdir);
-  await fs.unlink(physicalPath);
+  const relativePath = resolveMediaRelativePath(id, subdir, "deleteMediaBuffer");
+  const mediaRoot = await fsRoot(resolveMediaDir());
+  await mediaRoot.remove(relativePath);
 }

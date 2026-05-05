@@ -26,6 +26,7 @@ export {
   readPrivateJsonSync,
   readPrivateText,
   readPrivateTextSync,
+  readRegularFile,
   resolveLocalPathFromRootsSync,
   readRegularFileSync,
   resolveRegularFileAppendFlags,

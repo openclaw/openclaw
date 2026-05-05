@@ -6,7 +6,7 @@ import {
   resolveMemorySearchConfig,
   type OpenClawConfig,
 } from "./config-utils.js";
-import { isFileMissingError, readRegularFile, statRegularFile } from "./fs-utils.js";
+import { isFileMissingError, isPathInside, readRegularFile, statRegularFile } from "./fs-utils.js";
 import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import {
   buildMemoryReadResult,
@@ -43,7 +43,11 @@ export async function readMemoryFile(params: {
           continue;
         }
         if (stat.isDirectory()) {
-          if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
+          if (isPathInside(additionalPath, absPath)) {
+            const candidateStat = await fs.lstat(absPath).catch(() => null);
+            if (candidateStat?.isSymbolicLink()) {
+              continue;
+            }
             allowedAdditional = true;
             break;
           }

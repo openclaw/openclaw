@@ -1,4 +1,9 @@
-export { readRegularFile, statRegularFile, type RegularFileStatResult } from "@openclaw/fs-safe";
+export {
+  isPathInside,
+  readRegularFile,
+  statRegularFile,
+  type RegularFileStatResult,
+} from "@openclaw/fs-safe";
 
 export function isFileMissingError(
   err: unknown,

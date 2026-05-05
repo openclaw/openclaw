@@ -5,6 +5,7 @@ import {
   canonicalPathFromExistingAncestor,
   FsSafeError,
   resolveAbsolutePathForWrite,
+  root,
 } from "openclaw/plugin-sdk/security-runtime";
 
 const MAX_CONTENT_BYTES = 16 * 1024 * 1024; // 16 MB
@@ -57,6 +58,22 @@ function symlinkRedirectError(error: FsSafeError): FileWriteError {
     "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowWritePaths to the canonical path)",
     canonicalTarget,
   );
+}
+
+function writeFsSafeError(error: FsSafeError, targetPath: string): FileWriteError {
+  if (error.code === "symlink") {
+    return err(
+      "SYMLINK_TARGET_DENIED",
+      `path is a symlink; refusing to write through it: ${targetPath}`,
+    );
+  }
+  if (error.code === "not-file") {
+    return err("IS_DIRECTORY", `path resolves to a directory: ${targetPath}`);
+  }
+  if (error.code === "already-exists") {
+    return err("EXISTS_NO_OVERWRITE", `file already exists and overwrite is false: ${targetPath}`);
+  }
+  return err("WRITE_ERROR", error.message, targetPath);
 }
 
 export async function handleFileWrite(
@@ -167,6 +184,8 @@ export async function handleFileWrite(
     throw error;
   }
 
+  const targetFileName = path.basename(targetPath);
+  const parentRoot = await root(parentDir);
   let overwritten = false;
   try {
     const existingLStat = await fs.lstat(targetPath);
@@ -187,8 +206,9 @@ export async function handleFileWrite(
     }
     overwritten = true;
   } catch (statErr: unknown) {
-    // ENOENT is fine — file does not exist yet
-    if ((statErr as NodeJS.ErrnoException).code !== "ENOENT") {
+    const statErrorCode =
+      statErr instanceof FsSafeError ? statErr.code : (statErr as NodeJS.ErrnoException).code;
+    if (statErrorCode !== "not-found" && statErrorCode !== "ENOENT") {
       const message = statErr instanceof Error ? statErr.message : String(statErr);
       if (message.toLowerCase().includes("permission")) {
         return err("PERMISSION_DENIED", `permission denied: ${targetPath}`);
@@ -221,48 +241,38 @@ export async function handleFileWrite(
     };
   }
 
-  // 6. Atomic write: write to tmp, then rename
-  const tmpSuffix = crypto.randomBytes(8).toString("hex");
-  const tmpPath = `${targetPath}.${tmpSuffix}.tmp`;
-
   try {
-    await fs.writeFile(tmpPath, buf);
+    if (overwrite) {
+      await parentRoot.write(targetFileName, buf);
+    } else {
+      await parentRoot.create(targetFileName, buf);
+    }
   } catch (writeErr) {
+    if (writeErr instanceof FsSafeError) {
+      return writeFsSafeError(writeErr, targetPath);
+    }
     const message = writeErr instanceof Error ? writeErr.message : String(writeErr);
-    // Clean up tmp if possible
-    await fs.unlink(tmpPath).catch(() => {});
     if (message.toLowerCase().includes("permission") || message.toLowerCase().includes("access")) {
       return err("PERMISSION_DENIED", `permission denied writing to: ${parentDir}`);
     }
     return err("WRITE_ERROR", `failed to write file: ${message}`);
   }
 
-  try {
-    await fs.rename(tmpPath, targetPath);
-  } catch (renameErr) {
-    const message = renameErr instanceof Error ? renameErr.message : String(renameErr);
-    await fs.unlink(tmpPath).catch(() => {});
-    if (message.toLowerCase().includes("permission") || message.toLowerCase().includes("access")) {
-      return err("PERMISSION_DENIED", `permission denied renaming to: ${targetPath}`);
-    }
-    return err("WRITE_ERROR", `failed to rename tmp to target: ${message}`);
-  }
-
-  const writtenBuf = buf;
-
-  // 8. Re-realpath to resolve any symlinks in the final path
   let canonicalPath = targetPath;
   try {
-    canonicalPath = await fs.realpath(targetPath);
-  } catch {
-    // Best effort; use normalized path as fallback
-    canonicalPath = targetPath;
+    const opened = await parentRoot.open(targetFileName);
+    canonicalPath = opened.realPath;
+    await opened.handle.close().catch(() => undefined);
+  } catch (openErr) {
+    if (openErr instanceof FsSafeError) {
+      return writeFsSafeError(openErr, targetPath);
+    }
   }
 
   return {
     ok: true,
     path: canonicalPath,
-    size: writtenBuf.length,
+    size: buf.length,
     sha256: computedSha256,
     overwritten,
   };

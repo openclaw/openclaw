@@ -1,8 +1,11 @@
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { FsSafeError, resolveAbsolutePathForRead } from "openclaw/plugin-sdk/security-runtime";
+import {
+  FsSafeError,
+  resolveAbsolutePathForRead,
+  root,
+} from "openclaw/plugin-sdk/security-runtime";
 import { EXTENSION_MIME } from "../shared/mime.js";
 
 export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
@@ -81,6 +84,9 @@ function classifyFsError(err: unknown): FileFetchErrCode {
     if (err.code === "invalid-path") {
       return "INVALID_PATH";
     }
+    if (err.code === "not-file") {
+      return "IS_DIRECTORY";
+    }
   }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
@@ -141,78 +147,74 @@ export async function handleFileFetch(params: FileFetchParams): Promise<FileFetc
     };
   }
 
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
+  let opened: Awaited<ReturnType<Awaited<ReturnType<typeof root>>["open"]>>;
   try {
-    stats = await fs.stat(canonical);
+    const parentRoot = await root(path.dirname(canonical));
+    opened = await parentRoot.open(path.basename(canonical));
   } catch (err) {
     const code = classifyFsError(err);
-    return { ok: false, code, message: `stat failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (stats.isDirectory()) {
     return {
       ok: false,
-      code: "IS_DIRECTORY",
-      message: "path is a directory",
-      canonicalPath: canonical,
-    };
-  }
-  if (!stats.isFile()) {
-    return {
-      ok: false,
-      code: "READ_ERROR",
-      message: "path is not a regular file",
-      canonicalPath: canonical,
-    };
-  }
-  if (stats.size > maxBytes) {
-    return {
-      ok: false,
-      code: "FILE_TOO_LARGE",
-      message: `file size ${stats.size} exceeds limit ${maxBytes}`,
+      code,
+      message: code === "IS_DIRECTORY" ? "path is a directory" : `open failed: ${String(err)}`,
       canonicalPath: canonical,
     };
   }
 
-  if (preflightOnly) {
+  try {
+    const stats = opened.stat;
+    if (stats.size > maxBytes) {
+      return {
+        ok: false,
+        code: "FILE_TOO_LARGE",
+        message: `file size ${stats.size} exceeds limit ${maxBytes}`,
+        canonicalPath: opened.realPath,
+      };
+    }
+
+    if (preflightOnly) {
+      return {
+        ok: true,
+        path: opened.realPath,
+        size: stats.size,
+        mimeType: "",
+        base64: "",
+        sha256: "",
+        preflightOnly: true,
+      };
+    }
+
+    const buffer = await opened.handle.readFile();
+    if (buffer.byteLength > maxBytes) {
+      return {
+        ok: false,
+        code: "FILE_TOO_LARGE",
+        message: `read ${buffer.byteLength} bytes exceeds limit ${maxBytes}`,
+        canonicalPath: opened.realPath,
+      };
+    }
+
+    const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+    const base64 = buffer.toString("base64");
+    const mimeType = detectMimeType(opened.realPath);
+
     return {
       ok: true,
-      path: canonical,
-      size: stats.size,
-      mimeType: "",
-      base64: "",
-      sha256: "",
-      preflightOnly: true,
+      path: opened.realPath,
+      size: buffer.byteLength,
+      mimeType,
+      base64,
+      sha256,
     };
-  }
-
-  let buffer: Buffer;
-  try {
-    buffer = await fs.readFile(canonical);
   } catch (err) {
     const code = classifyFsError(err);
-    return { ok: false, code, message: `read failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (buffer.byteLength > maxBytes) {
     return {
       ok: false,
-      code: "FILE_TOO_LARGE",
-      message: `read ${buffer.byteLength} bytes exceeds limit ${maxBytes}`,
-      canonicalPath: canonical,
+      code,
+      message: `read failed: ${String(err)}`,
+      canonicalPath: opened.realPath,
     };
+  } finally {
+    await opened.handle.close().catch(() => undefined);
   }
-
-  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
-  const base64 = buffer.toString("base64");
-  const mimeType = detectMimeType(canonical);
-
-  return {
-    ok: true,
-    path: canonical,
-    size: buffer.byteLength,
-    mimeType,
-    base64,
-    sha256,
-  };
 }

@@ -111,7 +111,7 @@ function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile 
 async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
   const resolved = resolveCommitmentStorePath(storePath);
   try {
-    const parsed = await readPrivateJson<unknown>({
+    const parsed = await readPrivateJson({
       rootDir: path.dirname(resolved),
       filePath: resolved,
     });

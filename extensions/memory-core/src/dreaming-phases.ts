@@ -449,7 +449,7 @@ async function readDailyIngestionState(workspaceDir: string): Promise<DailyInges
   const statePath = resolveDailyIngestionStatePath(workspaceDir);
   try {
     return normalizeDailyIngestionState(
-      await readPrivateJson<unknown>({
+      await readPrivateJson({
         rootDir: workspaceDir,
         filePath: statePath,
       }),
@@ -567,7 +567,7 @@ async function readSessionIngestionState(workspaceDir: string): Promise<SessionI
   const statePath = resolveSessionIngestionStatePath(workspaceDir);
   try {
     return normalizeSessionIngestionState(
-      await readPrivateJson<unknown>({
+      await readPrivateJson({
         rootDir: workspaceDir,
         filePath: statePath,
       }),

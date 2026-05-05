@@ -1,1 +1,4 @@
-export * from "@openclaw/fs-safe/atomic";
+export {
+  movePathWithCopyFallback,
+  type MovePathWithCopyFallbackOptions,
+} from "@openclaw/fs-safe/atomic";

@@ -760,7 +760,7 @@ async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTer
   const storePath = resolveStorePath(workspaceDir);
   try {
     return normalizeStore(
-      await readPrivateJson<unknown>({
+      await readPrivateJson({
         rootDir: workspaceDir,
         filePath: storePath,
       }),
@@ -836,7 +836,7 @@ async function readPhaseSignalStore(
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   try {
     return normalizePhaseSignalStore(
-      await readPrivateJson<unknown>({
+      await readPrivateJson({
         rootDir: workspaceDir,
         filePath: phaseSignalPath,
       }),

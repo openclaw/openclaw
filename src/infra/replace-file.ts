@@ -1,1 +1,9 @@
-export * from "@openclaw/fs-safe/atomic";
+export {
+  replaceFileAtomic,
+  replaceFileAtomicSync,
+  type ReplaceFileAtomicFileSystem,
+  type ReplaceFileAtomicOptions,
+  type ReplaceFileAtomicResult,
+  type ReplaceFileAtomicSyncFileSystem,
+  type ReplaceFileAtomicSyncOptions,
+} from "@openclaw/fs-safe/atomic";

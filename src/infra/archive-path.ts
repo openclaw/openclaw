@@ -1,1 +1,7 @@
-export * from "@openclaw/fs-safe";
+export {
+  isWindowsDrivePath,
+  normalizeArchiveEntryPath,
+  resolveArchiveOutputPath,
+  stripArchivePath,
+  validateArchiveEntryPath,
+} from "@openclaw/fs-safe/archive";

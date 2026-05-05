@@ -5,6 +5,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolvePreferredOpenClawTmpDir,
   withPrivateTempWorkspace,
@@ -422,10 +423,11 @@ export async function uploadImageFeishu(params: {
   const { cfg, image, imageType = "message", accountId } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  // SDK accepts Buffer directly or fs.ReadStream for file paths
-  // Using Readable.from(buffer) causes issues with form-data library
+  // SDK accepts Buffer directly. Keep string path support on this helper, but
+  // verify the path as a regular local file before uploading it.
   // See: https://github.com/larksuite/node-sdk/issues/121
-  const imageData = typeof image === "string" ? fs.createReadStream(image) : image;
+  const imageData =
+    typeof image === "string" ? (await readRegularFile({ filePath: image })).buffer : image;
 
   const response = await requestFeishuApi(
     () =>
@@ -476,10 +478,11 @@ export async function uploadFileFeishu(params: {
   const { cfg, file, fileName, fileType, duration, accountId } = params;
   const { client } = createConfiguredFeishuMediaClient({ cfg, accountId });
 
-  // SDK accepts Buffer directly or fs.ReadStream for file paths
-  // Using Readable.from(buffer) causes issues with form-data library
+  // SDK accepts Buffer directly. Keep string path support on this helper, but
+  // verify the path as a regular local file before uploading it.
   // See: https://github.com/larksuite/node-sdk/issues/121
-  const fileData = typeof file === "string" ? fs.createReadStream(file) : file;
+  const fileData =
+    typeof file === "string" ? (await readRegularFile({ filePath: file })).buffer : file;
 
   const safeFileName = sanitizeFileNameForUpload(fileName);
 

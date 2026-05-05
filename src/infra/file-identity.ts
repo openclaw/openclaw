@@ -1,1 +1,1 @@
-export * from "@openclaw/fs-safe";
+export { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe";

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isPathInside } from "../../infra/path-guards.js";
 import { openPinnedFileSync } from "../../infra/safe-open-sync.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
@@ -9,14 +10,6 @@ type LoadedLocalSkill = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
 };
-
-function isPathWithinRoot(rootRealPath: string, candidatePath: string): boolean {
-  const relative = path.relative(rootRealPath, candidatePath);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
-  );
-}
 
 function readSkillFileSync(params: {
   rootRealPath: string;
@@ -32,7 +25,7 @@ function readSkillFileSync(params: {
     return null;
   }
   try {
-    if (!isPathWithinRoot(params.rootRealPath, opened.path)) {
+    if (!isPathInside(params.rootRealPath, opened.path)) {
       return null;
     }
     return fs.readFileSync(opened.fd, "utf8");
