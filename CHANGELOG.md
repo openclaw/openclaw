@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sessions: preserve fresh post-compaction token snapshots across stale usage updates, preventing repeated auto-compaction after every message. Fixes #82576. (#82578) Thanks @njuboy11.
 - Agents/OpenAI Responses: log redacted diagnostics for detail-less `response.failed` events while preserving failed response ids, so operators can correlate provider-side failures. Fixes #82558.
 - Agents/auth: redact OAuth refresh failure causes against in-memory, attempted, and reloaded credentials before generic token masking while ensuring failed ACP dispatch cleanup closes initialized runtimes.
+- Google/Gemini CLI OAuth: add provider-owned refresh support for `google-gemini-cli` so expired Gemini CLI tokens refresh in OpenClaw instead of falling through to the generic unknown-provider path. Fixes #42541. Thanks @jason-allen-oneal.
 - Telegram: cache successful startup bot identity by account and token fingerprint for up to 24 hours, so restarts can skip redundant `getMe` probes during Telegram API slow periods without permanently pinning renamed bots. Refs #82525.
 - Gateway/sessions: discard stale metadata when recreating dead main session rows, so replacement sessions do not inherit old labels or transcript paths.
 - Codex app-server: mark native context compaction completion events as successful, preventing false "Compaction incomplete" notices after successful Codex-managed compaction. Fixes #82470. (#81593) Thanks @Kyzcreig.
