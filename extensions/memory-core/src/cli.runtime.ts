@@ -237,6 +237,9 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
   if (repair.removedStaleLock) {
     actions.push("removed stale lock");
   }
+  if (repair.removedTempFiles > 0) {
+    actions.push(`removed ${repair.removedTempFiles} stale temp file(s)`);
+  }
   return actions.length > 0 ? actions.join(" · ") : "no changes";
 }
 

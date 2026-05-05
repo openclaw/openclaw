@@ -790,6 +790,80 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("throws on phase signal store I/O errors without overwriting existing signals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.parse("2026-04-01T10:00:00.000Z");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router setup",
+        nowMs,
+        results: [
+          {
+            path: "memory/2026-04-01.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.75,
+            snippet: "Router VLAN baseline noted.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        nowMs,
+      });
+      const key = ranked[0]?.key;
+      expect(key).toBeTruthy();
+
+      const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const phaseStoreRaw = `${JSON.stringify(
+        {
+          version: 1,
+          updatedAt: "2026-04-01T09:00:00.000Z",
+          entries: {
+            [key!]: {
+              key,
+              lightHits: 7,
+              remHits: 3,
+              lastLightAt: "2026-04-01T09:00:00.000Z",
+              lastRemAt: "2026-04-01T09:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`;
+      await fs.writeFile(phaseStorePath, phaseStoreRaw, "utf-8");
+
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
+        if (String(target) === phaseStorePath) {
+          throw Object.assign(new Error("phase store unavailable"), { code: "EACCES" });
+        }
+        return await actualFs.readFile(target, options);
+      });
+
+      try {
+        await expect(
+          recordDreamingPhaseSignals({
+            workspaceDir,
+            phase: "light",
+            keys: [key!],
+            nowMs,
+          }),
+        ).rejects.toMatchObject({ code: "EACCES" });
+      } finally {
+        readFile.mockRestore();
+      }
+
+      expect(await fs.readFile(phaseStorePath, "utf-8")).toBe(phaseStoreRaw);
+    });
+  });
+
   it("weights fresh phase signals more than stale ones", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
@@ -1633,6 +1707,34 @@ describe("short-term promotion", () => {
         version: 1,
         entries: {},
       });
+    });
+  });
+
+  it("removes stale short-term store temp files during repair", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const artifactsDir = path.join(workspaceDir, "memory", ".dreams");
+      const staleRecallTmp = path.join(artifactsDir, "short-term-recall.json.1.1.stale.tmp");
+      const stalePhaseTmp = path.join(artifactsDir, "phase-signals.json.1.1.stale.tmp");
+      const freshRecallTmp = path.join(artifactsDir, "short-term-recall.json.1.1.fresh.tmp");
+      const unrelatedTmp = path.join(artifactsDir, "other-store.json.1.1.stale.tmp");
+      await fs.writeFile(staleRecallTmp, "{}\n", "utf-8");
+      await fs.writeFile(stalePhaseTmp, "{}\n", "utf-8");
+      await fs.writeFile(freshRecallTmp, "{}\n", "utf-8");
+      await fs.writeFile(unrelatedTmp, "{}\n", "utf-8");
+
+      const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      await fs.utimes(staleRecallTmp, staleTime, staleTime);
+      await fs.utimes(stalePhaseTmp, staleTime, staleTime);
+      await fs.utimes(unrelatedTmp, staleTime, staleTime);
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.removedTempFiles).toBe(2);
+      await expect(fs.access(staleRecallTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(stalePhaseTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(freshRecallTmp)).resolves.toBeUndefined();
+      await expect(fs.access(unrelatedTmp)).resolves.toBeUndefined();
     });
   });
 
