@@ -1613,6 +1613,70 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("bypasses cached descriptors when a live plugin registry has hooks and tools", async () => {
+    let currentSessionId = "warm-cache";
+    const warmFactory = vi.fn(() => makeTool("stateful_tool"));
+    setRegistry([
+      {
+        pluginId: "stateful-plugin",
+        optional: false,
+        source: "/tmp/stateful-plugin.js",
+        names: ["stateful_tool"],
+        factory: warmFactory,
+      },
+    ]);
+
+    expectResolvedToolNames(resolvePluginTools(createResolveToolsParams()), ["stateful_tool"]);
+    expect(warmFactory).toHaveBeenCalledTimes(1);
+
+    const liveFactory = vi.fn(() => ({
+      ...makeTool("stateful_tool"),
+      async execute() {
+        return { content: [{ type: "text", text: currentSessionId }] };
+      },
+    }));
+    const liveRegistry = {
+      plugins: [{ id: "stateful-plugin", status: "loaded" }],
+      tools: [
+        {
+          pluginId: "stateful-plugin",
+          optional: false,
+          source: "/tmp/stateful-plugin.js",
+          names: ["stateful_tool"],
+          declaredNames: ["stateful_tool"],
+          factory: liveFactory,
+        },
+      ],
+      hooks: [
+        {
+          pluginId: "stateful-plugin",
+          events: ["before_prompt_build"],
+          source: "/tmp/stateful-plugin.js",
+          entry: { name: "capture-session", handler: () => undefined },
+        },
+      ],
+      typedHooks: [],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(
+      liveRegistry as never,
+      "test-tool-registry",
+      "gateway-bindable",
+      "/tmp",
+    );
+    resolveRuntimePluginRegistryMock.mockReturnValue(liveRegistry);
+    currentSessionId = "shared-session";
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["stateful_tool"]);
+    expect(liveFactory).toHaveBeenCalledTimes(1);
+    await expect(tools[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "shared-session" }],
+    });
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("reuses cached plugin tool descriptors across session identity changes", async () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sessionId?: string };
