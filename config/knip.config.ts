@@ -68,6 +68,7 @@ const rootBundledPluginRuntimeDependencies = [
   "node-edge-tts",
   "openshell",
   "pdfjs-dist",
+  "sharp",
   "tokenjuice",
 ] as const;
 
