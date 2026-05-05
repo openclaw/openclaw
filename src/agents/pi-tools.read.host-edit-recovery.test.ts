@@ -143,10 +143,16 @@ describe("edit tool recovery hardening", () => {
     });
   });
 
-  it("does not recover false success when the file never changed", async () => {
+  it("does not recover false success when the file never changed and is not at the target state", async () => {
+    // Original guard: if the file did not change AND is not in the requested
+    // target state, the post-write error must rethrow (no false success).
+    // Updated for the noop contract from #60816 — this test now uses a
+    // deliberate non-match where neither `oldText` nor `newText` is present
+    // in the file, so the noop classifier (which requires `newText` present)
+    // does not fire and the rethrow path stays exercised.
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");
-    await fs.writeFile(filePath, "replacement already present", "utf-8");
+    await fs.writeFile(filePath, "completely unrelated content", "utf-8");
 
     const tool = createRecoveredEditTool({
       root: tmpDir,
@@ -160,11 +166,110 @@ describe("edit tool recovery hardening", () => {
         "call-1",
         {
           path: filePath,
-          edits: [{ oldText: "missing", newText: "replacement already present" }],
+          edits: [{ oldText: "missing", newText: "also missing" }],
         },
         undefined,
       ),
     ).rejects.toThrow("Simulated post-write failure");
+  });
+
+  it("classifies follower of concurrent identical edits as noop, not success or error (#60816)", async () => {
+    // Concurrent identical edit case: leader request already mutated the file
+    // before this follower runs. The follower's `base.execute` cannot find
+    // `oldText` (the leader replaced it) and throws an exact-match mismatch,
+    // but the file IS at the desired final state. Recovery should report
+    // "Edit noop: content already up to date" rather than `Successfully
+    // replaced` (claims work this request did not perform) or rethrow the
+    // mismatch error (claims failure when the target state is satisfied).
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "alpha\nBETA\ngamma\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        // Underlying edit cannot find `beta` because the leader already
+        // replaced it. File is unchanged from this request's perspective.
+        throw new Error(
+          "Could not find the exact text in demo.txt. The old text must match exactly including all whitespace and newlines.",
+        );
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      { path: filePath, edits: [{ oldText: "beta", newText: "BETA" }] },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Edit noop: content already up to date in ${filePath}.`,
+    });
+  });
+
+  it("classifies multi-edit follower as noop when every target is already satisfied (#60816)", async () => {
+    // Same recovery contract holds for the `edits[]` shape with multiple
+    // entries. All edits' newText must be present and oldText absent for
+    // the noop classification to fire — partial overlap still rethrows.
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "ALPHA beta gamma DELTA\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        throw new Error(
+          "Could not find the exact text in demo.txt. The old text must match exactly including all whitespace and newlines.",
+        );
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "alpha", newText: "ALPHA" },
+          { oldText: "delta", newText: "DELTA" },
+        ],
+      },
+      undefined,
+    );
+
+    expect(result).toMatchObject({ isError: false });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: `Edit noop: content already up to date in ${filePath}.`,
+    });
+  });
+
+  it("does not classify as noop when oldText is still present (true mismatch) (#60816)", async () => {
+    // Negative pin: the noop classifier must NOT fire when the file has
+    // not reached the target state. Here `newText` is present but `oldText`
+    // is too — the file is in some intermediate / unrelated state, not the
+    // requested final state — so the original mismatch error stands.
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const filePath = path.join(tmpDir, "demo.txt");
+    await fs.writeFile(filePath, "alpha BETA beta gamma\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        throw new Error(
+          "Could not find the exact text in demo.txt. The old text must match exactly including all whitespace and newlines.",
+        );
+      },
+    });
+    await expect(
+      tool.execute(
+        "call-1",
+        { path: filePath, edits: [{ oldText: "beta", newText: "BETA" }] },
+        undefined,
+      ),
+    ).rejects.toThrow(/Could not find the exact text/);
   });
 
   it("recovers deletion edits when the file changed and oldText is gone", async () => {

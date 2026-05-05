@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Edit tool: classify the follower of two concurrent identical edits as a noop (`Edit noop: content already up to date in <path>.`) instead of either falsely claiming `Successfully replaced` or rethrowing the leader's "could not find the exact text" mismatch error. Distinguishes "this request did the work" from "another writer already landed it" without weakening true mismatch / write-failure error reporting. Fixes #60816. Thanks @jeffrey701.
 - Codex plugin: mirror the experimental upstream app-server protocol and format generated TypeScript before drift checks, keeping OpenClaw's `experimentalApi` bridge compatible with latest Codex while preserving formatter gates.
 - Telegram/media: derive no-caption inbound media placeholders from saved MIME metadata instead of the Telegram `photo` shape, so non-image and mixed attachments no longer reach the model as `<media:image>`. Fixes #69793. Thanks @aspalagin.
 - Agents/cache: keep per-turn runtime context out of ordinary chat system prompts while still delivering hidden current-turn context, restoring prompt-cache reuse on chat continuations. Fixes #77431. Thanks @Udjin79.
