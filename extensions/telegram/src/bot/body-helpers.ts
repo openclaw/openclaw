@@ -146,12 +146,28 @@ export function hasBotMention(msg: Message, botUsername: string) {
     return true;
   }
   for (const ent of entities) {
-    if (ent.type !== "mention") {
-      continue;
+    if (ent.type === "mention") {
+      const slice = text.slice(ent.offset, ent.offset + ent.length);
+      if (normalizeLowercaseStringOrEmpty(slice) === mention) {
+        return true;
+      }
     }
-    const slice = text.slice(ent.offset, ent.offset + ent.length);
-    if (normalizeLowercaseStringOrEmpty(slice) === mention) {
-      return true;
+    // Handle text_link entities created when users tap/click a bot mention in the
+    // Telegram UI (mobile and desktop). In this case Telegram encodes the mention
+    // as a text_link with URL "tg://user?id=<bot_id>" rather than a plain
+    // "mention" entity, so the previous type check would silently miss it.
+    // We recognise the pattern by checking for the tg://user scheme; the display
+    // text of the link is also checked against the @username as a fallback for
+    // clients that produce a different URL scheme.
+    if (ent.type === "text_link" && ent.url) {
+      const urlLower = ent.url.toLowerCase();
+      if (urlLower.startsWith("tg://user?id=") || urlLower.startsWith("tg://user/?id=")) {
+        return true;
+      }
+      const linkText = normalizeLowercaseStringOrEmpty(text.slice(ent.offset, ent.offset + ent.length));
+      if (linkText === mention) {
+        return true;
+      }
     }
   }
   return false;

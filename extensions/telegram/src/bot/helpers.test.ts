@@ -753,6 +753,58 @@ describe("hasBotMention", () => {
       ),
     ).toBe(false);
   });
+
+  it("matches text_link entity with tg://user?id= URL (Telegram UI tap-to-mention)", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaian hello",
+          entities: [{ type: "text_link", offset: 0, length: 6, url: "tg://user?id=123456789" }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches text_link entity with tg://user/?id= URL variant", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaian hello",
+          entities: [{ type: "text_link", offset: 0, length: 6, url: "tg://user/?id=123456789" }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches text_link entity where link text matches @username (fallback)", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "@gaian hello",
+          entities: [{ type: "text_link", offset: 0, length: 6, url: "https://t.me/gaian" }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match text_link entity with unrelated URL and non-matching link text", () => {
+    expect(
+      hasBotMention(
+        {
+          text: "click here",
+          entities: [{ type: "text_link", offset: 0, length: 10, url: "https://example.com" }],
+          chat: { id: 1, type: "supergroup" },
+        } as any,
+        "gaian",
+      ),
+    ).toBe(false);
+  });
 });
 describe("expandTextLinks", () => {
   it("returns text unchanged when no entities are provided", () => {
