@@ -27,6 +27,8 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
+import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
 
@@ -100,6 +102,7 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
+  private latestRateLimits: JsonValue | undefined;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -110,6 +113,11 @@ export class CodexAppServerEventProjector {
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {
+      return;
+    }
+    if (notification.method === "account/rateLimits/updated") {
+      this.latestRateLimits = params;
+      rememberCodexRateLimits(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -167,7 +175,7 @@ export class CodexAppServerEventProjector {
         if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
           break;
         }
-        this.promptError = readCodexErrorNotificationMessage(params) ?? "codex app-server error";
+        this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
       default:
@@ -523,7 +531,14 @@ export class CodexAppServerEventProjector {
       this.aborted = true;
     }
     if (turn.status === "failed") {
-      this.promptError = turn.error?.message ?? "codex app-server turn failed";
+      this.promptError =
+        formatCodexUsageLimitErrorMessage({
+          message: turn.error?.message,
+          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
+          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+        }) ??
+        turn.error?.message ??
+        "codex app-server turn failed";
       this.promptErrorSource = "prompt";
     }
     for (const item of turn.items ?? []) {
@@ -744,6 +759,17 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(meta ? { meta } : {}),
     });
+  }
+
+  private formatCodexErrorMessage(params: JsonObject): string | undefined {
+    const error = isJsonObject(params.error) ? params.error : undefined;
+    return (
+      formatCodexUsageLimitErrorMessage({
+        message: error ? readString(error, "message") : undefined,
+        codexErrorInfo: error?.codexErrorInfo,
+        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
+      }) ?? readCodexErrorNotificationMessage(params)
+    );
   }
 
   private emitAgentEvent(

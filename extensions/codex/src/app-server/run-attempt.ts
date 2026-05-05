@@ -84,6 +84,8 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
+import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
+import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -1034,16 +1036,18 @@ export async function runCodexAppServerAttempt(
       ),
     );
   } catch (error) {
+    const usageLimitError = formatCodexTurnStartUsageLimitError(error, pendingNotifications);
+    const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
-      data: { phase: "turn_start_failed", error: formatErrorMessage(error) },
+      data: { phase: "turn_start_failed", error: turnStartErrorMessage },
     });
     trajectoryRecorder?.recordEvent("session.ended", {
       status: "error",
       threadId: thread.threadId,
       timedOut,
       aborted: runAbortController.signal.aborted,
-      promptError: normalizeCodexTrajectoryError(error),
+      promptError: turnStartErrorMessage,
     });
     trajectoryEndRecorded = true;
     runAgentHarnessLlmOutputHook({
@@ -1065,7 +1069,7 @@ export async function runCodexAppServerAttempt(
       event: {
         messages: turnStartFailureMessages,
         success: false,
-        error: formatErrorMessage(error),
+        error: turnStartErrorMessage,
         durationMs: Date.now() - attemptStartedAt,
       },
       ctx: hookContext,
@@ -1083,6 +1087,11 @@ export async function runCodexAppServerAttempt(
       },
     });
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    if (usageLimitError) {
+      throw new Error(usageLimitError, {
+        cause: error,
+      });
+    }
     throw error;
   }
   turnId = turn.turn.id;
@@ -1642,6 +1651,76 @@ function readDynamicToolCallParams(
   value: JsonValue | undefined,
 ): CodexDynamicToolCallParams | undefined {
   return readCodexDynamicToolCallParams(value);
+}
+
+function formatCodexTurnStartUsageLimitError(
+  error: unknown,
+  pendingNotifications: CodexServerNotification[],
+): string | undefined {
+  const notificationError = readLatestCodexErrorNotification(pendingNotifications);
+  const errorPayload = readCodexErrorPayload(error);
+  return formatCodexUsageLimitErrorMessage({
+    message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
+    codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
+    rateLimits:
+      readLatestRateLimitNotificationPayload(pendingNotifications) ??
+      errorPayload.rateLimits ??
+      readRecentCodexRateLimits(),
+  });
+}
+
+function readLatestRateLimitNotificationPayload(
+  notifications: CodexServerNotification[],
+): JsonValue | undefined {
+  for (let index = notifications.length - 1; index >= 0; index -= 1) {
+    const notification = notifications[index];
+    if (notification?.method === "account/rateLimits/updated") {
+      rememberCodexRateLimits(notification.params);
+      return notification.params;
+    }
+  }
+  return undefined;
+}
+
+function readLatestCodexErrorNotification(
+  notifications: CodexServerNotification[],
+): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
+  for (let index = notifications.length - 1; index >= 0; index -= 1) {
+    const notification = notifications[index];
+    if (notification?.method !== "error" || !isJsonObject(notification.params)) {
+      continue;
+    }
+    const error = notification.params.error;
+    if (!isJsonObject(error)) {
+      continue;
+    }
+    return {
+      message: readString(error, "message"),
+      codexErrorInfo: error.codexErrorInfo,
+    };
+  }
+  return undefined;
+}
+
+function readCodexErrorPayload(error: unknown): {
+  message?: string;
+  codexErrorInfo?: JsonValue | null;
+  rateLimits?: JsonValue;
+} {
+  const message = error instanceof Error ? error.message : undefined;
+  if (!error || typeof error !== "object" || !("data" in error)) {
+    return { message };
+  }
+  const data = (error as { data?: unknown }).data as JsonValue | undefined;
+  if (!isJsonObject(data)) {
+    return { message };
+  }
+  const nestedError = isJsonObject(data.error) ? data.error : data;
+  return {
+    message: readString(nestedError, "message") ?? message,
+    codexErrorInfo: nestedError.codexErrorInfo,
+    rateLimits: nestedError.rateLimits ?? data.rateLimits,
+  };
 }
 
 function isTurnNotification(

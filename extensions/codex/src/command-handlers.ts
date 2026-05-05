@@ -9,6 +9,7 @@ import {
 import type { CodexComputerUseConfig } from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
+import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
@@ -321,6 +322,9 @@ export async function handleCodexSubcommand(
         undefined,
       ),
     ]);
+    if (limits.ok) {
+      rememberCodexRateLimits(limits.value);
+    }
     return { text: formatAccount(account, limits) };
   }
   return { text: `Unknown Codex command: ${formatCodexDisplayText(subcommand)}\n\n${buildHelp()}` };

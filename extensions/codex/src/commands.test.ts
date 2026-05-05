@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import {
+  readRecentCodexRateLimits,
+  resetCodexRateLimitCacheForTests,
+} from "./app-server/rate-limit-cache.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
 import {
   resetCodexDiagnosticsFeedbackStateForTests,
@@ -101,6 +105,7 @@ describe("codex command", () => {
 
   afterEach(async () => {
     resetCodexDiagnosticsFeedbackStateForTests();
+    resetCodexRateLimitCacheForTests();
     resetSharedCodexAppServerClientForTests();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -422,10 +427,10 @@ describe("codex command", () => {
     });
 
     await expect(handleCodexCommand(createContext("status"), { deps })).resolves.toMatchObject({
-      text: expect.stringContaining("Rate limits: 1"),
+      text: expect.stringContaining("Rate limits: Codex: primary 42%"),
     });
     await expect(handleCodexCommand(createContext("account"), { deps })).resolves.toMatchObject({
-      text: expect.stringContaining("Rate limits: 1"),
+      text: expect.stringContaining("Rate limits: Codex: primary 42%"),
     });
   });
 
@@ -476,6 +481,7 @@ describe("codex command", () => {
   });
 
   it("formats generated account/read responses", async () => {
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const safeCodexControlRequest = vi
       .fn()
       .mockResolvedValueOnce({
@@ -485,14 +491,30 @@ describe("codex command", () => {
           requiresOpenaiAuth: false,
         },
       })
-      .mockResolvedValueOnce({ ok: true, value: { data: [{ name: "primary" }] } });
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          rateLimits: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: { usedPercent: 50, windowDurationMins: 300, resetsAt },
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+          rateLimitsByLimitId: null,
+        },
+      });
 
-    await expect(
-      handleCodexCommand(createContext("account"), {
-        deps: createDeps({ safeCodexControlRequest }),
-      }),
-    ).resolves.toEqual({
-      text: ["Account: codex@example.com", "Rate limits: 1"].join("\n"),
+    const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Account: codex@example.com");
+    expect(result.text).toContain("Rate limits: Codex: primary 50%, resets in");
+    expect(readRecentCodexRateLimits()).toMatchObject({
+      rateLimits: { limitId: "codex" },
     });
     expect(safeCodexControlRequest).toHaveBeenCalledWith(undefined, CODEX_CONTROL_METHODS.account, {
       refreshToken: false,
