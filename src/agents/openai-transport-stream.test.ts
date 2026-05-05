@@ -4430,4 +4430,149 @@ describe("openai transport stream", () => {
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
+
+  describe("response.reasoning_text.done handling", () => {
+    const model = {
+      id: "lmstudio/qwen3",
+      name: "Qwen3",
+      api: "openai-responses" as const,
+      provider: "lmstudio",
+      baseUrl: "http://localhost:9191/v1",
+      reasoning: true,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    };
+
+    function makeOutput() {
+      return {
+        role: "assistant" as const,
+        content: [] as Array<Record<string, unknown>>,
+        api: "openai-responses" as const,
+        provider: "lmstudio",
+        model: "lmstudio/qwen3",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 0,
+      };
+    }
+
+    it("LM Studio path: inserts thinking block when no prior output_item.added reasoning item", async () => {
+      const output = makeOutput();
+      const events: unknown[] = [];
+      const stream = { push: (e: unknown) => events.push(e) };
+
+      async function* mockStream() {
+        yield { type: "response.created", response: { id: "resp_lms_1" } };
+        yield { type: "response.reasoning_text.done", text: "I should answer 4." };
+        yield {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1" },
+        };
+        yield { type: "response.output_text.delta", delta: "4" };
+        yield {
+          type: "response.output_item.done",
+          item: { type: "message", content: [{ type: "output_text", text: "4" }] },
+        };
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_lms_1",
+            status: "completed",
+            usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          },
+        };
+      }
+
+      await __testing.processResponsesStream(mockStream(), output, stream, model);
+
+      const thinkingBlock = output.content.find((b) => b["type"] === "thinking");
+      expect(thinkingBlock).toBeDefined();
+      expect(thinkingBlock?.["thinking"]).toBe("I should answer 4.");
+      expect(output.content[0]?.["type"]).toBe("thinking");
+
+      const thinkingStart = events.find((e) => (e as { type: string }).type === "thinking_start");
+      const thinkingEnd = events.find((e) => (e as { type: string }).type === "thinking_end");
+      expect(thinkingStart).toBeDefined();
+      expect(thinkingEnd).toBeDefined();
+    });
+
+    it("standard path: finalizes active reasoning block when output_item.added(reasoning) precedes reasoning_text.done", async () => {
+      const output = makeOutput();
+      const events: unknown[] = [];
+      const stream = { push: (e: unknown) => events.push(e) };
+
+      async function* mockStream() {
+        yield { type: "response.created", response: { id: "resp_std_1" } };
+        yield {
+          type: "response.output_item.added",
+          item: { type: "reasoning", id: "rs_1", summary: [] },
+        };
+        yield {
+          type: "response.reasoning_text.done",
+          item_id: "rs_1",
+          output_index: 0,
+          content_index: 0,
+          text: "Let me think about this.",
+        };
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_std_1",
+            status: "completed",
+            usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          },
+        };
+      }
+
+      await __testing.processResponsesStream(mockStream(), output, stream, model);
+
+      const thinkingBlocks = output.content.filter((b) => b["type"] === "thinking");
+      expect(thinkingBlocks).toHaveLength(1);
+      expect(thinkingBlocks[0]?.["thinking"]).toBe("Let me think about this.");
+
+      const thinkingEndEvents = events.filter(
+        (e) => (e as { type: string }).type === "thinking_end",
+      );
+      expect(thinkingEndEvents).toHaveLength(1);
+    });
+
+    it("does not produce duplicate thinking blocks when both paths fire", async () => {
+      const output = makeOutput();
+      const events: unknown[] = [];
+      const stream = { push: (e: unknown) => events.push(e) };
+
+      async function* mockStream() {
+        yield { type: "response.created", response: { id: "resp_dup_1" } };
+        yield {
+          type: "response.output_item.added",
+          item: { type: "reasoning", id: "rs_1", summary: [] },
+        };
+        yield { type: "response.reasoning_text.done", item_id: "rs_1", text: "Thinking done." };
+        // A second reasoning_text.done should be ignored since a thinking block already exists
+        yield { type: "response.reasoning_text.done", text: "Duplicate thinking." };
+        yield {
+          type: "response.completed",
+          response: {
+            id: "resp_dup_1",
+            status: "completed",
+            usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+          },
+        };
+      }
+
+      await __testing.processResponsesStream(mockStream(), output, stream, model);
+
+      const thinkingBlocks = output.content.filter((b) => b["type"] === "thinking");
+      expect(thinkingBlocks).toHaveLength(1);
+    });
+  });
 });
