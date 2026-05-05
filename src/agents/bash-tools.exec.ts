@@ -1480,11 +1480,7 @@ export function createExecTool(
           command: params.command,
           workdir,
           env,
-          requestedEnv: {
-            ...params.env,
-            OPENCLAW_AGENT_ID: agentId ?? "",
-            OPENCLAW_SESSION_KEY: defaults?.sessionKey ?? "",
-          },
+          requestedEnv: params.env,
           requestedNode: params.node?.trim(),
           boundNode: defaults?.node?.trim(),
           sessionKey: defaults?.sessionKey,
