@@ -6,9 +6,11 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCronDeliveryPlan, type CronDeliveryPlan } from "../delivery-plan.js";
 import type {
   CronAgentExecutionStarted,
@@ -268,6 +270,36 @@ function buildCronDeliveryTrace(params: {
     fallbackUsed: params.fallbackUsed,
     delivered: params.delivered,
   };
+}
+
+function applyExplicitCronDeliveryRouteToSession(params: {
+  cfg: OpenClawConfig;
+  cronSession: MutableCronSession;
+  resolvedDelivery: ResolvedCronDeliveryTarget;
+}) {
+  if (!params.resolvedDelivery.ok || params.resolvedDelivery.mode !== "explicit") {
+    return;
+  }
+  const deliveryFields = normalizeSessionDeliveryFields({
+    deliveryContext: {
+      channel: params.resolvedDelivery.channel,
+      to: params.resolvedDelivery.to,
+      accountId: params.resolvedDelivery.accountId,
+      threadId: params.resolvedDelivery.threadId,
+    },
+  });
+  if (!deliveryFields.deliveryContext) {
+    return;
+  }
+  Object.assign(params.cronSession.sessionEntry, deliveryFields);
+
+  const inferredChatType = resolveOutboundChannelPlugin({
+    channel: params.resolvedDelivery.channel,
+    cfg: params.cfg,
+  })?.messaging?.inferTargetChatType?.({ to: params.resolvedDelivery.to });
+  if (inferredChatType === "direct" || inferredChatType === "group") {
+    params.cronSession.sessionEntry.chatType = inferredChatType;
+  }
 }
 
 function resolveMessagingToolSentTargets(params: {
@@ -636,6 +668,11 @@ async function prepareCronRunContext(params: {
       job: input.job,
       agentId,
     });
+  applyExplicitCronDeliveryRouteToSession({
+    cfg: cfgWithAgentDefaults,
+    cronSession,
+    resolvedDelivery,
+  });
 
   const { formattedTime, timeLine } = resolveCronStyleNow(input.cfg, now);
   const base = `[cron:${input.job.id} ${input.job.name}] ${input.message}`.trim();

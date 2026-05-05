@@ -172,7 +172,6 @@ describe("createTelegramDraftStream", () => {
     const warn = vi.fn();
     const stream = createDraftStream(api, {
       thread: { id: 42, scope: "forum" },
-      previewTransport: "message",
       warn,
     });
 
@@ -232,7 +231,6 @@ describe("createTelegramDraftStream", () => {
     const warn = vi.fn();
     const stream = createDraftStream(api, {
       thread: { id: 42, scope: "forum" },
-      previewTransport: "draft",
       warn,
     });
 

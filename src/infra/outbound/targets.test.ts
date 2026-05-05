@@ -682,6 +682,57 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(1122);
   });
 
+  it("reuses route threadId when origin carries group chatType", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-forum-topic-origin-context",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "forum",
+          to: "room:ops",
+          threadId: 1122,
+        },
+        origin: {
+          provider: "forum",
+          to: "room:ops",
+          chatType: "group",
+        },
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("room:ops");
+    expect(resolved.threadId).toBe(1122);
+  });
+
+  it("reuses route threadId when the channel infers a group target", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-forum-topic-inferred-context",
+        updatedAt: 1,
+        deliveryContext: {
+          channel: "forum",
+          to: "room:ops",
+          threadId: 1122,
+        },
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("forum");
+    expect(resolved.to).toBe("room:ops");
+    expect(resolved.threadId).toBe(1122);
+  });
+
   it("does not inherit stale threadId for direct-chat heartbeat routes", () => {
     const cfg: OpenClawConfig = {};
     const resolved = resolveHeartbeatDeliveryTarget({
