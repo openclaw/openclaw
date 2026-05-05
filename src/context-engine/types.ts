@@ -176,8 +176,8 @@ export type ContextEngineRuntimeContext = Record<string, unknown> & {
   /** LLM completion capability for engines that need model inference. */
   llm?: {
     complete: (
-      params: import("../plugins/runtime/types-core.js").PluginLlmCompleteParams,
-    ) => Promise<import("../plugins/runtime/types-core.js").PluginLlmCompleteResult>;
+      params: import("../plugins/runtime/types-core.js").LlmCompleteParams,
+    ) => Promise<import("../plugins/runtime/types-core.js").LlmCompleteResult>;
   };
 };
 

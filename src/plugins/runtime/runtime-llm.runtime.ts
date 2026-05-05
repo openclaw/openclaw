@@ -10,16 +10,16 @@ import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-for
 import { normalizePluginsConfig } from "../config-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type {
-  PluginLlmCompleteCaller,
-  PluginLlmCompleteParams,
-  PluginLlmCompleteResult,
-  PluginLlmCompleteUsage,
+  LlmCompleteCaller,
+  LlmCompleteParams,
+  LlmCompleteResult,
+  LlmCompleteUsage,
   PluginRuntimeCore,
   RuntimeLogger,
 } from "./types-core.js";
 
 export type RuntimeLlmAuthority = {
-  caller?: PluginLlmCompleteCaller;
+  caller?: LlmCompleteCaller;
   /** Trusted host-derived plugin id used only for config policy lookup. */
   pluginIdForPolicy?: string;
   sessionKey?: string;
@@ -58,9 +58,9 @@ function toRuntimeLogger(logger: typeof defaultLogger): RuntimeLogger {
 }
 
 function normalizeCaller(
-  caller?: PluginLlmCompleteCaller,
-  fallback?: PluginLlmCompleteCaller,
-): PluginLlmCompleteCaller {
+  caller?: LlmCompleteCaller,
+  fallback?: LlmCompleteCaller,
+): LlmCompleteCaller {
   const source = caller ?? fallback;
   if (!source) {
     return { kind: "unknown" };
@@ -72,7 +72,7 @@ function normalizeCaller(
   };
 }
 
-function resolveTrustedCaller(authority?: RuntimeLlmAuthority): PluginLlmCompleteCaller {
+function resolveTrustedCaller(authority?: RuntimeLlmAuthority): LlmCompleteCaller {
   if (authority?.caller?.kind === "context-engine") {
     return normalizeCaller(authority.caller);
   }
@@ -93,7 +93,7 @@ function resolveRuntimeConfig(options: CreateRuntimeLlmOptions): OpenClawConfig 
 }
 
 async function resolveAgentId(params: {
-  request: PluginLlmCompleteParams;
+  request: LlmCompleteParams;
   cfg: OpenClawConfig;
   authority?: RuntimeLlmAuthority;
   allowAgentIdOverride: boolean;
@@ -121,7 +121,7 @@ async function resolveAgentId(params: {
   return resolveDefaultAgentId(params.cfg);
 }
 
-function buildSystemPrompt(params: PluginLlmCompleteParams): string | undefined {
+function buildSystemPrompt(params: LlmCompleteParams): string | undefined {
   const segments = [
     normalizeOptionalString(params.systemPrompt),
     ...params.messages
@@ -132,7 +132,7 @@ function buildSystemPrompt(params: PluginLlmCompleteParams): string | undefined 
 }
 
 function buildMessages(params: {
-  request: PluginLlmCompleteParams;
+  request: LlmCompleteParams;
   provider: string;
   model: string;
   api: Api;
@@ -190,7 +190,7 @@ function buildUsage(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
-}): PluginLlmCompleteUsage {
+}): LlmCompleteUsage {
   const costConfig = resolveModelCostConfig({
     provider: params.provider,
     model: params.model,
@@ -268,7 +268,7 @@ function buildPolicyFromEntry(entry: {
 
 function resolvePluginPolicyId(
   authority: RuntimeLlmAuthority | undefined,
-  caller: PluginLlmCompleteCaller,
+  caller: LlmCompleteCaller,
 ): string | undefined {
   const authorityPluginId = normalizeOptionalString(authority?.pluginIdForPolicy);
   if (authorityPluginId) {
@@ -355,7 +355,7 @@ function assertAllowedModelOverride(params: {
 export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginRuntimeCore["llm"] {
   const logger = options.logger ?? toRuntimeLogger(defaultLogger);
   return {
-    complete: async (params: PluginLlmCompleteParams): Promise<PluginLlmCompleteResult> => {
+    complete: async (params: LlmCompleteParams): Promise<LlmCompleteResult> => {
       const caller = resolveTrustedCaller(options.authority);
       if (options.authority?.allowComplete === false) {
         const reason = options.authority.denyReason ?? "capability denied";

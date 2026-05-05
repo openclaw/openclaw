@@ -62,11 +62,11 @@ export type {
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
 export type {
-  PluginLlmCompleteCaller,
-  PluginLlmCompleteMessage,
-  PluginLlmCompleteParams,
-  PluginLlmCompleteResult,
-  PluginLlmCompleteUsage,
+  LlmCompleteCaller,
+  LlmCompleteMessage,
+  LlmCompleteParams,
+  LlmCompleteResult,
+  LlmCompleteUsage,
 } from "../plugins/runtime/types-core.js";
 export type {
   BoundTaskFlowsRuntime,

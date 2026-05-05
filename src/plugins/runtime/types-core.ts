@@ -88,18 +88,18 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
-export type PluginLlmCompleteMessage = {
+export type LlmCompleteMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
 
-export type PluginLlmCompleteCaller = {
+export type LlmCompleteCaller = {
   kind: "plugin" | "context-engine" | "host" | "unknown";
   id?: string;
   name?: string;
 };
 
-export type PluginLlmCompleteUsage = {
+export type LlmCompleteUsage = {
   inputTokens?: number;
   outputTokens?: number;
   cacheReadTokens?: number;
@@ -108,8 +108,8 @@ export type PluginLlmCompleteUsage = {
   costUsd?: number;
 };
 
-export type PluginLlmCompleteParams = {
-  messages: PluginLlmCompleteMessage[];
+export type LlmCompleteParams = {
+  messages: LlmCompleteMessage[];
   /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
   model?: string;
   maxTokens?: number;
@@ -122,14 +122,14 @@ export type PluginLlmCompleteParams = {
   agentId?: string;
 };
 
-export type PluginLlmCompleteResult = {
+export type LlmCompleteResult = {
   text: string;
   provider: string;
   model: string;
   agentId: string;
-  usage: PluginLlmCompleteUsage;
+  usage: LlmCompleteUsage;
   audit: {
-    caller: PluginLlmCompleteCaller;
+    caller: LlmCompleteCaller;
     purpose?: string;
     sessionKey?: string;
   };
@@ -311,7 +311,7 @@ export type PluginRuntimeCore = {
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
-    complete: (params: PluginLlmCompleteParams) => Promise<PluginLlmCompleteResult>;
+    complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
