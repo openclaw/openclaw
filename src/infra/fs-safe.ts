@@ -718,7 +718,7 @@ export async function writeFileWithinRoot(params: {
   encoding?: BufferEncoding;
   mkdir?: boolean;
 }): Promise<void> {
-  if (process.platform === "win32") {
+  if (process.platform === "win32" || process.platform === "freebsd") {
     await writeFileWithinRootLegacy(params);
     return;
   }
@@ -775,7 +775,7 @@ export async function copyFileWithinRoot(params: {
   }
 
   try {
-    if (process.platform === "win32") {
+    if (process.platform === "win32" || process.platform === "freebsd") {
       await copyFileWithinRootLegacy(params, source);
       return;
     }
