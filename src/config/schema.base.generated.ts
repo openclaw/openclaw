@@ -21305,7 +21305,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
           sweepIntervalMs: {
             type: "integer",
             exclusiveMinimum: 0,
-            maximum: 9007199254740991,
+            maximum: 2147483647,
             title: "Task Sweep Interval (ms)",
             description:
               "How often the task registry maintenance sweep runs, in milliseconds. Default: 60000 (one minute). Rarely needs tuning; raise to reduce sweep cadence under steady-state load, lower to clear pruned records sooner after they expire.",
@@ -29475,6 +29475,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.5.4",
+  version: "2026.5.5",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

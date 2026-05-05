@@ -698,7 +698,12 @@ export const OpenClawSchema = z
     tasks: z
       .object({
         retentionMs: z.number().int().positive().optional(),
-        sweepIntervalMs: z.number().int().positive().optional(),
+        // Cap at Node's max 32-bit signed timer delay (2^31 - 1 ms ~= 24.8 days).
+        // Larger positive values overflow `setInterval`, which Node coerces to
+        // a 1ms delay and emits TimeoutOverflowWarning, turning a long sweep
+        // cadence into a busy loop. Reject above the timer maximum at
+        // config-load time so the running scheduler is always safe.
+        sweepIntervalMs: z.number().int().positive().max(2_147_483_647).optional(),
       })
       .strict()
       .optional(),

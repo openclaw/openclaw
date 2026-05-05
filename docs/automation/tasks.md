@@ -322,7 +322,7 @@ A sweeper runs every **60 seconds by default** and handles four things:
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
   </Step>
   <Step title="Cleanup stamping">
-    Sets a `cleanupAfter` timestamp on terminal tasks (endedAt + 7 days). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.
+    Sets a `cleanupAfter` timestamp on terminal tasks at `endedAt + tasks.retentionMs` (7 days by default; configurable, see [Tuning the sweeper](#tuning-the-sweeper) below). During retention, lost tasks still appear in audit as warnings; after `cleanupAfter` expires or when cleanup metadata is missing, they are errors.
   </Step>
   <Step title="Pruning">
     Deletes records past their `cleanupAfter` date.
@@ -347,9 +347,9 @@ Both the sweep cadence and the terminal-record retention window are configurable
 ```
 
 - `tasks.retentionMs` — milliseconds a terminal task record is retained before it becomes eligible for pruning. Default `604800000` (7 days).
-- `tasks.sweepIntervalMs` — milliseconds between automatic sweeps. Default `60000` (60 seconds).
+- `tasks.sweepIntervalMs` — milliseconds between automatic sweeps. Default `60000` (60 seconds). Capped at `2147483647` ms (~24.8 days), the maximum 32-bit signed delay Node's timers accept; larger values are rejected at config-load time to avoid `setInterval` overflow.
 
-Both keys must be positive integers in `openclaw.json`; the config schema rejects non-finite, zero, negative, or non-integer values at load time, leaving the defaults (`604800000` and `60000`) in effect. Both keys apply to the gateway's scheduled sweep **and** to the manual `openclaw tasks maintenance` CLI command, so out-of-band cleanup runs honor the same retention as the running gateway.
+Both keys must be positive integers in `openclaw.json`. The config schema rejects non-finite, zero, negative, or non-integer values (and `sweepIntervalMs` above `2147483647`) with an `INVALID_CONFIG` error at load time — invalid values must be corrected in `openclaw.json` before the gateway can start. The defaults (`604800000` and `60000`) apply only when the keys are omitted from `openclaw.json`. Both keys apply to the gateway's scheduled sweep **and** to the manual `openclaw tasks maintenance` CLI command, so out-of-band cleanup runs honor the same retention as the running gateway.
 
 ## How tasks relate to other systems
 
