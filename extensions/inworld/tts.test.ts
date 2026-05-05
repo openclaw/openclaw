@@ -101,6 +101,7 @@ describe("listInworldVoices", () => {
     expect(request.policy).toEqual({ hostnameAllowlist: ["api.inworld.ai"] });
     const headers = new Headers(request.init?.headers);
     expect(headers.get("authorization")).toBe("Basic test-key");
+    expect(headers.get("x-user-agent")).toBe("openclaw");
   });
 
   it("throws on API errors with response body", async () => {
@@ -233,6 +234,7 @@ describe("inworldTTS", () => {
     const headers = new Headers(request.init?.headers);
     expect(headers.get("authorization")).toBe("Basic test-key");
     expect(headers.get("content-type")).toBe("application/json");
+    expect(headers.get("x-user-agent")).toBe("openclaw");
     expect(JSON.parse(readRequestBody(request))).toEqual({
       text: "Hello",
       voiceId: "Sarah",
