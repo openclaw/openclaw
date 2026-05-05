@@ -326,6 +326,7 @@ Docs: https://docs.openclaw.ai
 - Agents/auth-profiles: do not record request-shape (`format`) rejections as auth-profile health failures, so a single per-session transcript-shape error (such as a prefill-strict 400 "conversation must end with a user message") no longer triggers a profile-wide cooldown that blocks every other healthy session sharing the same auth profile. Refs #77228. (#77280) Thanks @openperf.
 - CLI/update: stop dev-channel source updates immediately when `git fetch` fails, so tag conflicts cannot keep preflight, rebase, or build steps running against stale refs while the Gateway is still on the old runtime. (#77845) Thanks @obviyus.
 - Config/recovery: chmod restored `openclaw.json` back to owner-only (`0600`) after suspicious-read backup recovery on POSIX hosts, so a previously world-readable config mode cannot persist into a freshly restored credential-bearing config. (#77488) Thanks @drobison00.
+- Memory/dreaming: persist last dreaming-ingestion calendar day per daily note in `daily-ingestion.json` so unchanged notes are still re-ingested once per dreaming day for promotion signals toward deep thresholds. Fixes #76225. (#76359) Thanks @neeravmakwana.
 
 ## 2026.5.3-1
 
