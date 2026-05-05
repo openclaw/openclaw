@@ -1045,3 +1045,91 @@ describe("feishuOutbound.sendMedia renderMode", () => {
     );
   });
 });
+
+describe("feishu card table-limit fallback (230099/11310)", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+  });
+
+  it("degrades structured card table-limit failures to plain text without retrying card rendering", async () => {
+    sendStructuredCardFeishuMock.mockRejectedValueOnce(
+      new Error(
+        'Feishu card send failed: {"code":230099,"data":{"ErrCode":11310,"ErrMsg":"card table number over limit"}}',
+      ),
+    );
+
+    const result = await sendText({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "| a | b |\n| - | - |\n| 1 | 2 |",
+      threadId: "om_thread_1",
+      accountId: "main",
+    });
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "| a | b |\n| - | - |\n| 1 | 2 |",
+        replyToMessageId: "om_thread_1",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "text_msg" }));
+  });
+
+  it("rethrows non-table-limit structured card failures", async () => {
+    sendStructuredCardFeishuMock.mockRejectedValueOnce(new Error("Feishu card send failed: nope"));
+
+    await expect(
+      sendText({
+        cfg: cardRenderConfig,
+        to: "chat_1",
+        text: "| a | b |\n| - | - |",
+        accountId: "main",
+      }),
+    ).rejects.toThrow("nope");
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("degrades caption markdown card table-limit failures to plain text and preserves thread routing", async () => {
+    sendMarkdownCardFeishuMock.mockRejectedValueOnce(
+      new Error(
+        'Feishu card send failed: {"code":230099,"data":{"ErrCode":11310,"ErrMsg":"card table number over limit"}}',
+      ),
+    );
+
+    const result = await feishuOutbound.sendMedia?.({
+      cfg: cardRenderConfig,
+      to: "chat_1",
+      text: "| a | b |\n| - | - |\n| 1 | 2 |",
+      mediaUrl: "https://example.com/image.png",
+      threadId: "om_thread_1",
+      accountId: "main",
+    });
+
+    expect(sendMarkdownCardFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        text: "| a | b |\n| - | - |\n| 1 | 2 |",
+        replyToMessageId: "om_thread_1",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "chat_1",
+        mediaUrl: "https://example.com/image.png",
+        replyToMessageId: "om_thread_1",
+        replyInThread: true,
+        accountId: "main",
+      }),
+    );
+    expect(result).toEqual(expect.objectContaining({ channel: "feishu", messageId: "media_msg" }));
+  });
+});
