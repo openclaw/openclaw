@@ -4,7 +4,7 @@ import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
-import { fetchRemoteMedia, MediaFetchError } from "../media/fetch.js";
+import { fetchRemoteMedia, type FetchMediaRetryOptions, MediaFetchError } from "../media/fetch.js";
 import { isInboundPathAllowed, mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { detectMime } from "../media/mime.js";
@@ -29,6 +29,13 @@ type MediaPathResult = {
 type LocalReadResult = {
   buffer: Buffer;
   filePath: string;
+};
+
+const REMOTE_MEDIA_FETCH_RETRY: FetchMediaRetryOptions = {
+  attempts: 3,
+  minDelayMs: 500,
+  maxDelayMs: 3_000,
+  jitter: 0.2,
 };
 
 type AttachmentCacheEntry = {
@@ -167,6 +174,7 @@ export class MediaAttachmentCache {
         fetchImpl,
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
+        retry: REMOTE_MEDIA_FETCH_RETRY,
       });
       entry.buffer = fetched.buffer;
       entry.bufferMime =
