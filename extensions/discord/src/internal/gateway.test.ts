@@ -10,6 +10,7 @@ import {
 } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sharedGatewayIdentifyLimiter } from "./gateway-identify-limiter.js";
+import { GatewayHeartbeatTimers } from "./gateway-lifecycle.js";
 import { GatewayPlugin } from "./gateway.js";
 
 function attachOpenSocket(gateway: GatewayPlugin) {
@@ -66,6 +67,66 @@ type GatewaySessionState = {
 function gatewaySessionState(gateway: GatewayPlugin): GatewaySessionState {
   return gateway as unknown as GatewaySessionState;
 }
+
+describe("GatewayHeartbeatTimers", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("checks heartbeat ACK one full interval after the actual heartbeat send", async () => {
+    vi.useFakeTimers();
+    const timers = new GatewayHeartbeatTimers();
+    let acked = true;
+    const onHeartbeat = vi.fn(() => {
+      acked = false;
+    });
+    const onAckTimeout = vi.fn();
+
+    timers.start({
+      intervalMs: 1_000,
+      isAcked: () => acked,
+      onHeartbeat,
+      onAckTimeout,
+      random: () => 0.9,
+    });
+
+    await vi.advanceTimersByTimeAsync(900);
+    expect(onHeartbeat).toHaveBeenCalledTimes(1);
+    expect(onAckTimeout).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(onAckTimeout).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(onAckTimeout).toHaveBeenCalledTimes(1);
+    timers.stop();
+  });
+
+  it("schedules the next heartbeat after an ACKed heartbeat cycle", async () => {
+    vi.useFakeTimers();
+    const timers = new GatewayHeartbeatTimers();
+    let acked = true;
+    const onHeartbeat = vi.fn(() => {
+      acked = false;
+    });
+
+    timers.start({
+      intervalMs: 1_000,
+      isAcked: () => acked,
+      onHeartbeat,
+      onAckTimeout: vi.fn(),
+      random: () => 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onHeartbeat).toHaveBeenCalledTimes(1);
+    acked = true;
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(onHeartbeat).toHaveBeenCalledTimes(2);
+    timers.stop();
+  });
+});
 
 describe("GatewayPlugin", () => {
   afterEach(() => {
