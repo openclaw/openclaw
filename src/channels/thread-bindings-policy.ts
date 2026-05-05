@@ -192,7 +192,7 @@ export function resolveThreadBindingSpawnPolicy(params: {
     normalizeSpawnContext(account?.defaultSpawnContext) ??
     normalizeSpawnContext(root?.defaultSpawnContext) ??
     normalizeSpawnContext(params.cfg.session?.threadBindings?.defaultSpawnContext) ??
-    "fork";
+    "isolated";
   return {
     channel,
     accountId,

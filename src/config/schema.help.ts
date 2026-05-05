@@ -1473,7 +1473,7 @@ export const FIELD_HELP: Record<string, string> = {
   "session.threadBindings.spawnSessions":
     "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
   "session.threadBindings.defaultSpawnContext":
-    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+    'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "isolated".',
   "session.maintenance":
     "Automatic session-store maintenance controls for pruning age, entry caps, reset archive retention, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":

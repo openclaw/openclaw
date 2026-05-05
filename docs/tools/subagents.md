@@ -26,10 +26,10 @@ Primary goals:
 default. For heavy or repetitive tasks, set a cheaper model for sub-agents
 and keep your main agent on a higher-quality model. Configure via
 `agents.defaults.subagents.model` or per-agent overrides. When a child
-    genuinely needs the requester's current transcript, the agent can request
-    `context: "fork"` on that one spawn. Thread-bound subagent sessions default
-    to `context: "fork"` because they branch the current conversation into a
-    follow-up thread.
+genuinely needs the requester's current transcript, the agent can request
+`context: "fork"` on that one spawn. Thread-bound subagent sessions stay
+isolated by default too; set `threadBindings.defaultSpawnContext: "fork"` only
+when thread spawns should branch the current conversation.
 </Note>
 
 ## Slash command
@@ -184,7 +184,7 @@ session to confirm the effective tool list.
   `require` rejects spawn unless the target child runtime is sandboxed.
 </ParamField>
 <ParamField path="context" type='"isolated" | "fork"' default="isolated">
-  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound spawns default to `fork`; non-thread spawns default to `isolated`.
+  `fork` branches the requester's current transcript into the child session. Native sub-agents only. Thread-bound and non-thread spawns default to `isolated`; set `fork` only when the child needs requester history.
 </ParamField>
 
 <Warning>

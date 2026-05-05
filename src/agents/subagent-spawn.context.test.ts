@@ -146,7 +146,7 @@ describe("sessions_spawn context modes", () => {
     );
   });
 
-  it("forks by default for thread-bound subagent sessions", async () => {
+  it("keeps thread-bound subagent sessions isolated by default", async () => {
     const store: SessionStore = {
       main: {
         sessionId: "parent-session-id",
@@ -174,11 +174,7 @@ describe("sessions_spawn context modes", () => {
     );
 
     expect(result.status).toBe("error");
-    expect(forkSessionFromParentMock).toHaveBeenCalledWith({
-      parentEntry: store.main,
-      agentId: "main",
-      sessionsDir: path.dirname(storePath),
-    });
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "sessions.delete",

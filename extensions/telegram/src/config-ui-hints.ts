@@ -203,6 +203,6 @@ export const telegramChannelConfigUiHints = {
   },
   "threadBindings.defaultSpawnContext": {
     label: "Telegram Thread Spawn Context",
-    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "isolated".',
   },
 } satisfies Record<string, ChannelConfigUiHint>;
