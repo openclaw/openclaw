@@ -385,6 +385,7 @@ function applyResumePrompt(params: HandleCommandsParams, content: string): void 
   );
   params.ctx.Body = prompt;
   params.ctx.BodyForAgent = prompt;
+  params.ctx.BodyStripped = prompt;
   params.ctx.RawBody = prompt;
   params.ctx.CommandBody = prompt;
   params.ctx.BodyForCommands = prompt;
