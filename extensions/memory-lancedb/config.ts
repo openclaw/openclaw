@@ -17,6 +17,7 @@ export type MemoryConfig = {
   captureMaxChars?: number;
   recallMaxChars?: number;
   storageOptions?: Record<string, string>;
+  triggers?: string[];
 };
 
 export const MEMORY_CATEGORIES = ["preference", "fact", "decision", "entity", "other"] as const;
@@ -86,6 +87,26 @@ function resolveEnvVars(value: string): string {
   });
 }
 
+function parseTriggers(raw: unknown): string[] | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (!Array.isArray(raw)) {
+    throw new Error("triggers must be an array of regex strings");
+  }
+  return raw.map((item, i) => {
+    if (typeof item !== "string") {
+      throw new Error(`triggers[${i}] must be a string`);
+    }
+    try {
+      new RegExp(item);
+    } catch {
+      throw new Error(`triggers[${i}] is not a valid regex: ${item}`);
+    }
+    return item;
+  });
+}
+
 function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
   const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
   if (typeof embedding.dimensions !== "number") {
@@ -111,6 +132,7 @@ export const memoryConfigSchema = {
         "captureMaxChars",
         "recallMaxChars",
         "storageOptions",
+        "triggers",
       ],
       "memory config",
     );
@@ -186,6 +208,7 @@ export const memoryConfigSchema = {
       captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
       recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
       ...(storageOptions ? { storageOptions } : {}),
+      triggers: parseTriggers(cfg.triggers),
     };
   },
   uiHints: {
@@ -242,6 +265,11 @@ export const memoryConfigSchema = {
       help: "Maximum prompt/query length embedded for memory recall. Lower for small local embedding models.",
       advanced: true,
       placeholder: String(DEFAULT_RECALL_MAX_CHARS),
+    },
+    triggers: {
+      label: "Custom Capture Triggers",
+      advanced: true,
+      help: 'Additional regex patterns (as strings) that trigger auto-capture. Example: ["remember this", "mi \\\\w+ es"]',
     },
     storageOptions: {
       label: "Storage Options",
