@@ -44,6 +44,25 @@ import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js
  */
 type OwnerIdDisplay = "raw" | "hash";
 
+export function appendExtraSystemPromptToSystemPrompt(params: {
+  systemPrompt: string;
+  extraSystemPrompt?: string;
+  promptMode?: PromptMode;
+}): string {
+  const basePrompt = params.systemPrompt.trim();
+  const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  if (!extraSystemPrompt) {
+    return basePrompt;
+  }
+  const contextHeader =
+    params.promptMode === "minimal" ? "## Subagent Context" : "## Group Chat Context";
+  const extraPromptBlock = [contextHeader, extraSystemPrompt].join("\n\n");
+  if (basePrompt.includes(extraPromptBlock)) {
+    return basePrompt;
+  }
+  return [basePrompt, extraPromptBlock].filter(Boolean).join("\n\n");
+}
+
 const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["agents.md", 10],
   ["soul.md", 20],

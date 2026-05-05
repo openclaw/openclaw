@@ -44,6 +44,7 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
+import { appendExtraSystemPromptToSystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
@@ -324,28 +325,32 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: sessionAgentId,
   });
-  const builtSystemPrompt =
-    resolveSystemPromptOverride({
-      config: params.config,
-      agentId: sessionAgentId,
-    }) ??
-    buildSystemPrompt({
-      workspaceDir,
-      config: params.config,
-      defaultThinkLevel: params.thinkLevel,
-      extraSystemPrompt,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      silentReplyPromptMode: params.silentReplyPromptMode,
-      ownerNumbers: params.ownerNumbers,
-      heartbeatPrompt,
-      docsPath: openClawReferences.docsPath ?? undefined,
-      sourcePath: openClawReferences.sourcePath ?? undefined,
-      skillsPrompt,
-      tools: [],
-      contextFiles,
-      modelDisplay,
-      agentId: sessionAgentId,
-    });
+  const systemPromptOverride = resolveSystemPromptOverride({
+    config: params.config,
+    agentId: sessionAgentId,
+  });
+  const builtSystemPrompt = systemPromptOverride
+    ? appendExtraSystemPromptToSystemPrompt({
+        systemPrompt: systemPromptOverride,
+        extraSystemPrompt,
+      })
+    : buildSystemPrompt({
+        workspaceDir,
+        config: params.config,
+        defaultThinkLevel: params.thinkLevel,
+        extraSystemPrompt,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        silentReplyPromptMode: params.silentReplyPromptMode,
+        ownerNumbers: params.ownerNumbers,
+        heartbeatPrompt,
+        docsPath: openClawReferences.docsPath ?? undefined,
+        sourcePath: openClawReferences.sourcePath ?? undefined,
+        skillsPrompt,
+        tools: [],
+        contextFiles,
+        modelDisplay,
+        agentId: sessionAgentId,
+      });
   const transformedSystemPrompt =
     backendResolved.transformSystemPrompt?.({
       config: params.config,

@@ -60,6 +60,10 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
+function countOccurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
+
 function mockResolvedModel() {
   resolveModelMock.mockReset();
   resolveModelMock.mockReturnValue({
@@ -307,6 +311,46 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
         senderE164: "+15551234567",
       }),
     );
+  });
+
+  it("appends extraSystemPrompt to configured systemPromptOverride during compaction prompt rebuild", () => {
+    const buildDefaultSystemPrompt = vi.fn(() => "default prompt should not be used");
+    const overrideSentinel = "OC_COMPACTION_OVERRIDE_BASE_SENTINEL";
+    const extraSentinel = "OC_COMPACTION_EXTRA_PROMPT_SENTINEL";
+    const contextHeader = "## Group Chat Context";
+
+    const rebuiltPrompt = compactTesting.buildCompactionSystemPrompt({
+      systemPromptOverride: overrideSentinel,
+      buildDefaultSystemPrompt,
+      extraSystemPrompt: extraSentinel,
+      promptMode: "full",
+    });
+
+    expect(rebuiltPrompt).toContain(overrideSentinel);
+    expect(countOccurrences(rebuiltPrompt, extraSentinel)).toBe(1);
+    expect(countOccurrences(rebuiltPrompt, contextHeader)).toBe(1);
+    expect(buildDefaultSystemPrompt).not.toHaveBeenCalled();
+    expect(rebuiltPrompt.indexOf(overrideSentinel)).toBeLessThan(
+      rebuiltPrompt.indexOf(extraSentinel),
+    );
+  });
+
+  it("does not duplicate extraSystemPrompt when compaction uses the default system prompt", () => {
+    const extraSentinel = "OC_COMPACTION_EXTRA_PROMPT_SENTINEL";
+    const contextHeader = "## Group Chat Context";
+    const defaultPrompt = ["DEFAULT_PROMPT", contextHeader, extraSentinel].join("\n");
+    const buildDefaultSystemPrompt = vi.fn(() => defaultPrompt);
+
+    const rebuiltPrompt = compactTesting.buildCompactionSystemPrompt({
+      buildDefaultSystemPrompt,
+      extraSystemPrompt: extraSentinel,
+      promptMode: "full",
+    });
+
+    expect(buildDefaultSystemPrompt).toHaveBeenCalledTimes(1);
+    expect(rebuiltPrompt).toBe(defaultPrompt);
+    expect(countOccurrences(rebuiltPrompt, extraSentinel)).toBe(1);
+    expect(countOccurrences(rebuiltPrompt, contextHeader)).toBe(1);
   });
 
   it("uses the session model fallback chain when implicit compaction fails", async () => {
