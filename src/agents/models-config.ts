@@ -504,22 +504,71 @@ function resolveConfiguredApiKeyForCompare(
 }
 
 /**
- * Stable comparison of two arbitrary JSON-serializable values via
- * stableStringify.  Used for headers / auth shape equality where a
- * reference-equality or shallow-keys check would miss key-order or
- * nested-shape differences.
+ * Maximum recursion depth when comparing disk-controlled values during
+ * the short-circuit check (Codex P2 / Aisle medium #3 on PR #73261).
+ * Bounds the recursive walk so a deeply-nested adversarial models.json
+ * cannot stack-overflow or monopolize CPU during fingerprint compare.
+ * 64 is well above any realistic models.json structure (~3 levels deep)
+ * but small enough to bound the worst-case allocation.
  */
-function stableEqual(a: unknown, b: unknown): boolean {
-  return stableStringify(a) === stableStringify(b);
+const SHORT_CIRCUIT_COMPARE_MAX_DEPTH = 64;
+
+/**
+ * Depth-bounded variant of stableStringify used for short-circuit
+ * comparisons against disk-controlled state.  Throws when the depth
+ * limit is exceeded — `stableEqualBounded` catches and treats that as
+ * a non-match (fail closed → full plan).
+ */
+function stableStringifyBounded(value: unknown, maxDepth: number, depth = 0): string {
+  if (depth > maxDepth) {
+    throw new Error("stableStringifyBounded: max depth exceeded");
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value
+      .map((entry) => stableStringifyBounded(entry, maxDepth, depth + 1))
+      .join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>).toSorted(([a], [b]) =>
+    a.localeCompare(b),
+  );
+  return `{${entries
+    .map(
+      ([key, entry]) =>
+        `${JSON.stringify(key)}:${stableStringifyBounded(entry, maxDepth, depth + 1)}`,
+    )
+    .join(",")}}`;
 }
 
 /**
- * Hard cap on the bytes we will read + parse from models.json during
- * the short-circuit check (Aisle medium #4 on PR #73261).  Realistic
- * models.json sizes are dominated by listed models per provider; 1 MiB
- * is plenty of headroom while bounding the worst-case allocation.
+ * Bounded structural equality.  Returns false on any depth-cap overrun
+ * so adversarial nested input cannot DoS the gateway via stack/CPU
+ * exhaustion during the short-circuit check.
  */
-const MAX_MODELS_JSON_SHORT_CIRCUIT_BYTES = 1 * 1024 * 1024;
+function stableEqualBounded(a: unknown, b: unknown, maxDepth: number): boolean {
+  try {
+    return stableStringifyBounded(a, maxDepth) === stableStringifyBounded(b, maxDepth);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Per-model fields that can steer runtime transport (SSRF, header /
+ * credential injection) when consumed from models.json — see the
+ * runtime sinks at `src/agents/pi-embedded-runner/model.ts` which
+ * fall back to `discoveredModel.baseUrl` / `discoveredModel.api` /
+ * `discoveredModel.headers` when no provider-level override is set.
+ *
+ * The provider-scoped short-circuit cannot validate these without re-
+ * running the planner, so it refuses to short-circuit when the on-disk
+ * provider row carries any of them (Codex P1 / Aisle High #2 on PR
+ * #73261).  The full plan re-applies provider/plugin defaults and
+ * rewrites the file.
+ */
+const PER_MODEL_TRANSPORT_FIELDS: ReadonlySet<string> = new Set(["baseUrl", "api", "headers"]);
 
 /**
  * Verify that the on-disk models.json provider entry STRUCTURALLY
@@ -528,23 +577,35 @@ const MAX_MODELS_JSON_SHORT_CIRCUIT_BYTES = 1 * 1024 * 1024;
  * pipeline only when the disk state is provably consistent with config.
  *
  * Compares (all symmetric — either side undefined != string is a
- * mismatch):
+ * mismatch, all bounded — adversarial depth fails closed):
  *   apiKey  — resolved through env-ref expansion before comparing
  *             (env-source values compare by env-var NAME, not value,
- *             since that's what plan writes to disk)
- *   baseUrl — stable structural equality (closes asymmetric-undef bug)
- *   headers — stable structural equality
- *   auth    — stable structural equality
+ *             since that's what plan writes to disk).  Fails closed on
+ *             any non-string disk value when config has no apiKey
+ *             (Codex P2 on PR #73261).
+ *   baseUrl — bounded structural equality (closes asymmetric-undef bug)
+ *   headers — bounded structural equality
+ *   auth    — bounded structural equality
+ *   models[] per-entry transport fields (`baseUrl`/`api`/`headers`) —
+ *             refuses short-circuit if any disk-side model carries any
+ *             of them (Codex P1 / Aisle High #2 on PR #73261).  The
+ *             runtime consumes per-model transport when no provider-
+ *             level override is set, so an attacker who can write
+ *             models.json could otherwise inject per-model SSRF /
+ *             credential-exfil routes that survive the provider-scoped
+ *             check.  Refusing forces the planner to re-apply provider
+ *             defaults and rewrite the file.
  *
- * Other provider fields (models[], maxTokens, contextWindow, cost,
- * compat, etc.) are NOT compared.  Tampering with those would not
- * cause SSRF / credential exfil but might change inference behaviour;
- * accepting that trade-off keeps the short-circuit reachable.  If a
- * field becomes security-critical later, add it here.
+ * Other model-level fields (id/name/cost/contextWindow/compat/...) are
+ * not compared.  Tampering with those changes inference behaviour but
+ * is not a transport-level exfil vector; the trade-off keeps the
+ * short-circuit reachable for the common case where the planner persists
+ * configured + discovered metadata without per-model transport overrides.
  *
  * Any mismatch (or any state we cannot conclusively verify, like a
- * non-env secret ref) returns false so the caller falls through to
- * the full plan + write path.
+ * non-env secret ref or a disk-side per-model transport override)
+ * returns false so the caller falls through to the full plan + write
+ * path.
  */
 async function readExistingProviderMatchesConfig(
   targetPath: string,
@@ -565,24 +626,17 @@ async function readExistingProviderMatchesConfig(
   ) {
     return false;
   }
-  // Symlink-safe + size-capped read (Aisle medium #2 + #4).  Refuses
-  // symlinks, non-regular files, and files larger than the cap.
-  const lst = await fs.lstat(targetPath).catch(() => null);
-  if (!lst || lst.isSymbolicLink() || !lst.isFile()) {
-    return false;
-  }
-  if (lst.size > MAX_MODELS_JSON_SHORT_CIRCUIT_BYTES) {
-    return false;
-  }
-  let raw: string;
-  try {
-    raw = await fs.readFile(targetPath, "utf8");
-  } catch {
+  // Reuse the fingerprint-cache safe-read primitive (#73260):
+  // O_NOFOLLOW open, lstat/fstat regular-file check, MAX_MODELS_JSON_BYTES
+  // size cap, fail-closed on grow-past-cap.  Returns null on any of
+  // those conditions (which all map to "refuse short-circuit").
+  const safe = await safeHashRegularFile(targetPath, MAX_MODELS_JSON_BYTES);
+  if (!safe) {
     return false;
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(safe.raw.toString("utf8"));
   } catch {
     return false;
   }
@@ -606,8 +660,16 @@ async function readExistingProviderMatchesConfig(
   // security + Aisle High #1 on PR #73261).  Now: any difference
   // between configured and disk baseUrl — including config-undefined
   // vs disk-string — falls through to full planning, which will
-  // re-apply provider/plugin defaults and rewrite the file.
-  if (!stableEqual(configuredProvider.baseUrl, diskProvider.baseUrl)) {
+  // re-apply provider/plugin defaults and rewrite the file.  Bounded
+  // depth: a hostile disk baseUrl that's an exotically-nested object
+  // fails closed instead of stack-overflowing the gateway.
+  if (
+    !stableEqualBounded(
+      configuredProvider.baseUrl,
+      diskProvider.baseUrl,
+      SHORT_CIRCUIT_COMPARE_MAX_DEPTH,
+    )
+  ) {
     return false;
   }
 
@@ -625,18 +687,75 @@ async function readExistingProviderMatchesConfig(
     ) {
       return false;
     }
-  } else if (typeof diskProvider.apiKey === "string" && diskProvider.apiKey.length > 0) {
+  } else if (
+    diskProvider.apiKey !== undefined &&
+    !(typeof diskProvider.apiKey === "string" && diskProvider.apiKey.length === 0)
+  ) {
+    // Codex P2 on PR #73261: when config has no apiKey, accept only
+    // "absent" (undefined) or empty-string on disk.  Reject any other
+    // shape (number, null, object, array, non-empty string) — these
+    // indicate a malformed disk row and the planner should rewrite.
     return false;
   }
 
-  if (!stableEqual(configuredProvider.headers, diskProvider.headers)) {
+  if (
+    !stableEqualBounded(
+      configuredProvider.headers,
+      diskProvider.headers,
+      SHORT_CIRCUIT_COMPARE_MAX_DEPTH,
+    )
+  ) {
     return false;
   }
-  if (!stableEqual(configuredProvider.auth, diskProvider.auth)) {
+  if (
+    !stableEqualBounded(configuredProvider.auth, diskProvider.auth, SHORT_CIRCUIT_COMPARE_MAX_DEPTH)
+  ) {
+    return false;
+  }
+
+  // Per-model transport drift check (Codex P1 / Aisle High #2 on PR
+  // #73261).  The runtime consumes per-model `baseUrl` / `api` /
+  // `headers` from models.json (see `pi-embedded-runner/model.ts`); an
+  // attacker who can write models.json could otherwise inject per-model
+  // overrides that survive the provider-scoped short-circuit while
+  // keeping provider-level fields intact.  Refuse short-circuit when
+  // any disk-side model carries any transport field.  The full plan
+  // path will re-apply provider/plugin defaults and rewrite the file.
+  if (Array.isArray(diskProvider.models)) {
+    for (const m of diskProvider.models) {
+      if (!isRecord(m)) {
+        return false;
+      }
+      for (const f of PER_MODEL_TRANSPORT_FIELDS) {
+        if (Object.hasOwn(m, f)) {
+          return false;
+        }
+      }
+    }
+  } else if (diskProvider.models !== undefined) {
+    // models is present but not an array — malformed disk row.  Refuse
+    // short-circuit so the planner rewrites a well-formed structure.
     return false;
   }
 
   return true;
+}
+
+/**
+ * Provider-scoped readyCache key for successful short-circuit results.
+ * Uses a `\0sc:<provider>` suffix so non-targeted callers (whose cache
+ * key is the unsuffixed `${targetPath}\0${fingerprint}`) cannot collide
+ * with these entries — the short-circuit only validated ONE provider,
+ * and a non-targeted call must run a full plan to validate all of them
+ * (Codex P1 on PR #73261).  The null-byte separators cannot appear in
+ * provider ids or in the fingerprint hex digest.
+ */
+function modelsJsonScopedShortCircuitCacheKey(
+  targetPath: string,
+  fingerprint: string,
+  targetProvider: string,
+): string {
+  return `${targetPath}\0${fingerprint}\0sc:${targetProvider}`;
 }
 
 export async function ensureOpenClawModelsJson(
@@ -700,18 +819,37 @@ export async function ensureOpenClawModelsJson(
   // The fingerprint cache missed (cold start, gateway restart, or
   // input drift), but the caller hinted which provider it intends to
   // use.  If the on-disk provider entry STRUCTURALLY matches the
-  // current config (apiKey env-var name, baseUrl, headers, auth all
-  // identical), skip the heavy implicit-discovery pipeline.  Any
-  // drift (rotated key, attacker-tampered baseUrl/headers, missing
+  // current config (apiKey env-var name, baseUrl, headers, auth, and
+  // per-model transport surface all clean), skip the heavy implicit-
+  // discovery pipeline.  Any drift (rotated key, attacker-tampered
+  // baseUrl/headers/auth, per-model transport overrides, missing
   // fields) falls through to full plan + write.
   //
   // Order matters: we run AFTER the readyCache check so warm callers
-  // skip the disk read entirely.  We also POPULATE the readyCache
-  // after a successful short-circuit so subsequent calls hit the
-  // in-memory path instead of repeating the disk + parse work
-  // (Greptile P2 on PR #73261).
+  // skip the disk read entirely.  Successful short-circuits are cached
+  // under a PROVIDER-SCOPED key (`...\0sc:<provider>`) so they never
+  // poison the global readyCache — only the validated provider can
+  // reuse the entry, and a later non-targeted call still runs a full
+  // plan to validate every other provider (Codex P1 on PR #73261).
   const targetProvider = options?.targetProvider?.trim();
   if (targetProvider) {
+    const scopedKey = modelsJsonScopedShortCircuitCacheKey(targetPath, fingerprint, targetProvider);
+    const scopedCached = MODELS_JSON_STATE.readyCache.get(scopedKey);
+    if (scopedCached) {
+      const settled = await scopedCached;
+      // Same two-factor verification as the global cache hit above:
+      // fingerprint identity is necessary but not sufficient — also
+      // verify the on-disk models.json hash hasn't drifted since the
+      // short-circuit blessed it.  Any drift invalidates the scoped
+      // entry and falls through to a fresh check.
+      const currentModelsJsonHash = await readModelsJsonContentHash(targetPath);
+      if (currentModelsJsonHash === settled.modelsJsonHash) {
+        await ensureModelsFileModeForModelsJson(targetPath);
+        return settled.result;
+      }
+      MODELS_JSON_STATE.readyCache.delete(scopedKey);
+    }
+
     const explicitProviders = cfg.models?.providers ?? {};
     const configuredProvider = Object.hasOwn(explicitProviders, targetProvider)
       ? explicitProviders[targetProvider]
@@ -727,9 +865,13 @@ export async function ensureOpenClawModelsJson(
       if (matches) {
         await ensureModelsFileModeForModelsJson(targetPath);
         const result = { agentDir, wrote: false };
-        // Populate readyCache so the next call with identical inputs
-        // takes the warm-cache path above without re-reading disk.
-        MODELS_JSON_STATE.readyCache.set(cacheKey, Promise.resolve({ fingerprint, result }));
+        // Capture the post-validation models.json hash so the scoped
+        // cache hit above can detect external edits between calls.
+        const modelsJsonHash = await readModelsJsonContentHash(targetPath);
+        MODELS_JSON_STATE.readyCache.set(
+          scopedKey,
+          Promise.resolve({ fingerprint, modelsJsonHash, result }),
+        );
         return result;
       }
     }

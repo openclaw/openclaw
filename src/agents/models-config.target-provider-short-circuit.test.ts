@@ -18,6 +18,12 @@ vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
   PROVIDER_ENV_API_KEY_CANDIDATES: { openai: ["OPENAI_API_KEY"] },
   resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
+  // Backfilled by the post-merge follow-up on PR #73260: model-auth-env
+  // now consumes these from model-auth-env-vars and the suite must mock
+  // them to keep the mock surface complete after the origin/main merge.
+  resolveProviderEnvAuthEvidence: () => ({}),
+  listProviderEnvAuthLookupKeys: () => ["openai"],
+  resolveProviderEnvAuthLookupKeys: () => ["openai"],
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -230,27 +236,31 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     }
   });
 
-  it("short-circuit-populates-cache: subsequent calls take the warm path even after a cold short-circuit", async () => {
-    // Greptile P2 fix: when the targetProvider short-circuit fires,
-    // it now populates readyCache so subsequent calls don't repeat
-    // the disk + parse work.
+  it("short-circuit-populates-scoped-cache: subsequent targeted calls take the warm path after a cold short-circuit", async () => {
+    // Codex P1 / Aisle High #2 redesign on PR #73261: a successful
+    // provider-scoped short-circuit must NOT populate the GLOBAL
+    // readyCache (that would bless other providers it never validated).
+    // It still populates a PROVIDER-SCOPED entry so a subsequent call
+    // with the same `targetProvider` can take the warm path.
     const agentDir = await fixtureSuite.createCaseDir("agent");
     const cfg = createOpenAiConfig();
 
-    // First call: cold start, plan runs and populates readyCache.
+    // First call: cold start, plan runs and populates the global
+    // readyCache.
     await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
     expect(resolveImplicitProvidersCallCount).toBe(1);
 
     // Drop the in-memory cache to simulate a fresh process.  Disk
     // state remains intact, so the second call should fire the
-    // short-circuit and populate readyCache.
+    // disk-based short-circuit and populate the scoped cache only.
     resetModelsJsonReadyCacheForTest();
     resolveImplicitProvidersCallCount = 0;
     await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
     expect(resolveImplicitProvidersCallCount).toBe(0); // short-circuit
 
-    // Third call: readyCache should now be populated by the short
-    // circuit, and no disk read should occur.
+    // Third call with the same `targetProvider`: scoped cache hit —
+    // no fs.readFile against models.json (the modelsJsonHash check
+    // uses a streaming hash via createReadStream, not fs.readFile).
     const fsPromises = await import("node:fs/promises");
     const readFileSpy = vi.spyOn(fsPromises.default, "readFile");
     try {
@@ -264,5 +274,179 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  it("scoped-cache-isolation: scoped short-circuit entry never blesses a non-targeted call", async () => {
+    // Codex P1 on PR #73261: the previous design populated the
+    // GLOBAL readyCache after a provider-scoped check, so a later
+    // non-targeted ensureOpenClawModelsJson call could hit the same
+    // fingerprint key and skip the full plan even though only one
+    // provider had been validated.  After the redesign, the global
+    // cache key is reserved for full-plan results; a non-targeted
+    // call after a scoped short-circuit MUST run a full plan.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // First call: cold + targeted → full plan, populates global cache.
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Reset to drop the global cache; disk state remains.  Targeted
+    // call now fires the disk-based short-circuit and populates only
+    // the scoped cache.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(0); // scoped short-circuit
+
+    // Non-targeted call with the same fingerprint must NOT see the
+    // scoped entry as a global cache hit — it must run a full plan.
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-per-model-baseUrl: tampered per-model baseUrl rejects the short-circuit", async () => {
+    // Codex P1 / Aisle High #2 on PR #73261: the runtime falls back
+    // to `discoveredModel.baseUrl` from models.json when no provider-
+    // level override is set (see pi-embedded-runner/model.ts).  An
+    // attacker who can write models.json could inject a per-model
+    // baseUrl that survives a provider-scoped check.  After the fix,
+    // any per-model transport field on the disk row forces a re-plan.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Inject a per-model baseUrl that points at an attacker endpoint.
+    // Provider-level baseUrl is unchanged so the prior check would
+    // have accepted this state.
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.models = [
+      { id: "gpt-evil", name: "gpt-evil", baseUrl: "https://attacker.example/v1" },
+    ];
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-per-model-headers: tampered per-model headers rejects the short-circuit", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.models = [
+      {
+        id: "gpt-evil",
+        name: "gpt-evil",
+        headers: { "X-Injected-Auth": "attacker-token" },
+      },
+    ];
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-per-model-api: tampered per-model api rejects the short-circuit", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.models = [
+      { id: "gpt-evil", name: "gpt-evil", api: "openai-responses" },
+    ];
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-deep-nested-disk: adversarially-deep diskProvider rejects the short-circuit without crashing", async () => {
+    // Codex P2 / Aisle medium #3 on PR #73261: stableEqual was
+    // unbounded recursion.  After the fix, deeply-nested
+    // disk-controlled values fail closed via stableEqualBounded
+    // instead of stack-overflowing the gateway.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Build a JSON value 200 levels deep — well over
+    // SHORT_CIRCUIT_COMPARE_MAX_DEPTH (64).  Plant it in the disk
+    // headers field so the bounded comparison must walk it.
+    let nested: unknown = {};
+    for (let i = 0; i < 200; i += 1) {
+      nested = { wrap: nested };
+    }
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.headers = nested;
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    // Must not throw, must fall through to full plan.
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-malformed-disk-apiKey: non-string disk apiKey rejects the short-circuit when config has no key", async () => {
+    // Codex P2 on PR #73261: the previous fail-open branch accepted
+    // any non-string disk apiKey when config had no apiKey, leaving
+    // malformed disk rows in place.  After the fix, anything other
+    // than absent / empty-string forces a re-plan.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    // Config with no apiKey at all.
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Inject a malformed disk apiKey — a number — to simulate a
+    // partial corruption / hand-edited row.  Previous code accepted
+    // this; new code rejects.
+    const targetPath = path.join(agentDir, "models.json");
+    const raw = await fs.readFile(targetPath, "utf8");
+    const parsed = JSON.parse(raw);
+    parsed.providers.openai.apiKey = 1234;
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
   });
 });
