@@ -384,7 +384,7 @@ async function persistRegistrationsState(
   const filePath = resolveApnsRegistrationPath(baseDir);
   await writeJsonAtomic(filePath, state, {
     mode: 0o600,
-    ensureDirMode: 0o700,
+    dirMode: 0o700,
     trailingNewline: true,
   });
 }

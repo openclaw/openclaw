@@ -25,7 +25,7 @@ export async function readJsonFileWithFallback<T>(
 export async function writeJsonFileAtomically(filePath: string, value: unknown): Promise<void> {
   await writeJson(filePath, value, {
     mode: 0o600,
-    ensureDirMode: 0o700,
+    dirMode: 0o700,
     trailingNewline: true,
   });
 }

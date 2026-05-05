@@ -182,7 +182,7 @@ export async function writePersistedInstalledPluginIndex(
     { ...index, warning: INSTALLED_PLUGIN_INDEX_WARNING },
     {
       trailingNewline: true,
-      ensureDirMode: 0o700,
+      dirMode: 0o700,
       mode: 0o600,
     },
   );
