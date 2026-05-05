@@ -9,4 +9,4 @@ export {
   type PermissionExec as ExecFn,
   type WindowsAclEntry,
   type WindowsAclSummary,
-} from "@openclaw/fs-safe/permissions";
+} from "@openclaw/fs-safe/advanced";

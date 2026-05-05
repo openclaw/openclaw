@@ -293,9 +293,8 @@ async function readFileProviderPayload(params: {
       const { buffer: payload } = await readSecureFile({
         filePath,
         label: `secrets.providers.${params.providerName}.path`,
-        allowInsecurePath: params.providerConfig.allowInsecurePath,
-        maxBytes,
-        timeoutMs,
+        io: { maxBytes, timeoutMs },
+        permissions: { allowInsecure: params.providerConfig.allowInsecurePath },
       });
       const text = payload.toString("utf8").replace(/^\uFEFF/, "");
       if (params.providerConfig.mode === "singleValue") {

@@ -17,7 +17,7 @@ export {
   readPrivateJsonSync,
   readPrivateText,
   readPrivateTextSync,
-} from "@openclaw/fs-safe/store";
+} from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
   appendRegularFileSync,
@@ -25,7 +25,7 @@ export {
   readRegularFileSync,
   resolveRegularFileAppendFlags,
   statRegularFileSync,
-} from "@openclaw/fs-safe/regular-file";
+} from "@openclaw/fs-safe/advanced";
 export {
   openLocalFileSafely,
   readLocalFileSafely,

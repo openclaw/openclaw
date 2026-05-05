@@ -8,4 +8,4 @@ export {
   statRegularFileSync,
   type AppendRegularFileOptions,
   type RegularFileStatResult,
-} from "@openclaw/fs-safe/regular-file";
+} from "@openclaw/fs-safe/advanced";
