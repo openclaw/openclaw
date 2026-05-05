@@ -1752,7 +1752,7 @@
   },
   "overrides": {
     "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
-    "axios": "1.15.0",
+    "axios": "1.16.0",
     "follow-redirects": "1.16.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
     "uuid": "14.0.0"
@@ -1767,7 +1767,7 @@
       "hono": "4.12.14",
       "@hono/node-server": "1.19.14",
       "@aws-sdk/client-bedrock-runtime": "3.1024.0",
-      "axios": "1.15.0",
+      "axios": "1.16.0",
       "follow-redirects": "1.16.0",
       "defu": "6.1.5",
       "fast-xml-parser": "5.7.0",
