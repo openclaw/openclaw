@@ -417,6 +417,7 @@ function createChatContext(): Pick<
     logGateway: {
       warn: vi.fn(),
       debug: vi.fn(),
+      error: vi.fn(),
     } as unknown as GatewayRequestContext["logGateway"],
   };
 }
@@ -713,6 +714,112 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
+  });
+
+  it("does not mirror agent-run stale media final text from live delivery", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
+    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "Text-only test: one clean reply, no TTS, no media, no tool narration.",
+          mediaUrl: staleAudioPath,
+          mediaUrls: [staleAudioPath],
+          trustedLocalMedia: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-stale-agent-media",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    // Agent-run delivery is a live projection; Pi message_end owns persisted
+    // assistant transcript entries, including stale media/text final payloads.
+    expect(assistantUpdates).toEqual([]);
+    const transcriptLines = fs
+      .readFileSync(mockState.transcriptPath, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toEqual([]);
+  });
+
+  it("does not mirror normal agent-run final text from live delivery", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-text-only-");
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: "It's 11:52 AM EDT.",
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-text-only",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
+    // Pi persists the model-visible assistant turn from message_end.
+    expect(assistantUpdates).toEqual([]);
+    const transcriptLines = fs
+      .readFileSync(mockState.transcriptPath, "utf-8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    const assistantEntries = transcriptLines.filter(
+      (entry) =>
+        (entry as { message?: { role?: string } }).message?.role === "assistant" ||
+        (entry as { role?: string }).role === "assistant",
+    );
+    expect(assistantEntries).toEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
@@ -2730,9 +2837,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       { path: "/home/user/.openclaw/media/inbound/report.pdf", contentType: "application/pdf" },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
-    mockState.stageSandboxMediaError = Object.assign(new Error("ENOSPC: no space left on device"), {
+    const stageError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
     });
+    stageError.stack =
+      "Error: ENOSPC: no space left on device\n    at stageSandboxMedia (stage-sandbox-media.ts:1:1)";
+    mockState.stageSandboxMediaError = stageError;
     const respond = vi.fn();
     const context = createChatContext();
     const pdf = Buffer.from("%PDF-1.4\n%µ¶\n1 0 obj\n<<>>\nendobj\n").toString("base64");
@@ -2766,8 +2876,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(payload).toBeUndefined();
     expect(error?.code).toBe(ErrorCodes.UNAVAILABLE);
     expect(error?.message ?? String(error)).toMatch(/ENOSPC|non-image attachments/i);
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "chat.send attachment parse/stage failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "chat.send attachment parse/stage failed: MediaOffloadError",
+        ),
+        error: expect.stringContaining(
+          "Caused by: Error: ENOSPC: no space left on device\n    at stageSandboxMedia",
+        ),
+      }),
+    );
     // Orphaned media-store files are cleaned up before the 5xx surfaces.
     expect(mockState.deleteMediaBufferCalls).toEqual([{ id: "saved-media", subdir: "inbound" }]);
+  });
+
+  it("logs chat.send attachment parse failures with stack details", async () => {
+    createTranscriptFixture("openclaw-chat-send-attachment-parse-stack-");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-chat-send-attachment-parse-stack",
+      message: "inspect this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            content: "not-base64",
+          },
+        ],
+      },
+      expectBroadcast: false,
+      waitFor: "none",
+    });
+
+    expect(mockState.lastDispatchCtx).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: expect.stringContaining("attachment broken.png: invalid base64 content"),
+      }),
+    );
+    expect(context.logGateway.error).toHaveBeenCalledWith(
+      "chat.send attachment parse/stage failed",
+      expect.objectContaining({
+        consoleMessage: expect.stringContaining(
+          "chat.send attachment parse/stage failed: Error: attachment broken.png",
+        ),
+        error: expect.stringContaining("Error: attachment broken.png: invalid base64 content"),
+      }),
+    );
+    const logMeta = (context.logGateway.error as unknown as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[1] as { error?: string } | undefined;
+    expect(logMeta?.error).toContain("\n    at ");
   });
 
   it("surfaces partial non-image staging failures as 5xx UNAVAILABLE", async () => {

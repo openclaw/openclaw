@@ -17,7 +17,7 @@ import {
   TypingModeSchema,
 } from "./zod-schema.core.js";
 
-export const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
+const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
 const NonNegativeByteSizeSchema = z.union([
   z.number().int().nonnegative(),
@@ -239,6 +239,7 @@ export const AgentDefaultsSchema = z
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on"), z.literal("full")]).optional(),
+    toolProgressDetail: z.union([z.literal("explain"), z.literal("raw")]).optional(),
     reasoningDefault: z.union([z.literal("off"), z.literal("on"), z.literal("stream")]).optional(),
     elevatedDefault: z
       .union([z.literal("off"), z.literal("on"), z.literal("ask"), z.literal("full")])

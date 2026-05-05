@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
@@ -18,7 +19,6 @@ import {
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
   EMPTY_RESPONSE_RETRY_INSTRUCTION,
   extractPlanningOnlyPlanDetails,
-  hasCommittedUserVisibleToolDelivery,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
@@ -26,6 +26,7 @@ import {
   resolveEmptyResponseRetryInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -995,6 +996,136 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe("abandoned");
   });
 
+  it("flags tool-use stop reason as incomplete even when pre-tool text exists (#76477)", () => {
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: true,
+        lastAssistant: { stopReason: "toolUse" },
+      }),
+    ).toBe(true);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: false,
+        lastAssistant: { stopReason: "toolUse" },
+      }),
+    ).toBe(true);
+    expect(
+      isIncompleteTerminalAssistantTurn({
+        hasAssistantVisibleText: true,
+        lastAssistant: { stopReason: "end_turn" },
+      }),
+    ).toBe(false);
+  });
+
+  it("detects tool-use terminal turn with pre-tool text as incomplete (#76477)", () => {
+    // When the last assistant message ended with stopReason=toolUse, pre-tool
+    // text alone must not suppress the incomplete-turn guard. The model
+    // expected to continue after tool results but the post-tool response was
+    // never produced.
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Initial analysis of the codebase..."],
+        toolMetas: [{ toolName: "read", meta: "path=src/index.ts" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "anthropic",
+          model: "sonnet-4.6",
+          content: [
+            { type: "text", text: "Initial analysis of the codebase..." },
+            { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).not.toBeNull();
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+  });
+
+  it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 1,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Let me update the file..."],
+        toolMetas: [{ toolName: "write" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "Let me update the file..." },
+            { type: "tool_use", id: "tool_1", name: "write", input: {} },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("verify before retrying");
+  });
+
+  it("does not flag a completed tool-use turn with end_turn as incomplete (#76477)", () => {
+    // When the model successfully produces post-tool text, lastAssistant has
+    // stopReason=end_turn. The incomplete-turn guard should not fire.
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 2,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Initial analysis...", "Here is the final answer."],
+        toolMetas: [{ toolName: "read" }],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "anthropic",
+          model: "sonnet-4.6",
+          content: [{ type: "text", text: "Here is the final answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
+  it("surfaces an error for tool-use terminal turn with pre-tool text via runEmbeddedPiAgent (#76477)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Initial analysis of the issue..."],
+        toolMetas: [{ toolName: "read", meta: "path=src/index.ts" }],
+        lastAssistant: {
+          stopReason: "toolUse",
+          provider: "anthropic",
+          model: "sonnet-4.6",
+          content: [
+            { type: "text", text: "Initial analysis of the issue..." },
+            { type: "tool_use", id: "tool_1", name: "read", input: { path: "src/index.ts" } },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "sonnet-4.6",
+      runId: "run-tool-use-dropped-final-text",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("couldn't generate a response");
+    expect(mockedLog.warn).toHaveBeenCalledWith(
+      expect.stringContaining("incomplete turn detected"),
+    );
+  });
+
   it("treats missing replay metadata as replay-invalid", () => {
     const attempt = makeAttemptResult();
     delete (attempt as Partial<EmbeddedRunAttemptResult>).replayMetadata;
@@ -1345,20 +1476,30 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("verify before retrying");
   });
 
-  it("does not treat empty committed messaging arrays as user-visible delivery", () => {
+  it("does not treat empty committed messaging arrays as delivery", () => {
     expect(
-      hasCommittedUserVisibleToolDelivery({
+      hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts: ["  "],
         messagingToolSentMediaUrls: [],
       }),
     ).toBe(false);
   });
 
-  it("treats committed messaging media as user-visible delivery", () => {
+  it("treats committed messaging media as delivery", () => {
     expect(
-      hasCommittedUserVisibleToolDelivery({
+      hasCommittedMessagingToolDeliveryEvidence({
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+      }),
+    ).toBe(true);
+  });
+
+  it("treats committed messaging targets as delivery", () => {
+    expect(
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
       }),
     ).toBe(true);
   });
@@ -1381,6 +1522,18 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         didSendViaMessagingTool: false,
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: ["file:///tmp/render.png"],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats committed messaging targets as replay-invalid side effect metadata", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
+        messagingToolSentMediaUrls: [],
+        messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "channel-1" }],
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
   });
@@ -1877,7 +2030,7 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
         messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
       }),
-      clientToolCall: null,
+      clientToolCalls: undefined,
       yieldDetected: false,
       didSendDeterministicApprovalPrompt: false,
       didSendViaMessagingTool: false,

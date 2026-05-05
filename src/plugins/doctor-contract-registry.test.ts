@@ -14,6 +14,7 @@ const mocks = getRegistryJitiMocks();
 let clearPluginDoctorContractRegistryCache: typeof import("./doctor-contract-registry.js").clearPluginDoctorContractRegistryCache;
 let collectRelevantDoctorPluginIdsForTouchedPaths: typeof import("./doctor-contract-registry.js").collectRelevantDoctorPluginIdsForTouchedPaths;
 let listPluginDoctorLegacyConfigRules: typeof import("./doctor-contract-registry.js").listPluginDoctorLegacyConfigRules;
+let listPluginDoctorSessionRouteStateOwners: typeof import("./doctor-contract-registry.js").listPluginDoctorSessionRouteStateOwners;
 
 function makeTempDir(): string {
   return makeTrackedTempDir("openclaw-doctor-contract-registry", tempDirs);
@@ -23,7 +24,7 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-describe("doctor-contract-registry getJiti", () => {
+describe("doctor-contract-registry module loader", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
@@ -31,6 +32,7 @@ describe("doctor-contract-registry getJiti", () => {
       clearPluginDoctorContractRegistryCache,
       collectRelevantDoctorPluginIdsForTouchedPaths,
       listPluginDoctorLegacyConfigRules,
+      listPluginDoctorSessionRouteStateOwners,
     } = await import("./doctor-contract-registry.js"));
     clearPluginDoctorContractRegistryCache();
   });
@@ -67,7 +69,7 @@ describe("doctor-contract-registry getJiti", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("falls back to the Jiti boundary on Windows for TypeScript contract-api modules", () => {
+  it("falls back to the source-transform boundary on Windows for TypeScript contract-api modules", () => {
     const pluginRoot = makeTempDir();
     const contractApiPath = path.join(pluginRoot, "contract-api.ts");
     fs.writeFileSync(
@@ -181,6 +183,35 @@ describe("doctor-contract-registry getJiti", () => {
     } finally {
       platformSpy.mockRestore();
     }
+  });
+
+  it("loads session route-state owners from doctor contract modules", () => {
+    const pluginRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(pluginRoot, "doctor-contract-api.cjs"),
+      "module.exports = { sessionRouteStateOwners: [{ id: 'demo', label: 'Demo', providerIds: ['demo'], runtimeIds: ['demo-cli'], cliSessionKeys: ['demo-cli'], authProfilePrefixes: ['demo:'] }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
+        workspaceDir: pluginRoot,
+        env: {},
+      }),
+    ).toEqual([
+      {
+        id: "demo",
+        label: "Demo",
+        providerIds: ["demo"],
+        runtimeIds: ["demo-cli"],
+        cliSessionKeys: ["demo-cli"],
+        authProfilePrefixes: ["demo:"],
+      },
+    ]);
   });
 
   it("reads doctor contracts from the current manifest registry on each call", () => {
