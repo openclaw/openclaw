@@ -172,7 +172,7 @@ export function isSpawnAcpAcceptedResult(result: SpawnAcpResult): result is Spaw
 export const ACP_SPAWN_ACCEPTED_NOTE =
   "initial ACP task queued in isolated session; follow-ups continue in the bound thread.";
 export const ACP_SPAWN_SESSION_ACCEPTED_NOTE =
-  "thread-bound ACP session stays active after this task; continue in-thread for follow-ups.";
+  "thread-bound ACP session stays active after this task; continue in-thread for follow-ups through the parent assistant unless exact relay is explicitly requested.";
 
 export function resolveAcpSpawnRuntimePolicyError(params: {
   cfg: OpenClawConfig;
