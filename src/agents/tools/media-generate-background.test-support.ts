@@ -58,6 +58,7 @@ type DirectSendExpectation = {
   threadId: string;
   content: string;
   mediaUrls: string[];
+  arbiterEventKind: string;
 };
 
 type FallbackAnnouncementExpectation = {
@@ -154,6 +155,7 @@ export function expectDirectMediaSend({
   threadId,
   content,
   mediaUrls,
+  arbiterEventKind,
 }: DirectSendExpectation): void {
   expect(sendMessageMock).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -162,6 +164,13 @@ export function expectDirectMediaSend({
       threadId,
       content,
       mediaUrls,
+      hermesArbiter: expect.objectContaining({
+        arbiter_topic: "dev-iox",
+        arbiter_bot_name: "AHC_A8_bot",
+        arbiter_action_type: "status",
+        arbiter_event_kind: arbiterEventKind,
+        arbiter_target_chat_id: to,
+      }),
     }),
   );
 }

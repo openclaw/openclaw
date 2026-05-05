@@ -314,6 +314,38 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("accepts optional send metadata and forwards it into outbound delivery", async () => {
+    mockDeliverySuccess("m-metadata");
+    const metadata = {
+      arbiter_topic: "dev-command",
+      arbiter_bot_name: "HermesA8_bot",
+      arbiter_trace_id: "trace-1",
+      arbiter_idempotency_key: "idem-1",
+      arbiter_action_type: "send",
+    };
+
+    const { respond } = await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-metadata",
+      metadata,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        metadata,
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-metadata" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+
   it("forwards gateway client scopes into outbound delivery", async () => {
     mockDeliverySuccess("m-scope");
 

@@ -5,6 +5,8 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundTarget: vi.fn(),
   deliverOutboundPayloads: vi.fn(),
   resolveRuntimePluginRegistry: vi.fn(),
+  callGatewayLeastPrivilege: vi.fn(),
+  randomIdempotencyKey: vi.fn(),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -45,6 +47,11 @@ vi.mock("./deliver.js", () => ({
   deliverOutboundPayloads: mocks.deliverOutboundPayloads,
 }));
 
+vi.mock("./message.gateway.runtime.js", () => ({
+  callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
+  randomIdempotencyKey: mocks.randomIdempotencyKey,
+}));
+
 vi.mock("../../utils/message-channel.js", async () => {
   const actual = await vi.importActual<typeof import("../../utils/message-channel.js")>(
     "../../utils/message-channel.js",
@@ -62,6 +69,7 @@ vi.mock("../../utils/message-channel.js", async () => {
 
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { buildHermesArbiterMetadata } from "./hermes-arbiter-metadata.js";
 
 let sendMessage: typeof import("./message.js").sendMessage;
 let resetOutboundChannelResolutionStateForTest: typeof import("./channel-resolution.js").resetOutboundChannelResolutionStateForTest;
@@ -79,6 +87,10 @@ describe("sendMessage", () => {
     mocks.resolveOutboundTarget.mockClear();
     mocks.deliverOutboundPayloads.mockClear();
     mocks.resolveRuntimePluginRegistry.mockClear();
+    mocks.callGatewayLeastPrivilege.mockClear();
+    mocks.randomIdempotencyKey.mockClear();
+    mocks.callGatewayLeastPrivilege.mockResolvedValue({ messageId: "gw-1" });
+    mocks.randomIdempotencyKey.mockReturnValue("idem-generated");
 
     mocks.getChannelPlugin.mockReturnValue({
       outbound: { deliveryMode: "direct" },
@@ -353,5 +365,91 @@ describe("sendMessage", () => {
     });
 
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("forwards Hermes arbiter metadata through gateway delivery", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      outbound: { deliveryMode: "gateway" },
+    });
+
+    const hermesArbiter = buildHermesArbiterMetadata({
+      topic: "ops",
+      botName: "alpha",
+      actionType: "send",
+      traceId: "trace-1",
+      idempotencyKey: "idem-1",
+      extra: { arbiter_reason: "unit-test" },
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi",
+        idempotencyKey: "gateway-idem",
+        hermesArbiter,
+      }),
+    ).resolves.toMatchObject({
+      channel: "forum",
+      to: "123456",
+      via: "gateway",
+      result: { messageId: "gw-1" },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          to: "123456",
+          message: "hi",
+          idempotencyKey: "gateway-idem",
+          metadata: hermesArbiter,
+        }),
+      }),
+    );
+  });
+
+  it("routes Hermes arbiter metadata through gateway even for direct-mode channels", async () => {
+    const hermesArbiter = buildHermesArbiterMetadata({
+      topic: "ops",
+      botName: "alpha",
+      actionType: "status",
+      traceId: "trace-direct-1",
+      idempotencyKey: "idem-direct-1",
+      extra: { arbiter_reason: "direct-mode-unit-test" },
+    });
+
+    await expect(
+      sendMessage({
+        cfg: {},
+        channel: "forum",
+        to: "123456",
+        content: "hi direct",
+        threadId: 123,
+        idempotencyKey: "direct-idem",
+        hermesArbiter,
+      }),
+    ).resolves.toMatchObject({
+      channel: "forum",
+      to: "123456",
+      via: "gateway",
+      result: { messageId: "gw-1" },
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({
+          to: "123456",
+          message: "hi direct",
+          threadId: "123",
+          idempotencyKey: "direct-idem",
+          metadata: hermesArbiter,
+        }),
+      }),
+    );
   });
 });

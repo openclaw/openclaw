@@ -374,6 +374,8 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** Optional hook metadata carried by gateway send requests. */
+  metadata?: Record<string, unknown>;
 };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
@@ -745,6 +747,7 @@ async function applyMessageSendingHook(params: {
   accountId?: string;
   replyToId?: string | null;
   threadId?: string | number | null;
+  metadata?: Record<string, unknown>;
 }): Promise<{
   cancelled: boolean;
   payload: ReplyPayload;
@@ -765,6 +768,7 @@ async function applyMessageSendingHook(params: {
         replyToId: params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
         metadata: {
+          ...params.metadata,
           channel: params.channel,
           accountId: params.accountId,
           mediaUrls: params.payloadSummary.mediaUrls,
@@ -1082,6 +1086,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
         replyToId: resolveCurrentReplyTo(payload).replyToId,
         threadId: params.threadId,
+        metadata: params.metadata,
       });
       if (hookResult.cancelled) {
         continue;

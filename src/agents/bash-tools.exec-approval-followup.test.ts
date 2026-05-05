@@ -127,6 +127,13 @@ describe("exec approval followup", () => {
         threadId: "456",
         content: "all good",
         idempotencyKey: "exec-approval-followup:req-no-session",
+        hermesArbiter: expect.objectContaining({
+          arbiter_topic: "dev-iox",
+          arbiter_bot_name: "AHC_A8_bot",
+          arbiter_action_type: "status",
+          arbiter_event_kind: "exec_approval_followup",
+          arbiter_target_chat_id: "123",
+        }),
       }),
     );
     expect(callGatewayTool).not.toHaveBeenCalled();

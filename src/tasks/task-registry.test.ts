@@ -792,6 +792,16 @@ describe("task-registry", () => {
             to: "notifychat:123",
             threadId: "321",
             content: expect.stringContaining("Background task done: ACP background task"),
+            hermesArbiter: expect.objectContaining({
+              arbiter_topic: "dev-iox",
+              arbiter_bot_name: "AHC_A8_bot",
+              arbiter_action_type: "status",
+              arbiter_task_id: expect.any(String),
+              arbiter_run_id: "run-delivery",
+              arbiter_runtime: "acp",
+              arbiter_event_kind: "terminal",
+              arbiter_target_chat_id: "notifychat:123",
+            }),
             mirror: expect.objectContaining({
               sessionKey: "agent:main:main",
             }),
@@ -1005,6 +1015,64 @@ describe("task-registry", () => {
         expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
           expect.objectContaining({
             content: "Background task done: ACP background task (run run-deta).",
+          }),
+        ),
+      );
+    });
+  });
+
+  it("attaches Hermes arbiter metadata to task state-change delivery", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+          threadId: "321",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-state-arbiter",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        startedAt: 100,
+      });
+      updateTaskNotifyPolicyById({
+        taskId: task.taskId,
+        notifyPolicy: "state_changes",
+      });
+      recordTaskProgressByRunId({
+        runId: "run-state-arbiter",
+        eventSummary: "No output for 60s.",
+      });
+
+      await waitForAssertion(() =>
+        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            channel: "notifychat",
+            to: "notifychat:123",
+            threadId: "321",
+            hermesArbiter: expect.objectContaining({
+              arbiter_topic: "dev-iox",
+              arbiter_bot_name: "AHC_A8_bot",
+              arbiter_action_type: "status",
+              arbiter_task_id: task.taskId,
+              arbiter_run_id: "run-state-arbiter",
+              arbiter_runtime: "acp",
+              arbiter_event_kind: "state_change",
+              arbiter_target_chat_id: "notifychat:123",
+            }),
           }),
         ),
       );

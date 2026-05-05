@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+import { buildHermesArbiterMetadata } from "../infra/outbound/hermes-arbiter-metadata.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -50,6 +51,8 @@ import type {
 
 const log = createSubsystemLogger("tasks/registry");
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
+const HERMES_ARBITER_TASK_TOPIC = "dev-iox";
+const HERMES_ARBITER_TASK_BOT_NAME = "AHC_A8_bot";
 
 const tasks = new Map<string, TaskRecord>();
 const taskDeliveryStates = new Map<string, TaskDeliveryState>();
@@ -89,6 +92,33 @@ type TaskDeliveryOwner = {
   requesterOrigin?: TaskDeliveryState["requesterOrigin"];
   flowId?: string;
 };
+
+function buildTaskHermesArbiterMetadata(params: {
+  task: TaskRecord;
+  owner: TaskDeliveryOwner;
+  idempotencyKey: string;
+  eventKind: "terminal" | "state_change";
+}) {
+  const targetChatId = params.owner.requesterOrigin?.to?.trim();
+  if (!targetChatId) {
+    return undefined;
+  }
+  const runId = params.task.runId?.trim();
+  return buildHermesArbiterMetadata({
+    topic: HERMES_ARBITER_TASK_TOPIC,
+    botName: HERMES_ARBITER_TASK_BOT_NAME,
+    actionType: "status",
+    traceId: `openclaw:${params.eventKind}:${params.task.taskId}:${runId || "no-run"}`,
+    idempotencyKey: params.idempotencyKey,
+    extra: {
+      arbiter_task_id: params.task.taskId,
+      ...(runId ? { arbiter_run_id: runId } : {}),
+      arbiter_runtime: params.task.runtime,
+      arbiter_event_kind: params.eventKind,
+      arbiter_target_chat_id: targetChatId,
+    },
+  });
+}
 
 export type ParentFlowLinkErrorCode =
   | "scope_kind_not_session"
@@ -1180,6 +1210,12 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         content: eventText,
         agentId: requesterAgentId,
         idempotencyKey,
+        hermesArbiter: buildTaskHermesArbiterMetadata({
+          task: latest,
+          owner,
+          idempotencyKey,
+          eventKind: "terminal",
+        }),
         mirror: {
           sessionKey: ownerSessionKey,
           agentId: requesterAgentId,
@@ -1274,6 +1310,12 @@ export async function maybeDeliverTaskStateChangeUpdate(
       content: eventText,
       agentId: requesterAgentId,
       idempotencyKey,
+      hermesArbiter: buildTaskHermesArbiterMetadata({
+        task: current,
+        owner,
+        idempotencyKey,
+        eventKind: "state_change",
+      }),
       mirror: {
         sessionKey: ownerSessionKey,
         agentId: requesterAgentId,
