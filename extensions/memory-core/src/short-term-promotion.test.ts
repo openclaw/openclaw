@@ -817,7 +817,9 @@ describe("short-term promotion", () => {
         nowMs,
       });
       const key = ranked[0]?.key;
-      expect(key).toBeTruthy();
+      if (!key) {
+        throw new Error("expected short-term candidate key");
+      }
 
       const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
       const phaseStoreRaw = `${JSON.stringify(
@@ -825,7 +827,7 @@ describe("short-term promotion", () => {
           version: 1,
           updatedAt: "2026-04-01T09:00:00.000Z",
           entries: {
-            [key!]: {
+            [key]: {
               key,
               lightHits: 7,
               remHits: 3,
@@ -841,7 +843,7 @@ describe("short-term promotion", () => {
 
       const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
       const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (target, options) => {
-        if (String(target) === phaseStorePath) {
+        if (typeof target === "string" && target === phaseStorePath) {
           throw Object.assign(new Error("phase store unavailable"), { code: "EACCES" });
         }
         return await actualFs.readFile(target, options);
@@ -852,7 +854,7 @@ describe("short-term promotion", () => {
           recordDreamingPhaseSignals({
             workspaceDir,
             phase: "light",
-            keys: [key!],
+            keys: [key],
             nowMs,
           }),
         ).rejects.toMatchObject({ code: "EACCES" });
