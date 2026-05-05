@@ -193,6 +193,60 @@ describe("comfy image-generation provider", () => {
     });
   });
 
+  it("passes private-network SSRF policy when local mode uses a DNS hostname (#77922)", async () => {
+    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ prompt_id: "dns-prompt-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            "dns-prompt-1": {
+              outputs: {
+                "9": { images: [{ filename: "out.png", subfolder: "", type: "output" }] },
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("png"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildComfyImageGenerationProvider();
+    await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "a cat",
+      cfg: buildComfyConfig({
+        baseUrl: "http://comfy.local.example.com:8188",
+        mode: "local",
+        workflow: { "6": { inputs: { text: "" } }, "9": { inputs: {} } },
+        promptNodeId: "6",
+        outputNodeId: "9",
+      }),
+    });
+
+    // The fetch call must include a non-null policy that allows private networks.
+    // Without the fix, DNS hostnames that resolve to private IPs were excluded
+    // from the allowlist because isPrivateOrLoopbackHost returned false for them.
+    const firstCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
+      | Record<string, unknown>
+      | undefined;
+    expect(firstCall?.policy).toBeTruthy();
+  });
+
   it("uploads reference images for local edit workflows", async () => {
     _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock

@@ -18,7 +18,6 @@ import {
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
-  isPrivateOrLoopbackHost,
   mergeSsrFPolicies,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type SsrFPolicy,
@@ -268,10 +267,14 @@ function resolveComfyNetworkPolicy(params: {
   }
 
   const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
-  if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
+  if (!hostname || !params.allowPrivateNetwork) {
     return {};
   }
-
+  // Always allowlist the configured hostname when allowPrivateNetwork is set.
+  // isPrivateOrLoopbackHost() only matches numeric private IPs and loopback —
+  // it returns false for DNS names like "comfy.local.example.com" that resolve
+  // to a private IP, causing the SSRF guard to block the request even though
+  // the user explicitly opted in to local mode.
   const hostnamePolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostname]);
   const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
   return {
