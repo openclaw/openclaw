@@ -5,7 +5,33 @@ export type PluginHookMessageContext = {
   channelId: string;
   accountId?: string;
   conversationId?: string;
+  /**
+   * Canonical session key for this conversation — the same value the agent
+   * runtime sees as `params.sessionKey` for the run that produced the
+   * outbound payload, and the same value `agent_end`/`llm_input`/`llm_output`
+   * fire with. Plugins correlating per-turn state across `agent_end` and
+   * `message_sending` rely on this equality.
+   *
+   * For inbound message hooks (`inbound_claim` etc.), this is the canonical
+   * session for the inbound conversation as resolved by `resolveSessionKey`
+   * / `deriveInboundMessageHookContext`.
+   *
+   * For outbound delivery hooks (`message_sending`, `message_sent`), this
+   * mirrors `OutboundSessionContext.key` from the dispatch path.
+   */
   sessionKey?: string;
+  /**
+   * Per-turn run identifier (UUID), unique to one end-to-end agent turn:
+   * stable across all LLM-call iterations, retry attempts (compaction,
+   * empty-response, planning-only, etc.), and multi-payload reply chunks
+   * within that turn; distinct for each new inbound user message and for
+   * each cron/heartbeat/followup-triggered run.
+   *
+   * Generated once in `agent-runner-execution.ts`/`followup-runner.ts` via
+   * `crypto.randomUUID()`. Recommended correlation key for plugins linking
+   * `agent_end` → `message_sending` (more robust than `sessionKey`, which
+   * cannot disambiguate concurrent turns in the same session).
+   */
   runId?: string;
   messageId?: string;
   senderId?: string;

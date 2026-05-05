@@ -572,11 +572,23 @@ export async function dispatchReplyFromConfig(
       return null;
     }
     markInboundDedupeReplayUnsafe();
+    // session.key on the outbound side MUST equal the agent runtime's
+    // params.sessionKey for the run that produced this payload, so plugins
+    // observing both `agent_end` and `message_sending` see the same
+    // canonical session key. The agent runtime resolves its sessionKey as
+    // `targetSessionKey || ctx.SessionKey` (see get-reply.ts:198) — mirror
+    // that here. For non-native chat, both branches collapse to ctx.SessionKey;
+    // for native-command-redirect (CommandTargetSessionKey set), the agent
+    // runs against the redirect target, so session.key must follow it too.
+    const agentRuntimeSessionKey =
+      ctx.CommandSource === "native"
+        ? (normalizeOptionalString(ctx.CommandTargetSessionKey) ?? ctx.SessionKey)
+        : ctx.SessionKey;
     return await routeReplyRuntime.routeReply({
       payload,
       channel: routeReplyChannel,
       to: routeReplyTo,
-      sessionKey: ctx.SessionKey,
+      sessionKey: agentRuntimeSessionKey,
       policySessionKey:
         ctx.CommandSource === "native"
           ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
