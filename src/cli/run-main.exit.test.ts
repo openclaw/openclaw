@@ -20,6 +20,7 @@ const getProgramContextMock = vi.hoisted(() => vi.fn(() => null));
 const registerCoreCliByNameMock = vi.hoisted(() => vi.fn());
 const registerSubCliByNameMock = vi.hoisted(() => vi.fn());
 const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(async () => ({})));
+const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
@@ -156,6 +157,10 @@ vi.mock("../plugins/cli.js", () => ({
   registerPluginCliCommandsFromValidatedConfig: registerPluginCliCommandsFromValidatedConfigMock,
 }));
 
+vi.mock("../plugins/cli-registry-loader.js", () => ({
+  resolvePluginCliRootOwnerIds: resolvePluginCliRootOwnerIdsMock,
+}));
+
 vi.mock("../terminal/restore.js", () => ({
   restoreTerminalState: restoreTerminalStateMock,
 }));
@@ -218,6 +223,10 @@ describe("runCli exit behavior", () => {
     startProxyMock.mockResolvedValue(null);
     stopProxyMock.mockResolvedValue(undefined);
     getProgramContextMock.mockReturnValue(null);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "googlemeet" ? ["google-meet"] : [],
+    );
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
   });
@@ -339,7 +348,7 @@ describe("runCli exit behavior", () => {
     ["channel capabilities probe", ["node", "openclaw", "channels", "capabilities"]],
     ["directory plugin command", ["node", "openclaw", "directory", "peers", "list"]],
     ["message plugin command", ["node", "openclaw", "message", "send", "--to", "demo"]],
-    ["unknown plugin command", ["node", "openclaw", "googlemeet", "login"]],
+    ["metadata-owned plugin command", ["node", "openclaw", "googlemeet", "login"]],
   ])("starts managed proxy routing for %s", (_name, argv) => {
     expect(shouldStartProxyForCli(argv)).toBe(true);
   });
@@ -362,7 +371,11 @@ describe("runCli exit behavior", () => {
     ["agents list", ["node", "openclaw", "agents", "list"]],
     ["models list", ["node", "openclaw", "models", "list"]],
     ["models status without live probe", ["node", "openclaw", "models", "status"]],
+    ["skills check", ["node", "openclaw", "skills", "check"]],
+    ["skills info", ["node", "openclaw", "skills", "info", "weather"]],
+    ["skills list", ["node", "openclaw", "skills", "list"]],
     ["tasks list", ["node", "openclaw", "tasks", "list"]],
+    ["legacy singular tool namespace", ["node", "openclaw", "tool", "image_generate"]],
     ["gateway tools namespace typo", ["node", "openclaw", "tools", "effective"]],
     ["migrate", ["node", "openclaw", "migrate"]],
   ])("skips managed proxy routing for %s", (_name, argv) => {
@@ -377,7 +390,7 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("starts the managed proxy for unknown plugin commands by default", async () => {
+  it("starts the managed proxy for metadata-owned plugin commands by default", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
     await runCli(["node", "openclaw", "googlemeet", "login"]);
@@ -385,24 +398,44 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).toHaveBeenCalledWith(undefined);
   });
 
-  it("keeps gateway tool RPC names out of plugin command discovery", async () => {
+  it("rejects unowned command roots before proxy and plugin runtime registration", async () => {
+    await expect(runCli(["node", "openclaw", "foo"])).rejects.toThrow(
+      'No built-in command or plugin CLI metadata owns "foo"',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("does not install the env proxy dispatcher for bypassed skills inspection commands", async () => {
+    hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(true);
+    tryRouteCliMock.mockResolvedValueOnce(true);
+
+    await runCli(["node", "openclaw", "skills", "check"]);
+
+    expect(hasEnvHttpProxyAgentConfiguredMock).not.toHaveBeenCalled();
+    expect(ensureGlobalUndiciEnvProxyDispatcherMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["auth", ["node", "openclaw", "auth", "--help"]],
+    ["tool", ["node", "openclaw", "tool", "image_generate"]],
+    ["tools", ["node", "openclaw", "tools", "effective"]],
+  ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
     buildProgramMock.mockReturnValueOnce({
       commands: [],
       parseAsync,
     });
 
-    await runCli(["node", "openclaw", "tools", "effective"]);
+    await runCli(argv);
 
     expect(startProxyMock).not.toHaveBeenCalled();
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "tools", [
-      "node",
-      "openclaw",
-      "tools",
-      "effective",
-    ]);
+    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), argv[2], argv);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
-    expect(parseAsync).toHaveBeenCalledWith(["node", "openclaw", "tools", "effective"]);
+    expect(parseAsync).toHaveBeenCalledWith(argv);
   });
 
   it("fails protected commands when managed proxy activation fails", async () => {

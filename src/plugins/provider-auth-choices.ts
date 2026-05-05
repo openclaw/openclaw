@@ -2,9 +2,9 @@ import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 export type ProviderAuthChoiceMetadata = {
   pluginId: string;
@@ -180,12 +180,12 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceCandidate[] {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: params?.config ?? {},
     workspaceDir: params?.workspaceDir,
-    env: params?.env,
-    includeDisabled: true,
+    env: params?.env ?? process.env,
   });
+  const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   return registry.plugins.flatMap((plugin) => {
     if (

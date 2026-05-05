@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import { resolveVoiceCallEffectiveConfig, resolveVoiceCallSessionKey } from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
@@ -64,6 +65,11 @@ function createWebhookCall(params: {
   to: string;
 }): CallRecord {
   const callId = crypto.randomUUID();
+  const effective = resolveVoiceCallEffectiveConfig(
+    params.ctx.config,
+    params.direction === "inbound" ? params.to : undefined,
+  );
+  const effectiveConfig = effective.config;
 
   const callRecord: CallRecord = {
     callId,
@@ -73,14 +79,20 @@ function createWebhookCall(params: {
     state: "ringing",
     from: params.from,
     to: params.to,
+    sessionKey: resolveVoiceCallSessionKey({
+      config: effectiveConfig,
+      callId,
+      phone: params.direction === "outbound" ? params.to : params.from,
+    }),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
     metadata: {
       initialMessage:
         params.direction === "inbound"
-          ? params.ctx.config.inboundGreeting || "Hello! How can I help you today?"
+          ? effectiveConfig.inboundGreeting || "Hello! How can I help you today?"
           : undefined,
+      ...(effective.numberRouteKey ? { numberRouteKey: effective.numberRouteKey } : {}),
     },
   };
 
