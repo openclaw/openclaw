@@ -27,6 +27,10 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
   });
   const normalized: ReplyPayload[] = [];
   for (const payload of params.payloads) {
+    if (payload.sensitiveMedia === true) {
+      normalized.push(payload);
+      continue;
+    }
     normalized.push(await normalizeMediaPaths(payload));
   }
   return normalized;

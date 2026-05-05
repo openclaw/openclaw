@@ -98,4 +98,23 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrls).toBeUndefined();
     expect(payload?.text).toBeTruthy();
   });
+
+  it("does not stage sensitive media before display suppression", async () => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const workspaceDir = path.join(stateDir, "workspace");
+    const sourcePath = await createCodexHomeImage({ agentDir });
+    const cfg = createConfig({ agentDir, workspaceDir, allowRead: true });
+
+    const [payload] = await normalizeWebchatReplyMediaPathsForDisplay({
+      cfg,
+      sessionKey: "agent:main:webchat:direct:user",
+      agentId: "main",
+      payloads: [{ mediaUrls: [sourcePath], sensitiveMedia: true }],
+    });
+
+    expect(payload?.mediaUrl).toBeUndefined();
+    expect(payload?.mediaUrls).toEqual([sourcePath]);
+    await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+  });
 });
