@@ -18,6 +18,12 @@ import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import { editMessageTelegram } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+import {
+  markTelegramInflightCompleted,
+  markTelegramInflightDispatched,
+  markTelegramInflightFailed,
+  markStaleTelegramInflightInterrupted,
+} from "./telegram-reliability-store.js";
 
 export type TelegramBotDeps = {
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -39,6 +45,10 @@ export type TelegramBotDeps = {
   emitInternalMessageSentHook?: typeof emitInternalMessageSentHook;
   editMessageTelegram?: typeof editMessageTelegram;
   createChannelMessageReplyPipeline?: typeof createChannelMessageReplyPipeline;
+  markTelegramInflightDispatched?: typeof markTelegramInflightDispatched;
+  markTelegramInflightCompleted?: typeof markTelegramInflightCompleted;
+  markTelegramInflightFailed?: typeof markTelegramInflightFailed;
+  markStaleTelegramInflightInterrupted?: typeof markStaleTelegramInflightInterrupted;
 };
 
 export const defaultTelegramBotDeps: TelegramBotDeps = {
@@ -98,5 +108,17 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get createChannelMessageReplyPipeline() {
     return createChannelMessageReplyPipeline;
+  },
+  get markTelegramInflightDispatched() {
+    return markTelegramInflightDispatched;
+  },
+  get markTelegramInflightCompleted() {
+    return markTelegramInflightCompleted;
+  },
+  get markTelegramInflightFailed() {
+    return markTelegramInflightFailed;
+  },
+  get markStaleTelegramInflightInterrupted() {
+    return markStaleTelegramInflightInterrupted;
   },
 };

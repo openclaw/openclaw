@@ -24,6 +24,7 @@ const {
   getUpsertChannelPairingRequestMock,
   listSkillCommandsForAgents,
   makeForumGroupMessageCtx,
+  markStaleTelegramInflightInterruptedSpy,
   middlewareUseSpy,
   onSpy,
   replySpy,
@@ -201,6 +202,31 @@ describe("createTelegramBot", () => {
 
     expect(throttlerSpy).toHaveBeenCalledTimes(2);
     expect(useSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("notifies chats about interrupted inflight Telegram requests on startup", () => {
+    markStaleTelegramInflightInterruptedSpy.mockReturnValueOnce([
+      {
+        id: "inflight-1",
+        accountId: "default",
+        chatId: "123",
+        state: "interrupted",
+        receivedAt: "2026-05-05T12:00:00.000Z",
+        updatedAt: "2026-05-05T12:01:00.000Z",
+        thread: { scope: "forum", id: 99 },
+      },
+    ]);
+
+    createTelegramBot({ token: "tok" });
+
+    expect(markStaleTelegramInflightInterruptedSpy).toHaveBeenCalledWith({
+      accountId: "default",
+    });
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("interrupted before completion"),
+      expect.objectContaining({ message_thread_id: 99 }),
+    );
   });
 
   it("logs middleware errors through grammY catch without rethrowing", () => {
