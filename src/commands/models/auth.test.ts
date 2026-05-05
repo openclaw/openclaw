@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
+  loadNodeHostConfig: vi.fn<() => Promise<Record<string, unknown> | null>>(async () => null),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
@@ -117,6 +118,10 @@ vi.mock("../onboard-helpers.js", () => ({
 
 vi.mock("../oauth-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
+}));
+
+vi.mock("../../node-host/config.js", () => ({
+  loadNodeHostConfig: mocks.loadNodeHostConfig,
 }));
 
 vi.mock("../../plugins/provider-oauth-flow.js", () => ({
@@ -287,6 +292,7 @@ describe("modelsAuthLoginCommand", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.resolveDefaultAgentWorkspaceDir.mockReturnValue("/tmp/openclaw/workspace");
     mocks.isRemoteEnvironment.mockReturnValue(false);
+    mocks.loadNodeHostConfig.mockResolvedValue(null);
     mocks.loadValidConfigOrThrow.mockImplementation(async () => currentConfig);
     mocks.updateConfig.mockImplementation(
       async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
@@ -412,6 +418,28 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
     );
+  });
+
+  it("blocks auth login on a remote node host before writing local credentials", async () => {
+    const runtime = createRuntime();
+    mocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-1",
+      token: "node-token",
+      gateway: {
+        host: "10.30.10.20",
+        port: 18789,
+      },
+    });
+
+    await expect(modelsAuthLoginCommand({ provider: "openai-codex" }, runtime)).rejects.toThrow(
+      "configured as a remote node host",
+    );
+
+    expect(mocks.loadValidConfigOrThrow).not.toHaveBeenCalled();
+    expect(runProviderAuth).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
   it("uses the requested agent store for provider auth login", async () => {
