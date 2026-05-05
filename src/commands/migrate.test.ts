@@ -225,6 +225,10 @@ describe("migrateApplyCommand", () => {
         required: false,
         options: [
           expect.objectContaining({
+            value: MIGRATION_SKILL_SELECTION_SKIP,
+            label: "Skip for now",
+          }),
+          expect.objectContaining({
             value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
             label: "Toggle all on",
           }),
@@ -234,10 +238,6 @@ describe("migrateApplyCommand", () => {
           }),
           expect.objectContaining({ value: "skill:alpha", label: "alpha" }),
           expect.objectContaining({ value: "skill:beta", label: "beta" }),
-          expect.objectContaining({
-            value: MIGRATION_SKILL_SELECTION_SKIP,
-            label: "Skip for now",
-          }),
         ],
       }),
     );

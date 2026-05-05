@@ -61,6 +61,10 @@ async function promptCodexMigrationSkillSelection(
     message: stylePromptMessage("Select Codex skills to migrate into this agent"),
     options: [
       {
+        value: MIGRATION_SKILL_SELECTION_SKIP,
+        label: "Skip for now",
+      },
+      {
         value: MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
         label: "Toggle all on",
       },
@@ -76,10 +80,6 @@ async function promptCodexMigrationSkillSelection(
           hint: hint === undefined ? undefined : stylePromptHint(hint),
         };
       }),
-      {
-        value: MIGRATION_SKILL_SELECTION_SKIP,
-        label: "Skip for now",
-      },
     ],
     initialValues: getDefaultMigrationSkillSelectionValues(skillItems),
     required: false,
