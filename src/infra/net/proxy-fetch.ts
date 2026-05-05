@@ -7,6 +7,7 @@ import {
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
+import { sanitizeHeadersInit } from "./redirect-headers.js";
 
 export const PROXY_FETCH_PROXY_URL = Symbol.for("openclaw.proxyFetch.proxyUrl");
 type ProxyFetchWithMetadata = typeof fetch & {
@@ -47,7 +48,7 @@ function normalizeInitForUndici(init: RequestInit | undefined): RequestInit | un
   for (const [key, value] of body.entries()) {
     appendFormDataEntry(form, key, value);
   }
-  const headers = new Headers(init.headers);
+  const headers = new Headers(sanitizeHeadersInit(init.headers));
   headers.delete("content-length");
   headers.delete("content-type");
   return { ...init, headers, body: form as unknown as BodyInit };

@@ -3,7 +3,10 @@ import { logWarn } from "../../logger.js";
 import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
-import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
+import {
+  retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders,
+  sanitizeHeadersInit,
+} from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
   isMockedFetch,
@@ -243,7 +246,7 @@ function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
   if (!headers) {
     return headers;
   }
-  const nextHeaders = new Headers(headers);
+  const nextHeaders = new Headers(sanitizeHeadersInit(headers));
   nextHeaders.delete("content-encoding");
   nextHeaders.delete("content-language");
   nextHeaders.delete("content-length");

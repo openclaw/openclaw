@@ -1,4 +1,5 @@
 import type { Dispatcher } from "undici";
+import { sanitizeHeadersInit } from "./redirect-headers.js";
 import { loadUndiciRuntimeDeps, type UndiciRuntimeDeps } from "./undici-runtime.js";
 
 export type DispatcherAwareRequestInit = RequestInit & { dispatcher?: Dispatcher };
@@ -59,7 +60,7 @@ function normalizeRuntimeRequestInit(
     return init;
   }
 
-  const headers = new Headers(init.headers);
+  const headers = new Headers(sanitizeHeadersInit(init.headers));
   headers.delete("content-length");
   headers.delete("content-type");
   return {
