@@ -373,7 +373,7 @@ describe("CronService failure alerts", () => {
         channel: "telegram",
         to: "19098680",
         text: expect.stringMatching(
-          /Cron job "gateway restart" skipped 2 times\nSkip reason: disabled/,
+          /Cron job "gateway restart" skipped 2 times at .*\nSkip reason: disabled/,
         ),
       }),
     );

@@ -441,8 +441,10 @@ function emitFailureAlert(
   const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+  const now = state.deps.nowMs();
+  const timestampLabel = new Date(now).toISOString();
   const text = [
-    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times at ${timestampLabel}`,
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
 
