@@ -36,7 +36,7 @@ export function registerMaintenanceCommands(program: Command) {
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
         });
-        defaultRuntime.exit(0);
+        defaultRuntime.exit(typeof process.exitCode === "number" ? process.exitCode : 0);
       });
     });
 

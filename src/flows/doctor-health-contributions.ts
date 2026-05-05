@@ -620,6 +620,9 @@ async function runFinalConfigValidationHealth(_ctx: DoctorHealthFlowContext): Pr
       const path = issue.path || "<root>";
       _ctx.runtime.error(`- ${path}: ${issue.message}`);
     }
+    if (!process.exitCode) {
+      process.exitCode = 1;
+    }
   }
 }
 
