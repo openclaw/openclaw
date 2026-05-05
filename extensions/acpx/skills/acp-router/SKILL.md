@@ -212,7 +212,7 @@ Defaults are:
 
 - `openclaw -> openclaw acp`
 - `claude -> bundled @agentclientprotocol/claude-agent-acp@0.32.0`
-- `codex -> bundled @zed-industries/codex-acp@0.13.0 through OpenClaw's isolated CODEX_HOME wrapper`
+- `codex -> bundled @zed-industries/codex-acp@0.13.0` through OpenClaw's isolated `CODEX_HOME` wrapper by default; set ACPX plugin `codexHome` or `OPENCLAW_ACPX_CODEX_HOME` to use an explicitly authenticated Codex home
 - `copilot -> copilot --acp --stdio`
 - `cursor -> cursor-agent acp`
 - `droid -> droid exec --output-format acp`
