@@ -1205,6 +1205,7 @@ export const dispatchTelegramMessage = async ({
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
+                  allowProgressCallbacksWhenSourceDeliverySuppressed: Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
                     const progressPromise = pushStreamToolProgress(

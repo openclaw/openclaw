@@ -1243,9 +1243,14 @@ export async function dispatchReplyFromConfig(
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
+    const allowSuppressedSourceProgressCallbacks =
+      params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
     const shouldForwardProgressCallback = (options?: {
       forwardWhenSourceDeliverySuppressed?: boolean;
-    }) => !suppressAutomaticSourceDelivery || options?.forwardWhenSourceDeliverySuppressed === true;
+    }) =>
+      !suppressAutomaticSourceDelivery ||
+      (allowSuppressedSourceProgressCallbacks &&
+        options?.forwardWhenSourceDeliverySuppressed === true);
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
       options?: { forwardWhenSourceDeliverySuppressed?: boolean },

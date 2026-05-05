@@ -3131,6 +3131,7 @@ describe("dispatchReplyFromConfig", () => {
       dispatcher,
       replyOptions: {
         sourceReplyDeliveryMode: "message_tool_only",
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onToolStart: callbacks.toolStart,
         onItemEvent: callbacks.itemEvent,
         onCommandOutput: callbacks.commandOutput,
@@ -4567,11 +4568,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       if (name === "typingStart") {
         continue;
       }
-      if (name === "toolStart" || name === "itemEvent" || name === "planUpdate") {
-        expect(callback).toHaveBeenCalledTimes(1);
-      } else {
-        expect(callback).not.toHaveBeenCalled();
-      }
+      expect(callback).not.toHaveBeenCalled();
     }
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledWith(
       expect.objectContaining({
