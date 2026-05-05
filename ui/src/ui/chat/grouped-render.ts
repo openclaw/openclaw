@@ -721,8 +721,13 @@ function resolveRenderableMessageImages(
 ): RenderableImageBlock[] {
   return images.flatMap((img) => {
     const isLocalImage = isLocalAssistantAttachmentSource(img.url);
+    const localRoots = opts?.localMediaPreviewRoots ?? [];
+    // Mirror resolveAssistantAttachmentAvailability: when roots are empty the
+    // bootstrap config has not loaded yet, so let the server meta check decide
+    // instead of permanently hiding the image (#67915).
     const canProxyLocalImage =
-      isLocalImage && isLocalAttachmentPreviewAllowed(img.url, opts?.localMediaPreviewRoots ?? []);
+      isLocalImage &&
+      (localRoots.length === 0 || isLocalAttachmentPreviewAllowed(img.url, localRoots));
     if (isLocalImage && !canProxyLocalImage) {
       return [];
     }
@@ -1049,7 +1054,14 @@ function resolveAssistantAttachmentAvailability(
   if (!isLocalAssistantAttachmentSource(source)) {
     return { status: "available" };
   }
-  if (!isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)) {
+  // While the bootstrap config fetch is still in flight, `localMediaPreviewRoots`
+  // is the empty default. Skip the client-side gate in that window and fall
+  // through to the authoritative server-side `assistant-media?meta=1` check
+  // instead of permanently denying every local path. See issue #67915.
+  if (
+    localMediaPreviewRoots.length > 0 &&
+    !isLocalAttachmentPreviewAllowed(source, localMediaPreviewRoots)
+  ) {
     return { status: "unavailable", reason: "Outside allowed folders", checkedAt: Date.now() };
   }
   const normalizedAuthToken = authToken?.trim() ?? "";

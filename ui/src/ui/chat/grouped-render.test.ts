@@ -1365,6 +1365,53 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).toContain("Done");
   });
 
+  it("falls through to server meta when localMediaPreviewRoots is empty (bootstrap window)", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (!url.includes("meta=1")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      return {
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-bootstrap"),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-bootstrap-empty-roots",
+        role: "assistant",
+        content:
+          "Loading audio\nMEDIA:/home/node/.openclaw/media/outbound/8ad46428-7c81-412e-9df8-e1dbab658b57.mp3\nDone",
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        basePath: "/openclaw",
+        // Bootstrap config has not loaded yet — emulate the empty-roots window.
+        localMediaPreviewRoots: [],
+        onRequestUpdate: () => undefined,
+      },
+    );
+
+    // First render must NOT hard-deny while roots are still loading.
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const calledUrl = fetchMock.mock.calls[0]?.[0] as string;
+    expect(calledUrl).toContain("meta=1");
+    expect(calledUrl).toContain("8ad46428-7c81-412e-9df8-e1dbab658b57.mp3");
+
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(container.textContent).toContain("Loading audio");
+    expect(container.textContent).toContain("Done");
+    expect(container.textContent).not.toContain("Outside allowed folders");
+    vi.unstubAllGlobals();
+  });
+
   it("allows platform-specific local assistant attachments inside preview roots", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const fetchMock = vi.fn(async (url: string) => {
