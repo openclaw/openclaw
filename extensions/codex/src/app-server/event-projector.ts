@@ -706,7 +706,7 @@ export class CodexAppServerEventProjector {
         ...(params.phase === "result"
           ? {
               status,
-              isError: status === "failed",
+              isError: isNonSuccessItemStatus(status),
               ...itemToolResult(item),
             }
           : {}),
@@ -1118,15 +1118,22 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
-function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" {
+function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed") {
     return "failed";
+  }
+  if (status === "declined") {
+    return "blocked";
   }
   if (status === "inProgress" || status === "running") {
     return "running";
   }
   return "completed";
+}
+
+function isNonSuccessItemStatus(status: ReturnType<typeof itemStatus>): boolean {
+  return status === "failed" || status === "blocked";
 }
 
 function itemName(item: CodexThreadItem): string | undefined {

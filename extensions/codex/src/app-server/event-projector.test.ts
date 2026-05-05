@@ -733,6 +733,52 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("marks declined Codex-native tool results as non-success", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        phase: "end",
+        kind: "command",
+        name: "bash",
+        itemId: "cmd-declined",
+        status: "blocked",
+        suppressChannelProgress: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        name: "bash",
+        itemId: "cmd-declined",
+        toolCallId: "cmd-declined",
+        status: "blocked",
+        isError: true,
+      }),
+    });
+  });
+
   it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
