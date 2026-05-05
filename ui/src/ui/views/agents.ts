@@ -150,24 +150,27 @@ export function renderAgents(props: AgentsProps) {
       <section class="agents-toolbar">
         <div class="agents-toolbar-row">
           <div class="agents-control-select">
-            <select
-              class="agents-select"
-              .value=${selectedId ?? ""}
-              ?disabled=${props.loading || agents.length === 0}
-              @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
-            >
-              ${agents.length === 0
-                ? html` <option value="">${t("agents.noAgents")}</option> `
-                : agents.map(
-                    (agent) => html`
-                      <option value=${agent.id} ?selected=${agent.id === selectedId}>
-                        ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId)
-                          ? ` (${agentBadgeText(agent.id, defaultId)})`
-                          : ""}
-                      </option>
-                    `,
-                  )}
-            </select>
+            ${keyed(
+              selectedId ?? "",
+              html`<select
+                class="agents-select"
+                .value=${selectedId ?? ""}
+                ?disabled=${props.loading || agents.length === 0}
+                @change=${(e: Event) => props.onSelectAgent((e.target as HTMLSelectElement).value)}
+              >
+                ${agents.length === 0
+                  ? html` <option value="">${t("agents.noAgents")}</option> `
+                  : agents.map(
+                      (agent) => html`
+                        <option value=${agent.id} ?selected=${agent.id === selectedId}>
+                          ${normalizeAgentLabel(agent)}${agentBadgeText(agent.id, defaultId)
+                            ? ` (${agentBadgeText(agent.id, defaultId)})`
+                            : ""}
+                        </option>
+                      `,
+                    )}
+              </select>`,
+            )}
           </div>
           <div class="agents-toolbar-actions">
             ${selectedAgent

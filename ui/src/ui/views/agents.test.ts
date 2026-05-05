@@ -254,6 +254,31 @@ describe("renderAgents", () => {
     expect(alphaSelect).not.toBe(betaSelect);
   });
 
+  it("remounts the toolbar agent select when the selected agent changes", async () => {
+    const container = document.createElement("div");
+
+    render(renderAgents(createProps({ selectedAgentId: "beta" })), container);
+
+    const firstSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agents-select");
+      expect(select?.value).toBe("beta");
+      return select;
+    });
+
+    expect(firstSelect?.selectedOptions[0]?.value).toBe("beta");
+
+    render(renderAgents(createProps({ selectedAgentId: "alpha" })), container);
+
+    const secondSelect = await vi.waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>(".agents-select");
+      expect(select?.value).toBe("alpha");
+      return select;
+    });
+
+    expect(secondSelect?.selectedOptions[0]?.value).toBe("alpha");
+    expect(secondSelect).not.toBe(firstSelect);
+  });
+
   it("shows the skills count only for the selected agent's report", async () => {
     const container = document.createElement("div");
     render(
