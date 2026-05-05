@@ -887,13 +887,23 @@ export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBloc
   return blockers;
 }
 
+export function getInspectableTaskRegistryInspectionSummary(): {
+  tasks: TaskRegistrySummary;
+  taskAudit: TaskAuditSummary;
+} {
+  const inspectableTasks = reconcileInspectableTasks();
+  return {
+    tasks: summarizeTaskRecords(inspectableTasks),
+    taskAudit: summarizeTaskAuditFindings(listTaskAuditFindings({ tasks: inspectableTasks })),
+  };
+}
+
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
-  return summarizeTaskRecords(reconcileInspectableTasks());
+  return getInspectableTaskRegistryInspectionSummary().tasks;
 }
 
 export function getInspectableTaskAuditSummary(): TaskAuditSummary {
-  const tasks = reconcileInspectableTasks();
-  return summarizeTaskAuditFindings(listTaskAuditFindings({ tasks }));
+  return getInspectableTaskRegistryInspectionSummary().taskAudit;
 }
 
 export function reconcileTaskLookupToken(token: string): TaskRecord | undefined {

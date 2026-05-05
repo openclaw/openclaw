@@ -86,6 +86,7 @@ export async function scanStatus(
         channelIssues: overview.channelIssues,
         channels: overview.channels,
         pluginCompatibility,
+        summary: { includeChannelSummary: false },
       });
       progress.tick();
 

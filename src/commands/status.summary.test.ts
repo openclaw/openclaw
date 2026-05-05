@@ -61,42 +61,50 @@ vi.mock("../infra/system-events.js", () => ({
   peekSystemEvents: vi.fn(() => []),
 }));
 
-vi.mock("../tasks/task-registry.maintenance.js", () => ({
+const taskMaintenanceMocks = vi.hoisted(() => ({
   configureTaskRegistryMaintenance: vi.fn(),
-  getInspectableTaskRegistrySummary: vi.fn(() => ({
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
+  getInspectableTaskRegistryInspectionSummary: vi.fn(() => ({
+    tasks: {
+      total: 0,
+      active: 0,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
     },
-    byRuntime: {
-      subagent: 0,
-      acp: 0,
-      cli: 0,
-      cron: 0,
+    taskAudit: {
+      total: 1,
+      warnings: 1,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 1,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
     },
   })),
-  getInspectableTaskAuditSummary: vi.fn(() => ({
-    total: 1,
-    warnings: 1,
-    errors: 0,
-    byCode: {
-      stale_queued: 0,
-      stale_running: 0,
-      lost: 0,
-      delivery_failed: 1,
-      missing_cleanup: 0,
-      inconsistent_timestamps: 0,
-    },
-  })),
+}));
+
+vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  configureTaskRegistryMaintenance: taskMaintenanceMocks.configureTaskRegistryMaintenance,
+  getInspectableTaskRegistryInspectionSummary:
+    taskMaintenanceMocks.getInspectableTaskRegistryInspectionSummary,
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -174,5 +182,11 @@ describe("getStatusSummary", () => {
     expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
       expect.objectContaining({ allowAsyncLoad: false }),
     );
+  });
+
+  it("uses one task-registry inspection pass for status task and audit summaries", async () => {
+    await getStatusSummary({ includeChannelSummary: false });
+
+    expect(taskMaintenanceMocks.getInspectableTaskRegistryInspectionSummary).toHaveBeenCalledOnce();
   });
 });

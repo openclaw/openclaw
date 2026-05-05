@@ -49,6 +49,7 @@ import {
 } from "./task-registry.js";
 import {
   getInspectableTaskAuditSummary,
+  getInspectableTaskRegistryInspectionSummary,
   previewTaskRegistryMaintenance,
   resetTaskRegistryMaintenanceRuntimeForTests,
   reconcileInspectableTasks,
@@ -2411,6 +2412,43 @@ describe("task-registry", () => {
           inconsistent_timestamps: 0,
         },
       });
+    });
+  });
+
+  it("builds inspectable task registry and audit summaries from one reconciliation pass", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const listTaskRecords = vi.fn(() => [
+        {
+          taskId: "task-combined-summary",
+          runtime: "acp" as const,
+          requesterSessionKey: "agent:main:main",
+          ownerKey: "agent:main:main",
+          scopeKind: "session" as const,
+          runId: "run-combined-summary",
+          task: "Hung task",
+          status: "running" as const,
+          deliveryStatus: "pending" as const,
+          notifyPolicy: "done_only" as const,
+          createdAt: now - 50 * 60_000,
+          startedAt: now - 40 * 60_000,
+          lastEventAt: now - 40 * 60_000,
+        },
+      ]);
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map(),
+        snapshotTasks: [],
+        listTaskRecords,
+      });
+
+      const summary = getInspectableTaskRegistryInspectionSummary();
+
+      expect(listTaskRecords).toHaveBeenCalledOnce();
+      expect(summary.tasks.active).toBe(1);
+      expect(summary.taskAudit.errors).toBe(1);
+      expect(summary.taskAudit.byCode.stale_running).toBe(1);
     });
   });
 

@@ -150,8 +150,7 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });
-  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
+  const { tasks, taskAudit } = taskMaintenanceModule.getInspectableTaskRegistryInspectionSummary();
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
