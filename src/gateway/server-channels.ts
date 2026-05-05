@@ -188,11 +188,15 @@ type StartChannelOptions = {
   preserveManualStop?: boolean;
 };
 
+export type StopChannelOptions = {
+  manual?: boolean;
+};
+
 export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
   startChannels: () => Promise<void>;
   startChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
-  stopChannel: (channel: ChannelId, accountId?: string) => Promise<void>;
+  stopChannel: (channel: ChannelId, accountId?: string, opts?: StopChannelOptions) => Promise<void>;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
@@ -522,8 +526,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               }),
             ),
           );
-          const trackedPromise = task
+          let trackedPromise: Promise<unknown>;
+          const isActiveTask = () =>
+            store.tasks.get(id) === trackedPromise && store.aborts.get(id) === abort;
+          trackedPromise = task
             .then(() => {
+              if (!isActiveTask()) {
+                return;
+              }
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
                 return;
               }
@@ -532,12 +542,18 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] ${message}`);
             })
             .catch((err) => {
+              if (!isActiveTask()) {
+                return;
+              }
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .finally(async () => {
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
+              if (!isActiveTask()) {
+                return;
+              }
               setRuntime(channelId, id, {
                 accountId: id,
                 running: false,
@@ -545,6 +561,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               });
             })
             .then(async () => {
+              if (!isActiveTask()) {
+                return;
+              }
               if (manuallyStopped.has(rKey)) {
                 return;
               }
@@ -630,7 +649,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     await startChannelInternal(channelId, accountId);
   };
 
-  const stopChannel = async (channelId: ChannelId, accountId?: string) => {
+  const stopChannel = async (
+    channelId: ChannelId,
+    accountId?: string,
+    opts?: StopChannelOptions,
+  ) => {
+    const manualStop = opts?.manual !== false;
     const plugin = getChannelPlugin(channelId);
     const store = getStore(channelId);
     // Fast path: nothing running and no explicit plugin shutdown hook to run.
@@ -656,7 +680,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (!abort && !task && !plugin?.gateway?.stopAccount) {
           return;
         }
-        manuallyStopped.add(restartKey(channelId, id));
+        const rKey = restartKey(channelId, id);
+        if (manualStop) {
+          manuallyStopped.add(rKey);
+        } else {
+          manuallyStopped.delete(rKey);
+        }
         abort?.abort();
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
@@ -681,9 +710,17 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log.warn?.(
             `[${id}] channel stop exceeded ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms after abort; continuing shutdown`,
           );
+          if (!manualStop) {
+            if (store.tasks.get(id) === task) {
+              store.tasks.delete(id);
+            }
+            if (abort && store.aborts.get(id) === abort) {
+              store.aborts.delete(id);
+            }
+          }
           setRuntime(channelId, id, {
             accountId: id,
-            running: true,
+            running: manualStop,
             restartPending: false,
             lastError: `channel stop timed out after ${CHANNEL_STOP_ABORT_TIMEOUT_MS}ms`,
           });
