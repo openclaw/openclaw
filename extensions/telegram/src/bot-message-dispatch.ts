@@ -490,7 +490,10 @@ export const dispatchTelegramMessage = async ({
   const progressDraftGate = createChannelProgressDraftGate({
     onStart: () => renderProgressDraft({ flush: true }),
   });
-  const pushStreamToolProgress = async (line?: string, options?: { toolName?: string }) => {
+  const pushStreamToolProgress = async (
+    line?: string,
+    options?: { toolName?: string; startImmediately?: boolean },
+  ) => {
     if (!answerLane.stream) {
       return;
     }
@@ -528,6 +531,19 @@ export const dispatchTelegramMessage = async ({
           -resolveChannelProgressDraftMaxLines(telegramCfg),
         );
       }
+    }
+    if (
+      options?.startImmediately &&
+      streamToolProgressEnabled &&
+      !streamToolProgressSuppressed &&
+      normalized
+    ) {
+      const alreadyStarted = progressDraftGate.hasStarted;
+      await progressDraftGate.startNow();
+      if (alreadyStarted && progressDraftGate.hasStarted) {
+        await renderProgressDraft();
+      }
+      return;
     }
     const alreadyStarted = progressDraftGate.hasStarted;
     await progressDraftGate.noteWork();
@@ -1205,7 +1221,7 @@ export const dispatchTelegramMessage = async ({
                         },
                         payload.detailMode ? { detailMode: payload.detailMode } : undefined,
                       ),
-                      { toolName },
+                      { toolName, startImmediately: true },
                     );
                   },
                   onItemEvent: async (payload) => {
