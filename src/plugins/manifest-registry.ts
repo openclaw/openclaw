@@ -496,6 +496,7 @@ function buildBundleRecord(params: {
     settingsFiles?: string[];
     hooks: string[];
     capabilities: string[];
+    activation?: PluginManifestRecord["activation"];
   };
   candidate: PluginCandidate;
   manifestPath: string;
@@ -516,6 +517,7 @@ function buildBundleRecord(params: {
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
+    activation: params.manifest.activation,
     channels: [],
     providers: [],
     cliBackends: [],
