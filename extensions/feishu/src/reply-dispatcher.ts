@@ -1,7 +1,7 @@
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
-  formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   isChannelProgressDraftWorkToolName,
 } from "openclaw/plugin-sdk/channel-streaming";
 import {
@@ -708,7 +708,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (!isChannelProgressDraftWorkToolName(payload.name)) {
               return;
             }
-            const statusLine = formatChannelProgressDraftLine(
+            const statusLine = formatChannelProgressDraftLineForEntry(
+              account.config,
               {
                 event: "tool",
                 name: payload.name,

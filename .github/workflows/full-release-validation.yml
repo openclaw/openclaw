@@ -35,6 +35,11 @@ on:
           - minimum
           - stable
           - full
+      run_release_soak:
+        description: Run exhaustive live/Docker and upgrade-survivor soak lanes; forced on for release_profile=full
+        required: false
+        default: false
+        type: boolean
       rerun_group:
         description: Validation group to run
         required: false
@@ -136,6 +141,7 @@ jobs:
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
         run: |
@@ -145,6 +151,7 @@ jobs:
             echo "- Target ref: \`${TARGET_REF}\`"
             echo "- Target SHA: \`${TARGET_SHA}\`"
             echo "- Child workflow ref: \`${CHILD_WORKFLOW_REF}\`"
+            echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
@@ -206,7 +213,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url poll_count
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -246,10 +253,16 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            poll_count=0
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              poll_count=$((poll_count + 1))
+              if (( poll_count % 10 == 0 )); then
+                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
               fi
               sleep 30
             done
@@ -299,7 +312,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url poll_count
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -339,10 +352,16 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            poll_count=0
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              poll_count=$((poll_count + 1))
+              if (( poll_count % 10 == 0 )); then
+                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
               fi
               sleep 30
             done
@@ -388,6 +407,7 @@ jobs:
           PROVIDER: ${{ inputs.provider }}
           MODE: ${{ inputs.mode }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
@@ -398,7 +418,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url
+            local before_json dispatch_output run_id status conclusion url poll_count
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -438,10 +458,16 @@ jobs:
             }
             trap cancel_child EXIT INT TERM
 
+            poll_count=0
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
                 break
+              fi
+              poll_count=$((poll_count + 1))
+              if (( poll_count % 10 == 0 )); then
+                echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+                gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
               fi
               sleep 30
             done
@@ -465,6 +491,7 @@ jobs:
             echo "- Provider: \`${PROVIDER}\`"
             echo "- Cross-OS mode: \`${MODE}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
+            echo "- Release soak lanes: \`${RUN_RELEASE_SOAK}\`"
             echo "- Rerun group: \`${RERUN_GROUP}\`"
             if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
               echo "- Live suite filter: \`${LIVE_SUITE_FILTER}\`"
@@ -485,6 +512,7 @@ jobs:
             -f provider="$PROVIDER"
             -f mode="$MODE"
             -f release_profile="$RELEASE_PROFILE"
+            -f run_release_soak="$RUN_RELEASE_SOAK"
             -f rerun_group="$child_rerun_group"
           )
           if [[ -n "${LIVE_SUITE_FILTER// }" ]]; then
@@ -640,10 +668,16 @@ jobs:
           }
           trap cancel_child EXIT INT TERM
 
+          poll_count=0
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
             if [[ "$status" == "completed" ]]; then
               break
+            fi
+            poll_count=$((poll_count + 1))
+            if (( poll_count % 10 == 0 )); then
+              echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
             sleep 30
           done

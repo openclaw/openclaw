@@ -1131,6 +1131,50 @@ Optional overrides:
 }
 ```
 
+ElevenLabs for both agent-mode listening and speaking:
+
+```json5
+{
+  messages: {
+    tts: {
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          modelId: "eleven_v3",
+          voiceId: "pMsXgVXv3BLzUgSXRplE",
+        },
+      },
+    },
+  },
+  plugins: {
+    entries: {
+      "google-meet": {
+        config: {
+          realtime: {
+            transcriptionProvider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                modelId: "scribe_v2_realtime",
+                audioFormat: "ulaw_8000",
+                sampleRate: 8000,
+                commitStrategy: "vad",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The persistent Meet voice comes from
+`messages.tts.providers.elevenlabs.voiceId`. Agent replies can also use
+per-reply `[[tts:voiceId=... model=eleven_v3]]` directives when TTS model
+overrides are enabled, but config is the deterministic default for meetings.
+On join, the logs should show `transcriptionProvider=elevenlabs` and each
+spoken reply should log `provider=elevenlabs model=eleven_v3 voice=<voiceId>`.
+
 Twilio-only config:
 
 ```json5
@@ -1662,6 +1706,11 @@ Chrome talk-back modes need `BlackHole 2ch` plus either:
 - `chrome.audioBridgeCommand`: an external bridge command owns the whole local
   audio path and must exit after starting or validating its daemon. This is only
   valid for `bidi` because `agent` mode needs direct command-pair access for TTS.
+
+When an agent calls the `google_meet` tool in agent mode, the meeting consultant
+session forks the caller's current transcript before answering participant
+speech. The Meet session still stays separate (`agent:<agentId>:subagent:google-meet:<sessionId>`)
+so meeting follow-ups do not mutate the caller transcript directly.
 
 For clean duplex audio, route Meet output and Meet microphone through separate
 virtual devices or a Loopback-style virtual device graph. A single shared

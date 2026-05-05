@@ -513,6 +513,7 @@ export async function startCommandAgentAudioBridge(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   inputCommand: string[];
   outputCommand: string[];
   logger: RuntimeLogger;
@@ -711,6 +712,7 @@ export async function startCommandAgentAudioBridge(params: {
           runtime: params.runtime,
           logger: params.logger,
           meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
           args: {
             question: currentQuestion,
             responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -822,6 +824,7 @@ export async function startCommandRealtimeAudioBridge(params: {
   fullConfig: OpenClawConfig;
   runtime: PluginRuntime;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   inputCommand: string[];
   outputCommand: string[];
   logger: RuntimeLogger;
@@ -1108,6 +1111,7 @@ export async function startCommandRealtimeAudioBridge(params: {
           runtime: params.runtime,
           logger: params.logger,
           meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
           args: {
             question: currentQuestion,
             responseStyle: "Brief, natural spoken answer for a live meeting.",
@@ -1208,6 +1212,7 @@ export async function startCommandRealtimeAudioBridge(params: {
         runtime: params.runtime,
         logger: params.logger,
         meetingSessionId: params.meetingSessionId,
+        requesterSessionKey: params.requesterSessionKey,
         args: event.args,
         transcript,
       })

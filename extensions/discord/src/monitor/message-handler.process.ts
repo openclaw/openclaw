@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import {
   formatChannelProgressDraftLine,
+  formatChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
@@ -669,7 +670,8 @@ export async function processDiscordMessage(
                   await maybeBindStatusReactionsToToolReaction(payload);
                   await statusReactions.setTool(payload.name);
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine(
+                    formatChannelProgressDraftLineForEntry(
+                      discordConfig,
                       {
                         event: "tool",
                         name: payload.name,
@@ -683,7 +685,7 @@ export async function processDiscordMessage(
                 },
                 onItemEvent: async (payload) => {
                   await draftPreview.pushToolProgress(
-                    formatChannelProgressDraftLine({
+                    formatChannelProgressDraftLineForEntry(discordConfig, {
                       event: "item",
                       itemKind: payload.kind,
                       title: payload.title,
@@ -800,6 +802,7 @@ export async function processDiscordMessage(
         markDispatchIdle();
       }
     }
+    const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
     if (statusReactionsActive) {
       if (dispatchAborted) {
         if (removeAckAfterReply) {
@@ -808,14 +811,18 @@ export async function processDiscordMessage(
           void statusReactions.restoreInitial();
         }
       } else {
-        if (dispatchError) {
+        if (dispatchError || finalDeliveryFailed) {
           await statusReactions.setError();
         } else {
           await statusReactions.setDone();
         }
         if (removeAckAfterReply) {
           void (async () => {
-            await sleep(dispatchError ? DEFAULT_TIMING.errorHoldMs : DEFAULT_TIMING.doneHoldMs);
+            await sleep(
+              dispatchError || finalDeliveryFailed
+                ? DEFAULT_TIMING.errorHoldMs
+                : DEFAULT_TIMING.doneHoldMs,
+            );
             await statusReactions.clear();
           })();
         } else {

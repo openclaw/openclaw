@@ -5,18 +5,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { clearConfigCache } from "../../dist/config/config.js";
-import type { OpenClawConfig } from "../../dist/config/types.openclaw.js";
 import { runCrestodian } from "../../dist/crestodian/crestodian.js";
-import type { RuntimeEnv } from "../../dist/runtime.js";
 
-function assert(condition: unknown, message: string): asserts condition {
+function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
   }
 }
 
-function createRuntime(): { runtime: RuntimeEnv; lines: string[] } {
-  const lines: string[] = [];
+function assertOutputIncludes(output, expected, message) {
+  assert(output.includes(expected), `${message}\n\nCaptured Crestodian output:\n${output}`);
+}
+
+function createRuntime() {
+  const lines = [];
   return {
     lines,
     runtime: {
@@ -29,7 +31,7 @@ function createRuntime(): { runtime: RuntimeEnv; lines: string[] } {
   };
 }
 
-async function installFakeClaudeCli(fakeBinDir: string, promptLogPath: string): Promise<void> {
+async function installFakeClaudeCli(fakeBinDir, promptLogPath) {
   await fs.mkdir(fakeBinDir, { recursive: true });
   const scriptPath = path.join(fakeBinDir, "claude");
   await fs.writeFile(
@@ -75,20 +77,24 @@ async function main() {
     runtime.runtime,
   );
   const output = runtime.lines.join("\n");
-  assert(
-    output.includes("[crestodian] planner: claude-cli/claude-opus-4-7"),
+  assertOutputIncludes(
+    output,
+    "[crestodian] planner: claude-cli/claude-opus-4-7",
     "configless planner did not use Claude CLI fallback",
   );
-  assert(
-    output.includes("Fake Claude planner selected a typed model update."),
+  assertOutputIncludes(
+    output,
+    "Fake Claude planner selected a typed model update.",
     "planner reply was not surfaced",
   );
-  assert(
-    output.includes("[crestodian] interpreted: set default model openai/gpt-5.2"),
+  assertOutputIncludes(
+    output,
+    "[crestodian] interpreted: set default model openai/gpt-5.2",
     "planner command was not interpreted",
   );
-  assert(
-    output.includes("[crestodian] done: config.setDefaultModel"),
+  assertOutputIncludes(
+    output,
+    "[crestodian] done: config.setDefaultModel",
     "planned model update did not apply",
   );
 
@@ -99,7 +105,7 @@ async function main() {
     "planner prompt did not include docs reference context",
   );
 
-  const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+  const config = JSON.parse(await fs.readFile(configPath, "utf8"));
   assert(
     config.agents?.defaults?.model &&
       typeof config.agents.defaults.model === "object" &&

@@ -7,7 +7,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-plugin-e2e" OPENCL
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" kitchen-sink-plugin
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 kitchen-sink-plugin empty)"
-KITCHEN_SINK_NPM_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-npm:@openclaw/kitchen-sink@0.1.5}"
+KITCHEN_SINK_NPM_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_SPEC:-npm:@openclaw/kitchen-sink@0.2.5}"
 KITCHEN_SINK_NPM_MISSING_SPEC="${OPENCLAW_KITCHEN_SINK_NPM_MISSING_SPEC:-npm:@openclaw/kitchen-sink@beta}"
 
 DEFAULT_KITCHEN_SINK_SCENARIOS="$(

@@ -92,6 +92,7 @@ export async function launchChromeMeet(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   mode: GoogleMeetMode;
   url: string;
   logger: RuntimeLogger;
@@ -162,6 +163,7 @@ export async function launchChromeMeet(params: {
             fullConfig: params.fullConfig,
             runtime: params.runtime,
             meetingSessionId: params.meetingSessionId,
+            requesterSessionKey: params.requesterSessionKey,
             inputCommand: params.config.chrome.audioInputCommand,
             outputCommand: params.config.chrome.audioOutputCommand,
             logger: params.logger,
@@ -174,6 +176,7 @@ export async function launchChromeMeet(params: {
             fullConfig: params.fullConfig,
             runtime: params.runtime,
             meetingSessionId: params.meetingSessionId,
+            requesterSessionKey: params.requesterSessionKey,
             inputCommand: params.config.chrome.audioInputCommand,
             outputCommand: params.config.chrome.audioOutputCommand,
             logger: params.logger,
@@ -950,6 +953,7 @@ export async function launchChromeMeetOnNode(params: {
   config: GoogleMeetConfig;
   fullConfig: OpenClawConfig;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   mode: GoogleMeetMode;
   url: string;
   logger: RuntimeLogger;
@@ -1025,6 +1029,7 @@ export async function launchChromeMeetOnNode(params: {
       fullConfig: params.fullConfig,
       runtime: params.runtime,
       meetingSessionId: params.meetingSessionId,
+      requesterSessionKey: params.requesterSessionKey,
       nodeId,
       bridgeId: result.bridgeId,
       logger: params.logger,

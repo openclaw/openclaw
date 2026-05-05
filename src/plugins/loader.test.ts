@@ -1037,7 +1037,8 @@ describe("loadOpenClawPlugins", () => {
       },
     });
 
-    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+    const record = registry.plugins.find((entry) => entry.id === "discord");
+    expect(record?.status, record?.error).toBe("loaded");
   });
   it("registers standalone text transforms", () => {
     useNoBundledPlugins();
@@ -6591,7 +6592,7 @@ module.exports = {
       }),
     );
     const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-    expect(record?.status).toBe("loaded");
+    expect(record?.status, record?.error).toBe("loaded");
   });
 
   it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
@@ -6639,7 +6640,7 @@ module.exports = {
       const record = registry.plugins.find(
         (entry) => entry.id === "legacy-root-diagnostic-listener",
       );
-      expect(record?.status).toBe("loaded");
+      expect(record?.status, record?.error).toBe("loaded");
 
       emitDiagnosticEvent({
         type: "model.usage",

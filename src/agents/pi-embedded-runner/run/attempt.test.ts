@@ -22,6 +22,7 @@ import {
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
   shouldCreateBundleMcpRuntimeForAttempt,
+  shouldBuildCoreCodingToolsForAllowlist,
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -81,6 +82,15 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
       applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
     ).toEqual(["cron", "read"]);
   });
+
+  it("keeps plugin-only allowlists on the shared tool policy path", () => {
+    const tools = [{ name: "memory_search" }, { name: "plugin_extra" }];
+
+    expect(shouldBuildCoreCodingToolsForAllowlist(["memory_search"])).toBe(false);
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["memory_search"]).map((tool) => tool.name),
+    ).toEqual(["memory_search"]);
+  });
 });
 
 describe("buildEmbeddedAttemptToolRunContext", () => {
@@ -124,8 +134,15 @@ describe("normalizeMessagesForLlmBoundary", () => {
     expect(input[0]).toHaveProperty("details");
   });
 
-  it("keeps runtime-context transcript entries out of the LLM boundary", () => {
+  it("keeps historical runtime-context transcript entries out of the LLM boundary", () => {
     const input = [
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "old secret runtime context",
+        display: false,
+        timestamp: 0,
+      },
       {
         role: "user",
         content: [{ type: "text", text: "visible ask" }],
@@ -151,9 +168,12 @@ describe("normalizeMessagesForLlmBoundary", () => {
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
     ) as Array<Record<string, unknown>>;
 
-    expect(output).toHaveLength(2);
+    expect(output).toHaveLength(3);
     expect(output).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ customType: "openclaw.runtime-context" })]),
+      expect.arrayContaining([expect.objectContaining({ content: "old secret runtime context" })]),
+    );
+    expect(output).toEqual(
+      expect.arrayContaining([expect.objectContaining({ content: "secret runtime context" })]),
     );
     expect(output).toEqual(
       expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),

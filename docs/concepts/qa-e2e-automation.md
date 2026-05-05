@@ -314,6 +314,178 @@ Output artifacts:
 - `slack-qa-summary.json`
 - `slack-qa-observed-messages.json` — bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
 
+#### Setting up the Slack workspace
+
+The lane needs two distinct Slack apps in one workspace, plus a channel both bots are members of:
+
+- `channelId` — the `Cxxxxxxxxxx` id of a channel both bots have been invited to. Use a dedicated channel; the lane posts on every run.
+- `driverBotToken` — bot token (`xoxb-...`) of the **Driver** app.
+- `sutBotToken` — bot token (`xoxb-...`) of the **SUT** app, which must be a separate Slack app from the driver so its bot user id is distinct.
+- `sutAppToken` — app-level token (`xapp-...`) of the SUT app with `connections:write`, used by Socket Mode so the SUT app can receive events.
+
+Prefer a Slack workspace dedicated to QA over reusing a production workspace.
+
+**1. Create the Driver app**
+
+Go to [api.slack.com/apps](https://api.slack.com/apps) → _Create New App_ → _From a manifest_ → pick the QA workspace, paste the following manifest, then _Install to Workspace_:
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw QA Driver",
+    "description": "Test driver bot for OpenClaw QA Slack live lane"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "OpenClaw QA Driver",
+      "always_online": true
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": ["chat:write", "channels:history", "groups:history", "users:read"]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": false
+  }
+}
+```
+
+Copy the _Bot User OAuth Token_ (`xoxb-...`) — that becomes `driverBotToken`. The driver only needs to post messages and identify itself; no events, no Socket Mode.
+
+**2. Create the SUT app**
+
+Repeat _Create New App → From a manifest_ in the same workspace. The scope set mirrors the bundled Slack plugin's production install (`extensions/slack/src/setup-shared.ts:10`):
+
+```json
+{
+  "display_information": {
+    "name": "OpenClaw QA SUT",
+    "description": "OpenClaw QA SUT connector for OpenClaw"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "OpenClaw QA SUT",
+      "always_online": true
+    },
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "assistant:write",
+        "channels:history",
+        "channels:read",
+        "chat:write",
+        "commands",
+        "emoji:read",
+        "files:read",
+        "files:write",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "pins:read",
+        "pins:write",
+        "reactions:read",
+        "reactions:write",
+        "usergroups:read",
+        "users:read"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_home_opened",
+        "app_mention",
+        "channel_rename",
+        "member_joined_channel",
+        "member_left_channel",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "pin_added",
+        "pin_removed",
+        "reaction_added",
+        "reaction_removed"
+      ]
+    }
+  }
+}
+```
+
+After Slack creates the app, do two things on its settings page:
+
+- _Install to Workspace_ → copy the _Bot User OAuth Token_ → that becomes `sutBotToken`.
+- _Basic Information → App-Level Tokens → Generate Token and Scopes_ → add scope `connections:write` → save → copy the `xapp-...` value → that becomes `sutAppToken`.
+
+Verify the two bots have distinct user ids by calling `auth.test` on each token. The runtime distinguishes driver and SUT by user id; reusing one app for both will fail mention-gating immediately.
+
+**3. Create the channel**
+
+In the QA workspace, create a channel (e.g. `#openclaw-qa`) and invite both bots from inside the channel:
+
+```
+/invite @OpenClaw QA Driver
+/invite @OpenClaw QA SUT
+```
+
+Copy the `Cxxxxxxxxxx` id from _channel info → About → Channel ID_ — that becomes `channelId`. A public channel works; if you use a private channel both apps already have `groups:history` so the harness's history reads will still succeed.
+
+**4. Register the credentials**
+
+Two options. Use env vars for single-machine debugging (set the four `OPENCLAW_QA_SLACK_*` variables and pass `--credential-source env`), or seed the shared Convex pool so CI and other maintainers can lease them.
+
+For the Convex pool, write the four fields to a JSON file:
+
+```json
+{
+  "channelId": "Cxxxxxxxxxx",
+  "driverBotToken": "xoxb-...",
+  "sutBotToken": "xoxb-...",
+  "sutAppToken": "xapp-..."
+}
+```
+
+With `OPENCLAW_QA_CONVEX_SITE_URL` and `OPENCLAW_QA_CONVEX_SECRET_MAINTAINER` exported in your shell, register and verify:
+
+```bash
+pnpm openclaw qa credentials add \
+  --kind slack \
+  --payload-file slack-creds.json \
+  --note "QA Slack pool seed"
+
+pnpm openclaw qa credentials list --kind slack --status all --json
+```
+
+Expect `count: 1`, `status: "active"`, no `lease` field.
+
+**5. Verify end to end**
+
+Run the lane locally to confirm both bots can talk to each other through the broker:
+
+```bash
+pnpm openclaw qa slack \
+  --credential-source convex \
+  --credential-role maintainer \
+  --output-dir .artifacts/qa-e2e/slack-local
+```
+
+A green run completes in well under 30 seconds and `slack-qa-report.md` shows both `slack-canary` and `slack-mention-gating` at status `pass`. If the lane hangs for ~90 seconds and exits with `Convex credential pool exhausted for kind "slack"`, either the pool is empty or every row is leased — `qa credentials list --kind slack --status all --json` will tell you which.
+
 ### Convex credential pool
 
 Telegram, Discord, and Slack lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, and `"slack"`.
@@ -322,6 +494,7 @@ Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` — `groupId` must be a numeric chat-id string.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
+- Slack (`kind: "slack"`): `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }` — `channelId` must match `^[A-Z][A-Z0-9]+$` (a Slack id like `Cxxxxxxxxxx`). See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
 
 Operational env vars and the Convex broker endpoint contract live in [Testing → Shared Telegram credentials via Convex](/help/testing#shared-telegram-credentials-via-convex-v1) (the section name predates Discord support; the broker semantics are identical for both kinds).
 

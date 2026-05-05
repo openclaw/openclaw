@@ -240,7 +240,7 @@ describe("codex conversation binding", () => {
       request: vi.fn(async (method: string) => {
         if (method === "turn/start") {
           throw new Error(
-            "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+            "unexpected status 401 Unauthorized: Missing bearer <@U123> [trusted](https://evil) @here",
           );
         }
         throw new Error(`unexpected method: ${method}`);
@@ -283,12 +283,91 @@ describe("codex conversation binding", () => {
       expect(result).toEqual({
         handled: true,
         reply: {
-          text: "Codex app-server turn failed: unexpected status 401 Unauthorized: Missing bearer or basic authentication in header",
+          text: "Codex app-server turn failed: unexpected status 401 Unauthorized: Missing bearer &lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here",
         },
       });
+      const replyText = result?.reply?.text ?? "";
+      expect(replyText).not.toContain("<@U123>");
+      expect(replyText).not.toContain("[trusted](https://evil)");
+      expect(replyText).not.toContain("@here");
       expect(unhandledRejections).toEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
+  });
+
+  it("falls back to content when the channel body for agent is blank", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    const turnStartParams: Record<string, unknown>[] = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        if (method === "turn/start") {
+          turnStartParams.push(requestParams);
+          setImmediate(() =>
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [{ type: "agentMessage", id: "item-1", text: "done" }],
+                },
+              },
+            }),
+          );
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "use the fallback prompt",
+        bodyForAgent: "",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(turnStartParams[0]?.input).toMatchObject([
+      { type: "text", text: "use the fallback prompt" },
+    ]);
   });
 });

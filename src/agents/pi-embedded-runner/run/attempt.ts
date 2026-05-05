@@ -32,6 +32,7 @@ import {
 import {
   resolveProviderSystemPromptContribution,
   resolveProviderTextTransforms,
+  transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -61,10 +62,11 @@ import {
 } from "../../bootstrap-budget.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
+  buildBootstrapContextForFiles,
   hasCompletedBootstrapTurn,
   isWorkspaceBootstrapPending,
   makeBootstrapWarn,
-  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -78,7 +80,7 @@ import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
-import { stripRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
+import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
 import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
@@ -328,7 +330,6 @@ import {
 } from "./preemptive-compaction.js";
 import {
   buildCurrentTurnPromptContextSuffix,
-  buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -525,7 +526,7 @@ const CORE_CODING_TOOL_ALLOWLIST_NAMES = new Set([
   "write",
 ]);
 
-function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
+export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
   if (!toolsAllow || toolsAllow.length === 0) {
     return true;
   }
@@ -543,7 +544,7 @@ function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean 
 
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
-  return stripRuntimeContextCustomMessages(normalized);
+  return stripHistoricalRuntimeContextCustomMessages(normalized);
 }
 
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
@@ -944,8 +945,26 @@ export async function runEmbeddedAttempt(
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
     const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
+    const bootstrapWarn = makeBootstrapWarn({
+      sessionLabel,
+      workspaceDir: resolvedWorkspace,
+      warn: (message) => log.warn(message),
+    });
+    const preloadedBootstrapFiles =
+      isRawModelRun || contextInjectionMode === "never"
+        ? undefined
+        : await resolveBootstrapFilesForRun({
+            workspaceDir: resolvedWorkspace,
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            warn: bootstrapWarn,
+            contextMode: params.bootstrapContextMode,
+            runKind: params.bootstrapContextRunKind,
+          });
     const bootstrapRouting = await resolveAttemptWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending,
+      bootstrapFiles: preloadedBootstrapFiles,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       trigger: params.trigger,
       sessionKey: params.sessionKey,
@@ -969,20 +988,26 @@ export async function runEmbeddedAttempt(
       bootstrapMode,
       sessionFile: params.sessionFile,
       hasCompletedBootstrapTurn,
-      resolveBootstrapContextForRun: async () =>
-        await resolveBootstrapContextForRun({
-          workspaceDir: resolvedWorkspace,
-          config: params.config,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          warn: makeBootstrapWarn({
-            sessionLabel,
+      resolveBootstrapContextForRun: async () => {
+        const bootstrapFiles =
+          preloadedBootstrapFiles ??
+          (await resolveBootstrapFilesForRun({
             workspaceDir: resolvedWorkspace,
-            warn: (message) => log.warn(message),
+            config: params.config,
+            sessionKey: params.sessionKey,
+            sessionId: params.sessionId,
+            warn: bootstrapWarn,
+            contextMode: params.bootstrapContextMode,
+            runKind: params.bootstrapContextRunKind,
+          }));
+        return {
+          bootstrapFiles,
+          contextFiles: buildBootstrapContextForFiles(bootstrapFiles, {
+            config: params.config,
+            warn: bootstrapWarn,
           }),
-          contextMode: params.bootstrapContextMode,
-          runKind: params.bootstrapContextRunKind,
-        }),
+        };
+      },
     });
     prepStages.mark("bootstrap-context");
     const remappedContextFiles = remapInjectedContextFilesToWorkspace({
@@ -1291,6 +1316,7 @@ export async function runEmbeddedAttempt(
     const attemptSystemPrompt = buildAttemptSystemPrompt({
       isRawModelRun,
       systemPromptOverrideText,
+      transformProviderSystemPrompt,
       embeddedSystemPrompt: {
         workspaceDir: effectiveWorkspace,
         defaultThinkLevel: params.thinkLevel,
@@ -1620,6 +1646,7 @@ export async function runEmbeddedAttempt(
             {
               agentId: sessionAgentId,
               sessionKey: sandboxSessionKey,
+              config: params.config,
               sessionId: params.sessionId,
               runId: params.runId,
               loopDetection: clientToolLoopDetection,
@@ -3037,34 +3064,19 @@ export async function runEmbeddedAttempt(
               await abortable(activeSession.prompt(promptForModel));
             } else {
               const runtimeContext = promptSubmission.runtimeContext?.trim();
-              const runtimeSystemPrompt = runtimeContext
-                ? composeSystemPromptWithHookContext({
-                    baseSystemPrompt: systemPromptText,
-                    appendSystemContext: buildRuntimeContextSystemContext(runtimeContext),
-                  })
-                : undefined;
-              if (runtimeSystemPrompt) {
-                applySystemPromptOverrideToSession(activeSession, runtimeSystemPrompt);
-              }
-              try {
-                await queueRuntimeContextForNextTurn({
-                  session: activeSession,
-                  runtimeContext,
-                });
+              await queueRuntimeContextForNextTurn({
+                session: activeSession,
+                runtimeContext,
+              });
 
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
-                  await abortable(
-                    activeSession.prompt(promptForModel, { images: imageResult.images }),
-                  );
-                } else {
-                  await abortable(activeSession.prompt(promptForModel));
-                }
-              } finally {
-                if (runtimeSystemPrompt) {
-                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
-                }
+              // Only pass images option if there are actually images to pass
+              // This avoids potential issues with models that don't expect the images parameter
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(promptForModel, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(promptForModel));
               }
             }
           }

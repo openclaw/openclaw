@@ -90,7 +90,7 @@ describe("tsdown config", () => {
         "media-understanding/apply.runtime",
         "index",
         "commands/status.summary.runtime",
-        "auto-reply/reply/provider-dispatcher",
+        "provider-dispatcher.runtime",
         "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
@@ -112,12 +112,12 @@ describe("tsdown config", () => {
     );
   });
 
-  it("keeps reply dispatcher lazy runtime behind one stable dist entry", () => {
+  it("keeps reply dispatcher lazy runtime behind one root stable dist entry", () => {
     const distGraph = unifiedDistGraph();
 
     expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
       expect.objectContaining({
-        "auto-reply/reply/provider-dispatcher": "src/auto-reply/reply/provider-dispatcher.ts",
+        "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
       }),
     );
   });

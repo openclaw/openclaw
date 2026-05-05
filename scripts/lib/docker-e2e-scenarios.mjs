@@ -36,6 +36,7 @@ function lane(name, command, options = {}) {
     live: options.live === true,
     noOutputTimeoutMs: options.noOutputTimeoutMs,
     name,
+    needsLiveImage: options.needsLiveImage,
     retryPatterns: options.retryPatterns ?? [],
     retries: options.retries ?? 0,
     resources: options.resources ?? [],
@@ -79,6 +80,7 @@ function liveLane(name, command, options = {}) {
   return lane(name, command, {
     ...options,
     live: true,
+    needsLiveImage: options.needsLiveImage ?? true,
     resources: ["live", ...liveProviderResources(options), ...(options.resources ?? [])],
     retryPatterns: options.retryPatterns ?? LIVE_RETRY_PATTERNS,
     retries: options.retries ?? DEFAULT_LIVE_RETRIES,
@@ -158,6 +160,8 @@ export const mainLanes = [
     },
   ),
   liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    e2eImageKind: "functional",
+    needsLiveImage: false,
     provider: "openai",
     resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,
@@ -175,6 +179,11 @@ export const mainLanes = [
   npmLane(
     "npm-onboard-discord-channel-agent",
     "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
+  npmLane(
+    "npm-onboard-slack-channel-agent",
+    "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
   serviceLane("gateway-network", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:gateway-network"),
@@ -495,6 +504,11 @@ const releasePathPackageUpdateCoreLanes = [
     "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
+  npmLane(
+    "npm-onboard-slack-channel-agent",
+    "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
   npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
     stateScenario: "empty",
     weight: 3,
@@ -583,6 +597,8 @@ const legacyReleasePathChunks = {
 
 function openWebUILane() {
   return liveLane("openwebui", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui", {
+    e2eImageKind: "functional",
+    needsLiveImage: false,
     provider: "openai",
     resources: ["service"],
     timeoutMs: OPENWEBUI_TIMEOUT_MS,

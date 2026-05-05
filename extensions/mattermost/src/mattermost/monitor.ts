@@ -1876,7 +1876,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             if (!draftToolProgressEnabled) {
                               return;
                             }
-                            draftStream.update(buildMattermostToolStatusText(payload));
+                            draftStream.update(
+                              buildMattermostToolStatusText({
+                                ...payload,
+                                config: account.config,
+                              }),
+                            );
                           },
                         },
                       }),

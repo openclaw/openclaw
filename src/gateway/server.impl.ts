@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { CANVAS_HOST_PATH } from "../canvas-host/a2ui-shared.js";
 import type { CanvasHostServer } from "../canvas-host/server.js";
 import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
@@ -23,7 +24,6 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearAgentRunContext } from "../infra/agent-events.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -37,6 +37,7 @@ import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
+import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import {
@@ -70,7 +71,6 @@ import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
-import { resolveSessionKeyForRun } from "./server-session-key.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   getRequiredSharedGatewaySessionGeneration,
@@ -92,7 +92,11 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 
-export { __resetModelCatalogCacheForTest } from "./server-model-catalog.js";
+export async function __resetModelCatalogCacheForTest(): Promise<void> {
+  const { __resetModelCatalogCacheForTest: resetModelCatalogCacheForTest } =
+    await import("./server-model-catalog.js");
+  await resetModelCatalogCacheForTest();
+}
 
 ensureOpenClawCliOnPath();
 
@@ -352,7 +356,7 @@ function createGatewayStartupTrace() {
         timelineOptions(),
       );
       try {
-        const result = await run();
+        const result = await withDiagnosticPhase(mapTimelineName(name), run, { traceName: name });
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
@@ -732,9 +736,13 @@ export async function startGatewayServer(
         env: process.env,
         tailscaleMode,
       }),
+      config.gateway?.trustedProxies,
     );
   const resolveCurrentSharedGatewaySessionGeneration = () =>
-    resolveSharedGatewaySessionGeneration(getResolvedAuth());
+    resolveSharedGatewaySessionGeneration(
+      getResolvedAuth(),
+      getRuntimeConfig().gateway?.trustedProxies,
+    );
   const resolveSharedGatewaySessionGenerationForRuntimeSnapshot = () =>
     resolveSharedGatewaySessionGeneration(
       resolveGatewayAuth({
@@ -743,6 +751,7 @@ export async function startGatewayServer(
         env: process.env,
         tailscaleMode,
       }),
+      getRuntimeConfig().gateway?.trustedProxies,
     );
   const sharedGatewaySessionGenerationState: SharedGatewaySessionGenerationState = {
     current: resolveCurrentSharedGatewaySessionGeneration(),
@@ -892,8 +901,20 @@ export async function startGatewayServer(
   deps.cron = runtimeState.cronState.cron;
 
   let closePreludeStarted = false;
-  const runClosePrelude = async () => {
+  let postReadyMaintenanceTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearPostReadyMaintenanceTimer = () => {
+    if (!postReadyMaintenanceTimer) {
+      return;
+    }
+    clearTimeout(postReadyMaintenanceTimer);
+    postReadyMaintenanceTimer = null;
+  };
+  const markClosePreludeStarted = () => {
     closePreludeStarted = true;
+    clearPostReadyMaintenanceTimer();
+  };
+  const runClosePrelude = async () => {
+    markClosePreludeStarted();
     clearCurrentPluginMetadataSnapshot();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
@@ -1028,8 +1049,6 @@ export async function startGatewayServer(
         nodeSendToSession,
         agentRunSeq,
         chatRunState,
-        resolveSessionKeyForRun,
-        clearAgentRunContext,
         toolEventRecipients,
         sessionEventSubscribers,
         sessionMessageSubscribers,
@@ -1316,6 +1335,7 @@ export async function startGatewayServer(
     }
 
     const { attachGatewayWsHandlers } = await import("./server-ws-runtime.js");
+    const canvasHostScheme = gatewayTls.enabled ? "https" : "http";
     attachGatewayWsHandlers({
       wss,
       clients,
@@ -1323,6 +1343,7 @@ export async function startGatewayServer(
       port,
       gatewayHost: bindHost ?? undefined,
       canvasHostEnabled: Boolean(canvasHost),
+      canvasHostScheme,
       canvasHostServerPort,
       resolvedAuth,
       getResolvedAuth,
@@ -1342,6 +1363,11 @@ export async function startGatewayServer(
       context: gatewayRequestContext,
     });
     await startListening();
+    if (canvasHost?.rootDir) {
+      logCanvas.info(
+        `canvas host mounted at ${canvasHostScheme}://${bindHost}:${port}${CANVAS_HOST_PATH}/ (root ${canvasHost.rootDir})`,
+      );
+    }
     startupTrace.mark("http.bound");
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;
@@ -1492,28 +1518,30 @@ export async function startGatewayServer(
       log.warn(`gateway: failed to promote config last-known-good backup: ${String(err)}`);
     });
     if (!minimalTestGateway) {
-      const handle = setTimeout(() => {
-        void gatewayRuntimeServices.runGatewayPostReadyMaintenance({
-          startMaintenance: earlyRuntime.startMaintenance,
-          applyMaintenance: (maintenance) => {
-            runtimeState.tickInterval = maintenance.tickInterval;
-            runtimeState.healthInterval = maintenance.healthInterval;
-            runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
-            runtimeState.mediaCleanup = maintenance.mediaCleanup;
-          },
-          shouldStartCron: () => !gatewayCronStartHandled,
-          markCronStartHandled: () => {
-            gatewayCronStartHandled = true;
-          },
-          cron: runtimeState.cronState.cron,
-          logCron,
-          log,
-          recordPostReadyMemory: () => {
-            startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
-          },
-        });
-      }, POST_READY_MAINTENANCE_DELAY_MS);
-      handle.unref?.();
+      postReadyMaintenanceTimer = gatewayRuntimeServices.scheduleGatewayPostReadyMaintenance({
+        delayMs: POST_READY_MAINTENANCE_DELAY_MS,
+        isClosing: () => closePreludeStarted,
+        onStarted: () => {
+          postReadyMaintenanceTimer = null;
+        },
+        startMaintenance: earlyRuntime.startMaintenance,
+        applyMaintenance: (maintenance) => {
+          runtimeState.tickInterval = maintenance.tickInterval;
+          runtimeState.healthInterval = maintenance.healthInterval;
+          runtimeState.dedupeCleanup = maintenance.dedupeCleanup;
+          runtimeState.mediaCleanup = maintenance.mediaCleanup;
+        },
+        shouldStartCron: () => !gatewayCronStartHandled,
+        markCronStartHandled: () => {
+          gatewayCronStartHandled = true;
+        },
+        cron: runtimeState.cronState.cron,
+        logCron,
+        log,
+        recordPostReadyMemory: () => {
+          startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
+        },
+      });
     } else {
       startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
     }
@@ -1527,6 +1555,7 @@ export async function startGatewayServer(
   return {
     close: async (opts) => {
       try {
+        markClosePreludeStarted();
         // Run gateway_stop plugin hook before shutdown
         const { runGlobalGatewayStopSafely } = await import("../plugins/hook-runner-global.js");
         await runGlobalGatewayStopSafely({
