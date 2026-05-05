@@ -33,6 +33,8 @@ export interface RateLimitConfig {
   exemptLoopback?: boolean;
   /** Background prune interval in milliseconds; set <= 0 to disable auto-prune.  @default 60_000 */
   pruneIntervalMs?: number;
+  /** Hard cap on tracked entries; oldest non-locked entries are evicted first.  @default 10_000 */
+  maxEntries?: number;
 }
 
 export const AUTH_RATE_LIMIT_SCOPE_DEFAULT = "default";
@@ -80,6 +82,7 @@ const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
 const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
 const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
+const DEFAULT_MAX_ENTRIES = 10_000;
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -102,6 +105,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
   const lockoutMs = config?.lockoutMs ?? DEFAULT_LOCKOUT_MS;
   const exemptLoopback = config?.exemptLoopback ?? true;
   const pruneIntervalMs = config?.pruneIntervalMs ?? PRUNE_INTERVAL_MS;
+  const maxEntries = config?.maxEntries ?? DEFAULT_MAX_ENTRIES;
 
   const entries = new Map<string, RateLimitEntry>();
 
@@ -187,6 +191,7 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
     if (!entry) {
       entry = { attempts: [] };
       entries.set(key, entry);
+      enforceMaxEntries(now);
     }
 
     // If currently locked, do nothing (already blocked).
@@ -199,6 +204,30 @@ export function createAuthRateLimiter(config?: RateLimitConfig): AuthRateLimiter
 
     if (entry.attempts.length >= maxAttempts) {
       entry.lockedUntil = now + lockoutMs;
+    }
+  }
+
+  /**
+   * Cap the entries Map so a flood of unique attacker IPs cannot push memory
+   * use past the configured bound between prune ticks. Locked-out entries are
+   * preserved so an attacker cannot escape a lockout by evicting their own
+   * locked entry through a flood of fresh failures.
+   */
+  function enforceMaxEntries(now: number): void {
+    if (entries.size <= maxEntries) {
+      return;
+    }
+    const toRemove = entries.size - maxEntries;
+    let removed = 0;
+    for (const [key, entry] of entries) {
+      if (removed >= toRemove) {
+        break;
+      }
+      if (entry.lockedUntil && now < entry.lockedUntil) {
+        continue;
+      }
+      entries.delete(key);
+      removed += 1;
     }
   }
 

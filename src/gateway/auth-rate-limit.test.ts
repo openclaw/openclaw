@@ -264,4 +264,46 @@ describe("auth rate limiter", () => {
     limiter.dispose();
     expect(limiter.size()).toBe(0);
   });
+
+  // ---------- maxEntries cap ----------
+
+  it("caps entries via FIFO drop when a flood of unique IPs exceeds maxEntries", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 5,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      maxEntries: 3,
+      pruneIntervalMs: 0,
+    });
+    for (let i = 0; i < 10; i++) {
+      limiter.recordFailure(`10.0.99.${i}`);
+    }
+    expect(limiter.size()).toBe(3);
+  });
+
+  it("preserves locked-out entries during flood eviction", () => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      maxEntries: 4,
+      pruneIntervalMs: 0,
+    });
+    // Lock two IPs out by hitting maxAttempts each.
+    limiter.recordFailure("10.0.50.1");
+    limiter.recordFailure("10.0.50.1");
+    limiter.recordFailure("10.0.50.2");
+    limiter.recordFailure("10.0.50.2");
+    expect(limiter.check("10.0.50.1").allowed).toBe(false);
+    expect(limiter.check("10.0.50.2").allowed).toBe(false);
+
+    // Flood with 20 fresh non-locked IPs; cap should hold without dropping the
+    // two locked entries.
+    for (let i = 0; i < 20; i++) {
+      limiter.recordFailure(`10.0.60.${i}`);
+    }
+    expect(limiter.size()).toBeLessThanOrEqual(4);
+    expect(limiter.check("10.0.50.1").allowed).toBe(false);
+    expect(limiter.check("10.0.50.2").allowed).toBe(false);
+  });
 });
