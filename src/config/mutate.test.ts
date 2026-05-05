@@ -55,6 +55,10 @@ describe("config mutate helpers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetConfigRuntimeState();
+    ioMocks.writeConfigFile.mockResolvedValue({
+      persistedHash: "persisted-hash",
+      persistedConfig: {},
+    });
     ioMocks.resolveConfigSnapshotHash.mockImplementation(
       (snapshot: { hash?: string }) => snapshot.hash ?? null,
     );
@@ -140,6 +144,34 @@ describe("config mutate helpers", () => {
         afterWrite: { mode: "auto" },
       },
     );
+  });
+
+  it("returns the persisted config from the write result", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-persisted",
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValueOnce({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+    ioMocks.writeConfigFile.mockResolvedValueOnce({
+      persistedHash: "persisted-hash-123",
+      persistedConfig: {
+        gateway: { auth: { mode: "token" } },
+        meta: { lastTouchedVersion: "2026.5.3-1" },
+      },
+    });
+
+    const result = await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+    });
+
+    expect(result.persistedConfig).toEqual({
+      gateway: { auth: { mode: "token" } },
+      meta: { lastTouchedVersion: "2026.5.3-1" },
+    });
   });
 
   it("returns explicit restart follow-up intent for replace writes", async () => {

@@ -66,6 +66,10 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  writeConfigFileMock.mockImplementation(async (config: OpenClawConfig) => ({
+    persistedHash: "test-persisted-hash",
+    persistedConfig: config,
+  }));
   validateConfigObjectWithPluginsMock.mockImplementation((config: OpenClawConfig) => ({
     ok: true,
     config,

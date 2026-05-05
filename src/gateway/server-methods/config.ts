@@ -340,7 +340,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        config: redactConfigObject(writeResult.persistedConfig, parsed.schema.uiHints),
       },
       undefined,
     );
@@ -483,7 +483,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(validated.config, schemaPatch.uiHints),
+        config: redactConfigObject(writeResult.persistedConfig, schemaPatch.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,
@@ -540,7 +540,7 @@ export const configHandlers: GatewayRequestHandlers = {
       mode: "config.apply",
       configPath: writeResult.path,
       changedPaths,
-      nextConfig: parsed.config,
+      nextConfig: writeResult.persistedConfig,
       actor,
       context,
     });
@@ -549,7 +549,7 @@ export const configHandlers: GatewayRequestHandlers = {
       {
         ok: true,
         path: writeResult.path,
-        config: redactConfigObject(parsed.config, parsed.schema.uiHints),
+        config: redactConfigObject(writeResult.persistedConfig, parsed.schema.uiHints),
         restart,
         sentinel: {
           path: sentinelPath,
