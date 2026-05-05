@@ -673,7 +673,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   fileManagedKeys?: ReadonlySet<string>;
   fileBackedEnvironment?: Record<string, string>;
 }): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
-  const incoming = { ...params.dotenvVars, ...(params.fileBackedEnvironment ?? {}) };
+  const incoming = { ...params.dotenvVars, ...params.fileBackedEnvironment };
   for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
       throw new Error(
