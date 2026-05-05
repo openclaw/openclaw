@@ -361,6 +361,57 @@ describe("zalouser send helpers", () => {
     expect(result).toEqual({ ok: true, error: undefined });
   });
 
+  it("retries without styles when Zalo rejects with error code 112", async () => {
+    mockSendText
+      .mockResolvedValueOnce({ ok: false, errorCode: 112, error: "params too large (code: 112)" })
+      .mockResolvedValueOnce({ ok: true, messageId: "mid-retry" });
+
+    const result = await sendMessageZalouser("thread-retry", "**hello**", {
+      profile: "default",
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      1,
+      "thread-retry",
+      "hello",
+      expect.objectContaining({ textStyles: [{ start: 0, len: 5, st: TextStyle.Bold }] }),
+    );
+    expect(mockSendText).toHaveBeenNthCalledWith(
+      2,
+      "thread-retry",
+      "hello",
+      expect.objectContaining({ textStyles: undefined }),
+    );
+    expect(result).toEqual({ ok: true, messageId: "mid-retry" });
+  });
+
+  it("propagates the error when retry without styles also fails", async () => {
+    mockSendText
+      .mockResolvedValueOnce({ ok: false, errorCode: 112, error: "params too large (code: 112)" })
+      .mockResolvedValueOnce({ ok: false, errorCode: 500, error: "server error" });
+
+    const result = await sendMessageZalouser("thread-retry-fail", "**hello**", {
+      profile: "default",
+      textMode: "markdown",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ ok: false, errorCode: 500, error: "server error" });
+  });
+
+  it("does not retry on error code 112 when there are no styles", async () => {
+    mockSendText.mockResolvedValueOnce({ ok: false, errorCode: 112, error: "error (code: 112)" });
+
+    const result = await sendMessageZalouser("thread-no-retry", "plain text", {
+      profile: "default",
+    });
+
+    expect(mockSendText).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ ok: false, errorCode: 112, error: "error (code: 112)" });
+  });
+
   it("delegates delivered+seen helpers to JS transport", async () => {
     mockSendDelivered.mockResolvedValueOnce();
     mockSendSeen.mockResolvedValueOnce();

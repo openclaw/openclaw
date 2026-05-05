@@ -212,6 +212,10 @@ function normalizeProfile(profile?: string | null): string {
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
+    const code = (error as Error & { code?: unknown }).code;
+    if (typeof code === "number" || typeof code === "string") {
+      return `${error.message} (code: ${code})`;
+    }
     return error.message;
   }
   return String(error);
@@ -1332,7 +1336,9 @@ export async function sendZaloTextMessage(
         );
         return { ok: true, messageId: extractSendMessageId(response) };
       } catch (error) {
-        return { ok: false, error: toErrorMessage(error) };
+        const code = (error as Error & { code?: unknown }).code;
+        const errorCode = typeof code === "number" ? code : undefined;
+        return { ok: false, error: toErrorMessage(error), errorCode };
       }
     },
     { shouldPersist: (result) => result.ok },

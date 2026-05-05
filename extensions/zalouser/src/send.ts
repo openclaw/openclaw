@@ -52,7 +52,15 @@ export async function sendMessageZalouser(
             mediaUrl: undefined,
             textStyles: chunk.styles,
           };
-    const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions);
+    let result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions);
+    if (!result.ok && result.errorCode === 112 && chunkOptions.textStyles?.length) {
+      // Zalo rejected the request, likely because the params payload is too large
+      // when combined with styling data. Retry without styles.
+      result = await sendZaloTextMessage(threadId, chunk.text, {
+        ...chunkOptions,
+        textStyles: undefined,
+      });
+    }
     if (!result.ok) {
       return result;
     }
