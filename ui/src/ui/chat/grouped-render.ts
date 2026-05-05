@@ -799,7 +799,17 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
 
 function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
-  if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
+  // Bug #9b: also recognize the managed outgoing-document route
+  // (/api/chat/media/outgoing-doc/...) as a non-local URL so it isn't
+  // double-wrapped through /__openclaw__/assistant-media. The doc route
+  // already serves with the correct Content-Type and
+  // `Content-Disposition: attachment`; passing it through assistant-media
+  // would discard those guarantees.
+  if (
+    /^\/(?:__openclaw__|media|api\/chat\/media\/outgoing|api\/chat\/media\/outgoing-doc)\//.test(
+      trimmed,
+    )
+  ) {
     return false;
   }
   return (
@@ -1261,12 +1271,21 @@ function renderAssistantAttachments(
             reason: availability.status === "unavailable" ? availability.reason : undefined,
           });
         }
+        // Bug #9b: documents (xlsx/csv/pdf/zip/etc.) must download as binary
+        // files instead of opening in a new tab and triggering Safari's
+        // "Save as Webpage Complete" fallback. The `download` attribute
+        // forces same-origin save-to-disk and uses the inferred label as
+        // the suggested filename. Pair this with the gateway-side
+        // `Content-Disposition: attachment` so cross-origin or
+        // download-attribute-ignoring browsers still get the right
+        // behaviour.
         return html`
           <div class="chat-assistant-attachment-card">
             <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
             <a
               class="chat-assistant-attachment-card__link"
               href=${attachmentUrl}
+              download=${attachment.label}
               target="_blank"
               rel="noreferrer"
               >${attachment.label}</a
