@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "../../src/config.js";
 import type { CoreAgentDeps, CoreConfig } from "../../src/core-bridge.js";
 import { CallManager } from "../../src/manager.js";
+import { flushPendingCallRecordWritesForTest } from "../../src/manager/store.js";
 import type { VoiceCallProvider } from "../../src/providers/base.js";
 import { generateVoiceResponse } from "../../src/response-generator.js";
 import { resolveCallAgentId } from "../../src/util/resolve-call-agent-id.js";
@@ -68,15 +72,32 @@ function createAgentRuntimeStub(payloadText: string) {
 }
 
 describe("per-agent voice call routing — integration", () => {
+  const storeDirs: string[] = [];
+
+  afterEach(async () => {
+    await flushPendingCallRecordWritesForTest();
+    for (const dir of storeDirs.splice(0)) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function makeStore(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-per-agent-routing-"));
+    storeDirs.push(dir);
+    return dir;
+  }
+
   it("CallRecord.agentId persists from initiateCall through to generateVoiceResponse", async () => {
+    const storePath = makeStore();
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "mock",
       fromNumber: "+15550000000",
       // Plugin-level default agent — should be ignored when call has its own.
       agentId: "config-default",
+      store: storePath,
     });
-    const manager = new CallManager(config);
+    const manager = new CallManager(config, storePath);
     await manager.initialize(createProviderStub(), "https://example.com/wh");
 
     const result = await manager.initiateCall("+15550009999", undefined, {
@@ -112,13 +133,15 @@ describe("per-agent voice call routing — integration", () => {
   });
 
   it("falls back to effectiveConfig.agentId when call.agentId is unset (legacy outbound)", async () => {
+    const storePath = makeStore();
     const config = VoiceCallConfigSchema.parse({
       enabled: true,
       provider: "mock",
       fromNumber: "+15550000000",
       agentId: "owner",
+      store: storePath,
     });
-    const manager = new CallManager(config);
+    const manager = new CallManager(config, storePath);
     await manager.initialize(createProviderStub(), "https://example.com/wh");
 
     const result = await manager.initiateCall("+15550009999", undefined, { message: "hello" });
