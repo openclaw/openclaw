@@ -34,4 +34,26 @@ describe("irc inbound policy", () => {
 
     expect(resolved.effectiveGroupAllowFrom).toEqual([]);
   });
+
+  it("disables block streaming by default for IRC replies", () => {
+    expect(
+      __testing.resolveIrcDisableBlockStreaming({
+        config: {},
+      } as never),
+    ).toBe(true);
+
+    expect(
+      __testing.resolveIrcDisableBlockStreaming({
+        config: { blockStreaming: false },
+      } as never),
+    ).toBe(true);
+  });
+
+  it("allows opting back into IRC block streaming per account", () => {
+    expect(
+      __testing.resolveIrcDisableBlockStreaming({
+        config: { blockStreaming: true },
+      } as never),
+    ).toBe(false);
+  });
 });

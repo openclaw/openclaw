@@ -58,6 +58,13 @@ function resolveIrcEffectiveAllowlists(params: {
   return { effectiveAllowFrom, effectiveGroupAllowFrom };
 }
 
+function resolveIrcDisableBlockStreaming(account: ResolvedIrcAccount): boolean {
+  // IRC delivery is line-oriented and some providers only surface the last
+  // streamed text block. Keep full final replies by default unless IRC
+  // block streaming is explicitly opted in on the account.
+  return account.config.blockStreaming !== true;
+}
+
 async function deliverIrcReply(params: {
   payload: OutboundReplyPayload;
   cfg: CoreConfig;
@@ -361,14 +368,12 @@ export async function handleIrcInbound(params: {
     },
     replyOptions: {
       skillFilter: groupMatch.groupConfig?.skills,
-      disableBlockStreaming:
-        typeof account.config.blockStreaming === "boolean"
-          ? !account.config.blockStreaming
-          : undefined,
+      disableBlockStreaming: resolveIrcDisableBlockStreaming(account),
     },
   });
 }
 
 export const __testing = {
   resolveIrcEffectiveAllowlists,
+  resolveIrcDisableBlockStreaming,
 };
