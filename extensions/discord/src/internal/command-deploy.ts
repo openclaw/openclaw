@@ -180,6 +180,33 @@ export class DiscordCommandDeployer {
     }
     try {
       await fs.mkdir(path.dirname(storePath), { recursive: true });
+      // Re-read the on-disk hashes immediately before writing and merge them
+      // with our in-memory entries. Multiple Discord accounts on the same
+      // gateway share `command-deploy-cache.json`, and `server-channels.ts`
+      // can start their deployers concurrently. Without this re-read step,
+      // two deployers that both load the old file and then both write would
+      // each persist only their own scoped keys (`app:<id>:...`) and drop the
+      // other deployer's keys, defeating the rate-limit protection the cache
+      // was added for. Our in-memory entries always win on key collisions
+      // (we just produced them); on-disk entries that we don't have in memory
+      // are preserved as-is.
+      const merged = new Map<string, string>();
+      try {
+        const raw = await fs.readFile(storePath, "utf8");
+        const parsed = JSON.parse(raw) as { hashes?: unknown };
+        if (parsed.hashes && typeof parsed.hashes === "object") {
+          for (const [key, value] of Object.entries(parsed.hashes)) {
+            if (typeof value === "string" && key.trim() && value.trim()) {
+              merged.set(key, value);
+            }
+          }
+        }
+      } catch {
+        // Missing or corrupt on-disk cache — fine; we'll write a fresh one.
+      }
+      for (const [key, value] of this.hashes.entries()) {
+        merged.set(key, value);
+      }
       const tmpPath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
       await fs.writeFile(
         tmpPath,
@@ -188,7 +215,7 @@ export class DiscordCommandDeployer {
             version: 1,
             updatedAt: new Date().toISOString(),
             hashes: Object.fromEntries(
-              [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+              [...merged.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
             ),
           },
           null,
@@ -197,6 +224,11 @@ export class DiscordCommandDeployer {
         "utf8",
       );
       await fs.rename(tmpPath, storePath);
+      // Refresh in-memory state so future writes from the same deployer also
+      // see entries that other deployers added concurrently.
+      for (const [key, value] of merged.entries()) {
+        this.hashes.set(key, value);
+      }
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.
     }
