@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../../agents/test-helpers/fast-coding-tools.js";
 import {
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
+  makeCronSessionEntry,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveCronSessionMock,
   resolveDeliveryTargetMock,
   runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
@@ -126,6 +129,32 @@ describe("runCronIsolatedAgentTurn owner auth", () => {
       expect(call?.senderIsOwner).toBe(false);
       expect(call?.ownerOnlyToolAllowlist).toBeUndefined();
       expect(call?.toolsAllow).toEqual(["maniple__check_idle_workers"]);
+    },
+  );
+
+  it(
+    "passes cron sessionEntry scopeEnvelope into embedded cron runs",
+    { timeout: RUN_OWNER_AUTH_TIMEOUT_MS },
+    async () => {
+      const sessionEntry = makeCronSessionEntry({
+        scopeEnvelope: {
+          workspaceKind: "topic_workspace",
+          scopeOwner: "active_task",
+          platform: "discord",
+          chatId: "topic-123",
+        },
+      });
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({
+          sessionEntry,
+        }),
+      );
+
+      await runCronIsolatedAgentTurn(makeParams());
+
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.sessionEntry?.scopeEnvelope).toEqual(sessionEntry.scopeEnvelope);
     },
   );
 });

@@ -94,6 +94,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "claudeCliSessionId",
   "label",
   "displayName",
+  "scopeEnvelope",
   "channel",
   "groupId",
   "subject",

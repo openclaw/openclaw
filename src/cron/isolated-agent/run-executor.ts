@@ -202,6 +202,7 @@ export function createCronPromptExecutor(params: {
           messageThreadId: params.resolvedDelivery.threadId,
           currentChannelId,
           sessionFile,
+          sessionEntry: params.cronSession.sessionEntry,
           agentDir: params.agentDir,
           workspaceDir: params.workspaceDir,
           config: params.cfgWithAgentDefaults,
