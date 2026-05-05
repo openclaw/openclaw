@@ -103,6 +103,15 @@ workspace skill overrides them. You can gate them via
 See [Plugins](/tools/plugin) for discovery/config and [Tools](/tools) for
 the tool surface those skills teach.
 
+## Bundled operating skills
+
+Some bundled skills are domain operating guides rather than tool wrappers. For
+example, `etsy-shop-operator` converts broad Etsy shop-growth requests into
+auditable research, product, listing, ads, operations, and approval artifacts.
+It can coordinate internal drafting and analysis while keeping live shop
+changes, customer contact, ad spend, purchases, supplier outreach, hiring, and
+legal or tax commitments behind explicit approval gates.
+
 ## Skill Workshop
 
 The optional, experimental **Skill Workshop** plugin can create or update

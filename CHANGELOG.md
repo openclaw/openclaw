@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Skills: add an Etsy shop operator skill that converts broad shop-growth requests into auditable product, listing, ads, and operations drafts with explicit approval gates. (JAC-9) Thanks @jacobolschewski.
 - Gateway/Windows: bind the default loopback gateway listener only to `127.0.0.1` on Windows so libuv's dual-stack `::1` behavior cannot wedge localhost HTTP requests. (#69701, fixes #69674) Thanks @SARAMALI15792.
 - Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.
 - OpenAI/Codex media: advertise Codex audio transcription in runtime and manifest metadata and route active Codex chat models to the OpenAI transcription default instead of sending chat model ids to audio transcription. Thanks @vincentkoc.
