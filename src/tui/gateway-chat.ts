@@ -8,11 +8,7 @@ import {
   resolveExplicitGatewayAuth,
 } from "../gateway/call.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
-import {
-  GatewayClient,
-  type GatewayClientOptions,
-  GatewayClientRequestError,
-} from "../gateway/client.js";
+import { GatewayClient, GatewayClientRequestError } from "../gateway/client.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -52,6 +48,7 @@ const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 
 type ResolvedGatewayConnection = {
   url: string;
+  configuredGatewayUrl: string;
   token?: string;
   password?: string;
   preauthHandshakeTimeoutMs?: number;
@@ -121,6 +118,7 @@ export class GatewayChatClient implements TuiBackend {
 
     this.client = new GatewayClient({
       url: connection.url,
+      configuredGatewayUrl: connection.configuredGatewayUrl,
       token: connection.token,
       password: connection.password,
       preauthHandshakeTimeoutMs: connection.preauthHandshakeTimeoutMs,
@@ -278,6 +276,10 @@ export async function resolveGatewayConnection(
     config,
     ...(urlOverride ? { url: urlOverride } : {}),
   }).url;
+  const configuredGatewayUrl = buildGatewayConnectionDetails({
+    config,
+    ignoreEnvUrlOverride: Boolean(urlOverride),
+  }).url;
   const allowInsecureLocalOperatorUi = (() => {
     if (config.gateway?.controlUi?.allowInsecureAuth !== true) {
       return false;
@@ -292,6 +294,7 @@ export async function resolveGatewayConnection(
   if (urlOverride) {
     return {
       url,
+      configuredGatewayUrl,
       token: explicitAuth.token,
       password: explicitAuth.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
@@ -311,6 +314,7 @@ export async function resolveGatewayConnection(
     }
     return {
       url,
+      configuredGatewayUrl,
       token: resolved.token,
       password: resolved.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
@@ -327,6 +331,7 @@ export async function resolveGatewayConnection(
     });
     return {
       url,
+      configuredGatewayUrl,
       token: resolved.token,
       password: resolved.password,
       preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
@@ -352,6 +357,7 @@ export async function resolveGatewayConnection(
   }
   return {
     url,
+    configuredGatewayUrl,
     token: resolved.token,
     password: resolved.password,
     preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,

@@ -46,6 +46,7 @@ export async function createOperatorApprovalsGatewayClient(
 
   return new GatewayClient({
     url: bootstrap.url,
+    configuredGatewayUrl: bootstrap.configuredGatewayUrl,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,

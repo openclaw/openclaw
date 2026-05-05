@@ -14,6 +14,25 @@ let activeProxyUrl: ActiveManagedProxyUrl | undefined;
 let activeProxyLoopbackMode: ActiveManagedProxyLoopbackMode | undefined;
 let activeProxyRegistrationCount = 0;
 
+function parseActiveManagedProxyLoopbackMode(
+  value: string | undefined,
+): ActiveManagedProxyLoopbackMode | undefined {
+  if (value === "gateway-only" || value === "proxy" || value === "block") {
+    return value;
+  }
+  return undefined;
+}
+
+function readInheritedActiveManagedProxyLoopbackMode(): ActiveManagedProxyLoopbackMode | undefined {
+  if (process.env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
+    return undefined;
+  }
+  return (
+    parseActiveManagedProxyLoopbackMode(process.env["OPENCLAW_PROXY_LOOPBACK_MODE"]) ??
+    "gateway-only"
+  );
+}
+
 export function registerActiveManagedProxyUrl(
   proxyUrl: URL,
   loopbackMode: ActiveManagedProxyLoopbackMode = "gateway-only",
@@ -60,7 +79,7 @@ export function stopActiveManagedProxyRegistration(
 }
 
 export function getActiveManagedProxyLoopbackMode(): ActiveManagedProxyLoopbackMode | undefined {
-  return activeProxyLoopbackMode;
+  return activeProxyLoopbackMode ?? readInheritedActiveManagedProxyLoopbackMode();
 }
 
 export function getActiveManagedProxyUrl(): ActiveManagedProxyUrl | undefined {

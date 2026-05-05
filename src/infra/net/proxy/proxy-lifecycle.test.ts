@@ -48,6 +48,7 @@ describe("startProxy", () => {
     "GLOBAL_AGENT_FORCE_GLOBAL_AGENT",
     "GLOBAL_AGENT_NO_PROXY",
     "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_PROXY_LOOPBACK_MODE",
     "OPENCLAW_PROXY_URL",
   ];
   const originalHttpRequest = http.request;
@@ -177,6 +178,25 @@ describe("startProxy", () => {
     expect(process.env["GLOBAL_AGENT_HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
     expect(process.env["GLOBAL_AGENT_FORCE_GLOBAL_AGENT"]).toBe("true");
     expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
+    expect(process.env["OPENCLAW_PROXY_LOOPBACK_MODE"]).toBe("gateway-only");
+  });
+
+  it("persists loopbackMode in env for forked child CLIs", async () => {
+    const { getActiveManagedProxyLoopbackMode } = await import("./active-proxy-state.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "block",
+    });
+
+    expect(process.env["OPENCLAW_PROXY_LOOPBACK_MODE"]).toBe("block");
+    expect(getActiveManagedProxyLoopbackMode()).toBe("block");
+
+    await stopProxy(handle);
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "proxy";
+
+    expect(getActiveManagedProxyLoopbackMode()).toBe("proxy");
   });
 
   it("redacts proxy credentials before logging the active proxy URL", async () => {

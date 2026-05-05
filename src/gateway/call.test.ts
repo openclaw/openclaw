@@ -42,6 +42,7 @@ const eventLoopReadyState = vi.hoisted(() => ({
 
 let lastClientOptions: {
   url?: string;
+  configuredGatewayUrl?: string;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -79,6 +80,7 @@ vi.mock("./client.js", () => ({
   GatewayClient: class {
     constructor(opts: {
       url?: string;
+      configuredGatewayUrl?: string;
       token?: string;
       password?: string;
       preauthHandshakeTimeoutMs?: number;
@@ -143,6 +145,7 @@ const {
 class StubGatewayClient {
   constructor(opts: {
     url?: string;
+    configuredGatewayUrl?: string;
     token?: string;
     password?: string;
     preauthHandshakeTimeoutMs?: number;
@@ -352,6 +355,7 @@ describe("callGateway url resolution", () => {
     });
 
     expect(lastClientOptions?.url).toBe("wss://override.example/ws");
+    expect(lastClientOptions?.configuredGatewayUrl).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("explicit-token");
   });
 
@@ -368,6 +372,7 @@ describe("callGateway url resolution", () => {
 
     expect(getRuntimeConfig).not.toHaveBeenCalled();
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+    expect(lastClientOptions?.configuredGatewayUrl).toBe("ws://127.0.0.1:18789");
     expect(lastClientOptions?.token).toBe("test-token");
   });
 
@@ -460,6 +465,9 @@ describe("callGateway url resolution", () => {
     });
 
     expect(lastClientOptions?.url).toBe("wss://gateway-in-container.internal:9443/ws");
+    expect(lastClientOptions?.configuredGatewayUrl).toBe(
+      "wss://gateway-in-container.internal:9443/ws",
+    );
     expect(lastClientOptions?.token).toBe("env-token");
     expect(lastClientOptions?.password).toBeUndefined();
   });

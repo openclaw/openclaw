@@ -165,6 +165,7 @@ describe("resolveGatewayConnection", () => {
 
     expect(result).toEqual({
       url: "wss://override.example/ws",
+      configuredGatewayUrl: "ws://127.0.0.1:18789",
       ...expected,
       preauthHandshakeTimeoutMs: undefined,
       allowInsecureLocalOperatorUi: false,
@@ -506,6 +507,7 @@ describe("resolveGatewayConnection", () => {
       token: "override-token",
     });
     expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.configuredGatewayUrl).toBe("ws://127.0.0.1:18789");
     expect(result.token).toBe("override-token");
   });
 });
@@ -518,6 +520,7 @@ describe("GatewayChatClient", () => {
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
+      configuredGatewayUrl: "ws://127.0.0.1:18789",
       token: "test-token",
       preauthHandshakeTimeoutMs: 30_000,
       allowInsecureLocalOperatorUi: true,
@@ -552,6 +555,7 @@ describe("GatewayChatClient", () => {
     const onDisconnected = vi.fn();
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
+      configuredGatewayUrl: "ws://127.0.0.1:18789",
       token: "test-token",
       allowInsecureLocalOperatorUi: true,
     });
@@ -574,6 +578,7 @@ describe("GatewayChatClient", () => {
 
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
+      configuredGatewayUrl: "ws://127.0.0.1:18789",
       token: "test-token",
       allowInsecureLocalOperatorUi: true,
     });

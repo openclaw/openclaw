@@ -181,17 +181,25 @@ beforeAll(async () => {
 });
 
 describe("GatewayClient security checks", () => {
-  const envSnapshot = captureEnv(["OPENCLAW_ALLOW_INSECURE_PRIVATE_WS"]);
+  const envSnapshot = captureEnv([
+    "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
+    "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_PROXY_LOOPBACK_MODE",
+  ]);
 
   beforeEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_PROXY_ACTIVE;
+    delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     wsInstances.length = 0;
   });
 
   afterEach(() => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
+    delete process.env.OPENCLAW_PROXY_ACTIVE;
+    delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -261,6 +269,47 @@ describe("GatewayClient security checks", () => {
       client.stop();
       await stopProxy(handle);
     }
+  });
+
+  it("uses direct Gateway loopback agent only for the configured URL when managed proxy is active", async () => {
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+
+    try {
+      const configuredClient = new GatewayClient({
+        url: "ws://127.0.0.1:18789",
+        configuredGatewayUrl: "ws://127.0.0.1:18789",
+      });
+      configuredClient.start();
+      expect(getLatestWs().options).toMatchObject({ agent: expect.any(Object) });
+      configuredClient.stop();
+
+      const overrideClient = new GatewayClient({
+        url: "ws://127.0.0.1:3000",
+        configuredGatewayUrl: "ws://127.0.0.1:18789",
+      });
+      overrideClient.start();
+      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+      overrideClient.stop();
+    } finally {
+      await stopProxy(handle);
+    }
+  });
+
+  it("does not let inherited managed proxy env treat an explicit loopback URL as configured", () => {
+    process.env.OPENCLAW_PROXY_ACTIVE = "1";
+    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:3000",
+    });
+
+    client.start();
+
+    expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+    client.stop();
   });
 
   it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
