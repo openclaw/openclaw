@@ -285,6 +285,44 @@ describe("ensureSandboxContainer config-hash recreation", () => {
   });
 
   it.each([
+    { strategy: "named" as const, source: "openclaw-cache" },
+    { strategy: "ephemeral" as const },
+  ])(
+    "rejects reserved volume targets for $strategy strategy by default",
+    async ({ strategy, source }) => {
+      const workspaceDir = "/tmp/workspace";
+      const cfg = createSandboxConfig([]);
+      cfg.docker.dangerouslyAllowReservedContainerTargets = false;
+      cfg.docker.volumes = [
+        {
+          strategy,
+          source,
+          target: "/workspace",
+        },
+      ];
+
+      spawnState.inspectRunning = false;
+      spawnState.labelHash = "";
+      registryMocks.readRegistryEntry.mockResolvedValue(null);
+      registryMocks.updateRegistry.mockResolvedValue(undefined);
+
+      await expect(
+        ensureSandboxContainer({
+          sessionKey: "agent:main:session-1",
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+          cfg,
+        }),
+      ).rejects.toThrow(/reserved container path/);
+
+      const createCall = spawnState.calls.find(
+        (call) => call.command === "docker" && call.args[0] === "create",
+      );
+      expect(createCall).toBeUndefined();
+    },
+  );
+
+  it.each([
     { workspaceAccess: "rw" as const, expectedMainMount: "/tmp/workspace:/workspace:z" },
     { workspaceAccess: "ro" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },
     { workspaceAccess: "none" as const, expectedMainMount: "/tmp/workspace:/workspace:ro,z" },

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { getReservedContainerTargetReason } from "../agents/sandbox/validate-sandbox-security.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -633,6 +634,113 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectReservedVolumeTargetIssues(params: {
+  docker: unknown;
+  pathPrefix: string;
+  inheritedAllowReservedContainerTargets?: boolean;
+}): ConfigValidationIssue[] {
+  if (!isRecord(params.docker)) {
+    return [];
+  }
+  const localAllowReserved = params.docker.dangerouslyAllowReservedContainerTargets;
+  const allowReservedContainerTargets =
+    typeof localAllowReserved === "boolean"
+      ? localAllowReserved
+      : params.inheritedAllowReservedContainerTargets === true;
+  if (allowReservedContainerTargets) {
+    return [];
+  }
+  const volumes = params.docker.volumes;
+  return collectReservedVolumeTargetIssuesFromVolumes({
+    volumes,
+    pathPrefix: params.pathPrefix,
+  });
+}
+
+function collectReservedVolumeTargetIssuesFromVolumes(params: {
+  volumes: unknown;
+  pathPrefix: string;
+}): ConfigValidationIssue[] {
+  const volumes = params.volumes;
+  if (!Array.isArray(volumes) || volumes.length === 0) {
+    return [];
+  }
+  const issues: ConfigValidationIssue[] = [];
+  for (let index = 0; index < volumes.length; index += 1) {
+    const volume = volumes[index];
+    if (!isRecord(volume)) {
+      continue;
+    }
+    const targetRaw = volume.target;
+    const target = typeof targetRaw === "string" ? targetRaw.trim() : "";
+    if (!target) {
+      continue;
+    }
+    const reservedTargetReason = getReservedContainerTargetReason(target);
+    if (!reservedTargetReason || reservedTargetReason.kind !== "reserved_target") {
+      continue;
+    }
+    issues.push({
+      path: `${params.pathPrefix}.volumes.${index}.target`,
+      message:
+        `Sandbox security: volume target "${target}" hits reserved container path ` +
+        `"${reservedTargetReason.reservedPath}". ` +
+        "Use dangerouslyAllowReservedContainerTargets=true only when you fully trust this runtime.",
+    });
+  }
+  return issues;
+}
+
+function validateReservedVolumeTargetsWithInheritedOverrides(
+  config: OpenClawConfig,
+): ConfigValidationIssue[] {
+  const defaultsDocker = config.agents?.defaults?.sandbox?.docker;
+  const defaultsAllowReservedContainerTargets =
+    defaultsDocker?.dangerouslyAllowReservedContainerTargets === true;
+  const issues: ConfigValidationIssue[] = collectReservedVolumeTargetIssues({
+    docker: defaultsDocker,
+    pathPrefix: "agents.defaults.sandbox.docker",
+  });
+  const agentsList = config.agents?.list;
+  if (!Array.isArray(agentsList) || agentsList.length === 0) {
+    return issues;
+  }
+  for (let agentIndex = 0; agentIndex < agentsList.length; agentIndex += 1) {
+    const docker = agentsList[agentIndex]?.sandbox?.docker;
+    issues.push(
+      ...collectReservedVolumeTargetIssues({
+        docker,
+        pathPrefix: `agents.list.${agentIndex}.sandbox.docker`,
+        inheritedAllowReservedContainerTargets: defaultsAllowReservedContainerTargets,
+      }),
+    );
+    if (!isRecord(docker) || !defaultsAllowReservedContainerTargets) {
+      continue;
+    }
+    // Only an explicit `false` opts this agent out of inherited defaults `true`; unset keeps inheritance.
+    if (docker.dangerouslyAllowReservedContainerTargets !== false) {
+      continue;
+    }
+    const inheritedDefaultVolumeIssues = collectReservedVolumeTargetIssuesFromVolumes({
+      volumes: defaultsDocker?.volumes,
+      pathPrefix: "agents.defaults.sandbox.docker",
+    });
+    if (inheritedDefaultVolumeIssues.length === 0) {
+      continue;
+    }
+    for (const inheritedIssue of inheritedDefaultVolumeIssues) {
+      issues.push({
+        path: `agents.list.${agentIndex}.sandbox.docker.dangerouslyAllowReservedContainerTargets`,
+        message:
+          `${inheritedIssue.message} This agent explicitly sets ` +
+          "dangerouslyAllowReservedContainerTargets=false, so inherited defaults " +
+          "cannot include reserved volume targets.",
+      });
+    }
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -688,6 +796,12 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const reservedVolumeTargetIssues = validateReservedVolumeTargetsWithInheritedOverrides(
+    validated.data as OpenClawConfig,
+  );
+  if (reservedVolumeTargetIssues.length > 0) {
+    return { ok: false, issues: reservedVolumeTargetIssues };
   }
   return {
     ok: true,

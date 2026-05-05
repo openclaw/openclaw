@@ -23,6 +23,7 @@ import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
 import { DEFAULT_SANDBOX_BROWSER_IMAGE, SANDBOX_BROWSER_SECURITY_HASH_EPOCH } from "./constants.js";
 import {
+  appendVolumeMounts,
   buildSandboxCreateArgs,
   dockerContainerState,
   execDocker,
@@ -311,6 +312,7 @@ export async function ensureSandboxBrowser(params: {
         args.push("-v", bind);
       }
     }
+    appendVolumeMounts(args, browserDockerCfg);
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (noVncEnabled) {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);

@@ -246,6 +246,168 @@ describe("sandbox docker config", () => {
     });
     expect(res.ok).toBe(false);
   });
+
+  it("accepts sandbox.docker.volumes with mixed strategies", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [
+                { strategy: "ephemeral", target: "/tmp/cache" },
+                { strategy: "named", source: "openclaw-cache", target: "/cache" },
+                {
+                  strategy: "bind",
+                  source: "/home/user/shared",
+                  target: "/shared",
+                  readOnly: true,
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects bind volume strategy without absolute source", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [{ strategy: "bind", source: "relative/path", target: "/shared" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects ephemeral volume strategy when source is provided", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [{ strategy: "ephemeral", source: "not-allowed", target: "/tmp" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects reserved volume targets by default", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              volumes: [{ strategy: "named", source: "openclaw-cache", target: "/workspace" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows reserved volume targets with explicit dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowReservedContainerTargets: true,
+              volumes: [{ strategy: "named", source: "openclaw-cache", target: "/workspace" }],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("allows agent reserved volume targets when dangerous override is inherited from defaults", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowReservedContainerTargets: true,
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            sandbox: {
+              docker: {
+                volumes: [{ strategy: "named", source: "agent-cache", target: "/workspace" }],
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects agent reserved volume targets when agent explicitly disables inherited dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowReservedContainerTargets: true,
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            sandbox: {
+              docker: {
+                dangerouslyAllowReservedContainerTargets: false,
+                volumes: [{ strategy: "named", source: "agent-cache", target: "/workspace" }],
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects inherited default reserved volume targets when agent explicitly disables inherited dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowReservedContainerTargets: true,
+              volumes: [{ strategy: "named", source: "default-cache", target: "/workspace" }],
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            sandbox: {
+              docker: {
+                dangerouslyAllowReservedContainerTargets: false,
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
 });
 
 describe("sandbox browser binds config", () => {

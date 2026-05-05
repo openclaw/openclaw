@@ -208,6 +208,7 @@ OpenShell modes:
   <Accordion title="Current OpenShell limitations">
     - sandbox browser is not supported yet
     - `sandbox.docker.binds` is not supported on the OpenShell backend
+    - `sandbox.docker.volumes` is not supported on the OpenShell backend
     - Docker-specific runtime knobs under `sandbox.docker.*` still apply only to the Docker backend
 
   </Accordion>
@@ -313,6 +314,16 @@ Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
 Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
 
+`agents.defaults.sandbox.docker.volumes` mounts additional Docker volumes into sandbox containers with declarative entries:
+
+- `strategy: "ephemeral"` creates an anonymous Docker volume and must omit `source`
+- `strategy: "named"` mounts the Docker volume named by `source`
+- `strategy: "bind"` mounts the host path named by absolute `source`
+
+Each entry requires an absolute POSIX `target` inside the container and may set `readOnly: true`. Global and per-agent volumes are merged the same way as `sandbox.docker.binds`; under `scope: "shared"`, per-agent volumes are ignored.
+
+Docker volumes are Docker-backend only. The SSH and OpenShell sandbox backends reject `sandbox.docker.volumes` because they do not mount Docker volumes.
+
 `agents.defaults.sandbox.browser.binds` mounts additional host directories into the **sandbox browser** container only.
 
 - When set (including `[]`), it replaces `agents.defaults.sandbox.docker.binds` for the browser container.
@@ -358,6 +369,29 @@ Example (read-only source + an extra data directory):
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
 
 </Warning>
+
+Example (ephemeral cache + named dependency volume):
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        docker: {
+          volumes: [
+            { strategy: "ephemeral", target: "/tmp/cache" },
+            {
+              strategy: "named",
+              source: "openclaw-node-modules",
+              target: "/cache/node_modules",
+            },
+          ],
+        },
+      },
+    },
+  },
+}
+```
 
 ## Images and setup
 

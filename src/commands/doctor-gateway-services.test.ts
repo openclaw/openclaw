@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => ({
   resolveGatewayAuthTokenForService: vi.fn(),
   resolveGatewayPort: vi.fn(() => 18789),
   resolveIsNixMode: vi.fn(() => false),
+  resolveStateDir: vi.fn(() => "/tmp/openclaw-doctor-gateway-services-test"),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
   isSystemdUnitActive: vi.fn().mockResolvedValue(false),
@@ -44,8 +45,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  STATE_DIR: "/tmp/openclaw-doctor-gateway-services-test",
   resolveGatewayPort: mocks.resolveGatewayPort,
   resolveIsNixMode: mocks.resolveIsNixMode,
+  resolveStateDir: mocks.resolveStateDir,
 }));
 
 vi.mock("../config/config.js", async () => {

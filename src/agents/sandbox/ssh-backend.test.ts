@@ -61,7 +61,11 @@ function createSession() {
   };
 }
 
-function createBackendSandboxConfig(params?: { binds?: string[]; target?: string }): SandboxConfig {
+function createBackendSandboxConfig(params?: {
+  binds?: string[];
+  volumes?: SandboxConfig["docker"]["volumes"];
+  target?: string;
+}): SandboxConfig {
   return {
     mode: "all",
     backend: "ssh",
@@ -78,6 +82,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
       capDrop: ["ALL"],
       env: {},
       ...(params?.binds ? { binds: params.binds } : {}),
+      ...(params?.volumes ? { volumes: params.volumes } : {}),
     },
     ssh: {
       ...createSandboxSshConfig(
@@ -100,6 +105,7 @@ function createBackendSandboxConfig(params?: { binds?: string[]; target?: string
 
 async function expectBackendCreationToReject(params: {
   binds?: string[];
+  volumes?: SandboxConfig["docker"]["volumes"];
   target?: string;
   error: string;
 }) {
@@ -111,6 +117,7 @@ async function expectBackendCreationToReject(params: {
       agentWorkspaceDir: "/tmp/workspace",
       cfg: createBackendSandboxConfig({
         binds: params.binds,
+        volumes: params.volumes,
         target: params.target,
       }),
     }),
@@ -338,6 +345,14 @@ describe("ssh sandbox backend", () => {
 
     await expectBackendCreationToReject({
       error: "requires agents.defaults.sandbox.ssh.target",
+    });
+  });
+
+  it("rejects docker volumes because ssh does not mount them", async () => {
+    await expectBackendCreationToReject({
+      volumes: [{ strategy: "named", source: "cache", target: "/cache" }],
+      target: "peter@example.com:22",
+      error: "does not support sandbox.docker.volumes",
     });
   });
 });
