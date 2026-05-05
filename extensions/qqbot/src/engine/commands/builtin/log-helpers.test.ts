@@ -50,7 +50,7 @@ describe("buildBotLogsResult", () => {
 
     expect(typeof first).toBe("object");
     expect(typeof second).toBe("object");
-    if (typeof first === "string" || typeof second === "string") {
+    if (!first || !second || typeof first === "string" || typeof second === "string") {
       throw new Error("expected file upload results");
     }
     expect(path.basename(first.filePath)).toBe("bot-logs-2026-05-05T10-11-12.txt");
