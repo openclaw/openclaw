@@ -63,13 +63,16 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/subagents: keep resumed parent `message.send` calls in the originating Slack thread when ambient session thread context is present, and suppress successful silent child completion rows from follow-up findings. Thanks @bek91.
 - Infra/Windows: skip the POSIX `/tmp/openclaw` preferred path on Windows in `resolvePreferredOpenClawTmpDir` so log files, TTS temp files, and other writes land in `%TEMP%\openclaw-<uid>` instead of `C:\tmp\openclaw`. Fixes #60713. Thanks @juan-flores077.
+- Gateway/diagnostics: make stuck-session recovery outcome-driven and generation-guarded, add `diagnostics.stuckSessionAbortMs`, and emit structured recovery requested/completed events so stale or skipped recovery no longer looks like a successful abort.
 - Media/Windows: open saved attachment temp files read/write before fsync so Windows WebChat and `chat.send` media offloads no longer fail with EPERM during durability flush. (#76593) Thanks @qq230849622-a11y.
 - Agents/tools: honor narrow runtime tool allowlists when constructing embedded-runner tool families and bundled MCP/LSP runtimes, so cron/subagent runs that request tools such as `update_plan`, `browser`, `x_search`, channel login tools, or `group:plugins` no longer start with missing tools or unrelated bootstrap work. (#77519, #77532)
 - Codex plugin: mirror the experimental upstream app-server protocol and format generated TypeScript before drift checks, keeping OpenClaw's `experimentalApi` bridge compatible with latest Codex while preserving formatter gates.
 - Telegram/media: derive no-caption inbound media placeholders from saved MIME metadata instead of the Telegram `photo` shape, so non-image and mixed attachments no longer reach the model as `<media:image>`. Fixes #69793. Thanks @aspalagin.
 - Agents/cache: keep per-turn runtime context out of ordinary chat system prompts while still delivering hidden current-turn context, restoring prompt-cache reuse on chat continuations. Fixes #77431. Thanks @Udjin79.
 - Gateway/startup: include resolved thinking and fast-mode defaults in the `agent model` startup log line, defaulting unset startup thinking to `medium` without mixing in reasoning visibility.
+- Gateway/update: resolve local gateway probe auth from the installed config during post-update restart verification, so token/device-authenticated VPS gateways are not misreported as unhealthy port conflicts after a package swap. Thanks @vincentkoc.
 - Agents/Tools: add post-compaction loop guard in `pi-embedded-runner` that arms after auto-compaction-retry and aborts the run with `compaction_loop_persisted` when the agent emits the same `(tool, args, result)` triple `windowSize` times (default 3) within that window. Disable via existing `tools.loopDetection.enabled`; tune via `tools.loopDetection.postCompactionGuard.windowSize`. Targets the failure mode where context-overflow + compaction does not break a tool-call loop. Refs #77474; carries forward #21597. Thanks @efpiva.
 - Gateway/watch: suppress sync-I/O trace output during `pnpm gateway:watch --benchmark` unless explicitly requested, so CPU profiling no longer floods the terminal with stack traces.
 - Gateway/watch: when benchmark sync-I/O tracing is explicitly enabled, tee trace blocks to the benchmark output log and filter them from the terminal pane while keeping normal Gateway logs visible.
@@ -217,6 +220,7 @@ Docs: https://docs.openclaw.ai
 - Google Meet: make Twilio setup status require an enabled `voice-call` plugin entry instead of treating a missing entry as ready. Thanks @vincentkoc.
 - Telegram: render shared interactive reply buttons in reply delivery so plugin approval messages show inline keyboards. (#76238) Thanks @keshavbotagent.
 - Cron/sessions: keep cron metadata rows without an on-disk transcript non-resumable until a transcript exists, so doctor and `sessions cleanup --fix-missing` no longer report or prune pre-transcript cron rows as broken sessions. Refs #77011.
+- OpenAI Codex: recreate missing bound app-server threads once when a stale `/codex bind` sidecar survives a restart, preserving the selected auth profile and turn overrides before retrying the inbound turn. (#76936) Thanks @keshavbotagent.
 - Agents/cli-runner: drop a saved `claude-cli` resume sessionId at preparation time when its on-disk transcript no longer exists in `~/.claude/projects/`, so a stale binding from a half-installed `update.run` cannot trap follow-up runs (auto-reply / Telegram direct) in a `claude --resume` timeout loop; the run starts fresh and the new sessionId is written back through the existing post-run flow. (#77030; refs #77011) Thanks @openperf.
 - Release validation: install the cross-OS TypeScript harness through Windows-safe Node/npm shims so native Windows package checks reach the OpenClaw smoke suites instead of exiting before artifact capture. Thanks @vincentkoc.
 - Release validation: let Windows packaged-upgrade checks continue after the shipped 2026.5.2 updater hits its native-module swap cleanup fallback, verifying the fallback-installed candidate through package metadata and downstream smoke instead of crashing on the immediate update-status probe. Thanks @vincentkoc.
@@ -1397,6 +1401,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/plugins: enable the native `require()` fast path on Windows for bundled plugin modules so plugin loading uses `require()` instead of Jiti's transform pipeline, reducing startup from ~39s to ~2s on typical 6-plugin setups. Fixes #68656. (#74173) Thanks @galiniliev.
 - macOS app: detect stale Gateway TLS certificate pins, automatically repair trusted Tailscale Serve rotations, and surface paired-but-disconnected Mac companion nodes so partial Gateway connections no longer look healthy. Thanks @guti.
 - Feishu: recreate WebSocket clients with monitor-owned backoff only after SDK reconnect exhaustion, preserving heartbeat defaults and shutdown cleanup without treating recoverable SDK callback errors as terminal, so persistent connections recover without manual gateway restart. Fixes #52618; duplicate evidence #59753; related #55532, #68766, #72411, and #73739. Thanks @vincentkoc, @schumilin, @alex-xuweilong, @120106835, @sirfengyu, and @tianhaocui.
+- Agents/skills: require exact `<location>` skill paths for both single-skill and multi-skill prompt selection, so agents do not guess or hard-code skill file paths. (#74161) Thanks @lanzhi-lee.
 
 ## 2026.4.27
 
