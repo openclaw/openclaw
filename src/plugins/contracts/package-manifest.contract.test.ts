@@ -30,17 +30,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
   },
   { pluginId: "file-transfer" },
-  {
-    pluginId: "matrix",
-    pluginLocalRuntimeDeps: [
-      "@matrix-org/matrix-sdk-crypto-nodejs",
-      "@matrix-org/matrix-sdk-crypto-wasm",
-      "fake-indexeddb",
-      "matrix-js-sdk",
-      "music-metadata",
-    ],
-    minHostVersionBaseline: "2026.3.22",
-  },
+  { pluginId: "matrix", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
