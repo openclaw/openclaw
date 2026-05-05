@@ -2230,7 +2230,8 @@ export async function runEmbeddedPiAgent(
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             toolMetas: attempt.toolMetas,
-            lastAssistant: attempt.lastAssistant,
+            lastAssistant:
+              aborted && attempt.assistantTexts.length === 0 ? undefined : attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
             config: params.config,
             isCronTrigger: params.trigger === "cron",

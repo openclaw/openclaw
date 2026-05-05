@@ -1332,9 +1332,14 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+    const wasAborted = runResult.meta?.aborted === true;
 
     if (blockReplyPipeline) {
-      await blockReplyPipeline.flush({ force: true });
+      // Skip flushing buffered block replies when the run was aborted —
+      // the buffer may contain stale content from the interrupted turn.
+      if (!wasAborted) {
+        await blockReplyPipeline.flush({ force: true });
+      }
       blockReplyPipeline.stop();
     }
     if (pendingToolTasks.size > 0) {
@@ -1423,6 +1428,13 @@ export async function runReplyAgent(params: {
       cliSessionId,
       cliSessionBinding,
     });
+
+    // When the run was aborted (e.g. by interrupt queue mode), skip payload
+    // delivery entirely. The aborted run's payloads may contain stale
+    // `lastAssistant` fallback text from a previous turn. (#50145)
+    if (wasAborted) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
+    }
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
