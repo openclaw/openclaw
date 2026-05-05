@@ -15,9 +15,14 @@ on:
         description: Comma-separated plugin package names to publish when publish_scope=selected
         required: false
         type: string
+      ref:
+        description: Commit SHA on main or a release branch to publish from; defaults to the workflow ref
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: plugin-clawhub-release-${{ github.sha }}
+  group: plugin-clawhub-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -27,7 +32,7 @@ env:
   CLAWHUB_REGISTRY: "https://clawhub.ai"
   CLAWHUB_REPOSITORY: "openclaw/clawhub"
   # Pinned to a reviewed ClawHub commit so release behavior stays reproducible.
-  CLAWHUB_REF: "4af2bd50a71465683dbf8aa269af764b9d39bdf5"
+  CLAWHUB_REF: "facf20ceb6cc459e2872d941e71335a784bbc55c"
 
 jobs:
   preview_plugins_clawhub:
@@ -35,7 +40,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      ref_sha: ${{ steps.ref.outputs.sha }}
+      ref_revision: ${{ steps.ref.outputs.sha }}
       has_candidates: ${{ steps.plan.outputs.has_candidates }}
       candidate_count: ${{ steps.plan.outputs.candidate_count }}
       skipped_published_count: ${{ steps.plan.outputs.skipped_published_count }}
@@ -44,7 +49,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.sha }}
+          persist-credentials: false
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Setup Node environment
@@ -56,13 +62,39 @@ jobs:
 
       - name: Resolve checked-out ref
         id: ref
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Validate ref is on main
+        env:
+          TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD origin/main
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if [[ -n "${TARGET_REF}" ]]; then
+            if git rev-parse --verify --quiet "${TARGET_REF}^{commit}" >/dev/null; then
+              target_sha="$(git rev-parse "${TARGET_REF}^{commit}")"
+            elif git rev-parse --verify --quiet "origin/${TARGET_REF}^{commit}" >/dev/null; then
+              target_sha="$(git rev-parse "origin/${TARGET_REF}^{commit}")"
+            else
+              echo "Unable to resolve requested publish ref: ${TARGET_REF}" >&2
+              exit 1
+            fi
+            git checkout --detach "${target_sha}"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate ref is on main or a release branch
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          echo "Plugin ClawHub publishes must target a commit reachable from main or release/*." >&2
+          exit 1
 
       - name: Validate publishable plugin metadata
         env:
@@ -136,6 +168,12 @@ jobs:
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
 
+      - name: Verify OpenClaw ClawHub package ownership
+        if: steps.plan.outputs.has_candidates == 'true'
+        env:
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+        run: node --import tsx scripts/plugin-clawhub-owner-preflight.ts .local/plugin-clawhub-release-plan.json
+
   preview_plugin_pack:
     needs: preview_plugins_clawhub
     if: needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
@@ -144,14 +182,26 @@ jobs:
       contents: read
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
-          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Checkout target revision
+        env:
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          git checkout --detach "${TARGET_SHA}"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -159,15 +209,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Checkout ClawHub CLI source
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           repository: ${{ env.CLAWHUB_REPOSITORY }}
-          ref: ${{ env.CLAWHUB_REF }}
+          ref: main
           path: clawhub-source
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: Checkout pinned ClawHub CLI revision
+        working-directory: clawhub-source
+        env:
+          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
+        run: git checkout --detach "${CLAWHUB_REF}"
 
       - name: Install ClawHub CLI dependencies
         working-directory: clawhub-source
@@ -183,11 +240,14 @@ jobs:
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: Verify package-local runtime build
+        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
+
       - name: Preview publish command
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
+          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
@@ -203,14 +263,26 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
+      max-parallel: 6
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
-          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+
+      - name: Checkout target revision
+        env:
+          TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          git checkout --detach "${TARGET_SHA}"
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -218,15 +290,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
-          install-deps: "false"
+          install-deps: "true"
 
       - name: Checkout ClawHub CLI source
         uses: actions/checkout@v6
         with:
+          persist-credentials: false
           repository: ${{ env.CLAWHUB_REPOSITORY }}
-          ref: ${{ env.CLAWHUB_REF }}
+          ref: main
           path: clawhub-source
-          fetch-depth: 1
+          fetch-depth: 0
+
+      - name: Checkout pinned ClawHub CLI revision
+        working-directory: clawhub-source
+        env:
+          CLAWHUB_REF: ${{ env.CLAWHUB_REF }}
+        run: git checkout --detach "${CLAWHUB_REF}"
 
       - name: Install ClawHub CLI dependencies
         working-directory: clawhub-source
@@ -242,6 +321,36 @@ jobs:
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: Write ClawHub token config
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLAWHUB_TOKEN}" ]]; then
+            echo "No CLAWHUB_TOKEN secret configured; publish will rely on GitHub OIDC trusted publishing."
+            exit 0
+          fi
+          node --input-type=module <<'EOF'
+          import { writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const path = join(process.env.RUNNER_TEMP, "clawhub-config.json");
+          writeFileSync(
+            path,
+            `${JSON.stringify(
+              {
+                registry: process.env.CLAWHUB_REGISTRY,
+                token: process.env.CLAWHUB_TOKEN,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          console.log(path);
+          EOF
+          echo "CLAWHUB_CONFIG_PATH=${RUNNER_TEMP}/clawhub-config.json" >> "$GITHUB_ENV"
+
       - name: Ensure version is not already published
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
@@ -252,7 +361,19 @@ jobs:
           encoded_name="$(node -e 'console.log(encodeURIComponent(process.env.PACKAGE_NAME ?? ""))')"
           encoded_version="$(node -e 'console.log(encodeURIComponent(process.env.PACKAGE_VERSION ?? ""))')"
           url="${CLAWHUB_REGISTRY%/}/api/v1/packages/${encoded_name}/versions/${encoded_version}"
-          status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${url}")"
+          status=""
+          for attempt in $(seq 1 8); do
+            status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' "${url}")"
+            if [[ "${status}" == "404" || "${status}" =~ ^2 ]]; then
+              break
+            fi
+            if [[ "${status}" == "429" || "${status}" =~ ^5 ]]; then
+              echo "ClawHub availability check returned ${status} for ${PACKAGE_NAME}@${PACKAGE_VERSION}; retrying (${attempt}/8)."
+              sleep 60
+              continue
+            fi
+            break
+          done
           if [[ "${status}" =~ ^2 ]]; then
             echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on ClawHub."
             exit 1
@@ -266,7 +387,7 @@ jobs:
         env:
           CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
           SOURCE_REPO: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_sha }}
+          SOURCE_COMMIT: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
           SOURCE_REF: ${{ github.ref }}
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}

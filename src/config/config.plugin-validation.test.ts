@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
 vi.unmock("../version.js");
@@ -103,12 +102,12 @@ describe("config plugin validation", () => {
   let voiceCallSchemaPluginDir = "";
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
+  let blockedPluginDir = "";
   const suiteEnv = () =>
     ({
       HOME: suiteHome,
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: path.join(suiteHome, ".openclaw"),
-      OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "10000",
       OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
       OPENCLAW_VERSION: undefined,
       VITEST: "true",
@@ -190,6 +189,12 @@ describe("config plugin validation", () => {
     await writeManifestlessClaudeBundleFixture({
       dir: manifestlessClaudeBundleDir,
     });
+    blockedPluginDir = path.join(suiteHome, "blocked-plugin");
+    await writePluginFixture({
+      dir: blockedPluginDir,
+      id: "blocked-plugin",
+      schema: { type: "object" },
+    });
     voiceCallSchemaPluginDir = path.join(suiteHome, "voice-call-schema-plugin");
     const voiceCallManifestPath = path.join(
       process.cwd(),
@@ -208,28 +213,10 @@ describe("config plugin validation", () => {
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
     });
-    clearPluginManifestRegistryCache();
-    // Warm the plugin manifest cache once so path-based validations can reuse
-    // parsed manifests across test cases.
-    validateInSuite({
-      plugins: {
-        enabled: false,
-        load: {
-          paths: [
-            badPluginDir,
-            bluebubblesPluginDir,
-            bundlePluginDir,
-            manifestlessClaudeBundleDir,
-            voiceCallSchemaPluginDir,
-          ],
-        },
-      },
-    });
   });
 
   afterAll(async () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-    clearPluginManifestRegistryCache();
   });
 
   it("reports missing plugin refs across entries and allowlist surfaces", async () => {
@@ -264,6 +251,203 @@ describe("config plugin validation", () => {
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
     }
+  });
+
+  it("reports catalog install hints for missing configured official external plugins", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { brave: { enabled: true } },
+          allow: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
+    expect(res.warnings ?? []).toEqual(
+      expect.arrayContaining([
+        { path: "plugins.entries.brave", message },
+        { path: "plugins.allow", message },
+      ]),
+    );
+    expect(
+      (res.warnings ?? []).some(
+        (warning) =>
+          (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
+          warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports configured blocked plugins without stale not-found wording",
+    async () => {
+      await fs.chmod(blockedPluginDir, 0o777);
+      try {
+        const res = validateInSuite({
+          agents: { list: [{ id: "pi" }] },
+          plugins: {
+            enabled: true,
+            load: { paths: [blockedPluginDir] },
+            entries: { "blocked-plugin": { enabled: true } },
+            allow: ["blocked-plugin"],
+          },
+        });
+
+        expect(res.ok).toBe(true);
+        if (!res.ok) {
+          return;
+        }
+        expect(res.warnings).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: "plugins.entries.blocked-plugin",
+              message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+            }),
+            expect.objectContaining({
+              path: "plugins.allow",
+              message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+            }),
+          ]),
+        );
+        expect(
+          res.warnings.some(
+            (warning) =>
+              warning.message.includes("plugin not found: blocked-plugin") ||
+              warning.message.includes("remove it from plugins config"),
+          ),
+        ).toBe(false);
+      } finally {
+        await chmodSafeDir(blockedPluginDir);
+      }
+    },
+  );
+
+  it("maps legacy blocked diagnostics without plugin ids to configured load paths", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [blockedPluginDir] },
+          entries: { "blocked-plugin": { enabled: true } },
+          allow: ["blocked-plugin"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                source: path.join(blockedPluginDir, "index.js"),
+                message: `blocked plugin candidate: world-writable path (${blockedPluginDir}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "plugins.entries.blocked-plugin",
+          message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+        }),
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin present but blocked: blocked-plugin"),
+        }),
+      ]),
+    );
+    expect(
+      res.warnings.some((warning) => warning.message.includes("plugin not found: blocked-plugin")),
+    ).toBe(false);
+  });
+
+  it("does not source-match blocked diagnostics that already name a different plugin id", () => {
+    const aliasDir = path.join(suiteHome, "alias-dir");
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          enabled: true,
+          load: { paths: [aliasDir] },
+          entries: {
+            "actual-id": { enabled: true },
+            "alias-dir": { enabled: true },
+          },
+          allow: ["actual-id", "alias-dir"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "actual-id",
+                source: path.join(aliasDir, "index.js"),
+                message: `blocked plugin candidate: world-writable path (${aliasDir}, mode=0777)`,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "plugins.entries.actual-id",
+          message: expect.stringContaining("plugin present but blocked: actual-id"),
+        }),
+        expect.objectContaining({
+          path: "plugins.allow",
+          message: expect.stringContaining("plugin present but blocked: actual-id"),
+        }),
+        expect.objectContaining({
+          path: "plugins.entries.alias-dir",
+          message:
+            "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)",
+        }),
+        expect.objectContaining({
+          path: "plugins.allow",
+          message:
+            "plugin not found: alias-dir (stale config entry ignored; remove it from plugins config)",
+        }),
+      ]),
+    );
+    expect(
+      res.warnings.some((warning) =>
+        warning.message.includes("plugin present but blocked: alias-dir"),
+      ),
+    ).toBe(false);
   });
 
   it("warns instead of failing for stale channel config backed by missing plugin refs", async () => {
@@ -319,6 +503,36 @@ describe("config plugin validation", () => {
       message: "unknown channel id: telegarm",
     });
     expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+  });
+
+  it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          discord: { token: "xxx" },
+        },
+        plugins: {
+          allow: ["discord"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
+    });
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {

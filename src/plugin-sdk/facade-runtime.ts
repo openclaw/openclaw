@@ -3,9 +3,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../plugins/jiti-loader-cache.js";
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
@@ -16,7 +16,6 @@ import {
 import {
   createFacadeResolutionKey as createFacadeResolutionKeyShared,
   resolveBundledFacadeModuleLocation,
-  resolveCachedFacadeModuleLocation,
   resolveRegistryPluginModuleLocationFromRecords,
 } from "./facade-resolution-shared.js";
 export {
@@ -45,13 +44,6 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-const cachedFacadeModuleLocationsByKey = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  } | null
->();
 
 function createFacadeResolutionKey(params: {
   dirName: string;
@@ -100,11 +92,7 @@ function resolveFacadeModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  return resolveCachedFacadeModuleLocation({
-    cache: cachedFacadeModuleLocationsByKey,
-    key: createFacadeResolutionKey(params),
-    resolve: () => resolveFacadeModuleLocationUncached(params),
-  });
+  return resolveFacadeModuleLocationUncached(params);
 }
 
 type BundledPluginPublicSurfaceParams = {
@@ -122,16 +110,15 @@ const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
 ] as const;
 
 let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
-const facadeActivationCheckRuntimeJitiLoaders: PluginJitiLoaderCache = new Map();
+const facadeActivationCheckRuntimeLoaders: PluginModuleLoaderCache = new Map();
 
-function getFacadeActivationCheckRuntimeJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: facadeActivationCheckRuntimeJitiLoaders,
+function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
+  return getCachedPluginSourceModuleLoader({
+    cache: facadeActivationCheckRuntimeLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
     aliasMap: {},
-    tryNative: false,
   });
 }
 
@@ -161,7 +148,7 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     return facadeActivationCheckRuntimeModule;
   }
   facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
-    getFacadeActivationCheckRuntimeJiti(candidate)(candidate),
+    getFacadeActivationCheckRuntimeSourceLoader(candidate)(candidate),
   );
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
@@ -257,10 +244,8 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
 
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
-  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
   facadeActivationCheckRuntimeModule = undefined;
-  facadeActivationCheckRuntimeJitiLoaders.clear();
-  cachedFacadeModuleLocationsByKey.clear();
+  facadeActivationCheckRuntimeLoaders.clear();
 }
 
 export const __testing = {

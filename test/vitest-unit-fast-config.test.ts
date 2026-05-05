@@ -32,16 +32,18 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain("src/crestodian/rescue-policy.test.ts");
     expect(config.test?.include).toContain("src/crestodian/assistant.configured.test.ts");
     expect(config.test?.include).toContain("src/flows/search-setup.test.ts");
-    expect(config.test?.include).toContain("src/memory-host-sdk/host/mirror.test.ts");
+    expect(config.test?.include).toContain("src/memory-host-sdk/host/backend-config.test.ts");
     expect(config.test?.include).toContain("src/plugins/config-policy.test.ts");
     expect(config.test?.include).toContain("src/proxy-capture/proxy-server.test.ts");
     expect(config.test?.include).toContain("src/realtime-voice/agent-consult-tool.test.ts");
+    expect(config.test?.include).toContain("src/sessions/session-lifecycle-events.test.ts");
     expect(config.test?.include).toContain("src/sessions/transcript-events.test.ts");
     expect(config.test?.include).toContain(
       "src/security/audit-channel-source-config-slack.test.ts",
     );
     expect(config.test?.include).toContain("src/security/audit-config-symlink.test.ts");
     expect(config.test?.include).toContain("src/security/audit-exec-sandbox-host.test.ts");
+    expect(config.test?.include).toContain("src/security/audit-gateway.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-auth-selection.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-http-auth.test.ts");
     expect(config.test?.include).toContain("src/security/audit-gateway-tools-http.test.ts");
@@ -52,6 +54,7 @@ describe("unit-fast vitest lane", () => {
     expect(config.test?.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(config.test?.include).toContain("src/plugin-sdk/provider-entry.test.ts");
     expect(config.test?.include).toContain("src/security/dangerous-config-flags.test.ts");
+    expect(config.test?.include).toContain("src/security/context-visibility.test.ts");
     expect(config.test?.include).toContain("src/security/safe-regex.test.ts");
   });
 
@@ -71,7 +74,7 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
-    expect(isUnitFastTestFile("src/proxy-capture/coverage.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/plugins/install.npm-spec.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();
     expect(classifyUnitFastTestFileContent("vi.resetModules(); await import('./x.js')")).toEqual([

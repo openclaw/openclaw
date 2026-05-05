@@ -23,13 +23,13 @@ const ONE_HOUR_MS = 60 * 60_000;
  * Providers should only publish that timestamp from transport/heartbeat/poll
  * signals, not from ordinary app messages.
  */
-export type ChannelHealthTimingPolicy = {
+type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
   staleEventThresholdMs: number;
 };
 
-export type ChannelHealthMonitorDeps = {
+type ChannelHealthMonitorDeps = {
   channelManager: ChannelManager;
   checkIntervalMs?: number;
   /** @deprecated use timing.monitorStartupGraceMs */
@@ -163,7 +163,9 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
 
           try {
             if (status.running) {
-              await channelManager.stopChannel(channelId as ChannelId, accountId);
+              await channelManager.stopChannel(channelId as ChannelId, accountId, {
+                manual: false,
+              });
             }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
@@ -174,6 +176,8 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           }
         }
       }
+    } catch (err) {
+      log.error?.(`health-monitor: check failed: ${String(err)}`);
     } finally {
       checkInFlight = false;
     }

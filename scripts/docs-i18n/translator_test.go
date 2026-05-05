@@ -56,6 +56,14 @@ func TestDocsI18nPromptTimeoutUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestDocsI18nCommandWaitDelayUsesEnvOverride(t *testing.T) {
+	t.Setenv(envDocsI18nCommandWaitDelay, "50ms")
+
+	if got := docsI18nCommandWaitDelay(); got != 50*time.Millisecond {
+		t.Fatalf("expected 50ms wait delay, got %s", got)
+	}
+}
+
 func TestIsRetryableTranslateErrorRejectsDeadlineExceeded(t *testing.T) {
 	t.Parallel()
 
@@ -116,6 +124,26 @@ func TestCodexTranslatorRetriesTransientFailure(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("expected 2 attempts, got %d", attempts)
+	}
+}
+
+func TestCodexTranslatorStripsInputWrapperEcho(t *testing.T) {
+	t.Parallel()
+
+	translator := &CodexTranslator{
+		systemPrompt: "Translate from English to German.",
+		thinking:     "high",
+		runPrompt: func(context.Context, codexPromptRequest) (string, error) {
+			return "<openclaw_docs_i18n_input>\nÜbersetzt\n</openclaw_docs_i18n_input>", nil
+		},
+	}
+
+	got, err := translator.TranslateRaw(context.Background(), "Translate me", "en", "de")
+	if err != nil {
+		t.Fatalf("TranslateRaw returned error: %v", err)
+	}
+	if got != "Übersetzt" {
+		t.Fatalf("unexpected translation %q", got)
 	}
 }
 
@@ -212,6 +240,37 @@ printf 'translated from codex\n' > "$out"
 	}
 	if got != "translated from codex" {
 		t.Fatalf("unexpected output %q", got)
+	}
+}
+
+func TestRunCodexExecPromptDoesNotHangOnInheritedPipesAfterTimeout(t *testing.T) {
+	dir := t.TempDir()
+	fakeCodex := filepath.Join(dir, "codex")
+	if err := os.WriteFile(fakeCodex, []byte(`#!/bin/sh
+set -eu
+(sleep 10) &
+sleep 10
+`), 0o755); err != nil {
+		t.Fatalf("write fake codex: %v", err)
+	}
+	t.Setenv(envDocsI18nCodexExecutable, fakeCodex)
+	t.Setenv(envDocsI18nCommandWaitDelay, "20ms")
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err := runCodexExecPrompt(ctx, codexPromptRequest{
+		SystemPrompt: "Translate.",
+		Message:      "Hello",
+		Model:        "gpt-5.5",
+		Thinking:     "high",
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("expected bounded timeout, took %s", elapsed)
 	}
 }
 

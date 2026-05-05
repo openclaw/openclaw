@@ -7,15 +7,11 @@ title: "Mattermost"
 sidebarTitle: "Mattermost"
 ---
 
-Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs are supported. Mattermost is a self-hostable team messaging platform; see the official site at [mattermost.com](https://mattermost.com) for product details and downloads.
+Status: downloadable plugin (bot token + WebSocket events). Channels, groups, and DMs are supported. Mattermost is a self-hostable team messaging platform; see the official site at [mattermost.com](https://mattermost.com) for product details and downloads.
 
-## Bundled plugin
+## Install
 
-<Note>
-Mattermost ships as a bundled plugin in current OpenClaw releases, so normal packaged builds do not need a separate install.
-</Note>
-
-If you are on an older build or a custom install that excludes Mattermost, install it manually:
+Install Mattermost before configuring the channel:
 
 <Tabs>
   <Tab title="npm registry">
@@ -89,7 +85,9 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
     - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
     - For multi-account setups, `commands` can be set at the top level or under `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
-    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match one of the registered commands.
+    - OpenClaw refreshes current Mattermost command registration before accepting each callback so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
+    - Callback validation fails closed if the Mattermost API cannot confirm the command is still current; failed validations are cached briefly, concurrent lookups are coalesced, and fresh lookup starts are rate-limited per command to bound replay pressure.
+    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match the resolved command's registered token (a token valid for one command cannot reach upstream validation for a different command).
 
   </Accordion>
   <Accordion title="Reachability requirement">
@@ -423,6 +421,7 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
 4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break Mattermost's server-side action routing (returns 404). Strip them before use.
 5. `context.action_id` must match the button's `id` so the confirmation message shows the button name (e.g., "Approve") instead of a raw ID.
 6. `context.action_id` is required — the interaction handler returns 400 without it.
+
 </Warning>
 
 **HMAC token generation**

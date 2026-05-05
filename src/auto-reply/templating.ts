@@ -9,7 +9,7 @@ import type { ReplyThreadingPolicy } from "./types.js";
 /** Valid message channels for routing. */
 export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
 
-export type StickerContextMetadata = {
+type StickerContextMetadata = {
   cachedDescription?: string;
   emoji?: string;
   setName?: string;
@@ -21,7 +21,7 @@ export type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
-export type UntrustedStructuredContextEntry = {
+type UntrustedStructuredContextEntry = {
   label: string;
   source?: string;
   type?: string;
@@ -45,6 +45,8 @@ export type MsgContext = {
     timestamp?: number;
   }>;
   /**
+   * @deprecated Use CommandBody.
+   *
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */

@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  registerChatAttachmentPayload,
+  resetChatAttachmentPayloadStoreForTest,
+} from "../chat/attachment-payload-store.ts";
 import { GatewayRequestError } from "../gateway.ts";
 import {
   abortChatRun,
@@ -27,6 +31,10 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     ...overrides,
   };
 }
+
+afterEach(() => {
+  resetChatAttachmentPayloadStoreForTest();
+});
 
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
@@ -69,7 +77,7 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, undefined)).toBe(null);
   });
 
-  it("returns null when sessionKey does not match", () => {
+  it("returns null when sessionKey does not match and no active run is in flight", () => {
     const state = createState({ sessionKey: "main" });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -77,6 +85,73 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("accepts delta events for the active run when gateway emits a canonical session key", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+    expect(state.chatRunId).toBe("run-1");
+  });
+
+  it("accepts final events for the active run when gateway emits a canonical session key", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live reply",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("still drops events when neither session key nor active run id matches", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Wrong run" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatMessages).toEqual([]);
   });
 
   it("returns null for delta from another run", () => {
@@ -148,6 +223,17 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
+  it("drops HEARTBEAT_OK final payload from another run without clearing active stream", () => {
+    const state = createActiveStreamingState();
+    const payload = createOtherRunSilentFinalPayload("HEARTBEAT_OK");
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([]);
+  });
+
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "keeps plain-text %s final payload from another run without clearing active stream",
     (text) => {
@@ -161,6 +247,23 @@ describe("handleChatEvent", () => {
       expect(state.chatMessages).toEqual([payload.message]);
     },
   );
+
+  it("ignores HEARTBEAT_OK delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Previous visible text",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Previous visible text");
+  });
 
   it("replaces the stream when a delta snapshot gets shorter", () => {
     const state = createState({
@@ -192,6 +295,55 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatMessages).toEqual([]);
   });
+
+  it("keeps active stream for unowned final payloads", () => {
+    const state = createActiveStreamingState();
+    const payload: ChatEventPayload = {
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("keeps active stream while appending unowned assistant finals", () => {
+    const state = createActiveStreamingState();
+    const payload: ChatEventPayload = {
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Injected note" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toEqual([payload.message]);
+  });
+
+  it.each(["aborted", "error"] as const)(
+    "keeps active stream for unowned %s payloads",
+    (terminalState) => {
+      const state = createActiveStreamingState();
+      const payload: ChatEventPayload = {
+        sessionKey: "main",
+        state: terminalState,
+      };
+
+      expect(handleChatEvent(state, payload)).toBe(null);
+      expect(state.chatRunId).toBe("run-user");
+      expect(state.chatStream).toBe("Working...");
+      expect(state.chatStreamStartedAt).toBe(123);
+      expect(state.chatMessages).toEqual([]);
+    },
+  );
 
   it("persists streamed text when final event carries no message", () => {
     const existingMessage = {
@@ -696,6 +848,34 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
+  it("passes the backing session id from history when sending after reconnect", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "session-before-reconnect",
+        messages: [],
+      })
+      .mockResolvedValueOnce({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+    const result = await sendChatMessage(state, "continue");
+
+    expect(result).toEqual(expect.any(String));
+    expect(state.currentSessionId).toBe("session-before-reconnect");
+    expect(request).toHaveBeenLastCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session-before-reconnect",
+        message: "continue",
+      }),
+    );
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({
@@ -741,6 +921,44 @@ describe("sendChatMessage", () => {
         },
       ],
     });
+  });
+
+  it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const pdfBytes = "%PDF-1.4\n";
+    const file = new File([pdfBytes], "brief.pdf", { type: "application/pdf" });
+    const attachment = registerChatAttachmentPayload({
+      attachment: {
+        id: "att-side-store",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        sizeBytes: file.size,
+      },
+      dataUrl: `data:application/pdf;base64,${Buffer.from(pdfBytes).toString("base64")}`,
+      file,
+    });
+
+    const result = await sendChatMessage(state, "summarize", [attachment]);
+
+    expect(result).toEqual(expect.any(String));
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        attachments: [
+          expect.objectContaining({
+            type: "file",
+            content: Buffer.from(pdfBytes).toString("base64"),
+          }),
+        ],
+      }),
+    );
+    expect(JSON.stringify(state.chatMessages)).not.toContain(
+      Buffer.from(pdfBytes).toString("base64"),
+    );
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {

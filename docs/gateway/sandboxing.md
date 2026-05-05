@@ -89,6 +89,8 @@ SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specifi
 
 Sandboxing is off by default. If you enable sandboxing and do not choose a backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container isolation is determined by Docker namespaces.
 
+To expose host GPUs to Docker sandboxes, set `agents.defaults.sandbox.docker.gpus` or the per-agent `agents.list[].sandbox.docker.gpus` override. The value is passed to Docker's `--gpus` flag as a separate argument, for example `"all"` or `"device=GPU-uuid"`, and requires a compatible host runtime such as NVIDIA Container Toolkit.
+
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
 
@@ -361,29 +363,66 @@ Example (read-only source + an extra data directory):
 
 Default Docker image: `openclaw-sandbox:bookworm-slim`
 
+<Note>
+**Source checkout vs npm install**
+
+The `scripts/sandbox-setup.sh`, `scripts/sandbox-common-setup.sh`, and `scripts/sandbox-browser-setup.sh` helper scripts are only available when running from a [source checkout](https://github.com/openclaw/openclaw). They are not included in the npm package.
+
+If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker build` commands shown below instead.
+</Note>
+
 <Steps>
   <Step title="Build the default image">
+    From a source checkout:
+
     ```bash
     scripts/sandbox-setup.sh
     ```
 
+    From an npm install (no source checkout needed):
+
+    ```bash
+    docker build -t openclaw-sandbox:bookworm-slim - <<'DOCKERFILE'
+    FROM debian:bookworm-slim
+    ENV DEBIAN_FRONTEND=noninteractive
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash ca-certificates curl git jq python3 ripgrep \
+      && rm -rf /var/lib/apt/lists/*
+    RUN useradd --create-home --shell /bin/bash sandbox
+    USER sandbox
+    WORKDIR /home/sandbox
+    CMD ["sleep", "infinity"]
+    DOCKERFILE
+    ```
+
     The default image does **not** include Node. If a skill needs Node (or other runtimes), either bake a custom image or install via `sandbox.docker.setupCommand` (requires network egress + writable root + root user).
+
+    OpenClaw does not silently substitute plain `debian:bookworm-slim` when `openclaw-sandbox:bookworm-slim` is missing. Sandbox runs that target the default image fail fast with a build instruction until you build it, because the bundled image carries `python3` for sandbox write/edit helpers.
 
   </Step>
   <Step title="Optional: build the common image">
     For a more functional sandbox image with common tooling (for example `curl`, `jq`, `nodejs`, `python3`, `git`):
 
+    From a source checkout:
+
     ```bash
     scripts/sandbox-common-setup.sh
     ```
+
+    From an npm install, build the default image first (see above), then build the common image on top using the [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) from the repository.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
   </Step>
   <Step title="Optional: build the sandbox browser image">
+    From a source checkout:
+
     ```bash
     scripts/sandbox-browser-setup.sh
     ```
+
+    From an npm install, build using the [`scripts/docker/sandbox/Dockerfile.browser`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.browser) from the repository.
+
   </Step>
 </Steps>
 

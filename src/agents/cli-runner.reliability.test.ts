@@ -14,7 +14,7 @@ import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
   enqueueSystemEventMock,
-  requestHeartbeatNowMock,
+  requestHeartbeatMock,
   supervisorSpawnMock,
 } from "./cli-runner.test-support.js";
 import { executePreparedCliRun } from "./cli-runner/execute.js";
@@ -33,6 +33,26 @@ vi.mock("../tts/tts.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+type HookRunnerGlobalStateForTest = {
+  hookRunner: unknown;
+  registry: unknown;
+};
+
+function setHookRunnerForTest(hookRunner: unknown): void {
+  mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const state = (globalStore[hookRunnerGlobalStateKey] as
+    | HookRunnerGlobalStateForTest
+    | undefined) ?? {
+    hookRunner: null,
+    registry: null,
+  };
+  state.hookRunner = hookRunner;
+  state.registry = null;
+  globalStore[hookRunnerGlobalStateKey] = state;
+}
 
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
@@ -74,6 +94,7 @@ function buildPreparedContext(params?: {
   sessionKey?: string;
   cliSessionId?: string;
   runId?: string;
+  lane?: string;
   openClawHistoryPrompt?: string;
 }): PreparedCliRunContext {
   const backend = {
@@ -97,6 +118,7 @@ function buildPreparedContext(params?: {
       thinkLevel: "low",
       timeoutMs: 1_000,
       runId: params?.runId ?? "run-2",
+      lane: params?.lane,
     },
     started: Date.now(),
     workspaceDir: "/tmp",
@@ -127,6 +149,7 @@ describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
+    setHookRunnerForTest(null);
     vi.unstubAllEnvs();
   });
 
@@ -150,6 +173,36 @@ describe("runCliAgent reliability", () => {
         "thread-123",
       ),
     ).rejects.toThrow("produced no output");
+  });
+
+  it("adds request attribution to CLI watchdog failover errors", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      }),
+    );
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedContext({
+          cliSessionId: "thread-123",
+          lane: "custom-lane",
+          runId: "run-attribution",
+        }),
+        "thread-123",
+      ),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      sessionId: "s1",
+      lane: "custom-lane",
+    });
   });
 
   it("enqueues a system event and heartbeat wake on no-output watchdog timeout for session runs", async () => {
@@ -182,7 +235,9 @@ describe("runCliAgent reliability", () => {
     expect(String(notice)).toContain("produced no output");
     expect(String(notice)).toContain("interactive input or an approval prompt");
     expect(opts).toMatchObject({ sessionKey: "agent:main:main" });
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "cli-watchdog",
+      intent: "event",
       reason: "cli:watchdog:stall",
       sessionKey: "agent:main:main",
     });
@@ -217,7 +272,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -472,7 +527,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile();
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -572,7 +627,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -600,7 +655,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -644,7 +699,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile({
       history: Array.from({ length: MAX_CLI_SESSION_HISTORY_MESSAGES + 5 }, (_, index) => ({
         role: "user" as const,
@@ -725,7 +780,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const historySpy = vi.spyOn(sessionHistoryModule, "loadCliSessionHistoryMessages");
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -791,7 +846,7 @@ describe("runCliAgent reliability", () => {
       runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
       runBeforeAgentStart: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     try {
       const context = await prepareCliRunContext({
@@ -833,5 +888,15 @@ describe("resolveCliNoOutputTimeoutMs", () => {
       useResume: true,
     });
     expect(timeoutMs).toBe(42_000);
+  });
+
+  it("lets explicit cron timeouts lift the default resume no-output ceiling", () => {
+    const timeoutMs = resolveCliNoOutputTimeoutMs({
+      backend: { command: "codex" },
+      timeoutMs: 600_000,
+      useResume: true,
+      trigger: "cron",
+    });
+    expect(timeoutMs).toBe(480_000);
   });
 });

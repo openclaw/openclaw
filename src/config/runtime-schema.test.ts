@@ -34,6 +34,12 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     mockLoadPluginManifestRegistry(...args),
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(...args),
+  }),
+}));
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
     mockGetCurrentPluginMetadataSnapshot(...args),
@@ -188,7 +194,6 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: true,
       }),
     );
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
@@ -208,7 +213,6 @@ describe("readBestEffortRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { enabled: true } },
-        cache: true,
       }),
     );
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty("cache", false);
@@ -237,7 +241,6 @@ describe("loadGatewayRuntimeConfigSchema", () => {
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: { plugins: { entries: { demo: { enabled: true } } } },
-        cache: true,
       }),
     );
     expect(mockLoadPluginManifestRegistry.mock.calls[0]?.[0]).not.toHaveProperty(
@@ -312,7 +315,7 @@ describe("loadGatewayRuntimeConfigSchema", () => {
 
     expect(mockLoadPluginManifestRegistry).toHaveBeenCalledTimes(3);
     for (const call of mockLoadPluginManifestRegistry.mock.calls) {
-      expect(call[0]).toMatchObject({ cache: true });
+      expect(call[0]).toHaveProperty("config");
       expect(call[0]).not.toHaveProperty("bundledChannelConfigCollector");
     }
     expect(getActivePluginRegistry()).toBe(activeRegistry);

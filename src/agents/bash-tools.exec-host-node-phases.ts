@@ -1,6 +1,11 @@
 import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import {
+  describeInterpreterInlineEval,
+  type InterpreterInlineEvalHit,
+} from "../infra/command-analysis/inline-eval.js";
+import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
+import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -9,10 +14,6 @@ import {
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
-import {
-  describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
-} from "../infra/exec-inline-eval.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
@@ -23,7 +24,7 @@ import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import { callGatewayTool } from "./tools/gateway.js";
 import { listNodes, resolveNodeIdFromList } from "./tools/nodes-utils.js";
 
-export type NodeExecutionTarget = {
+type NodeExecutionTarget = {
   nodeId: string;
   platform?: string | null;
   argv: string[];
@@ -33,7 +34,7 @@ export type NodeExecutionTarget = {
   supportsSystemRunPrepare: boolean;
 };
 
-export type PreparedNodeRun = {
+type PreparedNodeRun = {
   plan: SystemRunApprovalPlan;
   argv: string[];
   rawCommand: string;
@@ -42,11 +43,11 @@ export type PreparedNodeRun = {
   sessionKey: string | undefined;
 };
 
-export type NodeApprovalAnalysis = {
+type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
-  inlineEvalHit: ReturnType<typeof detectInterpreterInlineEvalArgv>;
+  inlineEvalHit: InterpreterInlineEvalHit | null;
 };
 
 export function shouldSkipNodeApprovalPrepare(params: {
@@ -293,11 +294,7 @@ export async function analyzeNodeApprovalRequirement(params: {
   let durableApprovalSatisfied = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
-      ? (baseAllowlistEval.segments
-          .map((segment) =>
-            detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
-          )
-          .find((entry) => entry !== null) ?? null)
+      ? detectPolicyInlineEval(baseAllowlistEval.segments)
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(

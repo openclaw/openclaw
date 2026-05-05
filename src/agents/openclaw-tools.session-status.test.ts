@@ -183,6 +183,7 @@ function createCommandsStatusRuntimeModuleMock() {
       statusChannel: string;
       provider?: string;
       model: string;
+      workspaceDir?: string;
       primaryModelLabelOverride?: string;
       includeTranscriptUsage?: boolean;
       taskLineOverride?: string;
@@ -225,6 +226,7 @@ function createCommandsStatusRuntimeModuleMock() {
         sessionEntry: params.sessionEntry,
         modelAuth,
         includeTranscriptUsage: params.includeTranscriptUsage,
+        workspaceDir: params.workspaceDir,
       });
       return ["OpenClaw", `🧠 Model: ${primary}`, params.taskLineOverride]
         .filter(Boolean)
@@ -427,6 +429,28 @@ describe("session_status tool", () => {
     );
   });
 
+  it("passes spawned workspace to session_status auth labels", async () => {
+    resetSessionStore({
+      "agent:main:spawned": {
+        sessionId: "spawned-status",
+        updatedAt: 10,
+        spawnedWorkspaceDir: "/tmp/openclaw-spawned-workspace",
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      },
+    });
+
+    const tool = getSessionStatusTool("agent:main:spawned");
+
+    await tool.execute("call-spawned-workspace-status", {});
+
+    expect(buildStatusMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/openclaw-spawned-workspace",
+      }),
+    );
+  });
+
   it("errors for unknown session keys", async () => {
     resetSessionStore({
       main: { sessionId: "s1", updatedAt: 10 },
@@ -466,6 +490,83 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("main");
+  });
+
+  it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+      },
+    });
+
+    // Default visibility is "tree". The tool is constructed with the Telegram
+    // sandbox key as agentSessionKey but the live run session key as runSessionKey.
+    // semantic-current must be treated as self for visibility purposes.
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-run-session", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+  });
+
+  it("synthesizes semantic current from runSessionKey when the live run is not persisted yet", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-current-unpersisted-run", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+    expect(details.statusText).toContain("OpenClaw");
+  });
+
+  it("rejects explicit cross-session key under tree visibility even when it equals runSessionKey (#76708)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+      },
+    });
+
+    // Same setup but with an explicit key — should NOT bypass visibility.
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    await expect(
+      tool.execute("call-explicit-key", { sessionKey: "agent:main:main" }),
+    ).rejects.toThrow(/visibility is restricted/);
   });
 
   it("treats the TUI client label as the current requester session", async () => {
@@ -551,6 +652,122 @@ describe("session_status tool", () => {
     const details = result.details as { ok?: boolean; sessionKey?: string };
     expect(details.ok).toBe(true);
     expect(details.sessionKey).toBe("agent:main:current");
+  });
+
+  it("resolves sessionKey=current for a channel-plugin requester via implicit fallback", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    const result = await tool.execute("call-current-channel-plugin", { sessionKey: "current" });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("🧠 Model:");
+  });
+
+  it("resolves sandboxed sessionKey=current to the requester when no run session override exists", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:telegram:group:-5096326138", {
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call-current-sandboxed-channel", {
+      sessionKey: "current",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:telegram:group:-5096326138");
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("🧠 Model:");
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ key: "current" }),
+      }),
+    );
+  });
+
+  it("resolves the default session_status lookup for a channel-plugin requester via implicit fallback", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    const result = await tool.execute("call-current-channel-plugin-default", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string; statusText?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(details.statusText).toContain("OpenClaw");
+    expect(details.statusText).toContain("🧠 Model:");
+  });
+
+  it("materializes a valid persisted session entry when implicit current fallback mutates model state", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    const result = await tool.execute("call-current-channel-plugin-model", {
+      sessionKey: "current",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
+      string,
+      Record<string, SessionEntry>,
+    ];
+    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    expect(saved).toEqual(
+      expect.objectContaining({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        liveModelSwitchPending: true,
+      }),
+    );
+    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+  });
+
+  it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    const result = await tool.execute("call-current-channel-plugin-default-model", {
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:scope:scopy:direct:scopy");
+    expect(updateSessionStoreMock).toHaveBeenCalled();
+    const [, savedStore] = updateSessionStoreMock.mock.calls.at(-1) as [
+      string,
+      Record<string, SessionEntry>,
+    ];
+    const saved = savedStore["agent:main:scope:scopy:direct:scopy"];
+    expect(saved).toEqual(
+      expect.objectContaining({
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        liveModelSwitchPending: true,
+      }),
+    );
+    expect(saved.sessionId).toEqual(expect.any(String));
+    expect(saved.sessionId.trim().length).toBeGreaterThan(0);
+  });
+
+  it("does not synthesize a current fallback for unknown non-literal session keys", async () => {
+    resetSessionStore({});
+
+    const tool = getSessionStatusTool("agent:main:scope:scopy:direct:scopy");
+
+    await expect(
+      tool.execute("call-current-non-literal", { sessionKey: "definitely-not-current" }),
+    ).rejects.toThrow("Unknown sessionId: definitely-not-current");
   });
 
   it("includes background task context in session_status output", async () => {

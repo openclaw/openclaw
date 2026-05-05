@@ -23,6 +23,11 @@ import {
 } from "./provider-catalog.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
+import {
+  resolveOpenRouterThinkingProfile,
+  supportsOpenRouterXHighThinking,
+} from "./thinking-policy.js";
+import { buildOpenRouterVideoGenerationProvider } from "./video-generation-provider.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -149,12 +154,15 @@ export default definePluginEntry({
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
+      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
+      resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
     api.registerSpeechProvider(buildOpenRouterSpeechProvider());
   },
 });
