@@ -27,7 +27,18 @@ describe("realtime voice agent consult tool", () => {
     );
   });
 
-  it("builds a reusable spoken consultant prompt with recent transcript", () => {
+  it("accepts provider question aliases from realtime tool calls", () => {
+    expect(parseRealtimeVoiceAgentConsultArgs({ prompt: "  Check the repo. " })).toMatchObject({
+      question: "Check the repo.",
+    });
+    expect(
+      parseRealtimeVoiceAgentConsultArgs({ query: "  Send a Discord message. " }),
+    ).toMatchObject({
+      question: "Send a Discord message.",
+    });
+  });
+
+  it("builds a delegated voice request prompt with recent transcript", () => {
     const prompt = buildRealtimeVoiceAgentConsultPrompt({
       args: { question: "Do we support realtime tools?" },
       transcript: [
@@ -40,10 +51,13 @@ describe("realtime voice agent consult tool", () => {
       questionSourceLabel: "participant",
     });
 
-    expect(prompt).toContain("during a private Google Meet");
+    expect(prompt).toContain(
+      "Live voice request from the participant during a private Google Meet",
+    );
+    expect(prompt).toContain("Act as the configured OpenClaw agent on behalf of this user");
     expect(prompt).toContain("Participant: Can you check the repo?");
     expect(prompt).toContain("Agent: I'll verify.");
-    expect(prompt).toContain("Question:\nDo we support realtime tools?");
+    expect(prompt).toContain("User request:\nDo we support realtime tools?");
   });
 
   it("filters reasoning and error payloads from visible consult output", () => {

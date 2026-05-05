@@ -26,6 +26,7 @@ import {
 } from "./failover-policy.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  isModelFallbackDecisionLogEnabled,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
   type ModelFallbackStepFields,
@@ -815,6 +816,9 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      return;
+    }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);

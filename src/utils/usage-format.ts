@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
@@ -204,7 +204,7 @@ function loadModelsJsonCostIndex(options?: {
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
   try {
     const stat = fs.statSync(modelsPath);
     if (

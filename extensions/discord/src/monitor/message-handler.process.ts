@@ -660,8 +660,9 @@ export async function processDiscordMessage(
                 onModelSelected,
                 suppressDefaultToolProgressMessages:
                   draftPreview.suppressDefaultToolProgressMessages ? true : undefined,
-                onReasoningStream: async () => {
+                onReasoningStream: async (payload) => {
                   await statusReactions.setThinking();
+                  await draftPreview.pushReasoningProgress(payload?.text);
                 },
                 onToolStart: async (payload) => {
                   if (isProcessAborted(abortSignal)) {
@@ -802,6 +803,7 @@ export async function processDiscordMessage(
         markDispatchIdle();
       }
     }
+    const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
     if (statusReactionsActive) {
       if (dispatchAborted) {
         if (removeAckAfterReply) {
@@ -810,14 +812,18 @@ export async function processDiscordMessage(
           void statusReactions.restoreInitial();
         }
       } else {
-        if (dispatchError) {
+        if (dispatchError || finalDeliveryFailed) {
           await statusReactions.setError();
         } else {
           await statusReactions.setDone();
         }
         if (removeAckAfterReply) {
           void (async () => {
-            await sleep(dispatchError ? DEFAULT_TIMING.errorHoldMs : DEFAULT_TIMING.doneHoldMs);
+            await sleep(
+              dispatchError || finalDeliveryFailed
+                ? DEFAULT_TIMING.errorHoldMs
+                : DEFAULT_TIMING.doneHoldMs,
+            );
             await statusReactions.clear();
           })();
         } else {

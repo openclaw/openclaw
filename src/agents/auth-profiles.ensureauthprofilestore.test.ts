@@ -104,6 +104,10 @@ describe("ensureAuthProfileStore", () => {
     restoreEnvValue("PI_CODING_AGENT_DIR", params.previousPiAgentDir);
   }
 
+  function resolveDefaultMainAgentDir(stateDir: string): string {
+    return path.join(stateDir, "agents", "main", "agent");
+  }
+
   function expectApiKeyProfile(
     profile: AuthProfileCredential,
   ): Extract<AuthProfileCredential, { type: "api_key" }> {
@@ -167,16 +171,13 @@ describe("ensureAuthProfileStore", () => {
 
   it("merges main auth profiles into agent store and keeps agent overrides", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-merge-"));
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      const mainDir = path.join(root, "main-agent");
+      process.env.OPENCLAW_STATE_DIR = root;
+      const mainDir = resolveDefaultMainAgentDir(root);
       const agentDir = path.join(root, "agent-x");
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
-
-      process.env.OPENCLAW_AGENT_DIR = mainDir;
-      process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const mainStore = {
         version: AUTH_STORE_VERSION,
@@ -227,23 +228,20 @@ describe("ensureAuthProfileStore", () => {
         key: "agent-key",
       });
     } finally {
-      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("uses the main agent's newer OAuth profile when an agent still has a stale default profile", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-"));
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      const mainDir = path.join(root, "main-agent");
+      process.env.OPENCLAW_STATE_DIR = root;
+      const mainDir = resolveDefaultMainAgentDir(root);
       const agentDir = path.join(root, "agent-x");
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
-
-      process.env.OPENCLAW_AGENT_DIR = mainDir;
-      process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const freshProfileId = "openai-codex:user@example.com";
       const staleProfileId = "openai-codex:default";
@@ -325,23 +323,20 @@ describe("ensureAuthProfileStore", () => {
       ) as { profiles: Record<string, unknown> };
       expect(persistedAgentStore.profiles[staleProfileId]).toBeDefined();
     } finally {
-      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("keeps a newer agent replacement credential while repairing stale default references", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-newer-agent-"));
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      const mainDir = path.join(root, "main-agent");
+      process.env.OPENCLAW_STATE_DIR = root;
+      const mainDir = resolveDefaultMainAgentDir(root);
       const agentDir = path.join(root, "agent-x");
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
-
-      process.env.OPENCLAW_AGENT_DIR = mainDir;
-      process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const freshProfileId = "openai-codex:user@example.com";
       const staleProfileId = "openai-codex:default";
@@ -408,23 +403,20 @@ describe("ensureAuthProfileStore", () => {
       expect(store.order?.["openai-codex"]).toEqual([freshProfileId]);
       expect(store.lastGood?.["openai-codex"]).toBe(freshProfileId);
     } finally {
-      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("preserves a valid main default OAuth profile while replacing a stale agent override", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-base-default-"));
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      const mainDir = path.join(root, "main-agent");
+      process.env.OPENCLAW_STATE_DIR = root;
+      const mainDir = resolveDefaultMainAgentDir(root);
       const agentDir = path.join(root, "agent-x");
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
-
-      process.env.OPENCLAW_AGENT_DIR = mainDir;
-      process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const freshProfileId = "openai-codex:user@example.com";
       const defaultProfileId = "openai-codex:default";
@@ -497,23 +489,20 @@ describe("ensureAuthProfileStore", () => {
         lastUsed: 123,
       });
     } finally {
-      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("keeps a stale default OAuth profile when the main profile belongs to a different identity", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-drift-mismatch-"));
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      const mainDir = path.join(root, "main-agent");
+      process.env.OPENCLAW_STATE_DIR = root;
+      const mainDir = resolveDefaultMainAgentDir(root);
       const agentDir = path.join(root, "agent-x");
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
-
-      process.env.OPENCLAW_AGENT_DIR = mainDir;
-      process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const freshProfileId = "openai-codex:user@example.com";
       const staleProfileId = "openai-codex:default";
@@ -568,23 +557,20 @@ describe("ensureAuthProfileStore", () => {
       expect(store.order?.["openai-codex"]).toEqual([staleProfileId]);
       expect(store.lastGood?.["openai-codex"]).toBe(staleProfileId);
     } finally {
-      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
 
   it("rewrites invalidated per-agent Codex order to the main agent's healthy relogin profile", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-codex-relogin-"));
-    const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
-      const mainDir = path.join(root, "main-agent");
+      process.env.OPENCLAW_STATE_DIR = root;
+      const mainDir = resolveDefaultMainAgentDir(root);
       const agentDir = path.join(root, "agent-x");
       fs.mkdirSync(mainDir, { recursive: true });
       fs.mkdirSync(agentDir, { recursive: true });
-
-      process.env.OPENCLAW_AGENT_DIR = mainDir;
-      process.env.PI_CODING_AGENT_DIR = mainDir;
 
       const now = Date.now();
       const healthyProfileId = "openai-codex:bunsthedev@gmail.com";
@@ -656,7 +642,7 @@ describe("ensureAuthProfileStore", () => {
       expect(store.lastGood?.["openai-codex"]).toBe(healthyProfileId);
       expect(store.usageStats?.[staleProfileId]).toBeUndefined();
     } finally {
-      restoreAgentDirEnv({ previousAgentDir, previousPiAgentDir });
+      restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

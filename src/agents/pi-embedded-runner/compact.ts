@@ -34,8 +34,11 @@ import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveRunModelFallbacksOverride, resolveSessionAgentIds } from "../agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveRunModelFallbacksOverride,
+  resolveSessionAgentIds,
+} from "../agent-scope.js";
 import {
   makeBootstrapWarn,
   resolveBootstrapContextForRun,
@@ -481,8 +484,15 @@ async function compactEmbeddedPiSessionDirectOnce(
         : undefined,
     };
   };
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
-  await ensureOpenClawModelsJson(params.config, agentDir);
+  const earlyAgentIds = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const agentDir =
+    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
+  await ensureOpenClawModelsJson(params.config, agentDir, {
+    workspaceDir: resolvedWorkspace,
+  });
   const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
     provider,
     modelId,
@@ -574,15 +584,17 @@ async function compactEmbeddedPiSessionDirectOnce(
   let checkpointSnapshot: CapturedCompactionCheckpointSnapshot | null = null;
   let checkpointSnapshotRetained = false;
   try {
+    const skillsSnapshotForRun =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       agentId: effectiveSkillAgentId,
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: skillsSnapshotForRun,
     });
-    restoreSkillEnv = params.skillsSnapshot
+    restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
+          snapshot: skillsSnapshotForRun,
           config: params.config,
         })
       : applySkillEnvOverrides({
@@ -590,7 +602,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           config: params.config,
         });
     const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: skillsSnapshotForRun,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
