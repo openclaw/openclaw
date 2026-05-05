@@ -7,6 +7,7 @@ import {
   resolveSessionAgentId,
   resolveAgentModelFallbacksOverride,
 } from "../agents/agent-scope.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import {
@@ -53,6 +54,7 @@ let agentHarnessSelectionRuntimePromise: Promise<
 let statusQueueRuntimePromise: Promise<typeof import("./status-queue.runtime.js")> | null = null;
 let statusSubagentsRuntimePromise: Promise<typeof import("./status-subagents.runtime.js")> | null =
   null;
+let modelCatalogRuntimePromise: Promise<typeof import("../agents/model-catalog.js")> | null = null;
 
 function loadStatusMessageRuntime(): Promise<typeof import("../auto-reply/status.runtime.js")> {
   const runtimePromise = (statusMessageRuntimePromise ??=
@@ -79,6 +81,48 @@ function loadStatusSubagentsRuntime(): Promise<typeof import("./status-subagents
 function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime.js")> {
   const runtimePromise = (statusQueueRuntimePromise ??= import("./status-queue.runtime.js"));
   return runtimePromise;
+}
+
+function loadModelCatalogRuntime(): Promise<typeof import("../agents/model-catalog.js")> {
+  const runtimePromise = (modelCatalogRuntimePromise ??= import("../agents/model-catalog.js"));
+  return runtimePromise;
+}
+
+function normalizePositiveContextTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+async function resolveStatusRuntimeContextTokens(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<number | undefined> {
+  const cached = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    allowAsyncLoad: false,
+  });
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  try {
+    const { loadModelCatalog } = await loadModelCatalogRuntime();
+    const catalog = await loadModelCatalog({ config: params.cfg });
+    const entry = catalog.find(
+      (candidate) => candidate.provider === params.provider && candidate.id === params.model,
+    );
+    return (
+      normalizePositiveContextTokens(entry?.contextTokens) ??
+      normalizePositiveContextTokens(entry?.contextWindow)
+    );
+  } catch {
+    return undefined;
+  }
 }
 
 function shouldLoadUsageSummary(params: {
@@ -342,6 +386,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const runtimeContextTokens = await resolveStatusRuntimeContextTokens({
+    cfg,
+    provider: modelRefs.active.provider || provider,
+    model: modelRefs.active.model || model,
+  });
   return buildStatusMessage({
     config: cfg,
     agent: {
@@ -362,6 +411,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
         ? agentDefaults.contextTokens
         : undefined,
+    runtimeContextTokens,
     sessionEntry,
     sessionKey,
     parentSessionKey,
