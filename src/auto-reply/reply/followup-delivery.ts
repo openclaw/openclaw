@@ -26,6 +26,7 @@ function hasReplyPayloadMedia(payload: ReplyPayload): boolean {
 export function resolveFollowupDeliveryPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
+  currentMessageId?: string;
   messageProvider?: string;
   originatingAccountId?: string;
   originatingChannel?: string;
@@ -62,6 +63,7 @@ export function resolveFollowupDeliveryPayloads(params: {
     payloads: sanitizedPayloads,
     replyToMode,
     replyToChannel,
+    currentMessageId: params.currentMessageId,
   });
   const messagingToolPayloadDedupe = resolveMessagingToolPayloadDedupe({
     messageProvider: replyMessageProvider,
