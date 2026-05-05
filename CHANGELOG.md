@@ -114,6 +114,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/cron: print a stderr hint after `openclaw cron disable <id>` pointing users at `openclaw cron list --all` and `openclaw cron enable <id>`, so a successful disable no longer looks like a delete when the default `cron list` filters out the disabled job. Thanks @kate.
 - Telegram/Codex: generate DM topic labels with Codex-compatible simple-completion requests so auto-created private topics can be renamed instead of staying `New Chat`.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
