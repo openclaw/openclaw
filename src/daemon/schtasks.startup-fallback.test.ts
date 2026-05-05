@@ -229,6 +229,19 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("falls back to a Startup-folder launcher when schtasks create is denied on a Spanish-locale host (#77993)", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 1, stdout: "", stderr: "ERROR: Acceso denegado." },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("falls back to a Startup-folder launcher when schtasks availability is slow", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       schtasksResponses.push(
