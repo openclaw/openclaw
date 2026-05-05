@@ -131,7 +131,7 @@ async function expectRestartedChannel(
   accountId = "default",
 ) {
   const monitor = await startAndRunCheck(manager);
-  expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId);
+  expect(manager.stopChannel).toHaveBeenCalledWith(channel, accountId, { manual: false });
   expect(manager.startChannel).toHaveBeenCalledWith(channel, accountId);
   monitor.stop();
 }
@@ -286,7 +286,7 @@ describe("channel-health-monitor", () => {
       },
     );
     const monitor = await startAndRunCheck(manager);
-    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default", { manual: false });
     expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     expect(manager.stopChannel).not.toHaveBeenCalledWith("discord", "quiet");
     expect(manager.startChannel).not.toHaveBeenCalledWith("discord", "quiet");
@@ -308,9 +308,41 @@ describe("channel-health-monitor", () => {
       },
     });
     const monitor = await startAndRunCheck(manager);
-    expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default");
+    expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default", { manual: false });
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("whatsapp", "default");
     expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
+  });
+
+  it("restarts the account after recovery stop resolves", async () => {
+    const calls: string[] = [];
+    const now = Date.now();
+    const manager = createSnapshotManager(
+      {
+        whatsapp: {
+          default: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            linked: true,
+            lastStartAt: now - 300_000,
+          },
+        },
+      },
+      {
+        stopChannel: vi.fn(async () => {
+          calls.push("stop");
+        }),
+        startChannel: vi.fn(async () => {
+          calls.push("start");
+        }),
+      },
+    );
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledWith("whatsapp", "default", { manual: false });
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    expect(calls).toEqual(["stop", "start"]);
     monitor.stop();
   });
 
@@ -613,7 +645,7 @@ describe("channel-health-monitor", () => {
       const monitor = await startAndRunCheck(manager, {
         staleEventThresholdMs: customThreshold,
       });
-      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default");
+      expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
       monitor.stop();
     });

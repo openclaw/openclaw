@@ -301,7 +301,7 @@ describe("server-channels auto restart", () => {
     }
   });
 
-  it("does not allow a second account task to start when stop times out", async () => {
+  it("does not allow a second account task to start when a manual stop times out", async () => {
     const startAccount = vi.fn(
       async ({ abortSignal }: { abortSignal: AbortSignal }) =>
         await new Promise<void>(() => {
@@ -327,6 +327,103 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(true);
     expect(account?.restartPending).toBe(false);
     expect(account?.lastError).toContain("channel stop timed out");
+  });
+
+  it("does not keep recovery stop timeouts marked as manually stopped", async () => {
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>(() => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(account?.lastError).toContain("channel stop timed out");
+  });
+
+  it("allows a replacement account task after a recovery stop times out", async () => {
+    let runId = 0;
+    const startAccount = vi.fn(
+      async ({ abortSignal, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        runId += 1;
+        setStatus({ accountId: DEFAULT_ACCOUNT_ID, lastError: `task-${runId}` });
+        await new Promise<void>(() => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+        });
+      },
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "first account task did not start",
+    );
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "replacement account task did not start",
+    );
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toBe("task-2");
+  });
+
+  it("ignores stale task completion after a recovery stop times out and starts a replacement", async () => {
+    const firstTask = createDeferred();
+    let runId = 0;
+    const startAccount = vi.fn(async ({ setStatus }: ChannelGatewayContext<TestAccount>) => {
+      runId += 1;
+      setStatus({ accountId: DEFAULT_ACCOUNT_ID, lastError: `task-${runId}` });
+      if (runId === 1) {
+        await firstTask.promise;
+        return;
+      }
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 1,
+      "first account task did not start",
+    );
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "replacement account task did not start",
+    );
+
+    firstTask.resolve();
+    await flushMicrotasks();
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.running).toBe(true);
+    expect(account?.lastError).toBe("task-2");
   });
 
   it("marks enabled/configured when account descriptors omit them", () => {
