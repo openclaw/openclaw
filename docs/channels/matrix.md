@@ -268,6 +268,21 @@ Use `allowBots` when you intentionally want inter-agent Matrix traffic:
 
 Use strict room allowlists and mention requirements when enabling bot-to-bot traffic in shared rooms.
 
+## Voice messages and audio transcription
+
+Inbound audio attachments (`m.audio`, plus `m.file` carrying an `audio/*` mimetype) are transcribed before the mention gate, so a voice note that mentions the bot by name reaches the agent in a `requireMention: true` room without a separate text mention.
+
+Transcription uses the shared `tools.media.audio` provider — typically OpenAI `gpt-4o-mini-transcribe`. See [Media tools overview](/tools/media-overview) for the provider matrix and config keys (`enabled`, `provider`, `model`, `maxBytes`, `timeoutSeconds`, `language`).
+
+Behavior:
+
+- The transcript is wrapped with `[Audio transcript (machine-generated, untrusted)]: ...` framing before reaching the agent body, so prompt-injection content inside the audio cannot impersonate system instructions.
+- Encrypted media is decrypted via the existing crypto adapter before transcription; the plaintext file is passed to the provider through the regular media-understanding pipeline.
+- The attachment is marked transcribed (`MediaTranscribedIndexes`) so downstream tools do not transcribe the same audio a second time.
+- Transcription failures are non-fatal — the message falls through to the `[matrix audio attachment]` placeholder body and the agent can still inspect the file via `MediaPath` / `MediaType`.
+
+Disable globally by setting `tools.media.audio.enabled: false`.
+
 ## Encryption and verification
 
 In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image previews are encrypted alongside the full attachment. Unencrypted rooms still use plain `thumbnail_url`. No configuration is needed — the plugin detects E2EE state automatically.

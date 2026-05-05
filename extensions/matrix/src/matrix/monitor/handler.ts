@@ -33,6 +33,7 @@ import {
   formatMatrixMediaTooLargeText,
   formatMatrixMediaUnavailableText,
   formatMatrixMessageText,
+  isLikelyBareFilename,
   resolveMatrixMessageAttachment,
   resolveMatrixMessageBody,
 } from "../media-text.js";
@@ -57,6 +58,11 @@ import type { MatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions, stripMatrixMentionPrefix } from "./mentions.js";
+import {
+  formatMatrixAudioTranscript,
+  isMatrixAudioContent,
+  resolveMatrixPreflightAudioTranscript,
+} from "./preflight-audio.js";
 import { deliverMatrixReplies } from "./replies.js";
 import { createMatrixReplyContextResolver } from "./reply-context.js";
 import { createRoomHistoryTracker } from "./room-history.js";
@@ -894,6 +900,71 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
 
+        const earlyContentInfo =
+          "info" in content && content.info && typeof content.info === "object"
+            ? (content.info as { mimetype?: string; size?: number })
+            : undefined;
+        const earlyContentType = earlyContentInfo?.mimetype;
+        const earlyContentSize =
+          typeof earlyContentInfo?.size === "number" ? earlyContentInfo.size : undefined;
+        const earlyContentBody = typeof content.body === "string" ? content.body.trim() : "";
+        const earlyContentFilename =
+          typeof content.filename === "string" ? content.filename.trim() : "";
+        const earlyOriginalFilename = earlyContentFilename || earlyContentBody || undefined;
+
+        // Voice-note preflight: download + transcribe before the mention gate so
+        // transcribed mentions can pass `requireMention` rooms (peer-channel parity).
+        let preflightMedia: {
+          path: string;
+          contentType?: string;
+          placeholder: string;
+        } | null = null;
+        let preflightMediaDownloadFailed = false;
+        let preflightMediaSizeLimitExceeded = false;
+        let preflightAudioTranscript: string | undefined;
+        if (
+          isMatrixAudioContent({
+            msgtype: typeof content.msgtype === "string" ? content.msgtype : undefined,
+            mimetype: earlyContentType,
+          }) &&
+          mediaUrl?.startsWith("mxc://")
+        ) {
+          try {
+            preflightMedia = await downloadMatrixMedia({
+              client,
+              mxcUrl: mediaUrl,
+              contentType: earlyContentType,
+              sizeBytes: earlyContentSize,
+              maxBytes: mediaMaxBytes,
+              file: contentFile,
+              originalFilename: earlyOriginalFilename,
+            });
+          } catch (err) {
+            preflightMediaDownloadFailed = true;
+            if (isMatrixMediaSizeLimitError(err)) {
+              preflightMediaSizeLimitExceeded = true;
+            }
+            const errorText = formatMatrixErrorMessage(err);
+            logVerboseMessage(
+              `matrix: media download failed room=${roomId} id=${event.event_id ?? "unknown"} type=${content.msgtype} error=${errorText}`,
+            );
+            logger.warn("matrix media download failed", {
+              roomId,
+              eventId: event.event_id,
+              msgtype: content.msgtype,
+              encrypted: Boolean(contentFile),
+              error: errorText,
+            });
+          }
+          if (preflightMedia) {
+            preflightAudioTranscript = await resolveMatrixPreflightAudioTranscript({
+              mediaPath: preflightMedia.path,
+              mediaContentType: preflightMedia.contentType,
+              cfg,
+            });
+          }
+        }
+
         const _messageId = event.event_id ?? "";
         const _threadRootId = resolveMatrixThreadRootId({ event, content });
         const thread = resolveMatrixThreadRouting({
@@ -923,11 +994,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         const selfDisplayName = content.formatted_body
           ? await getMemberDisplayName(roomId, selfUserId).catch(() => undefined)
           : undefined;
+        const mentionPrecheckTextWithTranscript = preflightAudioTranscript
+          ? [mentionPrecheckText, preflightAudioTranscript].filter(Boolean).join("\n").trim()
+          : mentionPrecheckText;
         const { wasMentioned, hasExplicitMention } = resolveMentions({
           content,
           userId: selfUserId,
           displayName: selfDisplayName,
-          text: mentionPrecheckText,
+          text: mentionPrecheckTextWithTranscript,
           mentionRegexes: agentMentionRegexes,
         });
         if (
@@ -1025,9 +1099,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           path: string;
           contentType?: string;
           placeholder: string;
-        } | null = null;
-        let mediaDownloadFailed = false;
-        let mediaSizeLimitExceeded = false;
+        } | null = preflightMedia;
+        let mediaDownloadFailed = preflightMediaDownloadFailed;
+        let mediaSizeLimitExceeded = preflightMediaSizeLimitExceeded;
         const finalContentUrl =
           "url" in content && typeof content.url === "string" ? content.url : undefined;
         const finalContentFile =
@@ -1044,7 +1118,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             : undefined;
         const contentType = contentInfo?.mimetype;
         const contentSize = typeof contentInfo?.size === "number" ? contentInfo.size : undefined;
-        if (finalMediaUrl?.startsWith("mxc://")) {
+        if (!media && !mediaDownloadFailed && finalMediaUrl?.startsWith("mxc://")) {
           try {
             media = await downloadMatrixMedia({
               client,
@@ -1075,7 +1149,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
 
         const rawBody = locationPayload?.text ?? contentBody;
-        const bodyText = resolveMatrixInboundBodyText({
+        let bodyText = resolveMatrixInboundBodyText({
           rawBody,
           filename: typeof content.filename === "string" ? content.filename : undefined,
           mediaPlaceholder: media?.placeholder,
@@ -1084,6 +1158,20 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           mediaDownloadFailed,
           mediaSizeLimitExceeded,
         });
+        if (
+          preflightMedia &&
+          bodyText &&
+          bodyText !== preflightMedia.placeholder &&
+          isLikelyBareFilename(bodyText)
+        ) {
+          // Matrix voice clients auto-fill `body` with the attachment filename.
+          // Treat that as placeholder-equivalent so the agent sees a clear audio
+          // marker rather than a stray filename.
+          bodyText = preflightMedia.placeholder;
+        }
+        if (preflightAudioTranscript && bodyText && bodyText === media?.placeholder) {
+          bodyText = formatMatrixAudioTranscript(preflightAudioTranscript);
+        }
         if (!bodyText) {
           await commitInboundEventIfClaimed();
           return undefined;
@@ -1138,6 +1226,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           bodyText,
           commandBodyText,
           media,
+          preflightAudioTranscript,
           locationPayload,
           messageId: _messageId,
           triggerSnapshot,
@@ -1193,6 +1282,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         bodyText,
         commandBodyText,
         media,
+        preflightAudioTranscript,
         locationPayload,
         messageId: _messageId,
         triggerSnapshot,
@@ -1340,6 +1430,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
+        MediaTranscribedIndexes: preflightAudioTranscript !== undefined ? [0] : undefined,
         ...locationPayload?.context,
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
