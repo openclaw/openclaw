@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import {
+  acquireQaCredentialLease,
+  startQaCredentialLeaseHeartbeat,
+} from "../live-transports/shared/credential-lease.runtime.js";
 
 export type MantisSlackDesktopSmokeOptions = {
   alternateModel?: string;
@@ -48,6 +52,17 @@ type CommandRunner = (
   args: readonly string[],
   options: SpawnOptions,
 ) => Promise<CommandResult>;
+
+type SlackGatewayCredentialPayload = {
+  channelId: string;
+  sutAppToken: string;
+  sutBotToken: string;
+};
+
+type SlackGatewayCredentialLease = Awaited<
+  ReturnType<typeof acquireQaCredentialLease<SlackGatewayCredentialPayload>>
+>;
+type SlackGatewayCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
 
 type CrabboxInspect = {
   host?: string;
@@ -194,10 +209,108 @@ function buildCrabboxEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   if (!trimToValue(next.OPENCLAW_MANTIS_SLACK_BOT_TOKEN) && trimToValue(next.SLACK_BOT_TOKEN)) {
     next.OPENCLAW_MANTIS_SLACK_BOT_TOKEN = next.SLACK_BOT_TOKEN;
   }
+  if (
+    !trimToValue(next.OPENCLAW_MANTIS_SLACK_BOT_TOKEN) &&
+    trimToValue(next.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN)
+  ) {
+    next.OPENCLAW_MANTIS_SLACK_BOT_TOKEN = next.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN;
+  }
   if (!trimToValue(next.OPENCLAW_MANTIS_SLACK_APP_TOKEN) && trimToValue(next.SLACK_APP_TOKEN)) {
     next.OPENCLAW_MANTIS_SLACK_APP_TOKEN = next.SLACK_APP_TOKEN;
   }
+  if (
+    !trimToValue(next.OPENCLAW_MANTIS_SLACK_APP_TOKEN) &&
+    trimToValue(next.OPENCLAW_QA_SLACK_SUT_APP_TOKEN)
+  ) {
+    next.OPENCLAW_MANTIS_SLACK_APP_TOKEN = next.OPENCLAW_QA_SLACK_SUT_APP_TOKEN;
+  }
+  if (
+    !trimToValue(next.OPENCLAW_MANTIS_SLACK_CHANNEL_ID) &&
+    trimToValue(next.OPENCLAW_QA_SLACK_CHANNEL_ID)
+  ) {
+    next.OPENCLAW_MANTIS_SLACK_CHANNEL_ID = next.OPENCLAW_QA_SLACK_CHANNEL_ID;
+  }
   return next;
+}
+
+function resolveSlackGatewayEnvPayload(env: NodeJS.ProcessEnv): SlackGatewayCredentialPayload {
+  const channelId = trimToValue(env.OPENCLAW_QA_SLACK_CHANNEL_ID);
+  const sutBotToken = trimToValue(env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN);
+  const sutAppToken = trimToValue(env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN);
+  if (!channelId || !sutBotToken || !sutAppToken) {
+    throw new Error(
+      "Gateway setup requires OPENCLAW_QA_SLACK_CHANNEL_ID, OPENCLAW_QA_SLACK_SUT_BOT_TOKEN, and OPENCLAW_QA_SLACK_SUT_APP_TOKEN when using --credential-source env.",
+    );
+  }
+  return {
+    channelId,
+    sutAppToken,
+    sutBotToken,
+  };
+}
+
+function parseSlackGatewayCredentialPayload(payload: unknown): SlackGatewayCredentialPayload {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Slack credential payload must be an object.");
+  }
+  const candidate = payload as Record<string, unknown>;
+  const channelId =
+    typeof candidate.channelId === "string" ? trimToValue(candidate.channelId) : undefined;
+  const sutBotToken =
+    typeof candidate.sutBotToken === "string" ? trimToValue(candidate.sutBotToken) : undefined;
+  const sutAppToken =
+    typeof candidate.sutAppToken === "string" ? trimToValue(candidate.sutAppToken) : undefined;
+  if (!channelId || !sutBotToken || !sutAppToken) {
+    throw new Error(
+      "Slack credential payload must include channelId, sutBotToken, and sutAppToken.",
+    );
+  }
+  return {
+    channelId,
+    sutAppToken,
+    sutBotToken,
+  };
+}
+
+async function prepareGatewayCredentialEnv(params: {
+  credentialRole: string;
+  credentialSource: string;
+  env: NodeJS.ProcessEnv;
+  gatewaySetup: boolean;
+}) {
+  if (!params.gatewaySetup) {
+    return {};
+  }
+  if (
+    trimToValue(params.env.OPENCLAW_MANTIS_SLACK_BOT_TOKEN) &&
+    trimToValue(params.env.OPENCLAW_MANTIS_SLACK_APP_TOKEN)
+  ) {
+    return {};
+  }
+  const credentialLease = await acquireQaCredentialLease<SlackGatewayCredentialPayload>({
+    env: params.env,
+    kind: "slack",
+    source: params.credentialSource,
+    role: params.credentialRole,
+    resolveEnvPayload: () => resolveSlackGatewayEnvPayload(params.env),
+    parsePayload: parseSlackGatewayCredentialPayload,
+  });
+  const leaseHeartbeat = startQaCredentialLeaseHeartbeat(credentialLease);
+  const payload = credentialLease.payload;
+  params.env.OPENCLAW_MANTIS_SLACK_BOT_TOKEN = payload.sutBotToken;
+  params.env.OPENCLAW_MANTIS_SLACK_APP_TOKEN = payload.sutAppToken;
+  params.env.OPENCLAW_MANTIS_SLACK_CHANNEL_ID =
+    trimToValue(params.env.OPENCLAW_MANTIS_SLACK_CHANNEL_ID) ?? payload.channelId;
+  params.env.OPENCLAW_QA_SLACK_CHANNEL_ID =
+    trimToValue(params.env.OPENCLAW_QA_SLACK_CHANNEL_ID) ?? payload.channelId;
+  params.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN =
+    trimToValue(params.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN) ?? payload.sutBotToken;
+  params.env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN =
+    trimToValue(params.env.OPENCLAW_QA_SLACK_SUT_APP_TOKEN) ?? payload.sutAppToken;
+  return {
+    credentialLease,
+    leaseHeartbeat,
+  };
 }
 
 function extractLeaseId(output: string) {
@@ -656,6 +769,8 @@ export async function runMantisSlackDesktopSmoke(
   const remoteOutputDir = `/tmp/openclaw-mantis-slack-desktop-${startedAt
     .toISOString()
     .replace(/[^0-9A-Za-z]/gu, "-")}`;
+  let credentialLease: SlackGatewayCredentialLease | undefined;
+  let leaseHeartbeat: SlackGatewayCredentialHeartbeat | undefined;
   let leaseId = explicitLeaseId;
   let summary: MantisSlackDesktopSmokeSummary | undefined;
   let screenshotPath: string | undefined;
@@ -663,6 +778,14 @@ export async function runMantisSlackDesktopSmoke(
   let videoPath: string | undefined;
 
   try {
+    const preparedCredentialEnv = await prepareGatewayCredentialEnv({
+      credentialRole,
+      credentialSource,
+      env,
+      gatewaySetup,
+    });
+    credentialLease = preparedCredentialEnv.credentialLease;
+    leaseHeartbeat = preparedCredentialEnv.leaseHeartbeat;
     leaseId =
       leaseId ??
       (await warmupCrabbox({
@@ -718,6 +841,7 @@ export async function runMantisSlackDesktopSmoke(
       remoteRunError = error;
       return { stdout: "", stderr: "" };
     });
+    leaseHeartbeat?.throwIfFailed();
     await copyRemoteArtifacts({
       cwd: repoRoot,
       env,
@@ -813,6 +937,16 @@ export async function runMantisSlackDesktopSmoke(
     }
     if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
       await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+    }
+    if (leaseHeartbeat) {
+      await leaseHeartbeat.stop().catch((error: unknown) => {
+        console.warn(`Slack credential heartbeat cleanup failed: ${formatErrorMessage(error)}`);
+      });
+    }
+    if (credentialLease) {
+      await credentialLease.release().catch((error: unknown) => {
+        console.warn(`Slack credential release failed: ${formatErrorMessage(error)}`);
+      });
     }
   }
 }

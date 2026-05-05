@@ -1,7 +1,9 @@
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import type { ExternalCliAuthDiscovery } from "./auth-profiles/external-cli-discovery.js";
 import {
   ensureAuthProfileStore,
+  loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForSecretsRuntime,
 } from "./auth-profiles/store.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
@@ -11,6 +13,7 @@ import {
 } from "./pi-auth-discovery-core.js";
 
 export type DiscoverAuthStorageOptions = {
+  externalCli?: ExternalCliAuthDiscovery;
   readOnly?: boolean;
   skipCredentials?: boolean;
 } & PiDiscoveryAuthLookupOptions;
@@ -19,10 +22,17 @@ export function resolvePiCredentialsForDiscovery(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
 ): PiCredentialMap {
+  const storeOptions = {
+    allowKeychainPrompt: false,
+    ...(options?.config ? { config: options.config } : {}),
+    ...(options?.externalCli ? { externalCli: options.externalCli } : {}),
+  };
   const store =
     options?.readOnly === true
-      ? loadAuthProfileStoreForSecretsRuntime(agentDir)
-      : ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+      ? options.externalCli || options.config
+        ? loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, ...storeOptions })
+        : loadAuthProfileStoreForSecretsRuntime(agentDir)
+      : ensureAuthProfileStore(agentDir, storeOptions);
   const credentials = addEnvBackedPiCredentials(resolvePiCredentialMapFromStore(store), {
     config: options?.config,
     workspaceDir: options?.workspaceDir,

@@ -146,6 +146,12 @@ Required inputs for `--credential-source env`:
   before invoking Crabbox so Crabbox's `OPENCLAW_*` env forwarding can carry it
   into the VM.
 
+With `--gateway-setup --credential-source convex`, Mantis leases the Slack SUT
+credential from the shared pool before creating the VM and forwards the leased
+channel id, Socket Mode app token, and bot token as the `OPENCLAW_MANTIS_SLACK_*`
+runtime env inside the desktop. That keeps GitHub workflows thin: they only need
+the Convex broker secret, not raw Slack bot or app tokens.
+
 Useful Slack desktop flags:
 
 - `--lease-id <cbx_...>` reruns against a machine where an operator already logged in to Slack Web through VNC.

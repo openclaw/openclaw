@@ -209,7 +209,8 @@ jobs:
           require_var CRABBOX_COORDINATOR_TOKEN
 
           candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees/candidate"
-          root="$candidate_repo/.artifacts/qa-e2e/mantis/slack-desktop-smoke"
+          output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
+          root="$candidate_repo/$output_rel"
           echo "output_dir=${root}" >> "$GITHUB_OUTPUT"
           keep_args=()
           if [[ "$KEEP_VM" == "true" ]]; then
@@ -218,7 +219,7 @@ jobs:
 
           pnpm openclaw qa mantis slack-desktop-smoke \
             --repo-root "$candidate_repo" \
-            --output-dir "$root" \
+            --output-dir "$output_rel" \
             --provider hetzner \
             --class standard \
             --idle-timeout 45m \

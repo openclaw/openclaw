@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.
 - Providers/Fireworks: expose Kimi models as thinking-off-only and keep K2.5/K2.6 requests on `thinking: disabled`, so manual model switches do not send Fireworks-rejected `reasoning*` parameters. Refs #74289. Thanks @frankekn.
@@ -553,6 +554,7 @@ Docs: https://docs.openclaw.ai
 - Auto-reply/queue: treat reset-triggered `/new` and `/reset` turns as interrupt runs across active-run queue handling, so steer/followup modes cannot delay a fresh session behind existing work. Fixes #74093. (#74144) Thanks @ruji9527 and @yelog.
 - Cron: persist repaired startup runtime state back to `jobs-state.json` so a valid future `nextRunAtMs` with missing `updatedAtMs` no longer triggers repeated external health-check repairs after Gateway restart. Fixes #76461. Thanks @vincentkoc.
 - Cron: preserve manual `cron.run` IDs in `cron.runs` history so manual run acknowledgements can be correlated with finished run records. Fixes #76276.
+- Plugin SDK/cron: expose `sessionTarget` and `agentId` as top-level fields on `cron_changed` hook events so downstream plugins can route cron completion results without digging into the optional job snapshot. Thanks @amknight.
 - CLI/devices: request `operator.admin` for `openclaw devices approve <requestId>` only when the exact pending device request would mint or inherit admin-scoped operator access, while keeping lower-scope approvals on the pairing scope.
 - Memory/embedding: broaden the embedding reindex retry classifier to include transient socket-layer errors (`fetch failed`, `ECONNRESET`, `socket hang up`, `UND_ERR_*`, `closed`) so memory reindex survives provider network hiccups instead of aborting mid-run. Related #56815, #44166. (#76311) Thanks @buyitsydney.
 - Memory/sessions: keep rotated and deleted transcripts (`.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`) searchable by indexing archive content, mapping archive hits back to live transcript stems, emitting transcript update events on archive rotation, and bypassing incremental delta thresholds for one-shot archive mutations while keeping backups and compaction checkpoints opaque. Refs #56131. Thanks @buyitsydney.
