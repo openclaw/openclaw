@@ -262,6 +262,9 @@ export async function maybeRepairMemoryRecallHealth(params: {
               ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
               : null,
             repair.removedStaleLock ? "- removed stale promotion lock" : null,
+            repair.removedTempFiles > 0
+              ? `- removed ${repair.removedTempFiles} orphaned temp file${repair.removedTempFiles === 1 ? "" : "s"}`
+              : null,
             `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
           ].filter(Boolean);
           note(lines.join("\n"), "Doctor changes");

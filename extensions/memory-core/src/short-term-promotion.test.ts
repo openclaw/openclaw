@@ -1682,6 +1682,46 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("removes stale orphaned recall and phase temp files during repair", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const storePath = resolveShortTermRecallStorePath(workspaceDir);
+      const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+      const artifactsDir = path.dirname(storePath);
+      const oldRecallTmp = path.join(
+        artifactsDir,
+        "short-term-recall.json.1234.1760000000000.00000000-0000-4000-8000-000000000001.tmp",
+      );
+      const oldPhaseTmp = path.join(
+        artifactsDir,
+        "phase-signals.json.1234.1760000000000.00000000-0000-4000-8000-000000000002.tmp",
+      );
+      const freshRecallTmp = path.join(
+        artifactsDir,
+        "short-term-recall.json.1234.1760000000000.00000000-0000-4000-8000-000000000003.tmp",
+      );
+      const unrelatedTmp = `${phaseSignalPath}.manual.tmp`;
+
+      await fs.writeFile(oldRecallTmp, "{}\n", "utf-8");
+      await fs.writeFile(oldPhaseTmp, "{}\n", "utf-8");
+      await fs.writeFile(freshRecallTmp, "{}\n", "utf-8");
+      await fs.writeFile(unrelatedTmp, "{}\n", "utf-8");
+      const staleMtime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      await fs.utimes(oldRecallTmp, staleMtime, staleMtime);
+      await fs.utimes(oldPhaseTmp, staleMtime, staleMtime);
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.removedTempFiles).toBe(2);
+      expect(repair.rewroteStore).toBe(false);
+      expect(repair.removedStaleLock).toBe(false);
+      await expect(fs.access(oldRecallTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(oldPhaseTmp)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(freshRecallTmp)).resolves.toBeUndefined();
+      await expect(fs.access(unrelatedTmp)).resolves.toBeUndefined();
+    });
+  });
+
   it("waits for an active short-term lock before repairing", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const storePath = resolveShortTermRecallStorePath(workspaceDir);

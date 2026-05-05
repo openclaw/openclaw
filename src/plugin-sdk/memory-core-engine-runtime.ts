@@ -87,6 +87,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   removedInvalidEntries: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
+  removedTempFiles: number;
 };
 
 type MemoryIndexManagerFacade = {
