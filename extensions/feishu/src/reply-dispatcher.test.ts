@@ -659,6 +659,22 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("passes mediaLocalRoots from info.mediaAccess to media attachments", async () => {
+    const { options } = createDispatcherHarness();
+    await options.deliver(
+      { mediaUrl: "file:///local/path/a.png" },
+      { kind: "final", mediaAccess: { localRoots: ["/local/path"] } },
+    );
+
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "file:///local/path/a.png",
+        mediaLocalRoots: ["/local/path"],
+      }),
+    );
+  });
+
   it("passes audioAsVoice to media attachments", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver(

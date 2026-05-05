@@ -442,7 +442,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
   };
 
-  const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
+  const sendMediaReplies = async (
+    payload: ReplyPayload,
+    options?: { fallbackText?: string },
+    mediaLocalRoots?: readonly string[],
+  ) => {
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     let sentFallbackText = false;
     await sendMediaWithLeadingCaption({
@@ -456,6 +460,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
           accountId,
+          mediaLocalRoots,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });
         if (result?.voiceIntentDegradedToFile && options?.fallbackText && !sentFallbackText) {
@@ -592,7 +597,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             }
             // Send media even when streaming handled the text
             if (hasMedia) {
-              await sendMediaReplies(payload);
+              await sendMediaReplies(payload, undefined, info?.mediaAccess?.localRoots);
             }
             return;
           }
@@ -642,6 +647,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           await sendMediaReplies(
             payload,
             hasVoiceMedia && hasText ? { fallbackText: text } : undefined,
+            info?.mediaAccess?.localRoots,
           );
         }
       },
