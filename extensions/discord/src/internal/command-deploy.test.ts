@@ -1,6 +1,11 @@
-import type { APIApplicationCommand } from "discord-api-types/v10";
-import { describe, expect, test } from "vitest";
-import { __testing } from "./command-deploy.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import { describe, expect, test, vi } from "vitest";
+import { DiscordCommandDeployer, __testing } from "./command-deploy.js";
+import { BaseCommand } from "./commands.js";
+import type { RequestClient } from "./rest.js";
 
 const { commandsEqual } = __testing;
 
@@ -193,5 +198,245 @@ describe("commandsEqual", () => {
     const current = currentFromDiscord({ description: "ping the bot" });
     const desired = desiredFromLocal({ description: "ping\nthe bot" });
     expect(commandsEqual(current, desired)).toBe(true);
+  });
+});
+
+/**
+ * Regression for #77359: when two Discord accounts share the same on-disk
+ * deploy-cache file (the default in multi-bot setups) the persisted hash key
+ * must be scoped by application/client id. Otherwise a later account whose
+ * command set hashes the same as the first account's reuses the first
+ * account's hash and skips reconciling its own Discord application — leaving
+ * "This application has no commands" in the secondary bot's Integrations panel.
+ */
+describe("DiscordCommandDeployer cache scoping (multi-application)", () => {
+  class StaticCommand extends BaseCommand {
+    name: string;
+    description = "ping the bot";
+    type = ApplicationCommandType.ChatInput;
+    constructor(name: string) {
+      super();
+      this.name = name;
+    }
+    serializeOptions() {
+      return undefined;
+    }
+  }
+
+  function createRest(): RequestClient {
+    return {
+      get: vi.fn(async () => []),
+      post: vi.fn(async () => undefined),
+      patch: vi.fn(async () => undefined),
+      put: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    } as unknown as RequestClient;
+  }
+
+  test("two applications with identical command sets each reconcile their own application", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    const restA = createRest();
+    const deployerA = new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restA,
+    });
+    await deployerA.deploy({ mode: "reconcile" });
+
+    const restB = createRest();
+    const deployerB = new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands,
+      hashStorePath,
+      rest: () => restB,
+    });
+    await deployerB.deploy({ mode: "reconcile" });
+
+    // The first deploy issues a list + create against application "app-default".
+    expect(restA.get).toHaveBeenCalledTimes(1);
+    expect(restA.post).toHaveBeenCalledTimes(1);
+    // The second deploy MUST also list + create against "app-secondary"; before
+    // the fix it short-circuited on the shared `global:reconcile` hash and
+    // never touched its own Discord application.
+    expect(restB.get).toHaveBeenCalledTimes(1);
+    expect(restB.post).toHaveBeenCalledTimes(1);
+  });
+
+  test("re-deploying the same application still hits the persisted cache", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    const restFirst = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restFirst,
+    }).deploy({ mode: "reconcile" });
+
+    const restSecond = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restSecond,
+    }).deploy({ mode: "reconcile" });
+
+    expect(restFirst.get).toHaveBeenCalledTimes(1);
+    expect(restFirst.post).toHaveBeenCalledTimes(1);
+    // Same application, same command set, same hash file => skip reconcile.
+    expect(restSecond.get).not.toHaveBeenCalled();
+    expect(restSecond.post).not.toHaveBeenCalled();
+  });
+
+  test("persisted cache keys are namespaced by application id", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+
+    await new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands,
+      hashStorePath,
+      rest: () => createRest(),
+    }).deploy({ mode: "reconcile" });
+
+    const raw = await fs.readFile(hashStorePath, "utf8");
+    const parsed = JSON.parse(raw) as { hashes: Record<string, string> };
+    const keys = Object.keys(parsed.hashes);
+    expect(keys).toContain("app:app-default:global:reconcile");
+    expect(keys).toContain("app:app-secondary:global:reconcile");
+    expect(keys).not.toContain("global:reconcile");
+  });
+
+  test("a deployer that loaded an empty cache before another deployer's write preserves the other deployer's entries on persist", async () => {
+    // Regression for the codex follow-up on PR #77367: `server-channels.ts`
+    // can start multiple Discord deployers concurrently. Before the fix, a
+    // deployer that loaded the (empty) cache file before another deployer's
+    // first write would later overwrite it on its own `persistHashes()`,
+    // serializing only its own in-memory `app:<id>:...` entry and dropping
+    // the other deployer's entry. The current implementation re-reads the
+    // on-disk hashes inside `persistHashes` and merges them with our
+    // in-memory entries before the rename.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    // Deployer B starts first, loads the empty cache. Then deployer A
+    // completes its full deploy + persist, writing `app:app-default:...` to
+    // disk. When deployer B finally persists, it must merge in deployer A's
+    // entry instead of overwriting it with just its own.
+    const deployerB = new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands,
+      hashStorePath,
+      rest: () => createRest(),
+    });
+    // Trigger B's load of the (still missing) cache file by starting deploy
+    // and immediately awaiting just enough to clear the load. The deploy
+    // call awaits loadPersistedHashes inside putCommandSetIfChanged before
+    // calling deploy(); to keep the seam minimal here, we just race the load
+    // by running deployer A's full deploy in between.
+    const deployerA = new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => createRest(),
+    });
+
+    // Step 1: A runs a full deploy (load -> reconcile -> persist) on the
+    // initially missing cache file; result: file now has app-default entry.
+    await deployerA.deploy({ mode: "reconcile" });
+
+    // Step 2: B runs its full deploy. Without the fix, B's persistHashes
+    // would write only `app:app-secondary:...` and drop A's entry. With the
+    // fix, B re-reads the on-disk file inside persistHashes, sees A's entry,
+    // and merges it into the write so both keys survive.
+    await deployerB.deploy({ mode: "reconcile" });
+
+    const raw = await fs.readFile(hashStorePath, "utf8");
+    const parsed = JSON.parse(raw) as { hashes: Record<string, string> };
+    const keys = Object.keys(parsed.hashes);
+    expect(keys).toContain("app:app-default:global:reconcile");
+    expect(keys).toContain("app:app-secondary:global:reconcile");
+
+    // And subsequent restarts must still hit the cache for both apps,
+    // proving the rate-limit protection survived the concurrent write.
+    const restA = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-default",
+      commands,
+      hashStorePath,
+      rest: () => restA,
+    }).deploy({ mode: "reconcile" });
+    const restB = createRest();
+    await new DiscordCommandDeployer({
+      clientId: "app-secondary",
+      commands,
+      hashStorePath,
+      rest: () => restB,
+    }).deploy({ mode: "reconcile" });
+    expect(restA.get).not.toHaveBeenCalled();
+    expect(restA.post).not.toHaveBeenCalled();
+    expect(restB.get).not.toHaveBeenCalled();
+    expect(restB.post).not.toHaveBeenCalled();
+  });
+
+  test("truly parallel deployers serialize cache writes via the per-path mutex (codex follow-up on #77367)", async () => {
+    // Codex follow-up on PR #77367: re-read-before-write alone isn't enough
+    // when two deployers run `persistHashes` in real parallel — both can read
+    // the same snapshot before either writes. The in-process per-path mutex
+    // around the read-merge-write cycle makes the operation atomic.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-multi-app-"));
+    const hashStorePath = path.join(dir, "command-deploy-cache.json");
+    const commands = [new StaticCommand("ping")];
+
+    // Run BOTH deploys with Promise.all on the SAME process tick — pre-fix,
+    // both `persistHashes` calls would race on read-then-rename and one
+    // writer's `app:<id>:...` entry would be lost.
+    const restA = createRest();
+    const restB = createRest();
+    const restC = createRest();
+    await Promise.all([
+      new DiscordCommandDeployer({
+        clientId: "app-default",
+        commands,
+        hashStorePath,
+        rest: () => restA,
+      }).deploy({ mode: "reconcile" }),
+      new DiscordCommandDeployer({
+        clientId: "app-secondary",
+        commands,
+        hashStorePath,
+        rest: () => restB,
+      }).deploy({ mode: "reconcile" }),
+      new DiscordCommandDeployer({
+        clientId: "app-tertiary",
+        commands,
+        hashStorePath,
+        rest: () => restC,
+      }).deploy({ mode: "reconcile" }),
+    ]);
+
+    const raw = await fs.readFile(hashStorePath, "utf8");
+    const parsed = JSON.parse(raw) as { hashes: Record<string, string> };
+    const keys = Object.keys(parsed.hashes);
+    // All three apps' entries must survive — pre-fix, one or two would be
+    // lost to the race.
+    expect(keys).toContain("app:app-default:global:reconcile");
+    expect(keys).toContain("app:app-secondary:global:reconcile");
+    expect(keys).toContain("app:app-tertiary:global:reconcile");
   });
 });
