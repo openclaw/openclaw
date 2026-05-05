@@ -78,6 +78,60 @@ describe("Google Meet voice-call gateway", () => {
     expect(gatewayMocks.request).toHaveBeenCalledTimes(3);
   });
 
+  it("forwards agentId and sessionKey on the voicecall.start RPC payload", async () => {
+    const config = resolveGoogleMeetConfig({
+      voiceCall: {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        dtmfDelayMs: 0,
+        postDtmfSpeechDelayMs: 0,
+      },
+    });
+
+    await joinMeetViaVoiceCallGateway({
+      config,
+      dialInNumber: "+15551234567",
+      agentId: "slack-u123",
+      sessionKey: "agent:slack-u123:google-meet:meet_42",
+    });
+
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      1,
+      "voicecall.start",
+      {
+        to: "+15551234567",
+        mode: "conversation",
+        agentId: "slack-u123",
+        sessionKey: "agent:slack-u123:google-meet:meet_42",
+      },
+      { timeoutMs: 30_000 },
+    );
+  });
+
+  it("omits agentId and sessionKey when not provided (back-compat)", async () => {
+    const config = resolveGoogleMeetConfig({
+      voiceCall: {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        dtmfDelayMs: 0,
+        postDtmfSpeechDelayMs: 0,
+      },
+    });
+
+    await joinMeetViaVoiceCallGateway({
+      config,
+      dialInNumber: "+15551234567",
+    });
+
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      1,
+      "voicecall.start",
+      {
+        to: "+15551234567",
+        mode: "conversation",
+      },
+      { timeoutMs: 30_000 },
+    );
+  });
+
   it("skips the intro without failing when the realtime bridge is not ready", async () => {
     gatewayMocks.request
       .mockResolvedValueOnce({ callId: "call-1" })

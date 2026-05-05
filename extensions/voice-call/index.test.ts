@@ -566,9 +566,10 @@ describe("voice-call plugin", () => {
 
   it("tool get_status returns json payload", async () => {
     const { tools } = setup({ provider: "mock" });
-    const tool = tools[0] as {
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
+    const tool = factory({});
     const result = (await tool.execute("id", {
       action: "get_status",
       callId: "call-1",
@@ -578,9 +579,10 @@ describe("voice-call plugin", () => {
 
   it("tool send_dtmf returns json payload", async () => {
     const { tools } = setup({ provider: "mock" });
-    const tool = tools[0] as {
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
+    const tool = factory({});
     const result = (await tool.execute("id", {
       action: "send_dtmf",
       callId: "call-1",
@@ -592,13 +594,32 @@ describe("voice-call plugin", () => {
 
   it("legacy tool status without sid returns error payload", async () => {
     const { tools } = setup({ provider: "mock" });
-    const tool = tools[0] as {
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
       execute: (id: string, params: unknown) => Promise<unknown>;
     };
+    const tool = factory({});
     const result = (await tool.execute("id", { mode: "status" })) as {
       details: { error?: unknown };
     };
     expect(String(result.details.error)).toContain("sid required");
+  });
+
+  it("voice_call factory captures ctx.agentId for initiate_call", async () => {
+    const { tools } = setup({ provider: "mock", fromNumber: "+15550001234" });
+    const factory = tools[0] as (ctx: { agentId?: string }) => {
+      execute: (id: string, params: unknown) => Promise<unknown>;
+    };
+    const tool = factory({ agentId: "slack-u123" });
+    await tool.execute("id", {
+      action: "initiate_call",
+      to: "+15550009999",
+      message: "hello",
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550009999",
+      undefined,
+      expect.objectContaining({ agentId: "slack-u123", message: "hello" }),
+    );
   });
 
   it("CLI latency summarizes turn metrics from JSONL", async () => {

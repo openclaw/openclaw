@@ -1285,6 +1285,49 @@ describe("google-meet plugin", () => {
     });
   });
 
+  it("threads ctx.agentId through the gateway hop, runtime.join, and into joinMeetViaVoiceCallGateway with sessionKey", async () => {
+    const { tools } = setup(
+      { defaultTransport: "twilio" },
+      { toolContext: { agentId: "slack-u123", sessionKey: "agent:slack-u123:slack:channel:c1" } },
+    );
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { session: { id: string } } }>;
+    };
+    const joined = await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "slack-u123",
+        sessionKey: `agent:slack-u123:google-meet:${joined.details.session.id}`,
+      }),
+    );
+  });
+
+  it("omits agentId/sessionKey when ctx.agentId is missing (legacy callers)", async () => {
+    const { tools } = setup({ defaultTransport: "twilio" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ details: { session: { id: string } } }>;
+    };
+    await tool.execute("id", {
+      action: "join",
+      url: "https://meet.google.com/abc-defg-hij",
+      dialInNumber: "+15551234567",
+      pin: "123456",
+    });
+
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: undefined,
+        sessionKey: undefined,
+      }),
+    );
+  });
+
   it("explains that Twilio joins need dial-in details", async () => {
     const { tools } = setup({ defaultTransport: "twilio" });
     const tool = tools[0] as {

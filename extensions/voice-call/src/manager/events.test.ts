@@ -453,6 +453,67 @@ describe("processEvent (functional)", () => {
     expect(call.sessionKey).toBe(`voice:call:${call.callId}`);
   });
 
+  it("freezes the resolved agentId on inbound CallRecord at creation", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        agentId: "owner",
+        numbers: {
+          "+15550002222": {
+            agentId: "support",
+          },
+        },
+      }),
+    });
+
+    const event: NormalizedEvent = {
+      id: "evt-inbound-freeze-routed",
+      type: "call.initiated",
+      callId: "CA-inbound-freeze-routed",
+      providerCallId: "CA-inbound-freeze-routed",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550002222",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.agentId).toBe("support");
+  });
+
+  it("freezes the plugin-default agentId when no per-number override exists", () => {
+    const ctx = createContext({
+      config: VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "plivo",
+        fromNumber: "+15550000000",
+        inboundPolicy: "open",
+        agentId: "owner",
+      }),
+    });
+
+    const event: NormalizedEvent = {
+      id: "evt-inbound-freeze-default",
+      type: "call.initiated",
+      callId: "CA-inbound-freeze-default",
+      providerCallId: "CA-inbound-freeze-default",
+      timestamp: Date.now(),
+      direction: "inbound",
+      from: "+15554444444",
+      to: "+15550000000",
+    };
+
+    processEvent(ctx, event);
+
+    const call = requireFirstActiveCall(ctx);
+    expect(call.agentId).toBe("owner");
+  });
+
   it("applies per-number inbound greeting and stores the matched route key", () => {
     const ctx = createContext({
       config: VoiceCallConfigSchema.parse({
