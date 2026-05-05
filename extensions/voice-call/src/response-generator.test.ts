@@ -235,6 +235,62 @@ describe("generateVoiceResponse", () => {
     );
   });
 
+  it("prefers params.agentId over voiceConfig.agentId when both are set", async () => {
+    const {
+      runtime,
+      runEmbeddedPiAgent,
+      resolveAgentDir,
+      resolveAgentWorkspaceDir,
+      resolveStorePath,
+    } = createAgentRuntime([{ text: '{"spoken":"Per-call agent."}' }]);
+    const coreConfig = {} as CoreConfig;
+
+    await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({
+        agentId: "config-default",
+        responseTimeoutMs: 5000,
+      }),
+      coreConfig,
+      agentRuntime: runtime,
+      callId: "call-456",
+      from: "+15550001111",
+      agentId: "slack-u123",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "slack-u123" });
+    expect(resolveAgentDir).toHaveBeenCalledWith(coreConfig, "slack-u123");
+    expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "slack-u123");
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "slack-u123" }),
+    );
+  });
+
+  it("falls back to voiceConfig.agentId when params.agentId is unset", async () => {
+    const { runtime, runEmbeddedPiAgent, resolveStorePath } = createAgentRuntime([
+      { text: '{"spoken":"Config default."}' },
+    ]);
+
+    await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({
+        agentId: "config-default",
+        responseTimeoutMs: 5000,
+      }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-456",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+    });
+
+    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "config-default" });
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "config-default" }),
+    );
+  });
+
   it("uses the main agent workspace when voice config omits agentId", async () => {
     const {
       runtime,
