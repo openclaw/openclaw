@@ -255,7 +255,7 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime,
     });
 
-    expect(dispatchInboundReplyWithBaseMock).toHaveBeenCalledOnce();
+    expect(dispatchChannelMessageReplyWithBaseMock).toHaveBeenCalledOnce();
     expect(runtime.log).not.toHaveBeenCalledWith(
       "nextcloud-talk: drop room room-group (no mention)",
     );

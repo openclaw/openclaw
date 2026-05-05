@@ -2337,8 +2337,6 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               recordSessionState(evt);
               return;
             case "session.long_running":
-            case "session.recovery.completed":
-            case "session.recovery.requested":
             case "session.stalled":
               return;
             case "session.stuck":
