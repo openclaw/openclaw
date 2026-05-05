@@ -30,6 +30,46 @@ export const WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+
+const DIAG_DEDUPE_CACHE_SIZE = 256;
+const diagEmittedKeys = new Set<string>();
+
+function shouldEmitDiagnostic(warningKey: string): boolean {
+  if (diagEmittedKeys.has(warningKey)) {
+    return false;
+  }
+  diagEmittedKeys.add(warningKey);
+  if (diagEmittedKeys.size > DIAG_DEDUPE_CACHE_SIZE) {
+    // Drop the oldest entry (rough LRU; Set iteration is insertion order).
+    const oldest = diagEmittedKeys.values().next().value;
+    if (oldest !== undefined) {
+      diagEmittedKeys.delete(oldest);
+    }
+  }
+  return true;
+}
+
+function emitLoopDetectionDiagnostic(
+  toolName: string,
+  result: Extract<LoopDetectionResult, { stuck: true }>,
+): void {
+  const key = result.warningKey ?? `${toolName}:${result.detector}`;
+  if (!shouldEmitDiagnostic(key)) {
+    return;
+  }
+  log.info(
+    `[loop-detection-diag] tool=${toolName} detector=${result.detector} ` +
+      `would-fire=${result.level} count=${result.count} ` +
+      `warningKey=${result.warningKey ?? "unknown"} ` +
+      `(detection disabled — set tools.loopDetection.enabled=true to enforce)`,
+  );
+}
+
+/** Test-only: clear the dedupe cache between tests. Not part of public API. */
+export function __resetLoopDetectionDiagnosticCacheForTesting(): void {
+  diagEmittedKeys.clear();
+}
+
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
@@ -494,6 +534,12 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
 /**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
+ *
+ * When `enabled: true`, returns the verdict and emits matching log.warn /
+ * log.error lines. When `enabled: false`, runs the same detection core but
+ * always returns `{ stuck: false }`; if a verdict would have fired, emits a
+ * deduplicated `[loop-detection-diag]` INFO line so silent loops are still
+ * visible in journals without enforcement.
  */
 export function detectToolCallLoop(
   state: SessionState,
@@ -503,9 +549,25 @@ export function detectToolCallLoop(
   scope?: ToolLoopDetectionScope,
 ): LoopDetectionResult {
   const resolvedConfig = resolveLoopDetectionConfig(config);
-  if (!resolvedConfig.enabled) {
-    return { stuck: false };
+  const verdict = computeLoopDetectionVerdict(resolvedConfig, state, toolName, params, scope);
+
+  if (resolvedConfig.enabled) {
+    return verdict;
   }
+
+  if (verdict.stuck) {
+    emitLoopDetectionDiagnostic(toolName, verdict);
+  }
+  return { stuck: false };
+}
+
+function computeLoopDetectionVerdict(
+  resolvedConfig: ResolvedLoopDetectionConfig,
+  state: SessionState,
+  toolName: string,
+  params: unknown,
+  scope?: ToolLoopDetectionScope,
+): LoopDetectionResult {
   const history = selectHistoryForScope(state.toolCallHistory ?? [], scope);
   const currentHash = hashToolCall(toolName, params);
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
@@ -526,9 +588,11 @@ export function detectToolCallLoop(
   }
 
   if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
-    log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
-    );
+    if (resolvedConfig.enabled) {
+      log.error(
+        `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      );
+    }
     return {
       stuck: true,
       level: "critical",
@@ -544,7 +608,9 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.criticalThreshold
   ) {
-    log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    if (resolvedConfig.enabled) {
+      log.error(`Critical polling loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    }
     return {
       stuck: true,
       level: "critical",
@@ -560,7 +626,9 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    if (resolvedConfig.enabled) {
+      log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    }
     return {
       stuck: true,
       level: "warning",
@@ -580,9 +648,11 @@ export function detectToolCallLoop(
     pingPong.count >= resolvedConfig.criticalThreshold &&
     pingPong.noProgressEvidence
   ) {
-    log.error(
-      `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-    );
+    if (resolvedConfig.enabled) {
+      log.error(
+        `Critical ping-pong loop detected: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      );
+    }
     return {
       stuck: true,
       level: "critical",
@@ -595,9 +665,11 @@ export function detectToolCallLoop(
   }
 
   if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
-    log.warn(
-      `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-    );
+    if (resolvedConfig.enabled) {
+      log.warn(
+        `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      );
+    }
     return {
       stuck: true,
       level: "warning",
@@ -619,7 +691,9 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    if (resolvedConfig.enabled) {
+      log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    }
     return {
       stuck: true,
       level: "warning",

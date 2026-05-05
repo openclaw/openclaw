@@ -74,7 +74,7 @@ Per-agent override (optional):
 
 | Field                            | Default | Effect                                                                                                                          |
 | -------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                        | `false` | Master switch for the rolling-history detectors. Setting `false` also disables the post-compaction guard.                       |
+| `enabled`                        | `false` | Master switch. `true` enables enforcement (warnings, suppressions, model-context advisories) and diagnostic logging. `false` disables enforcement and the post-compaction guard, but detector analysis still runs to emit `[loop-detection-diag]` INFO lines (see [Diagnostic mode](#diagnostic-mode-always-on)). |
 | `historySize`                    | `30`    | Number of recent tool calls kept for analysis.                                                                                  |
 | `warningThreshold`               | `10`    | Threshold before a pattern is classified as warning-only.                                                                       |
 | `criticalThreshold`              | `20`    | Threshold for blocking repetitive loop patterns.                                                                                |
@@ -135,6 +135,16 @@ When a loop is detected, OpenClaw reports a loop event and either dampens or blo
 - Suppression follows when patterns persist past the warning threshold.
 - Critical thresholds block the next tool-cycle and surface a clear loop-detection reason in the run record.
 - The post-compaction guard emits `compaction_loop_persisted` errors with the offending tool name and identical-call count.
+
+### Diagnostic mode (always-on)
+
+Even when `tools.loopDetection.enabled: false`, the detector still runs its analysis and emits an INFO-level diagnostic line whenever a loop _would_ have fired. The line is tagged `[loop-detection-diag]` and includes the detector kind, severity that would have applied, current count, and the deduplication key:
+
+```
+[loop-detection-diag] tool=read detector=generic_repeat would-fire=warning count=10 warningKey=generic:read:abc123 (detection disabled — set tools.loopDetection.enabled=true to enforce)
+```
+
+The dedupe cache is a bounded FIFO of 256 distinct `warningKey` entries per process: each key is logged at most once until it is evicted (when the cache is full and a new key arrives, the oldest-inserted key is dropped and could log again on its next occurrence). Repeated hits on an existing key do not refresh its position. This makes silent loops visible in `journalctl` without enabling enforcement, so operators can audit how often detection would have fired before opting in.
 
 ## Related
 
