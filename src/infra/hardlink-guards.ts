@@ -1,1 +1,1 @@
-export { assertNoHardlinkedFinalPath } from "@openclaw/fs-safe";
+export { assertNoHardlinkedFinalPath } from "@openclaw/fs-safe/path-policy";

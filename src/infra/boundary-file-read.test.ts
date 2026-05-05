@@ -1,4 +1,4 @@
-import * as upstream from "@openclaw/fs-safe";
+import * as upstream from "@openclaw/fs-safe/root-file";
 import { describe, expect, it } from "vitest";
 import * as shim from "./boundary-file-read.js";
 

@@ -1,1 +1,1 @@
-export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe";
+export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/trash";

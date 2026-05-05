@@ -1,8 +1,5 @@
-import {
-  readLocalFileSafely as readLocalFileSafelyImpl,
-  FsSafeError,
-  type FsSafeErrorCode,
-} from "@openclaw/fs-safe";
+import { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe";
+import { readLocalFileSafely as readLocalFileSafelyImpl } from "@openclaw/fs-safe/root";
 
 export type FsSafeLikeError = {
   code: FsSafeErrorCode;

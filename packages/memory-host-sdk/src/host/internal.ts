@@ -5,7 +5,13 @@ import path from "node:path";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
-import { isFileMissingError, readRegularFile, statRegularFile } from "./fs-utils.js";
+import {
+  isFileMissingError,
+  readRegularFile,
+  statRegularFile,
+  walkDirectory,
+  type WalkDirectoryEntry,
+} from "./fs-utils.js";
 import {
   buildMemoryMultimodalLabel,
   classifyMemoryMultimodalPath,
@@ -103,36 +109,31 @@ function isAllowedMemoryFilePath(filePath: string, multimodal?: MemoryMultimodal
   );
 }
 
-async function walkDir(
+function shouldDescendMemoryEntry(
+  entry: WalkDirectoryEntry,
+  shouldSkipPath?: (absPath: string) => boolean,
+): boolean {
+  if (shouldSkipPath?.(entry.path)) {
+    return false;
+  }
+  return entry.kind === "directory" && entry.name !== ".openclaw-repair";
+}
+
+async function collectMemoryFilesFromDir(
   dir: string,
   files: string[],
   multimodal?: MemoryMultimodalSettings,
   shouldSkipPath?: (absPath: string) => boolean,
-) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (shouldSkipPath?.(full)) {
-      continue;
-    }
-    if (entry.isSymbolicLink()) {
-      continue;
-    }
-    if (entry.isDirectory()) {
-      if (entry.name === ".openclaw-repair") {
-        continue;
-      }
-      await walkDir(full, files, multimodal, shouldSkipPath);
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    if (!isAllowedMemoryFilePath(full, multimodal)) {
-      continue;
-    }
-    files.push(full);
-  }
+): Promise<void> {
+  const scan = await walkDirectory(dir, {
+    symlinks: "skip",
+    descend: (entry) => shouldDescendMemoryEntry(entry, shouldSkipPath),
+    include: (entry) =>
+      !shouldSkipPath?.(entry.path) &&
+      entry.kind === "file" &&
+      isAllowedMemoryFilePath(entry.path, multimodal),
+  });
+  files.push(...scan.entries.map((entry) => entry.path));
 }
 
 export async function listMemoryFiles(
@@ -166,7 +167,7 @@ export async function listMemoryFiles(
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
-      await walkDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
+      await collectMemoryFilesFromDir(memoryDir, result, multimodal, shouldSkipWorkspaceMemoryPath);
     }
   } catch {}
 
@@ -182,7 +183,12 @@ export async function listMemoryFiles(
           continue;
         }
         if (stat.isDirectory()) {
-          await walkDir(inputPath, result, multimodal, shouldSkipWorkspaceMemoryPath);
+          await collectMemoryFilesFromDir(
+            inputPath,
+            result,
+            multimodal,
+            shouldSkipWorkspaceMemoryPath,
+          );
           continue;
         }
         if (stat.isFile() && isAllowedMemoryFilePath(inputPath, multimodal)) {

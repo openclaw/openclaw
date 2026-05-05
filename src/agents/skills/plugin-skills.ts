@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfigWithResolver,
@@ -130,15 +131,13 @@ function collectSkillTargets(dir: string, targets: Map<string, string>): void {
     return;
   }
 
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
-  } catch {
-    return;
-  }
+  const entries = walkDirectorySync(dir, {
+    maxDepth: 1,
+    symlinks: "skip",
+    include: (entry) => entry.kind === "directory",
+  }).entries;
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const childPath = path.join(dir, entry.name);
+    const childPath = entry.path;
     if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) continue;
     const basename = entry.name;
     const existing = targets.get(basename);

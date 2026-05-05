@@ -1,9 +1,10 @@
+export { isPathInside } from "@openclaw/fs-safe/path";
 export {
-  isPathInside,
   readRegularFile,
   statRegularFile,
   type RegularFileStatResult,
-} from "@openclaw/fs-safe";
+} from "@openclaw/fs-safe/regular-file";
+export { walkDirectory, type WalkDirectoryEntry } from "@openclaw/fs-safe/walk";
 
 export function isFileMissingError(
   err: unknown,

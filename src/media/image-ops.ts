@@ -1,6 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { withTempWorkspace } from "../infra/private-temp-workspace.js";
+import { withTempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
@@ -358,17 +356,16 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
   return null;
 }
 
-async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+async function withImageTemp<T>(fn: (workspace: TempWorkspace) => Promise<T>): Promise<T> {
   return await withTempWorkspace(
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-img-" },
-    async (workspace) => await fn(workspace.dir),
+    fn,
   );
 }
 
 async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.img");
-    await fs.writeFile(input, buffer, { mode: 0o600 });
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.writePrivate("in.img", buffer);
     const { stdout } = await runExec(
       "/usr/bin/sips",
       ["-g", "pixelWidth", "-g", "pixelHeight", input],
@@ -399,10 +396,9 @@ async function sipsResizeToJpeg(params: {
   maxSide: number;
   quality: number;
 }): Promise<Buffer> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.img");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, params.buffer, { mode: 0o600 });
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.writePrivate("in.img", params.buffer);
+    const output = workspace.file("out.jpg");
     await runExec(
       "/usr/bin/sips",
       [
@@ -420,20 +416,19 @@ async function sipsResizeToJpeg(params: {
       ],
       { timeoutMs: 20_000, maxBuffer: 1024 * 1024 },
     );
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
 async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.heic");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, buffer, { mode: 0o600 });
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.writePrivate("in.heic", buffer);
+    const output = workspace.file("out.jpg");
     await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
@@ -494,15 +489,14 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
       return buffer;
   }
 
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.jpg");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, buffer, { mode: 0o600 });
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.writePrivate("in.jpg", buffer);
+    const output = workspace.file("out.jpg");
     await runExec("/usr/bin/sips", [...ops, input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 

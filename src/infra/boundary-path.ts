@@ -5,4 +5,4 @@ export {
   resolveRootPathSync,
   type ResolvedRootPath,
   type RootPathAliasPolicy,
-} from "@openclaw/fs-safe";
+} from "@openclaw/fs-safe/root-path";
