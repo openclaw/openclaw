@@ -24,6 +24,16 @@ function hasNumericMessageThreadId(
   );
 }
 
+function shouldAllowThreadlessFallback(thread?: TelegramThreadSpec | null): boolean {
+  if (thread?.scope === "dm") {
+    return true;
+  }
+  if (thread?.id == null) {
+    return true;
+  }
+  return Math.trunc(thread.id) === 1;
+}
+
 export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
@@ -79,6 +89,7 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
+  const allowThreadlessFallback = shouldAllowThreadlessFallback(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
     replyToMessageId != null
@@ -122,6 +133,9 @@ export function createTelegramDraftStream(params: {
       };
     } catch (err) {
       if (!usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
+        throw err;
+      }
+      if (!allowThreadlessFallback) {
         throw err;
       }
       const threadlessParams: TelegramSendMessageParams = { ...sendParams };
