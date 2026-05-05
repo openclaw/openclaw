@@ -89,6 +89,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- iOS: stabilize chat streaming layout and session flow so streamed updates stay scoped to the active session, recover cleanly after failures, and remain refreshable when chat views reappear. Thanks @eulicesl.
 - Gateway/shutdown: cancel delayed post-ready maintenance during close and suppress maintenance/cron startup after quick restarts, preventing orphaned background timers. Thanks @vincentkoc.
 - Agents/generated media: treat attachment-style message tool actions as completed chat sends, preventing duplicate fallback media posts when generated files were already uploaded.
 - Control UI/sessions: show each session's agent runtime in the Sessions table and allow filtering by runtime labels, matching the Agents panel runtime wording. Thanks @vincentkoc.
