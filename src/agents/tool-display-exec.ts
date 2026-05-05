@@ -396,6 +396,9 @@ export function resolveExecDetail(args: unknown): string | undefined {
     return undefined;
   }
 
+  const node = (record.node as string | undefined) || (record.nodeId as string | undefined);
+  const safeNode = node ? node.replace(/[^a-zA-Z0-9._-]/g, "").trim() : undefined;
+
   const unwrapped = unwrapShellWrapper(raw);
   const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
   const summary = result?.text || "run command";
@@ -409,11 +412,22 @@ export function resolveExecDetail(args: unknown): string | undefined {
   const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
   const compact = compactRawCommand(unwrapped);
-  if (result?.allGeneric !== false && isGenericSummary(summary)) {
-    return cwd ? `${compact} (in ${cwd})` : compact;
+
+  // Build display with node
+  let displayText = summary;
+  if (safeNode) {
+    displayText = `(${safeNode}) ${displayText}`;
   }
 
-  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
+  const displaySummary = cwd ? `${displayText} (in ${cwd})` : displayText;
+
+  // Generic summary case (most common case)
+  if (result?.allGeneric !== false && isGenericSummary(summary)) {
+    const finalCompact = cwd ? `${compact} (in ${cwd})` : compact;
+    return safeNode ? `(${safeNode}) ${finalCompact}` : finalCompact;
+  }
+
+  // Rich summary case
   if (compact && compact !== displaySummary && compact !== summary) {
     return `${displaySummary} · \`${compact}\``;
   }

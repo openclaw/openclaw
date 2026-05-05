@@ -386,7 +386,11 @@
       "emoji": "🛠️",
       "title": "Exec",
       "detailKeys": [
-        "command"
+        "command",
+        "node",
+        "nodeId",
+        "cwd",
+        "workdir"
       ]
     },
     "tool_call": {
