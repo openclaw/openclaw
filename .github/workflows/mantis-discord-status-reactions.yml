@@ -401,6 +401,7 @@ jobs:
             )
             pnpm "${args[@]}"
             cp "$desktop_dir/desktop-browser-smoke.png" "$root/$lane/discord-status-reactions-tool-only-desktop.png"
+            cp "$desktop_dir/desktop-browser-smoke.mp4" "$root/$lane/discord-status-reactions-tool-only-desktop.mp4"
           }
 
           capture_desktop_lane baseline
@@ -431,6 +432,8 @@ jobs:
             echo "- Candidate screenshot: \`candidate/discord-status-reactions-tool-only-timeline.png\`"
             echo "- Baseline desktop screenshot: \`baseline/discord-status-reactions-tool-only-desktop.png\`"
             echo "- Candidate desktop screenshot: \`candidate/discord-status-reactions-tool-only-desktop.png\`"
+            echo "- Baseline desktop video: \`baseline/discord-status-reactions-tool-only-desktop.mp4\`"
+            echo "- Candidate desktop video: \`candidate/discord-status-reactions-tool-only-desktop.mp4\`"
           } > "$root/mantis-report.md"
 
           cat "$root/mantis-report.md" >> "$GITHUB_STEP_SUMMARY"
@@ -491,7 +494,9 @@ jobs:
             "$root/baseline/discord-status-reactions-tool-only-timeline.png" \
             "$root/candidate/discord-status-reactions-tool-only-timeline.png" \
             "$root/baseline/discord-status-reactions-tool-only-desktop.png" \
-            "$root/candidate/discord-status-reactions-tool-only-desktop.png"
+            "$root/candidate/discord-status-reactions-tool-only-desktop.png" \
+            "$root/baseline/discord-status-reactions-tool-only-desktop.mp4" \
+            "$root/candidate/discord-status-reactions-tool-only-desktop.mp4"
           do
             if [[ ! -f "$required" ]]; then
               echo "Missing required QA evidence file: $required" >&2
@@ -519,14 +524,16 @@ jobs:
           cp "$root/candidate/discord-status-reactions-tool-only-timeline.png" "$artifacts_worktree/$artifact_root/candidate.png"
           cp "$root/baseline/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/baseline-desktop.png"
           cp "$root/candidate/discord-status-reactions-tool-only-desktop.png" "$artifacts_worktree/$artifact_root/candidate-desktop.png"
+          cp "$root/baseline/discord-status-reactions-tool-only-desktop.mp4" "$artifacts_worktree/$artifact_root/baseline-desktop.mp4"
+          cp "$root/candidate/discord-status-reactions-tool-only-desktop.mp4" "$artifacts_worktree/$artifact_root/candidate-desktop.mp4"
           cp "$root/comparison.json" "$artifacts_worktree/$artifact_root/comparison.json"
           cp "$root/mantis-report.md" "$artifacts_worktree/$artifact_root/mantis-report.md"
 
           git -C "$artifacts_worktree" add "$artifact_root"
           if git -C "$artifacts_worktree" diff --cached --quiet; then
-            echo "No QA screenshot artifact changes to publish."
+            echo "No QA screenshot/video artifact changes to publish."
           else
-            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord screenshots for PR ${TARGET_PR}"
+            git -C "$artifacts_worktree" commit --quiet -m "qa: publish Mantis Discord evidence for PR ${TARGET_PR}"
             git -C "$artifacts_worktree" push --quiet origin HEAD:qa-artifacts
           fi
 
@@ -557,6 +564,10 @@ jobs:
           | Baseline desktop/VNC browser | Candidate desktop/VNC browser |
           | --- | --- |
           | <img src="${raw_base}/baseline-desktop.png" width="420" alt="Baseline Mantis desktop browser screenshot"> | <img src="${raw_base}/candidate-desktop.png" width="420" alt="Candidate Mantis desktop browser screenshot"> |
+
+          Videos:
+          - [Baseline desktop MP4](${raw_base}/baseline-desktop.mp4)
+          - [Candidate desktop MP4](${raw_base}/candidate-desktop.mp4)
 
           Raw QA files: https://github.com/${GITHUB_REPOSITORY}/tree/qa-artifacts/${artifact_root}
           EOF
