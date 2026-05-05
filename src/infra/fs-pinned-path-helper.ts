@@ -115,6 +115,49 @@ const LOCAL_PINNED_PATH_PYTHON = [
   "        'birthtimeMs': getattr(target_stat, 'st_birthtime', target_stat.st_ctime) * 1000,",
   "    }))",
   "",
+  "def maybe_apply_rename_test_race(point, source_parent_fd, source_basename):",
+  "    raw = os.environ.get('OPENCLAW_TEST_PINNED_PATH_HELPER_RACE')",
+  "    if not raw:",
+  "        return",
+  "    try:",
+  "        payload = json.loads(raw)",
+  "    except Exception:",
+  "        return",
+  "    if payload.get('point') != point:",
+  "        return",
+  "    if payload.get('action') != 'replace-source-with-symlink':",
+  "        return",
+  "    target = payload.get('target')",
+  "    if not isinstance(target, str):",
+  "        return",
+  "    try:",
+  "        current_stat = os.lstat(source_basename, dir_fd=source_parent_fd)",
+  "        if stat.S_ISDIR(current_stat.st_mode) and not stat.S_ISLNK(current_stat.st_mode):",
+  "            os.rmdir(source_basename, dir_fd=source_parent_fd)",
+  "        else:",
+  "            os.unlink(source_basename, dir_fd=source_parent_fd)",
+  "    except FileNotFoundError:",
+  "        pass",
+  "    os.symlink(target, source_basename, dir_fd=source_parent_fd)",
+  "",
+  "def same_stat_identity(left_stat, right_stat):",
+  "    return (",
+  "        getattr(left_stat, 'st_dev', None) == getattr(right_stat, 'st_dev', None)",
+  "        and getattr(left_stat, 'st_ino', None) == getattr(right_stat, 'st_ino', None)",
+  "    )",
+  "",
+  "def remove_leaf(parent_fd, basename, leaf_stat):",
+  "    if stat.S_ISDIR(leaf_stat.st_mode) and not stat.S_ISLNK(leaf_stat.st_mode):",
+  "        os.rmdir(basename, dir_fd=parent_fd)",
+  "    else:",
+  "        os.unlink(basename, dir_fd=parent_fd)",
+  "",
+  "def validate_renamed_destination(dest_parent_fd, dest_basename, expected_stat):",
+  "    dest_stat = os.lstat(dest_basename, dir_fd=dest_parent_fd)",
+  "    if stat.S_ISLNK(dest_stat.st_mode) or not same_stat_identity(dest_stat, expected_stat):",
+  "        remove_leaf(dest_parent_fd, dest_basename, dest_stat)",
+  "        raise OSError(errno.ELOOP, 'rename endpoint changed during operation', dest_basename)",
+  "",
   "def rename_within_root(root_fd, source_segments, dest_segments, overwrite):",
   "    if not source_segments or not dest_segments:",
   "        raise OSError(errno.EPERM, 'refusing to rename root path')",
@@ -135,13 +178,17 @@ const LOCAL_PINNED_PATH_PYTHON = [
   "                raise OSError(errno.ELOOP, 'refusing to rename over symlink destination', dest_basename)",
   "        except FileNotFoundError:",
   "            pass",
+  "        maybe_apply_rename_test_race('after-endpoint-lstat', source_parent_fd, source_basename)",
   "        if not overwrite:",
   "            if not stat.S_ISREG(source_stat.st_mode):",
   "                raise OSError(errno.EPERM, 'no-overwrite rename only supports regular files', source_basename)",
   "            os.link(source_basename, dest_basename, src_dir_fd=source_parent_fd, dst_dir_fd=dest_parent_fd, follow_symlinks=False)",
+  "            validate_renamed_destination(dest_parent_fd, dest_basename, source_stat)",
   "            os.unlink(source_basename, dir_fd=source_parent_fd)",
+  "            validate_renamed_destination(dest_parent_fd, dest_basename, source_stat)",
   "            return",
   "        os.rename(source_basename, dest_basename, src_dir_fd=source_parent_fd, dst_dir_fd=dest_parent_fd)",
+  "        validate_renamed_destination(dest_parent_fd, dest_basename, source_stat)",
   "    finally:",
   "        os.close(source_parent_fd)",
   "        if dest_parent_fd is not None:",
@@ -206,6 +253,14 @@ function buildPinnedPathError(stderr: string, code: number | null, signal: NodeJ
   );
 }
 
+function buildPinnedPathHelperEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (process.env.NODE_ENV !== "test" && process.env.VITEST !== "true") {
+    delete env.OPENCLAW_TEST_PINNED_PATH_HELPER_RACE;
+  }
+  return env;
+}
+
 export function isPinnedPathHelperSpawnError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -238,6 +293,7 @@ export async function runPinnedPathHelper(params: {
       params.overwrite === true ? "1" : "0",
     ],
     {
+      env: buildPinnedPathHelperEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );

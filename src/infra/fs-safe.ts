@@ -188,6 +188,21 @@ function parsePinnedStatPayload(stdout: string): SafePathStats {
   return result.data;
 }
 
+function parsePinnedReaddirPayload(stdout: string): string[] {
+  let entries: unknown;
+  try {
+    entries = JSON.parse(stdout);
+  } catch (err) {
+    throw new SafeOpenError("invalid-path", "invalid directory listing result", {
+      cause: err instanceof Error ? err : undefined,
+    });
+  }
+  if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
+    throw new SafeOpenError("invalid-path", "invalid directory listing result");
+  }
+  return entries;
+}
+
 async function expandRelativePathWithHome(relativePath: string): Promise<string> {
   let home = process.env.HOME || process.env.USERPROFILE || os.homedir();
   try {
@@ -460,8 +475,10 @@ export async function statPathWithinRoot(params: {
       throw err;
     }
   }
-  const expectedFollowedStat =
-    params.followSymlinks !== false ? await fs.stat(realPath) : undefined;
+  if (!isPathInside(resolved.rootWithSep, realPath)) {
+    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
+  }
+  const expectedPinnedStat = params.followSymlinks !== false ? await fs.lstat(realPath) : undefined;
   let stat: SafePathStats;
   try {
     if (process.platform === "win32") {
@@ -471,12 +488,15 @@ export async function statPathWithinRoot(params: {
         operation: "stat",
         rootPath: resolved.rootReal,
         relativePath: path.relative(resolved.rootReal, realPath).split(path.sep).join("/"),
-        overwrite: params.followSymlinks !== false,
+        overwrite: false,
       });
       stat = parsePinnedStatPayload(stdout);
+      if (params.followSymlinks !== false && stat.isSymbolicLink()) {
+        throw new SafeOpenError("outside-workspace", "file changed while statting");
+      }
       if (
-        expectedFollowedStat !== undefined &&
-        !sameFileIdentity({ dev: stat.dev, ino: stat.ino }, expectedFollowedStat)
+        expectedPinnedStat !== undefined &&
+        !sameFileIdentity({ dev: stat.dev, ino: stat.ino }, expectedPinnedStat)
       ) {
         throw new SafeOpenError("outside-workspace", "file changed while statting");
       }
@@ -495,9 +515,6 @@ export async function statPathWithinRoot(params: {
       }
       throw normalized;
     }
-  }
-  if (!isPathInside(resolved.rootWithSep, realPath)) {
-    throw new SafeOpenError("outside-workspace", "file is outside workspace root");
   }
 
   return {
@@ -533,11 +550,7 @@ export async function readdirWithinRoot(params: {
       rootPath: resolved.rootReal,
       relativePath: resolved.relativePosix,
     });
-    const entries: unknown = JSON.parse(stdout);
-    if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string")) {
-      throw new SafeOpenError("invalid-path", "invalid directory listing result");
-    }
-    return entries;
+    return parsePinnedReaddirPayload(stdout);
   } catch (error) {
     if (isPinnedPathHelperSpawnError(error)) {
       throw new SafeOpenError("invalid-path", "safe directory listing helper unavailable", {
