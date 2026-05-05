@@ -156,6 +156,9 @@ export class RealtimeCallHandler {
     wss.handleUpgrade(request, socket, head, (ws) => {
       let bridge: ActiveRealtimeVoiceBridge | null = null;
       let initialized = false;
+      let activeCallSid = "unknown";
+      let lastMediaTimestamp: number | undefined;
+      let lastMediaGapWarnAt = 0;
 
       ws.on("message", (data: Buffer) => {
         try {
@@ -169,6 +172,7 @@ export class RealtimeCallHandler {
             const streamSid =
               typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
             const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
+            activeCallSid = callSid;
             const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
             if (!nextBridge) {
               return;
@@ -186,10 +190,25 @@ export class RealtimeCallHandler {
           if (msg.event === "media" && typeof mediaData?.payload === "string") {
             const audio = Buffer.from(mediaData.payload, "base64");
             bridge.sendAudio(audio);
-            if (typeof mediaData.timestamp === "number") {
-              bridge.setMediaTimestamp(mediaData.timestamp);
-            } else if (typeof mediaData.timestamp === "string") {
-              bridge.setMediaTimestamp(Number.parseInt(mediaData.timestamp, 10));
+            const mediaTimestamp =
+              typeof mediaData.timestamp === "number"
+                ? mediaData.timestamp
+                : typeof mediaData.timestamp === "string"
+                  ? Number.parseInt(mediaData.timestamp, 10)
+                  : Number.NaN;
+            if (Number.isFinite(mediaTimestamp)) {
+              if (lastMediaTimestamp !== undefined) {
+                const gapMs = mediaTimestamp - lastMediaTimestamp;
+                const now = Date.now();
+                if ((gapMs > 120 || gapMs < 0) && now - lastMediaGapWarnAt > 5_000) {
+                  lastMediaGapWarnAt = now;
+                  console.warn(
+                    `[voice-call] realtime media timestamp gap providerCallId=${activeCallSid} gapMs=${gapMs} timestamp=${mediaTimestamp}`,
+                  );
+                }
+              }
+              lastMediaTimestamp = mediaTimestamp;
+              bridge.setMediaTimestamp(mediaTimestamp);
             }
             return;
           }
@@ -289,11 +308,17 @@ export class RealtimeCallHandler {
         return false;
       }
       if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
+        console.warn(
+          `[voice-call] realtime outbound websocket backpressure before send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
+        );
         ws.close(1013, "Backpressure: send buffer exceeded");
         return false;
       }
       ws.send(JSON.stringify(message));
       if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
+        console.warn(
+          `[voice-call] realtime outbound websocket backpressure after send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
+        );
         ws.close(1013, "Backpressure: send buffer exceeded");
         return false;
       }
@@ -303,6 +328,9 @@ export class RealtimeCallHandler {
       streamSid,
       sendJson,
       onBackpressure: () => {
+        console.warn(
+          `[voice-call] realtime paced audio backpressure callId=${callId} providerCallId=${callSid}`,
+        );
         if (ws.readyState === WebSocket.OPEN) {
           ws.close(1013, "Backpressure: paced audio queue exceeded");
         }
@@ -322,7 +350,10 @@ export class RealtimeCallHandler {
           audioPacer.sendAudio(muLaw);
         },
         clearAudio: () => {
-          audioPacer.clearAudio();
+          const clearedBytes = audioPacer.clearAudio();
+          console.log(
+            `[voice-call] realtime outbound audio clear requested callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+          );
         },
         sendMark: (markName) => {
           audioPacer.sendMark(markName);
@@ -375,7 +406,6 @@ export class RealtimeCallHandler {
         this.activeBridgesByCallId.delete(callSid);
         this.partialUserTranscriptsByCallId.delete(callId);
         if (reason !== "error") {
-          emitCallEnd("completed");
           return;
         }
         emitCallEnd("error");
@@ -398,7 +428,10 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
-        audioPacer.clearAudio();
+        const clearedBytes = audioPacer.clearAudio();
+        console.log(
+          `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+        );
       }
       sendAudioToSession(audio);
     };

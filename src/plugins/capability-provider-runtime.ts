@@ -326,6 +326,53 @@ function collectRequestedMediaUnderstandingProviderIds(
   return requested;
 }
 
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function getPluginEntryConfig(
+  cfg: OpenClawConfig | undefined,
+  pluginId: string,
+): Record<string, unknown> | undefined {
+  return getRecord(getRecord(cfg?.plugins?.entries)?.[pluginId])?.config as
+    | Record<string, unknown>
+    | undefined;
+}
+
+function collectRequestedRealtimeVoiceProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
+  const requested = new Set<string>();
+
+  const voiceCallRealtime = getRecord(getPluginEntryConfig(cfg, "voice-call")?.realtime);
+  addStringValue(requested, voiceCallRealtime?.provider);
+  addObjectKeys(requested, voiceCallRealtime?.providers);
+
+  const googleMeetRealtime = getRecord(getPluginEntryConfig(cfg, "google-meet")?.realtime);
+  addStringValue(requested, googleMeetRealtime?.voiceProvider);
+  addStringValue(requested, googleMeetRealtime?.provider);
+  addObjectKeys(requested, googleMeetRealtime?.providers);
+
+  return requested;
+}
+
+function collectRequestedRealtimeTranscriptionProviderIds(
+  cfg: OpenClawConfig | undefined,
+): Set<string> {
+  const requested = new Set<string>();
+
+  const voiceCallStreaming = getRecord(getPluginEntryConfig(cfg, "voice-call")?.streaming);
+  addStringValue(requested, voiceCallStreaming?.provider);
+  addObjectKeys(requested, voiceCallStreaming?.providers);
+
+  const googleMeetRealtime = getRecord(getPluginEntryConfig(cfg, "google-meet")?.realtime);
+  addStringValue(requested, googleMeetRealtime?.transcriptionProvider);
+  addStringValue(requested, googleMeetRealtime?.provider);
+  addObjectKeys(requested, googleMeetRealtime?.providers);
+
+  return requested;
+}
+
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
@@ -333,6 +380,10 @@ function collectRequestedCapabilityProviderIds(params: {
   switch (params.key) {
     case "speechProviders":
       return collectRequestedSpeechProviderIds(params.cfg);
+    case "realtimeTranscriptionProviders":
+      return collectRequestedRealtimeTranscriptionProviderIds(params.cfg);
+    case "realtimeVoiceProviders":
+      return collectRequestedRealtimeVoiceProviderIds(params.cfg);
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
@@ -361,7 +412,12 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
   requested: Set<string>;
   entries: PluginRegistry[K];
 }): PluginRegistry[K] {
-  if (params.key !== "speechProviders" && params.key !== "mediaUnderstandingProviders") {
+  if (
+    params.key !== "speechProviders" &&
+    params.key !== "realtimeTranscriptionProviders" &&
+    params.key !== "realtimeVoiceProviders" &&
+    params.key !== "mediaUnderstandingProviders"
+  ) {
     return [] as unknown as PluginRegistry[K];
   }
   if (params.requested.size === 0) {
@@ -386,7 +442,7 @@ function resolveRequestedCapabilityPluginIds(params: {
   cfg?: OpenClawConfig;
   requested?: Set<string>;
 }): CapabilityPluginResolution | undefined {
-  if (params.key !== "speechProviders" || !params.requested || params.requested.size === 0) {
+  if (!params.requested || params.requested.size === 0) {
     return undefined;
   }
   const runtimePluginIds = new Set<string>();
@@ -551,17 +607,23 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
-  let requestedSpeechProviders: Set<string> | undefined;
-  if (params.key === "speechProviders") {
-    requestedSpeechProviders =
+  let requestedProviders: Set<string> | undefined;
+  if (
+    params.key === "speechProviders" ||
+    params.key === "realtimeTranscriptionProviders" ||
+    params.key === "realtimeVoiceProviders"
+  ) {
+    requestedProviders =
       missingRequestedProviders ??
-      (activeProviders.length === 0 ? collectRequestedSpeechProviderIds(params.cfg) : undefined);
+      (activeProviders.length === 0
+        ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
+        : undefined);
   }
   const pluginIds =
     resolveRequestedCapabilityPluginIds({
       key: params.key,
       cfg: params.cfg,
-      requested: requestedSpeechProviders,
+      requested: requestedProviders,
     }) ??
     resolveCapabilityPluginIds({
       key: params.key,
@@ -581,7 +643,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     cfg: params.cfg,
     bundledCompatPluginIds: pluginIds.bundledCompatPluginIds,
     loadOptions,
-    requested: requestedSpeechProviders,
+    requested: requestedProviders,
   });
   if (params.key !== "memoryEmbeddingProviders") {
     const mergeLoadedProviders =

@@ -346,7 +346,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("marks realtime calls ended when the provider closes normally", async () => {
+  it("leaves realtime calls active when the provider closes normally", async () => {
     let callbacks:
       | {
           onClose?: (reason: "completed" | "error") => void;
@@ -402,16 +402,15 @@ describe("RealtimeCallHandler path routing", () => {
 
         ws.send(JSON.stringify({ event: "stop" }));
 
-        await vi.waitFor(() => {
-          expect(processEvent).toHaveBeenCalledWith(
-            expect.objectContaining({
-              type: "call.ended",
-              callId: "call-1",
-              providerCallId: "CA-complete",
-              reason: "completed",
-            }),
-          );
-        });
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        expect(processEvent).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.ended",
+            callId: "call-1",
+            providerCallId: "CA-complete",
+            reason: "completed",
+          }),
+        );
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
