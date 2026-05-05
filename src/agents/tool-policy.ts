@@ -96,6 +96,7 @@ export type AllowlistResolution = {
 };
 
 export const DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY = "__openclaw_default_plugin_tools__";
+export const IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY = "__openclaw_implicit_core_tools__";
 
 export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefined>): string[] {
   const entries: string[] = [];
@@ -116,6 +117,7 @@ export function collectExplicitAllowlist(policies: Array<ToolPolicyLike | undefi
       }
     }
     if (policy[IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW] === true) {
+      entries.push(IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY);
       entries.push(DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY);
     }
   }
