@@ -127,7 +127,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
   it("message_end block-replies visible text when text_end streamed only silent NO_REPLY chunks", async () => {
     const onBlockReply = vi.fn();
-    const { emit } = createTextEndBlockReplyHarness({ onBlockReply });
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextEnd({ emit, content: "NO_REPLY" });
@@ -148,6 +148,7 @@ describe("subscribeEmbeddedPiSession", () => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
     expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Final visible reply.");
+    expect(subscription.assistantTexts).toEqual(["Final visible reply."]);
   });
 
   it("does not duplicate when message_end flushes and a late text_end arrives", async () => {
