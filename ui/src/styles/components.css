@@ -718,6 +718,16 @@
   background: rgba(239, 68, 68, 0.15);
 }
 
+.btn--soft-danger {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--border));
+  background: color-mix(in srgb, var(--danger-subtle) 68%, transparent);
+  color: var(--danger);
+}
+
+.btn--soft-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger-subtle) 86%, transparent);
+}
+
 .btn--sm {
   padding: 6px 10px;
   font-size: 12px;
@@ -2394,6 +2404,33 @@
   overflow: hidden;
 }
 
+.sessions-page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.sessions-store-path {
+  display: inline-flex;
+  max-width: min(720px, 100%);
+  margin-top: 8px;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-muted) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: var(--radius-full);
+  font-family: var(--mono);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.sessions-refresh-button svg {
+  width: 15px;
+  height: 15px;
+}
+
 .data-table-toolbar {
   display: flex;
   align-items: center;
@@ -2404,13 +2441,32 @@
 }
 
 .data-table-search {
+  position: relative;
   flex: 1;
   min-width: 0;
 }
 
+.data-table-search__icon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  display: inline-flex;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.data-table-search__icon svg {
+  width: 15px;
+  height: 15px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+}
+
 .data-table-search input {
   width: 100%;
-  padding: 6px 10px;
+  padding: 7px 10px 7px 32px;
   font-size: 13px;
   color: var(--text);
   background: var(--card);
@@ -2535,6 +2591,14 @@
   cursor: pointer;
 }
 
+.session-data-row--expanded td {
+  background: color-mix(in srgb, var(--accent-subtle) 28%, var(--card));
+}
+
+.session-data-row--expanded td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .session-data-row--expandable:focus-visible {
   outline: 1px solid var(--border-strong);
   outline-offset: -2px;
@@ -2582,6 +2646,289 @@
 .session-token-cell {
   min-width: 112px;
   white-space: nowrap;
+}
+
+.session-label-input,
+.session-inline-select {
+  width: 100%;
+  max-width: 150px;
+  min-height: 32px;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  color: var(--text);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.session-label-input::placeholder {
+  color: var(--muted);
+}
+
+.session-label-input:focus,
+.session-inline-select:focus {
+  border-color: var(--border-strong);
+  box-shadow: var(--focus-ring);
+}
+
+.session-label-input:disabled,
+.session-inline-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.session-inline-select {
+  min-width: 98px;
+  cursor: pointer;
+}
+
+.session-token-meter {
+  display: grid;
+  gap: 5px;
+  min-width: 142px;
+}
+
+.session-token-meter__label,
+.session-token-value {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+}
+
+.session-token-meter__track {
+  height: 5px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.session-token-meter__track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+}
+
+.session-compaction-cell {
+  display: grid;
+  gap: 5px;
+  min-width: 150px;
+}
+
+.session-compaction-cell--empty {
+  min-width: 120px;
+}
+
+.session-compaction-empty,
+.session-compaction-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-checkpoint-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: fit-content;
+  min-height: 30px;
+  padding: 5px 9px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease;
+}
+
+.session-checkpoint-toggle:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-subtle) 90%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+}
+
+.session-checkpoint-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.session-checkpoint-toggle:disabled {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.session-checkpoint-toggle__icon,
+.session-checkpoint-toggle__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-checkpoint-toggle__icon svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+}
+
+.session-checkpoint-details-row td {
+  padding: 0;
+  background: color-mix(in srgb, var(--bg-elevated) 82%, var(--card));
+  border-bottom: 1px solid var(--border);
+}
+
+.session-checkpoint-panel {
+  display: grid;
+  gap: 14px;
+  margin: 0 10px 12px calc(var(--data-table-checkbox-col-width) + 10px);
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: var(--radius-lg);
+  background:
+    radial-gradient(
+      circle at 20% 0%,
+      color-mix(in srgb, var(--accent-subtle) 55%, transparent),
+      transparent 42%
+    ),
+    var(--card);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.12);
+}
+
+.session-checkpoint-panel__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.session-checkpoint-panel__eyebrow {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.session-checkpoint-panel__title {
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.session-checkpoint-panel__sub {
+  margin-top: 3px;
+  max-width: 620px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-checkpoint-panel__stats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.session-checkpoint-panel__stats span {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  padding: 5px 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--bg-muted) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: var(--radius-full);
+  font-size: 12px;
+}
+
+.session-checkpoint-panel__stats strong {
+  color: var(--text);
+}
+
+.session-checkpoint-list {
+  display: grid;
+  gap: 10px;
+}
+
+.session-checkpoint-card {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.session-checkpoint-card__timeline {
+  position: relative;
+  min-height: 100%;
+}
+
+.session-checkpoint-card__timeline::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 20px;
+  bottom: -10px;
+  width: 1px;
+  background: color-mix(in srgb, var(--accent) 24%, var(--border));
+}
+
+.session-checkpoint-card__timeline::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 12px;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-subtle);
+}
+
+.session-checkpoint-card__body {
+  display: grid;
+  gap: 9px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 68%, var(--card));
+}
+
+.session-checkpoint-card__topline,
+.session-checkpoint-card__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.session-checkpoint-card__delta {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.session-checkpoint-card__summary {
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-checkpoint-empty {
+  padding: 18px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-muted) 56%, transparent);
 }
 
 /* Checkbox column */

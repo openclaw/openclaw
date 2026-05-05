@@ -420,6 +420,62 @@ describe("sessions view", () => {
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
     expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+    const checkpointToggle = container.querySelector(".session-checkpoint-toggle");
+    expect(checkpointToggle?.textContent).toContain("1 checkpoint");
+  });
+
+  it("renders polished checkpoint details with a timeline and explicit actions", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 41123,
+            contextTokens: 200000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+        checkpointItemsByKey: {
+          "agent:main:main": [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 88104,
+              tokensAfter: 41206,
+              summary: "Kept the current UI design thread and preserved earlier setup notes.",
+              preCompaction: { sessionId: "session-1" },
+              postCompaction: { sessionId: "session-1" },
+            },
+          ],
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".session-checkpoint-panel__title")?.textContent).toContain(
+      "Saved checkpoints for this session",
+    );
+    expect(container.querySelector(".session-checkpoint-card__delta")?.textContent).toContain(
+      "88,104 → 41,206 tokens",
+    );
+    expect(container.querySelector(".session-checkpoint-card__summary")?.textContent).toContain(
+      "current UI design thread",
+    );
+    expect(container.textContent).toContain("Branch from checkpoint");
+    expect(container.textContent).toContain("Restore checkpoint");
   });
 
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
