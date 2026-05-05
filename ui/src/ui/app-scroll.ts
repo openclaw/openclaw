@@ -2,6 +2,10 @@
 const NEAR_BOTTOM_THRESHOLD = 450;
 const HEADER_HIDE_SCROLL_DELTA = 12;
 const HEADER_SHOW_TOP_THRESHOLD = 24;
+/** Small upward movement should stop auto-follow before the user fully leaves the old threshold. */
+const MANUAL_SCROLL_RELEASE_THRESHOLD = 24;
+/** Re-enable follow only once the user is effectively back at the bottom. */
+const FOLLOW_REACQUIRE_THRESHOLD = 24;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -13,26 +17,59 @@ type ScrollHost = {
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
   chatHeaderControlsHidden: boolean;
+  chatFollowLocked: boolean;
+  chatSmoothAutoScrolling: boolean;
   chatNewMessagesBelow: boolean;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
 };
 
-function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null {
-  return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
-}
-
-export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
+function cancelPendingChatScroll(host: ScrollHost) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
+    host.chatScrollFrame = null;
   }
   if (host.chatScrollTimeout != null) {
     clearTimeout(host.chatScrollTimeout);
     host.chatScrollTimeout = null;
   }
+}
+
+function canConsumeVerticalWheelDelta(node: HTMLElement, deltaY: number) {
+  const overflowY = getComputedStyle(node).overflowY;
+  const hasVerticalScrollRange = node.scrollHeight - node.clientHeight > 1;
+  const canScrollVertically =
+    (overflowY === "auto" || overflowY === "scroll" || overflowY === "overlay") &&
+    hasVerticalScrollRange;
+  if (!canScrollVertically) {
+    return false;
+  }
+  if (deltaY < 0) {
+    return node.scrollTop > 1;
+  }
+  return node.scrollTop + node.clientHeight < node.scrollHeight - 1;
+}
+
+function hasNestedScrollableAncestor(
+  target: EventTarget | null,
+  container: HTMLElement,
+  deltaY: number,
+) {
+  let node = target instanceof HTMLElement ? target : null;
+  while (node && node !== container) {
+    if (canConsumeVerticalWheelDelta(node, deltaY)) {
+      return true;
+    }
+    node = node.parentElement;
+  }
+  return false;
+}
+
+export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
+  cancelPendingChatScroll(host);
   const pickScrollTarget = () => {
-    const container = queryHost(host, ".chat-thread") as HTMLElement | null;
+    const container = host.querySelector(".chat-thread") as HTMLElement | null;
     if (container) {
       const overflowY = getComputedStyle(container).overflowY;
       const canScroll =
@@ -53,13 +90,14 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
       if (!target) {
         return;
       }
-      const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-
       // force=true only overrides when we haven't auto-scrolled yet (initial load).
       // After initial load, respect the user's scroll position.
       const effectiveForce = force && !host.chatHasAutoScrolled;
+      const hasVerticalScrollRange = target.scrollHeight - target.clientHeight > 1;
       const shouldStick =
-        effectiveForce || host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+        effectiveForce ||
+        (host.chatUserNearBottom && !host.chatFollowLocked) ||
+        !hasVerticalScrollRange;
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
@@ -81,6 +119,13 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         target.scrollTop = scrollTop;
       }
       host.chatUserNearBottom = true;
+      host.chatFollowLocked = false;
+      host.chatSmoothAutoScrolling = smoothEnabled;
+      // Smooth scroll events compare against this baseline; repeated stream ticks reset it
+      // to the latest in-flight position so only real upward movement releases follow.
+      host.chatLastScrollTop = smoothEnabled
+        ? Math.max(target.scrollTop, 0)
+        : Math.max(0, target.scrollHeight - target.clientHeight);
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
       host.chatScrollTimeout = window.setTimeout(() => {
@@ -89,17 +134,16 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         if (!latest) {
           return;
         }
-        const latestDistanceFromBottom =
-          latest.scrollHeight - latest.scrollTop - latest.clientHeight;
         const shouldStickRetry =
-          effectiveForce ||
-          host.chatUserNearBottom ||
-          latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+          effectiveForce || (host.chatUserNearBottom && !host.chatFollowLocked);
         if (!shouldStickRetry) {
           return;
         }
         latest.scrollTop = latest.scrollHeight;
         host.chatUserNearBottom = true;
+        host.chatFollowLocked = false;
+        host.chatSmoothAutoScrolling = false;
+        host.chatLastScrollTop = Math.max(0, latest.scrollHeight - latest.clientHeight);
       }, retryDelay);
     });
   });
@@ -112,7 +156,7 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   void host.updateComplete.then(() => {
     host.logsScrollFrame = requestAnimationFrame(() => {
       host.logsScrollFrame = null;
-      const container = queryHost(host, ".log-stream") as HTMLElement | null;
+      const container = host.querySelector(".log-stream") as HTMLElement | null;
       if (!container) {
         return;
       }
@@ -132,14 +176,15 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
-  const scrollTop = Math.max(0, container.scrollTop);
-  const delta = scrollTop - host.chatLastScrollTop;
-  host.chatLastScrollTop = scrollTop;
-  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-  host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const currentScrollTop = Math.max(0, container.scrollTop);
+  const delta = currentScrollTop - host.chatLastScrollTop;
+  const distanceFromBottom = container.scrollHeight - currentScrollTop - container.clientHeight;
+  const nearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const scrollingUp = currentScrollTop < host.chatLastScrollTop;
+  const backAtBottom = distanceFromBottom <= FOLLOW_REACQUIRE_THRESHOLD;
   const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
 
-  if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
+  if (!hasUsefulScroll || currentScrollTop <= HEADER_SHOW_TOP_THRESHOLD || nearBottom) {
     host.chatHeaderControlsHidden = false;
   } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
     host.chatHeaderControlsHidden = true;
@@ -147,10 +192,53 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
     host.chatHeaderControlsHidden = false;
   }
 
+  if (host.chatSmoothAutoScrolling) {
+    if (scrollingUp && distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD) {
+      host.chatSmoothAutoScrolling = false;
+      host.chatUserNearBottom = false;
+      host.chatFollowLocked = true;
+    } else if (backAtBottom || !scrollingUp) {
+      host.chatSmoothAutoScrolling = false;
+    }
+  } else if (
+    host.chatUserNearBottom &&
+    scrollingUp &&
+    distanceFromBottom > MANUAL_SCROLL_RELEASE_THRESHOLD
+  ) {
+    host.chatUserNearBottom = false;
+    host.chatFollowLocked = true;
+  } else if (backAtBottom && !scrollingUp) {
+    host.chatUserNearBottom = true;
+    host.chatFollowLocked = false;
+  } else if (!host.chatFollowLocked && nearBottom && !scrollingUp) {
+    host.chatUserNearBottom = true;
+  }
+
+  host.chatLastScrollTop = currentScrollTop;
   // Clear the "new messages below" indicator when user scrolls back to bottom.
-  if (host.chatUserNearBottom) {
+  if (host.chatUserNearBottom && !host.chatFollowLocked) {
     host.chatNewMessagesBelow = false;
   }
+}
+
+export function handleChatWheelIntent(host: ScrollHost, event: WheelEvent) {
+  if (event.deltaY >= 0) {
+    return;
+  }
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container || container.scrollHeight - container.clientHeight <= 1) {
+    return;
+  }
+  if (hasNestedScrollableAncestor(event.target, container, event.deltaY)) {
+    return;
+  }
+  if (!host.chatUserNearBottom && host.chatFollowLocked) {
+    return;
+  }
+  cancelPendingChatScroll(host);
+  host.chatSmoothAutoScrolling = false;
+  host.chatUserNearBottom = false;
+  host.chatFollowLocked = true;
 }
 
 export function handleLogsScroll(host: ScrollHost, event: Event) {
@@ -165,8 +253,10 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
-  host.chatLastScrollTop = 0;
   host.chatHeaderControlsHidden = false;
+  host.chatFollowLocked = false;
+  host.chatSmoothAutoScrolling = false;
+  host.chatLastScrollTop = 0;
   host.chatNewMessagesBelow = false;
 }
 
@@ -188,7 +278,7 @@ export function observeTopbar(host: ScrollHost) {
   if (typeof ResizeObserver === "undefined") {
     return;
   }
-  const topbar = queryHost(host, ".topbar");
+  const topbar = host.querySelector(".topbar");
   if (!topbar) {
     return;
   }
