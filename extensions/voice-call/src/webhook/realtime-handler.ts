@@ -35,6 +35,7 @@ const DEFAULT_HOST = "localhost:8443";
 const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
+const FORCED_CONSULT_NATIVE_DEDUPE_MS = 2_000;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
@@ -117,7 +118,16 @@ function shouldInsertTranscriptSpace(base: string, next: string): boolean {
   if (!base || !next) {
     return false;
   }
-  if (/[\s(\[{"']$/.test(base) || /^[\s,.;:!?)]/.test(next)) {
+  const last = base.at(-1);
+  if (
+    /\s$/.test(base) ||
+    last === "(" ||
+    last === "[" ||
+    last === "{" ||
+    last === '"' ||
+    last === "'" ||
+    /^[\s,.;:!?)]/.test(next)
+  ) {
     return false;
   }
   return true;
@@ -218,15 +228,35 @@ type RealtimeSpeakResult = {
   error?: string;
 };
 
+type ForcedConsultState = {
+  promise: Promise<unknown>;
+  sendSpeechPrompt: boolean;
+  completedAt?: number;
+};
+
+type NativeConsultState = {
+  startedAt: number;
+  promise: Promise<unknown>;
+  partialUserTranscript?: string;
+};
+
+type TelephonyCloseReason = "completed" | "error";
+
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
+  private readonly activeTelephonyClosersByCallId = new Map<
+    string,
+    (reason: TelephonyCloseReason) => void
+  >();
   private readonly partialUserTranscriptsByCallId = new Map<string, string>();
   private readonly partialUserTranscriptUpdatedAtByCallId = new Map<string, number>();
   private readonly forcedConsultTimersByCallId = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly forcedConsultInFlightByCallId = new Set<string>();
+  private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
   private readonly lastProviderConsultAtByCallId = new Map<string, number>();
+  private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
 
@@ -298,6 +328,7 @@ export class RealtimeCallHandler {
       let bridge: ActiveRealtimeVoiceBridge | null = null;
       let initialized = false;
       let activeCallSid = "unknown";
+      let stopReceived = false;
       let lastMediaTimestamp: number | undefined;
       let lastMediaGapWarnAt = 0;
 
@@ -358,15 +389,17 @@ export class RealtimeCallHandler {
             return;
           }
           if (msg.event === "stop") {
-            bridge.close();
+            stopReceived = true;
+            this.closeTelephonyBridge(activeCallSid, bridge, "completed");
           }
         } catch (error) {
           console.error("[voice-call] realtime WS parse failed:", error);
         }
       });
 
-      ws.on("close", () => {
-        bridge?.close();
+      ws.on("close", (code) => {
+        const reason = stopReceived || code === 1000 || code === 1005 ? "completed" : "error";
+        this.closeTelephonyBridge(activeCallSid, bridge, reason);
       });
 
       ws.on("error", (error) => {
@@ -566,7 +599,9 @@ export class RealtimeCallHandler {
       onClose: (reason) => {
         this.activeBridgesByCallId.delete(callId);
         this.activeBridgesByCallId.delete(callSid);
-        this.partialUserTranscriptsByCallId.delete(callId);
+        this.activeTelephonyClosersByCallId.delete(callId);
+        this.activeTelephonyClosersByCallId.delete(callSid);
+        this.clearPartialUserTranscript(callId);
         if (reason !== "error") {
           return;
         }
@@ -585,8 +620,14 @@ export class RealtimeCallHandler {
           });
       },
     });
+    const closeTelephony = (reason: TelephonyCloseReason) => {
+      emitCallEnd(reason);
+      session.close();
+    };
     this.activeBridgesByCallId.set(callId, session);
     this.activeBridgesByCallId.set(callSid, session);
+    this.activeTelephonyClosersByCallId.set(callId, closeTelephony);
+    this.activeTelephonyClosersByCallId.set(callSid, closeTelephony);
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
@@ -601,6 +642,8 @@ export class RealtimeCallHandler {
     session.close = () => {
       this.activeBridgesByCallId.delete(callId);
       this.activeBridgesByCallId.delete(callSid);
+      this.activeTelephonyClosersByCallId.delete(callId);
+      this.activeTelephonyClosersByCallId.delete(callSid);
       this.clearPartialUserTranscript(callId);
       this.clearForcedConsultState(callId);
       audioPacer.close();
@@ -678,7 +721,21 @@ export class RealtimeCallHandler {
       this.forcedConsultTimersByCallId.delete(callId);
     }
     this.forcedConsultInFlightByCallId.delete(callId);
+    this.forcedConsultsByCallId.delete(callId);
     this.lastProviderConsultAtByCallId.delete(callId);
+  }
+
+  private closeTelephonyBridge(
+    callIdOrSid: string,
+    bridge: ActiveRealtimeVoiceBridge | null,
+    reason: TelephonyCloseReason,
+  ): void {
+    const closer = this.activeTelephonyClosersByCallId.get(callIdOrSid);
+    if (closer) {
+      closer(reason);
+      return;
+    }
+    bridge?.close();
   }
 
   private scheduleForcedAgentConsult(params: {
@@ -735,16 +792,24 @@ export class RealtimeCallHandler {
       `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.question.length}`,
     );
     params.clearAudio();
+    const state: ForcedConsultState = {
+      sendSpeechPrompt: true,
+      promise: Promise.resolve().then(() =>
+        params.handler(
+          {
+            question: params.question,
+            context:
+              "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
+          },
+          params.callId,
+          {},
+        ),
+      ),
+    };
+    this.forcedConsultsByCallId.set(params.callId, state);
     try {
-      const result = await params.handler(
-        {
-          question: params.question,
-          context:
-            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
-        },
-        params.callId,
-        {},
-      );
+      const result = await state.promise;
+      state.completedAt = Date.now();
       const text = readSpeakableToolResultText(result);
       if (!text) {
         console.warn(
@@ -752,8 +817,10 @@ export class RealtimeCallHandler {
         );
         return;
       }
-      params.clearAudio();
-      params.session.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+      if (state.sendSpeechPrompt) {
+        params.clearAudio();
+        params.session.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+      }
       console.log(
         `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
       );
@@ -764,6 +831,12 @@ export class RealtimeCallHandler {
       );
     } finally {
       this.forcedConsultInFlightByCallId.delete(params.callId);
+      const cleanupTimer = setTimeout(() => {
+        if (this.forcedConsultsByCallId.get(params.callId) === state) {
+          this.forcedConsultsByCallId.delete(params.callId);
+        }
+      }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
+      cleanupTimer.unref?.();
     }
   }
 
@@ -849,7 +922,92 @@ export class RealtimeCallHandler {
         clearTimeout(timer);
         this.forcedConsultTimersByCallId.delete(callId);
       }
-      await this.waitForConsultTranscriptSettle(callId, startedAt);
+      const forcedConsult = this.forcedConsultsByCallId.get(callId);
+      if (forcedConsult) {
+        if (forcedConsult.completedAt) {
+          bridge.submitToolResult(bridgeCallId, {
+            status: "already_delivered",
+            message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
+          });
+          return;
+        }
+        forcedConsult.sendSpeechPrompt = false;
+        const result = await forcedConsult.promise.catch((error: unknown) => ({
+          error: formatErrorMessage(error),
+        }));
+        bridge.submitToolResult(bridgeCallId, result);
+        return;
+      }
+
+      const submitWorkingResponse = () => {
+        if (
+          handler &&
+          bridge.bridge.supportsToolResultContinuation &&
+          !this.config.fastContext.enabled
+        ) {
+          bridge.submitToolResult(
+            bridgeCallId,
+            buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+            { willContinue: true },
+          );
+        }
+      };
+
+      const existingNativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
+      if (existingNativeConsult) {
+        console.log(
+          `[voice-call] realtime tool call sharing in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
+        );
+        submitWorkingResponse();
+        bridge.submitToolResult(bridgeCallId, await existingNativeConsult.promise);
+        return;
+      }
+
+      submitWorkingResponse();
+      const state: NativeConsultState = {
+        startedAt,
+        promise: Promise.resolve(),
+      };
+      state.promise = (async () => {
+        await this.waitForConsultTranscriptSettle(callId, startedAt);
+        const context = {
+          partialUserTranscript: this.partialUserTranscriptsByCallId.get(callId),
+        };
+        state.partialUserTranscript = context.partialUserTranscript;
+        const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
+        console.log(
+          `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
+        );
+        return !handler
+          ? { error: `Tool "${name}" not available` }
+          : await handler(handlerArgs, callId, context);
+      })().catch((error: unknown) => ({
+        error: formatErrorMessage(error),
+      }));
+      this.nativeConsultsInFlightByCallId.set(callId, state);
+      try {
+        const result = await state.promise;
+        const status =
+          result && typeof result === "object" && !Array.isArray(result) && "error" in result
+            ? "error"
+            : "ok";
+        const error =
+          status === "error" && result && typeof result === "object" && !Array.isArray(result)
+            ? formatErrorMessage((result as { error?: unknown }).error ?? "unknown")
+            : undefined;
+        console.log(
+          `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
+        );
+        bridge.submitToolResult(bridgeCallId, result);
+        if (status === "ok") {
+          this.consumePartialUserTranscript(callId, state.partialUserTranscript);
+        }
+      } finally {
+        if (this.nativeConsultsInFlightByCallId.get(callId) === state) {
+          this.nativeConsultsInFlightByCallId.delete(callId);
+        }
+      }
+      return;
     }
     console.log(
       `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
@@ -861,18 +1019,6 @@ export class RealtimeCallHandler {
       name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
         ? withFallbackConsultQuestion(args, context.partialUserTranscript)
         : args;
-    if (
-      handler &&
-      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
-      bridge.bridge.supportsToolResultContinuation &&
-      !this.config.fastContext.enabled
-    ) {
-      bridge.submitToolResult(
-        bridgeCallId,
-        buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
-        { willContinue: true },
-      );
-    }
     const result = !handler
       ? { error: `Tool "${name}" not available` }
       : await handler(handlerArgs, callId, context).catch((error: unknown) => ({
@@ -884,7 +1030,7 @@ export class RealtimeCallHandler {
         : "ok";
     const error =
       status === "error" && result && typeof result === "object" && !Array.isArray(result)
-        ? String((result as { error?: unknown }).error ?? "unknown")
+        ? formatErrorMessage((result as { error?: unknown }).error ?? "unknown")
         : undefined;
     console.log(
       `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,

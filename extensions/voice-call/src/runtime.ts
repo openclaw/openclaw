@@ -359,6 +359,10 @@ export async function createVoiceCallRuntime(params: {
             ...call,
             config: effectiveConfig,
           });
+          const requesterSessionKey =
+            typeof call.metadata?.requesterSessionKey === "string"
+              ? call.metadata.requesterSessionKey
+              : undefined;
           const fastContext = await resolveRealtimeFastContextConsult({
             cfg,
             agentId,
@@ -398,6 +402,8 @@ export async function createVoiceCallRuntime(params: {
             model,
             thinkLevel,
             timeoutMs: effectiveConfig.responseTimeoutMs,
+            spawnedBy: requesterSessionKey,
+            contextMode: requesterSessionKey ? "fork" : undefined,
             toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(
               effectiveConfig.realtime.toolPolicy,
             ),

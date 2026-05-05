@@ -249,6 +249,6 @@ describe("google provider plugin hooks", () => {
     expect(bridge).toBeDefined();
     expect(() => bridge?.sendAudio(Buffer.alloc(160))).not.toThrow();
     expect(() => bridge?.setMediaTimestamp(20)).not.toThrow();
-    expect(() => bridge?.sendUserMessage("hello")).not.toThrow();
+    expect(() => bridge?.sendUserMessage?.("hello")).not.toThrow();
   });
 });

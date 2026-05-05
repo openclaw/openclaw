@@ -924,7 +924,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("loads voice-call requested realtime voice providers missing from active registry", () => {
+  it("loads requested realtime voice providers missing from active registry", () => {
     const active = createEmptyPluginRegistry();
     active.realtimeVoiceProviders.push({
       pluginId: "openai",
@@ -953,28 +953,17 @@ describe("resolvePluginCapabilityProviders", () => {
       params === undefined ? active : loaded,
     );
 
-    const providers = resolvePluginCapabilityProviders({
+    const provider = resolvePluginCapabilityProvider({
       key: "realtimeVoiceProviders",
-      cfg: {
-        plugins: {
-          allow: ["openai", "google", "voice-call"],
-          entries: {
-            "voice-call": {
-              enabled: true,
-              config: {
-                realtime: { enabled: true, provider: "google" },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      providerId: "google",
+      cfg: { plugins: { allow: ["openai", "google"] } } as OpenClawConfig,
     });
 
-    expectResolvedCapabilityProviderIds(providers, ["openai", "google"]);
+    expect(provider?.id).toBe("google");
     expectActiveRegistryLookup(["google"]);
   });
 
-  it("loads google-meet requested realtime transcription providers missing from active registry", () => {
+  it("loads requested realtime transcription providers missing from active registry", () => {
     const active = createEmptyPluginRegistry();
     active.realtimeTranscriptionProviders.push({
       pluginId: "openai",
@@ -1003,24 +992,13 @@ describe("resolvePluginCapabilityProviders", () => {
       params === undefined ? active : loaded,
     );
 
-    const providers = resolvePluginCapabilityProviders({
+    const provider = resolvePluginCapabilityProvider({
       key: "realtimeTranscriptionProviders",
-      cfg: {
-        plugins: {
-          allow: ["openai", "xai", "google-meet"],
-          entries: {
-            "google-meet": {
-              enabled: true,
-              config: {
-                realtime: { enabled: true, transcriptionProvider: "xai" },
-              },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      providerId: "xai",
+      cfg: { plugins: { allow: ["openai", "xai"] } } as OpenClawConfig,
     });
 
-    expectResolvedCapabilityProviderIds(providers, ["openai", "xai"]);
+    expect(provider?.id).toBe("xai");
     expectActiveRegistryLookup(["xai"]);
   });
 

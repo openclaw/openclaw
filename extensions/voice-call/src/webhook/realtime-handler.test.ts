@@ -346,7 +346,7 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("leaves realtime calls active when the provider closes normally", async () => {
+  it("ends realtime calls when the telephony stream stops", async () => {
     let callbacks:
       | {
           onClose?: (reason: "completed" | "error") => void;
@@ -402,15 +402,16 @@ describe("RealtimeCallHandler path routing", () => {
 
         ws.send(JSON.stringify({ event: "stop" }));
 
-        await new Promise((resolve) => setTimeout(resolve, 25));
-        expect(processEvent).not.toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "call.ended",
-            callId: "call-1",
-            providerCallId: "CA-complete",
-            reason: "completed",
-          }),
-        );
+        await vi.waitFor(() => {
+          expect(processEvent).toHaveBeenCalledWith(
+            expect.objectContaining({
+              type: "call.ended",
+              callId: "call-1",
+              providerCallId: "CA-complete",
+              reason: "completed",
+            }),
+          );
+        });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -808,6 +809,109 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("shares concurrent native consult tool calls on the same call session", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    let resolveConsult: ((value: unknown) => void) | undefined;
+    const submitToolResult = vi.fn();
+    const bridge = makeBridge({
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return bridge;
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        getCallByProviderCallId: vi.fn(
+          (): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "CA-shared-native",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          }),
+        ),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const consult = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveConsult = resolve;
+        }),
+    );
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-shared-native", callSid: "CA-shared-native" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onTranscript?.("user", "Send a Discord message.", false);
+        callbacks?.onToolCall?.({
+          itemId: "item-1",
+          callId: "consult-call-1",
+          name: "openclaw_agent_consult",
+          args: { question: "Send a Discord message." },
+        });
+        callbacks?.onToolCall?.({
+          itemId: "item-2",
+          callId: "consult-call-2",
+          name: "openclaw_agent_consult",
+          args: { question: "Send a Discord message." },
+        });
+
+        await vi.waitFor(() => {
+          expect(consult).toHaveBeenCalledTimes(1);
+        });
+        resolveConsult?.({ text: "I sent it." });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "consult-call-1",
+            { text: "I sent it." },
+            undefined,
+          );
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "consult-call-2",
+            { text: "I sent it." },
+            undefined,
+          );
+        });
+        expect(consult).toHaveBeenCalledTimes(1);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("does not force a duplicate consult when the realtime provider calls the consult tool", async () => {
     let callbacks:
       | {
@@ -883,6 +987,104 @@ describe("RealtimeCallHandler path routing", () => {
         });
         await new Promise((resolve) => setTimeout(resolve, 250));
         expect(consult).toHaveBeenCalledTimes(1);
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("shares an in-flight forced consult when the provider calls the consult tool late", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    let resolveConsult: ((value: unknown) => void) | undefined;
+    const sendUserMessage = vi.fn();
+    const submitToolResult = vi.fn();
+    const bridge = makeBridge({
+      sendUserMessage,
+      supportsToolResultContinuation: true,
+      submitToolResult,
+    });
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return bridge;
+      },
+    );
+    const handler = makeHandler(
+      { consultPolicy: "always" },
+      {
+        manager: {
+          getCallByProviderCallId: vi.fn(
+            (): CallRecord => ({
+              callId: "call-1",
+              providerCallId: "CA-late-native",
+              provider: "twilio",
+              direction: "inbound",
+              state: "ringing",
+              from: "+15550001234",
+              to: "+15550009999",
+              startedAt: Date.now(),
+              transcript: [],
+              processedEventIds: [],
+              metadata: {},
+            }),
+          ),
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const consult = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveConsult = resolve;
+        }),
+    );
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-late-native", callSid: "CA-late-native" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onTranscript?.("user", "Send me a Discord message.", true);
+        await vi.waitFor(() => {
+          expect(consult).toHaveBeenCalledTimes(1);
+        });
+
+        callbacks?.onToolCall?.({
+          itemId: "item-1",
+          callId: "consult-call",
+          name: "openclaw_agent_consult",
+          args: { question: "Send me a Discord message." },
+        });
+        resolveConsult?.({ text: "Native shared result." });
+
+        await vi.waitFor(() => {
+          expect(submitToolResult).toHaveBeenLastCalledWith(
+            "consult-call",
+            { text: "Native shared result." },
+            undefined,
+          );
+        });
+        expect(consult).toHaveBeenCalledTimes(1);
+        expect(sendUserMessage).not.toHaveBeenCalled();
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

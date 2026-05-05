@@ -326,53 +326,6 @@ function collectRequestedMediaUnderstandingProviderIds(
   return requested;
 }
 
-function getRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function getPluginEntryConfig(
-  cfg: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  return getRecord(getRecord(cfg?.plugins?.entries)?.[pluginId])?.config as
-    | Record<string, unknown>
-    | undefined;
-}
-
-function collectRequestedRealtimeVoiceProviderIds(cfg: OpenClawConfig | undefined): Set<string> {
-  const requested = new Set<string>();
-
-  const voiceCallRealtime = getRecord(getPluginEntryConfig(cfg, "voice-call")?.realtime);
-  addStringValue(requested, voiceCallRealtime?.provider);
-  addObjectKeys(requested, voiceCallRealtime?.providers);
-
-  const googleMeetRealtime = getRecord(getPluginEntryConfig(cfg, "google-meet")?.realtime);
-  addStringValue(requested, googleMeetRealtime?.voiceProvider);
-  addStringValue(requested, googleMeetRealtime?.provider);
-  addObjectKeys(requested, googleMeetRealtime?.providers);
-
-  return requested;
-}
-
-function collectRequestedRealtimeTranscriptionProviderIds(
-  cfg: OpenClawConfig | undefined,
-): Set<string> {
-  const requested = new Set<string>();
-
-  const voiceCallStreaming = getRecord(getPluginEntryConfig(cfg, "voice-call")?.streaming);
-  addStringValue(requested, voiceCallStreaming?.provider);
-  addObjectKeys(requested, voiceCallStreaming?.providers);
-
-  const googleMeetRealtime = getRecord(getPluginEntryConfig(cfg, "google-meet")?.realtime);
-  addStringValue(requested, googleMeetRealtime?.transcriptionProvider);
-  addStringValue(requested, googleMeetRealtime?.provider);
-  addObjectKeys(requested, googleMeetRealtime?.providers);
-
-  return requested;
-}
-
 function collectRequestedCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
@@ -380,10 +333,6 @@ function collectRequestedCapabilityProviderIds(params: {
   switch (params.key) {
     case "speechProviders":
       return collectRequestedSpeechProviderIds(params.cfg);
-    case "realtimeTranscriptionProviders":
-      return collectRequestedRealtimeTranscriptionProviderIds(params.cfg);
-    case "realtimeVoiceProviders":
-      return collectRequestedRealtimeVoiceProviderIds(params.cfg);
     case "mediaUnderstandingProviders":
       return collectRequestedMediaUnderstandingProviderIds(params.cfg);
     default:
@@ -492,9 +441,7 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
         ? loadedEntries
         : coldEntries;
   const missingRequested =
-    params.key === "speechProviders" && params.requested && params.requested.size > 0
-      ? new Set(params.requested)
-      : undefined;
+    params.requested && params.requested.size > 0 ? new Set(params.requested) : undefined;
   if (missingRequested) {
     removeActiveProviderIds(missingRequested, entries);
   }
@@ -608,11 +555,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     }
   }
   let requestedProviders: Set<string> | undefined;
-  if (
-    params.key === "speechProviders" ||
-    params.key === "realtimeTranscriptionProviders" ||
-    params.key === "realtimeVoiceProviders"
-  ) {
+  if (params.key === "speechProviders") {
     requestedProviders =
       missingRequestedProviders ??
       (activeProviders.length === 0

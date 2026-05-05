@@ -5,10 +5,15 @@ import {
   forkSessionFromParent,
   resolveParentForkDecision,
 } from "../auto-reply/reply/session-fork.js";
+import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  deliveryContextFromSession,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import {
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
@@ -51,6 +56,39 @@ function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey:
     return trimmed;
   }
   return `agent:${agentId}:${trimmed}`;
+}
+
+function hasRoutableDeliveryContext(
+  context: DeliveryContext | undefined,
+): context is DeliveryContext & { channel: string; to: string } {
+  return Boolean(context?.channel && context?.to);
+}
+
+function resolveRequesterDeliveryContext(params: {
+  agentRuntime: RealtimeVoiceAgentConsultRuntime;
+  storePath: string;
+  spawnedBy?: string | null;
+}): DeliveryContext | undefined {
+  const requesterSessionKey = params.spawnedBy?.trim();
+  if (!requesterSessionKey) {
+    return undefined;
+  }
+  try {
+    const store = params.agentRuntime.session.loadSessionStore(params.storePath);
+    const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
+    const candidates = Array.from(
+      new Set([requesterSessionKey, baseSessionKey].filter((key): key is string => Boolean(key))),
+    );
+    for (const key of candidates) {
+      const context = deliveryContextFromSession(store[key] as SessionEntry | undefined);
+      if (hasRoutableDeliveryContext(context)) {
+        return context;
+      }
+    }
+  } catch {
+    // Best-effort routing enrichment only; consults should still work without it.
+  }
+  return undefined;
 }
 
 async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
@@ -153,6 +191,11 @@ export async function consultRealtimeVoiceAgent(params: {
   const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
     agentId,
   });
+  const requesterDeliveryContext = resolveRequesterDeliveryContext({
+    agentRuntime: params.agentRuntime,
+    storePath,
+    spawnedBy: params.spawnedBy,
+  });
   const sessionEntry = await resolveRealtimeVoiceAgentConsultSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
@@ -173,7 +216,15 @@ export async function consultRealtimeVoiceAgent(params: {
     sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
     agentId,
     spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
+    messageProvider: requesterDeliveryContext?.channel ?? params.messageProvider,
+    agentAccountId: requesterDeliveryContext?.accountId,
+    messageTo: requesterDeliveryContext?.to,
+    messageThreadId: requesterDeliveryContext?.threadId,
+    currentChannelId: requesterDeliveryContext?.to,
+    currentThreadTs:
+      requesterDeliveryContext?.threadId != null
+        ? String(requesterDeliveryContext.threadId)
+        : undefined,
     sessionFile,
     workspaceDir,
     config: params.cfg,
