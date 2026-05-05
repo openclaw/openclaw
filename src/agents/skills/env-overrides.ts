@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
+import { resolveSecretInputString } from "../../config/types.secrets.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -145,8 +145,9 @@ function applySkillConfigEnvOverrides(params: {
   primaryEnv?: string | null;
   requiredEnv?: string[] | null;
   skillKey: string;
+  cfg?: Pick<OpenClawConfig, "secrets">;
 }) {
-  const { updates, skillConfig, primaryEnv, requiredEnv, skillKey } = params;
+  const { updates, skillConfig, primaryEnv, requiredEnv, skillKey, cfg } = params;
   const allowedSensitiveKeys = new Set<string>();
   const normalizedPrimaryEnv = primaryEnv?.trim();
   if (normalizedPrimaryEnv) {
@@ -177,13 +178,31 @@ function applySkillConfigEnvOverrides(params: {
     (process.env[normalizedPrimaryEnv] === undefined ||
       activeSkillEnvEntries.has(normalizedPrimaryEnv));
   if (canInjectPrimaryEnv && !pendingOverrides[normalizedPrimaryEnv]) {
-    const resolvedApiKey =
-      normalizeResolvedSecretInputString({
-        value: skillConfig.apiKey,
-        path: `skills.entries.${skillKey}.apiKey`,
-      }) ?? "";
-    if (resolvedApiKey) {
-      pendingOverrides[normalizedPrimaryEnv] = resolvedApiKey;
+    // applySkillConfigEnvOverrides runs eagerly during skill loading, BEFORE the
+    // gateway runtime snapshot is threaded into context. Strict resolution of an
+    // exec/file SecretRef (e.g. `apiKey: { source: "exec", provider: "op-*" }`)
+    // would throw here and break every chat turn for users who configure their
+    // skill apiKeys via SecretRef. Use inspect mode so we get a structured
+    // status without throwing, then:
+    //   - available  → inject the resolved value
+    //   - missing    → no apiKey configured at all; skip injection
+    //   - configured_unavailable → SecretRef configured but cannot resolve here;
+    //                              skip injection and log a warning. The skill
+    //                              subprocess sees no env var and fails at the
+    //                              actual API boundary (fail-closed at the right
+    //                              place, not at config-load time).
+    const resolved = resolveSecretInputString({
+      value: skillConfig.apiKey,
+      path: `skills.entries.${skillKey}.apiKey`,
+      defaults: cfg?.secrets?.defaults,
+      mode: "inspect",
+    });
+    if (resolved.status === "available") {
+      pendingOverrides[normalizedPrimaryEnv] = resolved.value;
+    } else if (resolved.status === "configured_unavailable") {
+      log.warn(
+        `Skipping ${skillKey} apiKey injection: configured SecretRef "${resolved.ref.source}:${resolved.ref.provider}:${resolved.ref.id}" cannot be resolved at skill-load time. Resolution is deferred until the gateway runtime snapshot is available.`,
+      );
     }
   }
 
@@ -234,6 +253,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
       skillKey,
+      cfg: config,
     });
   }
 
@@ -263,6 +283,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
       skillKey: skill.name,
+      cfg: config,
     });
   }
 

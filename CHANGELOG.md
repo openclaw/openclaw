@@ -10,6 +10,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- fix(skills): defer skill `apiKey` SecretRef resolution until runtime instead of throwing during eager skill-load env injection, so chat turns no longer fail with `unresolved SecretRef` for skills configured with `apiKey: { source: "exec" | "file", provider: "op-*", id: "value" }`. Inspect-mode resolution skips injection on `configured_unavailable` (logging a warning) and lets the skill subprocess fail at the actual API boundary instead of breaking every chat turn at config-load time. Same SecretRef-class as #76987.
+- fix(codex): expose `gpt-5.5-codex`'s 400K total context window with the 272K input cap as a separate `contextTokens` bound, matching the OpenAI announcement on 2026-04-23 (https://platform.openai.com/docs/models/gpt-5-codex) so OpenClaw's compaction sizing matches what Codex actually accepts. Previously `contextWindow` was 272K and `contextTokens` was missing entirely.
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.

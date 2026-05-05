@@ -8,7 +8,13 @@ export const CODEX_PROVIDER_ID = "codex";
 export const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 export const CODEX_APP_SERVER_AUTH_MARKER = "codex-app-server";
 
-const DEFAULT_CONTEXT_WINDOW = 272_000;
+// gpt-5.5-codex via the Codex app-server has a 400K total context window with a
+// 272K input cap. See https://platform.openai.com/docs/models/gpt-5-codex
+// (announced 2026-04-23). Both bounds are exposed so OpenClaw's compaction
+// sizing matches what Codex actually accepts; previously contextWindow was
+// 272K and contextTokens was missing entirely.
+const DEFAULT_CONTEXT_WINDOW = 400_000;
+const DEFAULT_CONTEXT_TOKENS = 272_000;
 const DEFAULT_MAX_TOKENS = 128_000;
 
 export const FALLBACK_CODEX_MODELS = [
@@ -54,6 +60,7 @@ export function buildCodexModelDefinition(model: {
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
+    contextTokens: DEFAULT_CONTEXT_TOKENS,
     maxTokens: DEFAULT_MAX_TOKENS,
     compat: {
       supportsReasoningEffort: model.supportedReasoningEfforts.length > 0,
