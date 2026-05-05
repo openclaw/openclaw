@@ -33,6 +33,7 @@ import {
   diagnosticLogger,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
+  resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
 } from "./diagnostic.js";
@@ -78,6 +79,7 @@ describe("diagnostic session state pruning", () => {
       diagnosticSessionStates.set(`session-${i}`, {
         sessionId: `session-${i}`,
         lastActivity: now + i,
+        generation: 0,
         state: "idle",
         queueDepth: 1,
       });
@@ -232,6 +234,7 @@ describe("stuck session diagnostics threshold", () => {
       sessionKey: "main",
       ageMs: expect.any(Number),
       queueDepth: 0,
+      stateGeneration: expect.any(Number),
     });
   });
 
@@ -271,6 +274,7 @@ describe("stuck session diagnostics threshold", () => {
       sessionKey: "main",
       ageMs: expect.any(Number),
       queueDepth: 1,
+      stateGeneration: expect.any(Number),
     });
   });
 
@@ -443,7 +447,189 @@ describe("stuck session diagnostics threshold", () => {
       ageMs: expect.any(Number),
       queueDepth: 0,
       allowActiveAbort: true,
+      stateGeneration: expect.any(Number),
     });
+  });
+
+  it("uses diagnostics.stuckSessionAbortMs for stalled active-work recovery", () => {
+    const recoverStuckSession = vi.fn();
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+          stuckSessionAbortMs: 60_000,
+        },
+      },
+      { recoverStuckSession },
+    );
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+    vi.advanceTimersByTime(61_000);
+
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+      allowActiveAbort: true,
+      stateGeneration: expect.any(Number),
+    });
+  });
+
+  it("marks diagnostic session state idle only after a mutating recovery outcome", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockResolvedValue({
+      status: "released",
+      action: "release_lane",
+      released: 1,
+      sessionId: "s1",
+      sessionKey: "main",
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      vi.advanceTimersByTime(61_000);
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    const state = getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" });
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.recovery.completed",
+        status: "released",
+        action: "release_lane",
+      }),
+    );
+  });
+
+  it("does not mark a newer processing generation idle after a late recovery outcome", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn().mockImplementation(async () => {
+      markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
+      return {
+        status: "released",
+        action: "release_lane",
+        released: 1,
+        sessionId: "s1",
+        sessionKey: "main",
+      };
+    });
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      vi.advanceTimersByTime(61_000);
+      await Promise.resolve();
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).state).toBe(
+      "processing",
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.recovery.completed",
+        status: "released",
+        stale: true,
+      }),
+    );
+  });
+
+  it("does not start duplicate recovery for the same processing generation", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    let resolveRecovery:
+      | ((outcome: {
+          status: "noop";
+          action: "none";
+          reason: "no_active_work";
+          sessionId: string;
+          sessionKey: string;
+        }) => void)
+      | undefined;
+    const recoverStuckSession = vi.fn(
+      () =>
+        new Promise<{
+          status: "noop";
+          action: "none";
+          reason: "no_active_work";
+          sessionId: string;
+          sessionKey: string;
+        }>((resolve) => {
+          resolveRecovery = resolve;
+        }),
+    );
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+
+      vi.advanceTimersByTime(61_000);
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(60_000);
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session.recovery.completed",
+          status: "skipped",
+          outcomeReason: "already_in_flight",
+        }),
+      );
+
+      resolveRecovery?.({
+        status: "noop",
+        action: "none",
+        reason: "no_active_work",
+        sessionId: "s1",
+        sessionKey: "main",
+      });
+      await Promise.resolve();
+    } finally {
+      unsubscribe();
+    }
   });
 
   it("reports long-running sessions separately when active work is making progress", () => {
@@ -894,6 +1080,16 @@ describe("stuck session diagnostics threshold", () => {
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
+    expect(
+      resolveStuckSessionAbortMs({ diagnostics: { stuckSessionAbortMs: 5_000 } }, 30_000),
+    ).toBe(30_000);
+    expect(
+      resolveStuckSessionAbortMs(
+        { diagnostics: { stuckSessionAbortMs: 48 * 60 * 60_000 } },
+        30_000,
+      ),
+    ).toBe(48 * 60 * 60_000);
+    expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(10 * 60_000);
   });
 });
 

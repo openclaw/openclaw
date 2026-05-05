@@ -170,23 +170,34 @@ Release checks call Package Acceptance with the package/update/plugin set:
 doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update
 ```
 
-They also pass:
+When release soak is enabled, they also pass:
 
 ```text
-published_upgrade_survivor_baselines=all-since-2026.4.23
+published_upgrade_survivor_baselines=last-stable-4 2026.4.23 2026.5.2 2026.4.15
 published_upgrade_survivor_scenarios=reported-issues
 telegram_mode=mock-openai
 ```
 
 This keeps package migration, update channel switching, stale plugin dependency
 cleanup, offline plugin coverage, plugin update behavior, and Telegram package
-QA on the same resolved artifact.
+QA on the same resolved artifact without making the default release package gate
+walk every published release.
 
-`all-since-2026.4.23` is the Full Release CI upgrade sample: every stable npm-published release from `2026.4.23` through `latest`. For exhaustive published
+`last-stable-4` resolves to the four latest stable npm-published OpenClaw
+releases. Release package acceptance pins `2026.4.23` as the first plugin-update
+compatibility boundary, `2026.5.2` as a plugin-architecture churn boundary, and
+`2026.4.15` as an older 2026.4.1x published-update baseline; the resolver
+dedupes pins that are already in the latest four. For exhaustive published
 update migration coverage, use `all-since-2026.4.23` in the separate Update
 Migration workflow instead of Full Release CI. `release-history` remains
 available for manual wider sampling when you also want the legacy pre-date
 anchor.
+
+When multiple published-upgrade survivor baselines are selected, the reusable
+Docker workflow shards each baseline into its own targeted runner job. Each
+baseline shard still runs the selected scenario set, but logs and artifacts stay
+per-baseline and wall time is bounded by the slowest shard instead of one large
+serial job.
 
 Run a package profile manually when validating a candidate before release:
 
@@ -197,7 +208,7 @@ gh workflow run package-acceptance.yml \
   -f source=npm \
   -f package_spec=openclaw@beta \
   -f suite_profile=package \
-  -f published_upgrade_survivor_baselines=all-since-2026.4.23 \
+  -f published_upgrade_survivor_baselines="last-stable-4 2026.4.23 2026.5.2 2026.4.15" \
   -f published_upgrade_survivor_scenarios=reported-issues \
   -f telegram_mode=mock-openai
 ```
