@@ -7,6 +7,17 @@
 
 ## Last Session
 
+- **Date**: 2026-05-05 (handover note)
+- **What changed**:
+  - Added repo-root `HANDOVER.md` as the front-door handoff note for future Claude/Codex sessions
+  - The note includes SSH instructions, required files to read before starting, branch/PR protocol, dashboard and gateway deploy protocols, relevant NVIDIA/model files, runtime paths, smoke tests, and the end-of-session checklist
+- **Validation**:
+  - Documentation-only change; reviewed rendered markdown content on DevAgents
+
+---
+
+## Last Session (prev)
+
 - **Date**: 2026-05-04 (Jojo PM NVIDIA fallback hotfix)
 - **What changed**:
   - **Jojo PM / projectmanager (2ndClaw)**: repaired existing config by adding the dashboard-supported NVIDIA model definitions, changing primary back to `nvidia/z-ai/glm-5.1`, and placing `venice/claude-opus-4-6` first in fallbacks
@@ -19,7 +30,7 @@
 
 ---
 
-## Last Session (prev)
+## Last Session (prev 2)
 
 - **Date**: 2026-05-03 (dashboard NVIDIA public-chat hotfix)
 - **What changed**:
@@ -33,7 +44,7 @@
 
 ---
 
-## Last Session (prev 2)
+## Last Session (prev 3)
 
 - **Date**: 2026-05-03 (dashboard NVIDIA model defaults)
 - **What changed**:
@@ -45,7 +56,7 @@
 
 ---
 
-## Last Session (prev 3)
+## Last Session (prev 4)
 
 - **Date**: 2026-04-30 (dashboard GitHub MCP hotfix)
 - **What changed**:
