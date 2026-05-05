@@ -447,6 +447,29 @@ describe("fs-safe", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "rejects final symlink stat targets outside root before invoking the pinned helper",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      await fs.writeFile(path.join(outside, "secret.txt"), "secret");
+      await fs.symlink(path.join(outside, "secret.txt"), path.join(root, "link.txt"));
+      const runPinnedPathHelperSpy = vi.spyOn(pinnedPathHelperModule, "runPinnedPathHelper");
+
+      try {
+        await expect(
+          statPathWithinRoot({
+            rootDir: root,
+            relativePath: "link.txt",
+          }),
+        ).rejects.toMatchObject({ code: "invalid-path" });
+        expect(runPinnedPathHelperSpy).not.toHaveBeenCalled();
+      } finally {
+        runPinnedPathHelperSpy.mockRestore();
+      }
+    },
+  );
+
   it("returns missing stat results within root when allowed", async () => {
     const root = await tempDirs.make("openclaw-fs-safe-root-");
 
