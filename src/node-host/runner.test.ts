@@ -30,10 +30,8 @@ vi.mock("../gateway/client-start-readiness.js", () => ({
 }));
 
 vi.mock("../gateway/client.js", () => ({
-  GatewayClient: class {
-    constructor(opts: GatewayClientOptions) {
-      mocks.capturedGatewayClientOptions.push(opts);
-    }
+  GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
+    mocks.capturedGatewayClientOptions.push(opts);
   },
 }));
 
