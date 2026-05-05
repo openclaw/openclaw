@@ -893,6 +893,9 @@ describe("short-term promotion", () => {
       });
       const key = ranked[0]?.key;
       expect(key).toBeTruthy();
+      if (!key) {
+        throw new Error("expected ranked candidate key");
+      }
 
       const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
       const existingRaw = `${JSON.stringify(
@@ -900,7 +903,7 @@ describe("short-term promotion", () => {
           version: 1,
           updatedAt: "2026-04-01T10:00:00.000Z",
           entries: {
-            [key!]: {
+            [key]: {
               key,
               lightHits: 2,
               remHits: 1,
@@ -937,7 +940,7 @@ describe("short-term promotion", () => {
           recordDreamingPhaseSignals({
             workspaceDir,
             phase: "rem",
-            keys: [key!],
+            keys: [key],
             nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
           }),
         ).rejects.toMatchObject({
