@@ -5,6 +5,9 @@ import {
   type StatusReactionAdapter,
 } from "./status-reactions.js";
 
+const EXEC_TOOL_EMOJI = "🛠️";
+const WEB_SEARCH_TOOL_EMOJI = "🔎";
+
 function createSlackMockAdapter() {
   const active = new Set<string>();
   const log: string[] = [];
@@ -60,12 +63,13 @@ describe("Slack status reaction lifecycle", () => {
 
     void ctrl.setTool("web_search");
     await vi.advanceTimersByTimeAsync(10);
-    expect(active.has(DEFAULT_EMOJIS.web)).toBe(true);
+    expect(active.has(WEB_SEARCH_TOOL_EMOJI)).toBe(true);
     expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(true);
 
     await ctrl.setDone();
     expect(active.has(DEFAULT_EMOJIS.done)).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.web)).toBe(true);
+    expect(active.has(WEB_SEARCH_TOOL_EMOJI)).toBe(false);
+    expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(false);
 
     await ctrl.clear();
     expect(active.size).toBe(0);
@@ -87,7 +91,7 @@ describe("Slack status reaction lifecycle", () => {
 
     await ctrl.setError();
     expect(active.has(DEFAULT_EMOJIS.error)).toBe(true);
-    expect(active.has("eyes")).toBe(true);
+    expect(active.has("eyes")).toBe(false);
 
     await ctrl.restoreInitial();
     expect(active.has("eyes")).toBe(true);
@@ -156,7 +160,8 @@ describe("Slack status reaction lifecycle", () => {
 
     expect(active.has("eyes")).toBe(true);
     expect(active.has(DEFAULT_EMOJIS.done)).toBe(false);
-    expect(adapter.removeReaction).toHaveBeenCalledTimes(1);
+    expect(adapter.removeReaction).toHaveBeenCalledTimes(2);
+    expect(adapter.removeReaction).toHaveBeenCalledWith("eyes");
     expect(adapter.removeReaction).toHaveBeenCalledWith(DEFAULT_EMOJIS.done);
     expect(adapter.removeReaction).not.toHaveBeenCalledWith(DEFAULT_EMOJIS.thinking);
   });
@@ -177,14 +182,14 @@ describe("Slack status reaction lifecycle", () => {
 
     void ctrl.setTool("web_search");
     await vi.advanceTimersByTimeAsync(25);
-    expect(active.has(DEFAULT_EMOJIS.web)).toBe(true);
+    expect(active.has(WEB_SEARCH_TOOL_EMOJI)).toBe(true);
     expect(active.has("eyes")).toBe(true);
 
     void ctrl.setThinking();
     await ctrl.restoreInitial();
 
     expect(active.has("eyes")).toBe(true);
-    expect(active.has(DEFAULT_EMOJIS.web)).toBe(false);
+    expect(active.has(WEB_SEARCH_TOOL_EMOJI)).toBe(false);
     expect(adapter.setReaction).toHaveBeenCalledTimes(2);
   });
 
@@ -255,7 +260,7 @@ describe("Slack status reaction lifecycle", () => {
 
     void ctrl.setTool("exec");
     await vi.advanceTimersByTimeAsync(10);
-    expect(active.has(DEFAULT_EMOJIS.coding)).toBe(true);
+    expect(active.has(EXEC_TOOL_EMOJI)).toBe(true);
     expect(active.has("eyes")).toBe(true);
   });
 });

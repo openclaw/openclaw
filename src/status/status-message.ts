@@ -33,7 +33,7 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readLatestSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-utils.fs.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import {
@@ -97,6 +97,7 @@ export type StatusArgs = {
   activeModelAuth?: string;
   usageLine?: string;
   timeLine?: string;
+  uptimeLine?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
@@ -325,11 +326,12 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const snapshot = readLatestSessionUsageFromTranscript(
+    const snapshot = readRecentSessionUsageFromTranscript(
       sessionId,
       storePath,
       sessionEntry?.sessionFile,
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+      256 * 1024,
     );
     if (!snapshot) {
       return undefined;
@@ -960,6 +962,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   return [
     versionLine,
     args.timeLine,
+    args.uptimeLine,
     modelLine,
     configuredFallbacksLine,
     fallbackLine,

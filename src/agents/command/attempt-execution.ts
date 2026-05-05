@@ -1,8 +1,11 @@
-import fs from "node:fs/promises";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { resolveSessionTranscriptFile } from "../../config/sessions/transcript.js";
+import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import {
+  readTailAssistantTextFromSessionTranscript,
+  resolveSessionTranscriptFile,
+} from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
@@ -20,9 +23,12 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
-import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockAcquireTimeoutMs,
+} from "../session-write-lock.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -36,13 +42,15 @@ import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
-  claudeCliSessionTranscriptHasContent,
   createAcpVisibleTextAccumulator,
-  resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function normalizeTranscriptMirrorText(value: string): string {
+  return value.trim().replace(/\s+/gu, " ");
+}
 
 const ACP_TRANSCRIPT_USAGE = {
   input: 0,
@@ -79,6 +87,8 @@ type PersistTextTurnTranscriptParams = {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
+  config: OpenClawConfig;
+  embeddedAssistantGapFill?: boolean;
   assistant: {
     api: string;
     provider: string;
@@ -194,41 +204,60 @@ async function persistTextTurnTranscript(
     agentId: params.sessionAgentId,
     threadId: params.threadId,
   });
-  const hadSessionFile = await fs
-    .access(sessionFile)
-    .then(() => true)
-    .catch(() => false);
-  const sessionManager = SessionManager.open(sessionFile);
-  await prepareSessionManagerForRun({
-    sessionManager,
+  const lock = await acquireSessionWriteLock({
     sessionFile,
-    hadSessionFile,
-    sessionId: params.sessionId,
-    cwd: params.sessionCwd,
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    allowReentrant: true,
   });
+  try {
+    if (promptText) {
+      await appendSessionTranscriptMessage({
+        transcriptPath: sessionFile,
+        sessionId: params.sessionId,
+        cwd: params.sessionCwd,
+        config: params.config,
+        message: {
+          role: "user",
+          content: promptText,
+          timestamp: Date.now(),
+        },
+      });
+    }
 
-  if (promptText) {
-    sessionManager.appendMessage({
-      role: "user",
-      content: promptText,
-      timestamp: Date.now(),
-    });
+    if (replyText) {
+      let appendAssistant = true;
+      if (params.embeddedAssistantGapFill) {
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
+        const normalizedReply = normalizeTranscriptMirrorText(replyText);
+        const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
+        if (normalizedLatest && normalizedLatest === normalizedReply) {
+          appendAssistant = false;
+        }
+      }
+      if (appendAssistant) {
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          sessionId: params.sessionId,
+          cwd: params.sessionCwd,
+          config: params.config,
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: replyText }],
+            api: params.assistant.api,
+            provider: params.assistant.provider,
+            model: params.assistant.model,
+            usage: resolveTranscriptUsage(params.assistant.usage),
+            stopReason: "stop",
+            timestamp: Date.now(),
+          },
+        });
+      }
+    }
+  } finally {
+    await lock.release();
   }
 
-  if (replyText) {
-    sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: replyText }],
-      api: params.assistant.api,
-      provider: params.assistant.provider,
-      model: params.assistant.model,
-      usage: resolveTranscriptUsage(params.assistant.usage),
-      stopReason: "stop",
-      timestamp: Date.now(),
-    });
-  }
-
-  emitSessionTranscriptUpdate(sessionFile);
+  emitSessionTranscriptUpdate({ sessionFile, sessionKey: params.sessionKey });
   return sessionEntry;
 }
 
@@ -261,6 +290,7 @@ export async function persistAcpTurnTranscript(params: {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
+  config: OpenClawConfig;
 }): Promise<SessionEntry | undefined> {
   return await persistTextTurnTranscript({
     ...params,
@@ -284,14 +314,17 @@ export async function persistCliTurnTranscript(params: {
   sessionAgentId: string;
   threadId?: string | number;
   sessionCwd: string;
+  config: OpenClawConfig;
+  embeddedAssistantGapFill?: boolean;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+  const gapFill = params.embeddedAssistantGapFill ?? false;
 
   return await persistTextTurnTranscript({
-    body: params.body,
-    transcriptBody: params.transcriptBody,
+    body: gapFill ? "" : params.body,
+    transcriptBody: gapFill ? undefined : params.transcriptBody,
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -301,6 +334,8 @@ export async function persistCliTurnTranscript(params: {
     sessionAgentId: params.sessionAgentId,
     threadId: params.threadId,
     sessionCwd: params.sessionCwd,
+    config: params.config,
+    embeddedAssistantGapFill: gapFill,
     assistant: {
       api: "cli",
       provider,
@@ -343,7 +378,10 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  suppressPromptPersistenceOnRetry?: boolean;
+  onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
@@ -391,7 +429,7 @@ export function runAgentAttempt(params: {
         runtimeOverride: agentRuntimeOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
-    ? ({ runtime: "pi", fallback: "pi" } as const)
+    ? ({ runtime: "pi" } as const)
     : resolveAgentHarnessPolicy({
         provider: params.providerOverride,
         modelId: params.modelOverride,
@@ -575,6 +613,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
@@ -597,6 +636,8 @@ export function runAgentAttempt(params: {
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
+    suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+    onUserMessagePersisted: params.onUserMessagePersisted,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
   });

@@ -2,6 +2,7 @@
 summary: "CLI reference for `openclaw update` (safe-ish source update + gateway auto-restart)"
 read_when:
   - You want to update a source checkout safely
+  - You are debugging `openclaw update` output or options
   - You need to understand `--update` shorthand behavior
 title: "Update"
 ---
@@ -41,6 +42,14 @@ openclaw --update
   detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
+
+`openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
+the planned channel/tag/install/restart actions, `--json` for machine-readable
+results, and `openclaw update status --json` when you only need channel and
+availability details. If you are debugging Gateway logs around an update,
+console verbosity and file log level are separate: Gateway `--verbose` affects
+terminal/WebSocket output, while file logs require `logging.level: "debug"` or
+`"trace"` in config. See [Gateway logging](/gateway/logging).
 
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
@@ -103,10 +112,19 @@ explicit `openclaw completion --write-state` runs.
 When a local managed Gateway service is installed and restart is enabled,
 package-manager updates stop the running service before replacing the package
 tree, then refresh the service metadata from the updated install, restart the
-service, and verify the restarted Gateway reports the expected version. With
-`--no-restart`, package replacement still runs but the managed service is not
-stopped or restarted, so the running Gateway may keep old code until you restart
-it manually.
+service, and verify the restarted Gateway reports the expected version before
+reporting success. On macOS, the post-update check also verifies the LaunchAgent
+is loaded/running for the active profile and the configured loopback port is
+healthy. If the plist is installed but launchd is not supervising it, OpenClaw
+re-bootstraps the LaunchAgent automatically, then reruns the
+health/version/channel readiness checks. A fresh bootstrap loads the RunAtLoad
+job directly, so update recovery does not immediately `kickstart -k` the newly
+spawned Gateway. If the Gateway still does not become healthy, the command exits
+non-zero and prints the restart log path plus explicit restart, reinstall, and
+package rollback instructions. With `--no-restart`,
+package replacement still runs but the managed service is not stopped or
+restarted, so the running Gateway may keep old code until you restart it
+manually.
 
 ## Git checkout flow
 
@@ -144,9 +162,15 @@ it manually.
     `openclaw doctor` runs as the final safe-update check.
   </Step>
   <Step title="Sync plugins">
-    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates npm-installed plugins.
+    Syncs plugins to the active channel. Dev uses bundled plugins; stable and beta use npm. Updates tracked plugin installs.
   </Step>
 </Steps>
+
+On the beta update channel, tracked npm and ClawHub plugin installs that follow
+the default/latest line try a plugin `@beta` release first. If the plugin has no
+beta release, OpenClaw falls back to the recorded default/latest spec. For npm
+plugins, OpenClaw also falls back when the beta package exists but fails install
+validation. Exact versions and explicit tags are not rewritten.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.
@@ -155,7 +179,7 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 <Note>
 Post-update plugin sync failures fail the update result and stop restart follow-up work. Fix the plugin install or update error, then rerun `openclaw update`.
 
-When the updated Gateway starts, enabled bundled plugin runtime dependencies are staged before plugin activation. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks. Service-manager restarts still drain runtime-dependency staging before closing the Gateway.
+When the updated Gateway starts, plugin loading is verify-only: startup does not run package managers or mutate dependency trees. Package-manager `update.run` restarts bypass the normal idle deferral and restart cooldown after the package tree has been swapped, so the old process cannot keep lazy-loading removed chunks.
 
 If pnpm bootstrap still fails, the updater stops early with a package-manager-specific error instead of trying `npm run build` inside the checkout.
 </Note>

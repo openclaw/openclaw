@@ -72,6 +72,7 @@ type RunPhaseIfTriggeredParams = {
 );
 const LIGHT_SLEEP_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
 const REM_SLEEP_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
+const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DAILY_MEMORY_FILENAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
 const DAILY_INGESTION_STATE_RELATIVE_PATH = path.join("memory", ".dreams", "daily-ingestion.json");
 const DAILY_INGESTION_SCORE = 0.62;
@@ -112,9 +113,14 @@ function resolveWorkspaces(params: {
   cfg?: DreamingHostConfig;
   fallbackWorkspaceDir?: string;
 }): string[] {
+  const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
   const workspaceCandidates = params.cfg
     ? resolveMemoryDreamingWorkspaces(
         params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+        {
+          primaryWorkspaceDir: fallbackWorkspaceDir,
+          primaryAgentId: "main",
+        },
       ).map((entry) => entry.workspaceDir)
     : [];
   const seen = new Set<string>();
@@ -125,7 +131,6 @@ function resolveWorkspaces(params: {
     seen.add(workspaceDir);
     return true;
   });
-  const fallbackWorkspaceDir = normalizeTrimmedString(params.fallbackWorkspaceDir);
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
     workspaces.push(fallbackWorkspaceDir);
   }
@@ -382,6 +387,7 @@ type DailyIngestionBatch = {
 type DailyIngestionFileState = {
   mtimeMs: number;
   size: number;
+  lastDreamingDayIngested?: string;
 };
 
 type DailyIngestionState = {
@@ -413,15 +419,25 @@ function normalizeDailyIngestionState(raw: unknown): DailyIngestionState {
     if (!Number.isFinite(mtimeMs) || mtimeMs < 0 || !Number.isFinite(size) || size < 0) {
       continue;
     }
+    const lastDreamingDayIngested = normalizeMemoryDay(file.lastDreamingDayIngested);
     files[key] = {
       mtimeMs: Math.floor(mtimeMs),
       size: Math.floor(size),
+      ...(lastDreamingDayIngested ? { lastDreamingDayIngested } : {}),
     };
   }
   return {
     version: 1,
     files,
   };
+}
+
+function normalizeMemoryDay(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const day = value.trim();
+  return MEMORY_DAY_RE.test(day) ? day : undefined;
 }
 
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
@@ -641,13 +657,22 @@ function buildSessionRenderedLine(params: {
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
-function resolveSessionAgentsForWorkspace(cfg: DreamingHostConfig, workspaceDir: string): string[] {
+function resolveSessionAgentsForWorkspace(params: {
+  cfg: DreamingHostConfig;
+  workspaceDir: string;
+  primaryWorkspaceDir?: string;
+}): string[] {
+  const { cfg, workspaceDir, primaryWorkspaceDir } = params;
   if (!cfg) {
     return [];
   }
   const target = normalizeWorkspaceKey(workspaceDir);
   const workspaces = resolveMemoryDreamingWorkspaces(
     cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
+    {
+      primaryWorkspaceDir,
+      primaryAgentId: "main",
+    },
   );
   const match = workspaces.find((entry) => normalizeWorkspaceKey(entry.workspaceDir) === target);
   if (!match) {
@@ -706,6 +731,7 @@ async function appendSessionCorpusLines(params: {
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -720,7 +746,11 @@ async function collectSessionIngestionBatches(params: {
         Object.keys(params.state.seenMessages).length > 0,
     };
   }
-  const agentIds = resolveSessionAgentsForWorkspace(params.cfg, params.workspaceDir);
+  const agentIds = resolveSessionAgentsForWorkspace({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
+  });
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
   const nextFiles: Record<string, SessionIngestionFileState> = {};
@@ -1003,6 +1033,7 @@ async function collectSessionIngestionBatches(params: {
 async function ingestSessionTranscriptSignals(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -1011,6 +1042,7 @@ async function ingestSessionTranscriptSignals(params: {
   const collected = await collectSessionIngestionBatches({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.lookbackDays,
     nowMs: params.nowMs,
     timezone: params.timezone,
@@ -1045,6 +1077,7 @@ async function collectDailyIngestionBatches(params: {
   lookbackDays: number;
   limit: number;
   nowMs: number;
+  ingestionDreamingDay: string;
   state: DailyIngestionState;
 }): Promise<DailyIngestionCollectionResult> {
   const memoryDir = path.join(params.workspaceDir, "memory");
@@ -1099,11 +1132,15 @@ async function collectDailyIngestionBatches(params: {
       previous !== undefined &&
       previous.mtimeMs === fingerprint.mtimeMs &&
       previous.size === fingerprint.size;
-    if (!unchanged) {
-      changed = true;
-    } else {
+    const previousDreamingDay = normalizeMemoryDay(previous?.lastDreamingDayIngested);
+    if (unchanged && previousDreamingDay === params.ingestionDreamingDay) {
+      nextFiles[relativePath] = {
+        ...fingerprint,
+        lastDreamingDayIngested: previousDreamingDay,
+      };
       continue;
     }
+    changed = true;
 
     const raw = await fs.readFile(filePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
@@ -1135,6 +1172,10 @@ async function collectDailyIngestionBatches(params: {
     }
     batches.push({ day: file.day, results });
     total += results.length;
+    nextFiles[relativePath] = {
+      ...fingerprint,
+      lastDreamingDayIngested: params.ingestionDreamingDay,
+    };
     if (total >= totalCap) {
       break;
     }
@@ -1169,14 +1210,15 @@ async function ingestDailyMemorySignals(params: {
   timezone?: string;
 }): Promise<void> {
   const state = await readDailyIngestionState(params.workspaceDir);
+  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   const collected = await collectDailyIngestionBatches({
     workspaceDir: params.workspaceDir,
     lookbackDays: params.lookbackDays,
     limit: params.limit,
     nowMs: params.nowMs,
+    ingestionDreamingDay: ingestionDayBucket,
     state,
   });
-  const ingestionDayBucket = formatMemoryDreamingDay(params.nowMs, params.timezone);
   for (const batch of collected.batches) {
     await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
@@ -1520,6 +1562,7 @@ export function previewRemDreaming(params: {
 async function runLightDreaming(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   config: LightDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
@@ -1537,6 +1580,7 @@ async function runLightDreaming(params: {
   await ingestSessionTranscriptSignals({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
@@ -1617,6 +1661,7 @@ async function runLightDreaming(params: {
 async function runRemDreaming(params: {
   workspaceDir: string;
   cfg?: DreamingHostConfig;
+  primaryWorkspaceDir?: string;
   config: RemDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
@@ -1634,6 +1679,7 @@ async function runRemDreaming(params: {
   await ingestSessionTranscriptSignals({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
@@ -1766,9 +1812,10 @@ async function runPhaseIfTriggered(
   if (!params.config.enabled) {
     return { handled: true, reason: `memory-core: ${params.phase} dreaming disabled` };
   }
+  const primaryWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
   const workspaces = resolveWorkspaces({
     cfg: params.cfg,
-    fallbackWorkspaceDir: params.workspaceDir,
+    fallbackWorkspaceDir: primaryWorkspaceDir,
   });
   if (workspaces.length === 0) {
     params.logger.warn(
@@ -1786,6 +1833,7 @@ async function runPhaseIfTriggered(
         await runLightDreaming({
           workspaceDir,
           cfg: params.cfg,
+          primaryWorkspaceDir,
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,
@@ -1794,6 +1842,7 @@ async function runPhaseIfTriggered(
         await runRemDreaming({
           workspaceDir,
           cfg: params.cfg,
+          primaryWorkspaceDir,
           config: params.config,
           logger: params.logger,
           subagent: params.subagent,

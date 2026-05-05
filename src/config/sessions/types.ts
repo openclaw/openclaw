@@ -72,6 +72,8 @@ export type AcpSessionRuntimeOptions = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
+  forceReuse?: boolean;
   authProfileId?: string;
   authEpoch?: string;
   authEpochVersion?: number;
@@ -163,6 +165,8 @@ export type SessionEntry = {
   heartbeatTaskState?: Record<string, number>;
   /** Plugin-owned session state, grouped by plugin id then extension namespace. */
   pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Top-level SessionEntry mirror slots owned by plugin session extensions. */
+  pluginExtensionSlotKeys?: Record<string, Record<string, string>>;
   /** Durable one-shot prompt additions drained before the next agent turn. */
   pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
@@ -263,6 +267,16 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  /** Durable marker that final user reply delivery still needs a retry/resume pass. */
+  pendingFinalDelivery?: boolean;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryLastAttemptAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
+  /** Frozen reply text that needs delivery. */
+  pendingFinalDeliveryText?: string | null;
+  /** Original delivery context (channel, recipient, etc). */
+  pendingFinalDeliveryContext?: DeliveryContext;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -528,6 +542,14 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /**
+   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
+   * each SKILL.md body) so the embedded runner can skip a workspace skill
+   * scan within a turn. Stripped from sessions.json on every read and write
+   * via normalizeSessionStore — see store-load.ts. On a cold session resume
+   * this is undefined and src/agents/pi-embedded-runner/skills-runtime.ts
+   * rebuilds it by reloading skill entries from disk.
+   */
   resolvedSkills?: Skill[];
   version?: number;
 };

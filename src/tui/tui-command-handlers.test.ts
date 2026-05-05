@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
+import {
+  TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+  TUI_SESSION_PICKER_LIMIT,
+} from "./tui-session-list-policy.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -16,6 +20,7 @@ async function flushAsyncSelect() {
 function createHarness(params?: {
   sendChat?: ReturnType<typeof vi.fn>;
   getGatewayStatus?: ReturnType<typeof vi.fn>;
+  listSessions?: ReturnType<typeof vi.fn>;
   patchSession?: ReturnType<typeof vi.fn>;
   resetSession?: ReturnType<typeof vi.fn>;
   runAuthFlow?: RunAuthFlow;
@@ -28,9 +33,11 @@ function createHarness(params?: {
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   opts?: { local?: boolean };
+  currentSessionId?: string | null;
 }) {
   const sendChat = params?.sendChat ?? vi.fn().mockResolvedValue({ runId: "r1" });
   const getGatewayStatus = params?.getGatewayStatus ?? vi.fn().mockResolvedValue({});
+  const listSessions = params?.listSessions ?? vi.fn().mockResolvedValue({ sessions: [] });
   const patchSession = params?.patchSession ?? vi.fn().mockResolvedValue({});
   const resetSession = params?.resetSession ?? vi.fn().mockResolvedValue({ ok: true });
   const setSession = params?.setSession ?? (vi.fn().mockResolvedValue(undefined) as SetSessionMock);
@@ -55,14 +62,16 @@ function createHarness(params?: {
   const state = {
     currentAgentId: "main",
     currentSessionKey: "agent:main:main",
+    currentSessionId: params?.currentSessionId ?? null,
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
+    pendingChatRunId: null as string | null,
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
 
-  const { handleCommand } = createCommandHandlers({
-    client: { sendChat, getGatewayStatus, patchSession, resetSession } as never,
+  const { handleCommand, openSessionSelector } = createCommandHandlers({
+    client: { sendChat, getGatewayStatus, listSessions, patchSession, resetSession } as never,
     chatLog: { addUser, addSystem } as never,
     tui: { requestRender } as never,
     opts: params?.opts ?? {},
@@ -89,7 +98,9 @@ function createHarness(params?: {
   return {
     handleCommand,
     getGatewayStatus,
+    listSessions,
     sendChat,
+    openSessionSelector,
     openOverlay,
     closeOverlay,
     patchSession,
@@ -111,6 +122,31 @@ function createHarness(params?: {
 }
 
 describe("tui command handlers", () => {
+  it("bounds session picker hydration to recent TUI sessions", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      sessions: [
+        {
+          key: "agent:main:main",
+          displayName: "main",
+          updatedAt: Date.now(),
+        },
+      ],
+    });
+    const { openSessionSelector } = createHarness({ listSessions });
+
+    await openSessionSelector();
+
+    expect(listSessions).toHaveBeenCalledWith({
+      limit: TUI_SESSION_PICKER_LIMIT,
+      activeMinutes: TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
+      includeGlobal: false,
+      includeUnknown: false,
+      includeDerivedTitles: true,
+      includeLastMessage: true,
+      agentId: "main",
+    });
+  });
+
   it("renders the sending indicator before chat.send resolves", async () => {
     let resolveSend: (value: { runId: string }) => void = () => {
       throw new Error("sendChat promise resolver was not initialized");
@@ -153,6 +189,22 @@ describe("tui command handlers", () => {
       }),
     );
     expect(requestRender).toHaveBeenCalled();
+  });
+
+  it("passes the current backing session id when sending to the gateway", async () => {
+    const { handleCommand, sendChat } = createHarness({
+      currentSessionId: "session-before-relaunch",
+    });
+
+    await handleCommand("/status");
+
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        sessionId: "session-before-relaunch",
+        message: "/status",
+      }),
+    );
   });
 
   it("opens a context mode selector for /context without sending immediately", async () => {
@@ -274,6 +326,29 @@ describe("tui command handlers", () => {
     expect(state.pendingOptimisticUserMessage).toBe(true);
   });
 
+  it("tracks the in-flight runId so escape can abort during the wait", async () => {
+    const sendChat = vi.fn().mockResolvedValue({ runId: "ignored" });
+    const { handleCommand, state } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    const sentRunId = (sendChat.mock.calls[0]?.[0] as { runId: string }).runId;
+    expect(typeof sentRunId).toBe("string");
+    expect(sentRunId.length).toBeGreaterThan(0);
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingChatRunId).toBe(sentRunId);
+  });
+
+  it("clears the pending runId if sendChat fails", async () => {
+    const sendChat = vi.fn().mockRejectedValue(new Error("boom"));
+    const { handleCommand, state } = createHarness({ sendChat });
+
+    await handleCommand("hello");
+
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+  });
+
   it("sends /btw without hijacking the active main run", async () => {
     const setActivityStatus = vi.fn();
     const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
@@ -293,6 +368,25 @@ describe("tui command handlers", () => {
     expect(sendChat).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "/btw what changed?",
+      }),
+    );
+  });
+
+  it("sends /side without hijacking the active main run", async () => {
+    const { handleCommand, sendChat, addUser, noteLocalRunId, noteLocalBtwRunId, state } =
+      createHarness({
+        activeChatRunId: "run-main",
+      });
+
+    await handleCommand("/side what changed?");
+
+    expect(addUser).not.toHaveBeenCalled();
+    expect(noteLocalRunId).not.toHaveBeenCalled();
+    expect(noteLocalBtwRunId).toHaveBeenCalledTimes(1);
+    expect(state.activeChatRunId).toBe("run-main");
+    expect(sendChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "/side what changed?",
       }),
     );
   });

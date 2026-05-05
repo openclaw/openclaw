@@ -12,7 +12,30 @@ import {
   makeRegistry,
   resetPluginAutoEnableTestState,
 } from "./plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import { validateConfigObject } from "./validation.js";
+
+vi.mock("../channels/plugins/configured-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/plugins/configured-state.js")>();
+  return {
+    ...actual,
+    hasBundledChannelConfiguredState: (params: {
+      channelId: string;
+      cfg: OpenClawConfig;
+      env?: NodeJS.ProcessEnv;
+    }) => {
+      if (params.channelId === "irc") {
+        return Boolean(params.env?.IRC_HOST?.trim() && params.env?.IRC_NICK?.trim());
+      }
+      if (params.channelId === "slack") {
+        return ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"].some((key) =>
+          Boolean(params.env?.[key]?.trim()),
+        );
+      }
+      return actual.hasBundledChannelConfiguredState(params);
+    },
+  };
+});
 
 const env = makeIsolatedEnv();
 
@@ -91,6 +114,19 @@ describe("applyPluginAutoEnable core", () => {
 
     expect(result.config.channels?.slack?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toBeUndefined();
+  });
+
+  it("does not auto-enable Slack from unrelated Slack-prefixed env vars", () => {
+    const result = applyPluginAutoEnable({
+      config: {},
+      env: makeIsolatedEnv({
+        SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/T000/B000/XXX",
+      }),
+    });
+
+    expect(result.config.channels?.slack).toBeUndefined();
+    expect(result.config.plugins?.entries?.slack).toBeUndefined();
+    expect(result.changes).toEqual([]);
   });
 
   it("stores auto-enable reasons in a null-prototype dictionary", () => {
@@ -412,7 +448,6 @@ describe("applyPluginAutoEnable core", () => {
             model: "openai/gpt-5.5",
             agentRuntime: {
               id: "codex",
-              fallback: "none",
             },
           },
         },
@@ -444,7 +479,6 @@ describe("applyPluginAutoEnable core", () => {
           defaults: {
             agentRuntime: {
               id: "codex",
-              fallback: "none",
             },
           },
         },
@@ -472,7 +506,6 @@ describe("applyPluginAutoEnable core", () => {
           defaults: {
             agentRuntime: {
               id: "claude-cli",
-              fallback: "none",
             },
           },
         },

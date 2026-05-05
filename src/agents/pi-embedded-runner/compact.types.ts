@@ -44,6 +44,8 @@ export type CompactEmbeddedPiSessionParams = {
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
   model?: string;
+  /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
+  modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */
   contextEngine?: ContextEngine;
   /** Optional caller-resolved token budget for harness-owned compaction. */
@@ -70,6 +72,12 @@ export type CompactEmbeddedPiSessionParams = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
   abortSignal?: AbortSignal;
+  onCompactionHookMessages?: (payload: {
+    phase: "before" | "after";
+    messages: string[];
+    sessionId: string;
+    sessionKey: string;
+  }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
 };

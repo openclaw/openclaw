@@ -91,7 +91,7 @@ export const DEFAULT_DIFFS_TOOL_DEFAULTS: DiffToolDefaults = {
   mode: "both",
 };
 
-export type DiffsPluginSecurityConfig = {
+type DiffsPluginSecurityConfig = {
   allowRemoteViewer: boolean;
 };
 

@@ -127,7 +127,7 @@ type QueryDigestBundle = {
   claims: QueryDigestClaim[];
 };
 
-export type WikiSearchResult = {
+type WikiSearchResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;
@@ -156,7 +156,7 @@ export type WikiSearchResult = {
   evidenceSourceIds?: string[];
 };
 
-export type WikiGetResult = {
+type WikiGetResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;
@@ -182,6 +182,43 @@ type QuerySearchOverrides = {
   searchBackend?: WikiSearchBackend;
   searchCorpus?: WikiSearchCorpus;
 };
+
+function sortWikiSearchResults(results: WikiSearchResult[]): WikiSearchResult[] {
+  return results.toSorted((left, right) => {
+    if (left.score !== right.score) {
+      return right.score - left.score;
+    }
+    return left.title.localeCompare(right.title);
+  });
+}
+
+function mergeWikiSearchCorpusResults(params: {
+  wikiResults: WikiSearchResult[];
+  memoryResults: WikiSearchResult[];
+  maxResults: number;
+  balanceCorpora: boolean;
+}): WikiSearchResult[] {
+  const wikiResults = sortWikiSearchResults(params.wikiResults);
+  const memoryResults = sortWikiSearchResults(params.memoryResults);
+  if (!params.balanceCorpora || wikiResults.length === 0 || memoryResults.length === 0) {
+    return sortWikiSearchResults([...wikiResults, ...memoryResults]).slice(0, params.maxResults);
+  }
+
+  const perCorpusCap = Math.ceil(params.maxResults / 2);
+  const selectedWiki = wikiResults.slice(0, perCorpusCap);
+  const selectedMemory = memoryResults.slice(0, perCorpusCap);
+  const selected = [...selectedWiki, ...selectedMemory];
+  if (selected.length < params.maxResults) {
+    selected.push(
+      ...sortWikiSearchResults([
+        ...wikiResults.slice(selectedWiki.length),
+        ...memoryResults.slice(selectedMemory.length),
+      ]).slice(0, params.maxResults - selected.length),
+    );
+  }
+
+  return sortWikiSearchResults(selected).slice(0, params.maxResults);
+}
 
 async function listWikiMarkdownFiles(rootDir: string): Promise<string[]> {
   const files = (
@@ -1219,14 +1256,12 @@ export async function searchMemoryWiki(params: {
       )
     : [];
 
-  return [...wikiResults, ...memoryResults]
-    .toSorted((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-      return left.title.localeCompare(right.title);
-    })
-    .slice(0, maxResults);
+  return mergeWikiSearchCorpusResults({
+    wikiResults,
+    memoryResults,
+    maxResults,
+    balanceCorpora: effectiveConfig.search.corpus === "all",
+  });
 }
 
 export async function getMemoryWikiPage(params: {

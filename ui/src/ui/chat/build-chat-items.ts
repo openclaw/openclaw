@@ -1,4 +1,8 @@
 import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types.ts";
+import {
+  isAssistantHeartbeatAckForDisplay,
+  stripHeartbeatTokenForDisplay,
+} from "./heartbeat-display.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
@@ -180,12 +184,16 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
         key: `group:${role}:${item.key}`,
         role,
         senderLabel,
-        messages: [{ message: item.message, key: item.key }],
+        messages: [{ message: item.message, key: item.key, duplicateCount: item.duplicateCount }],
         timestamp,
         isStreaming: false,
       };
     } else {
-      currentGroup.messages.push({ message: item.message, key: item.key });
+      currentGroup.messages.push({
+        message: item.message,
+        key: item.key,
+        duplicateCount: item.duplicateCount,
+      });
     }
   }
 
@@ -195,9 +203,58 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   return result;
 }
 
+function collapseDuplicateDisplaySignature(message: unknown): string | null {
+  const normalized = normalizeMessage(message);
+  const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
+  if (!role || role === "tool") {
+    return null;
+  }
+  if (normalized.content.length === 0) {
+    return null;
+  }
+  const textParts: string[] = [];
+  for (const block of normalized.content) {
+    if (block.type !== "text" || typeof block.text !== "string") {
+      return null;
+    }
+    textParts.push(block.text);
+  }
+  const text = textParts.join("\n").trim().replace(/\s+/g, " ");
+  if (!text) {
+    return null;
+  }
+  const senderLabel = role === "user" ? (normalized.senderLabel ?? "").trim() : "";
+  return `${role}:${senderLabel}:${text}`;
+}
+
+function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {
+  const collapsed: ChatItem[] = [];
+  let previousSignature: string | null = null;
+
+  for (const item of items) {
+    if (item.kind !== "message") {
+      collapsed.push(item);
+      previousSignature = null;
+      continue;
+    }
+    const signature = collapseDuplicateDisplaySignature(item.message);
+    const previous = collapsed[collapsed.length - 1];
+    if (signature && previousSignature === signature && previous?.kind === "message") {
+      previous.duplicateCount = (previous.duplicateCount ?? 1) + 1;
+      continue;
+    }
+    collapsed.push(item);
+    previousSignature = signature;
+  }
+
+  return collapsed;
+}
+
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
-  const history = Array.isArray(props.messages) ? props.messages : [];
+  const history = (Array.isArray(props.messages) ? props.messages : []).filter(
+    (message) => !isAssistantHeartbeatAckForDisplay(message),
+  );
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
   const historyStart = Math.max(0, history.length - CHAT_HISTORY_RENDER_LIMIT);
   if (historyStart > 0) {
@@ -223,7 +280,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compaction",
+        label: "Compacted history",
+        description:
+          "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+        action: {
+          kind: "session-checkpoints",
+          label: "Open checkpoints",
+        },
         timestamp: normalized.timestamp ?? Date.now(),
       });
       continue;
@@ -292,18 +355,20 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     if (props.stream.trim().length > 0) {
-      items.push({
-        kind: "stream",
-        key,
-        text: props.stream,
-        startedAt: props.streamStartedAt ?? Date.now(),
-      });
+      if (!stripHeartbeatTokenForDisplay(props.stream).shouldSkip) {
+        items.push({
+          kind: "stream",
+          key,
+          text: props.stream,
+          startedAt: props.streamStartedAt ?? Date.now(),
+        });
+      }
     } else {
       items.push({ kind: "reading-indicator", key });
     }
   }
 
-  return groupMessages(items);
+  return groupMessages(collapseSequentialDuplicateMessages(items));
 }
 
 function messageKey(message: unknown, index: number): string {

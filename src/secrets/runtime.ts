@@ -140,21 +140,14 @@ async function resolveLoadablePluginOrigins(params: {
     params.config,
     resolveDefaultAgentId(params.config),
   );
-  const { loadPluginManifestRegistryForInstalledIndex, loadPluginRegistrySnapshot } =
+  const { listPluginOriginsFromMetadataSnapshot, loadPluginMetadataSnapshot } =
     await loadRuntimeManifestHelpers();
-  const index = loadPluginRegistrySnapshot({
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
     workspaceDir,
     env: params.env,
   });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return new Map(manifestRegistry.plugins.map((record) => [record.id, record.origin]));
+  return listPluginOriginsFromMetadataSnapshot(snapshot);
 }
 
 function mergeSecretsRuntimeEnv(
@@ -180,6 +173,16 @@ function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
     typeof entries === "object" &&
     !Array.isArray(entries) &&
     Object.keys(entries).length > 0
+  );
+}
+
+function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
+  const channels = config.channels;
+  return (
+    !!channels &&
+    typeof channels === "object" &&
+    !Array.isArray(channels) &&
+    Object.keys(channels).some((channelId) => channelId !== "defaults")
   );
 }
 
@@ -372,7 +375,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   } = await loadRuntimePrepareHelpers();
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
-    (hasConfiguredPluginEntries(sourceConfig)
+    (hasConfiguredPluginEntries(sourceConfig) || hasConfiguredChannelEntries(sourceConfig)
       ? await resolveLoadablePluginOrigins({ config: sourceConfig, env: runtimeEnv })
       : new Map<string, PluginOrigin>());
   const context = createResolverContext({
