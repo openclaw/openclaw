@@ -231,7 +231,7 @@ export const zh_CN: TranslationMap = {
       tools: "工具",
       skills: "技能",
       channels: "频道",
-      cronJobs: "定时任务",
+      cronJobs: "Cron Jobs",
     },
     context: {
       title: "代理上下文",
