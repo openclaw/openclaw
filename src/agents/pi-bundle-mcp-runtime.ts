@@ -84,6 +84,39 @@ function isValidRootInputSchema(schema: Record<string, unknown>): boolean {
   return schema.type === "object";
 }
 
+function collectValidCatalogTools(params: {
+  listedTools: LenientListedTool[];
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+}): McpCatalogTool[] {
+  const tools: McpCatalogTool[] = [];
+  for (const tool of params.listedTools) {
+    const toolName = tool.name.trim();
+    if (!toolName) {
+      continue;
+    }
+    const inputSchema = normalizeInputSchema(tool.inputSchema);
+    if (!isValidRootInputSchema(inputSchema)) {
+      logWarn(
+        `bundle-mcp: skipping tool "${toolName}" from server "${params.serverName}": ` +
+          `inputSchema.type is ${JSON.stringify(inputSchema.type)} (must be "object" per MCP spec).`,
+      );
+      continue;
+    }
+    tools.push({
+      serverName: params.serverName,
+      safeServerName: params.safeServerName,
+      toolName,
+      title: tool.title,
+      description: normalizeOptionalString(tool.description),
+      inputSchema,
+      fallbackDescription: `Provided by bundle MCP server "${params.serverName}" (${params.launchSummary}).`,
+    });
+  }
+  return tools;
+}
+
 const require = createRequire(import.meta.url);
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
@@ -311,34 +344,18 @@ export function createSessionMcpRuntime(params: {
             failIfDisposed();
             const listedTools = await listAllTools(client);
             failIfDisposed();
+            const catalogTools = collectValidCatalogTools({
+              listedTools,
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+            });
             servers[serverName] = {
               serverName,
               launchSummary: resolved.description,
-              toolCount: listedTools.length,
+              toolCount: catalogTools.length,
             };
-            for (const tool of listedTools) {
-              const toolName = tool.name.trim();
-              if (!toolName) {
-                continue;
-              }
-              const inputSchema = normalizeInputSchema(tool.inputSchema);
-              if (!isValidRootInputSchema(inputSchema)) {
-                logWarn(
-                  `bundle-mcp: skipping tool "${toolName}" from server "${serverName}": ` +
-                    `inputSchema.type is ${JSON.stringify(inputSchema.type)} (must be "object" per MCP spec).`,
-                );
-                continue;
-              }
-              tools.push({
-                serverName,
-                safeServerName,
-                toolName,
-                title: tool.title,
-                description: normalizeOptionalString(tool.description),
-                inputSchema,
-                fallbackDescription: `Provided by bundle MCP server "${serverName}" (${resolved.description}).`,
-              });
-            }
+            tools.push(...catalogTools);
           } catch (error) {
             if (!disposed) {
               logWarn(
@@ -701,6 +718,7 @@ export const __testing = {
   resolveSessionMcpRuntimeIdleTtlMs,
   normalizeInputSchema,
   isValidRootInputSchema,
+  collectValidCatalogTools,
   LenientToolSchema,
   LenientListToolsResultSchema,
 };

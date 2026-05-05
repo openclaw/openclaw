@@ -223,6 +223,39 @@ describe("session MCP runtime", () => {
     expect(isValidRootInputSchema({ type: "number" })).toBe(false);
   });
 
+  it("counts only accepted tools after catalog schema filtering", () => {
+    const { collectValidCatalogTools } = __testing;
+
+    const catalogTools = collectValidCatalogTools({
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      launchSummary: "node probe.mjs",
+      listedTools: [
+        {
+          name: " typeless_tool ",
+          description: "Tool without inputSchema.type",
+          inputSchema: { properties: { query: { type: "string" } } },
+        },
+        {
+          name: "bad_root_schema",
+          inputSchema: { type: "string" },
+        },
+        {
+          name: "   ",
+          inputSchema: { type: "object", properties: {} },
+        },
+      ],
+    });
+
+    expect(catalogTools).toHaveLength(1);
+    expect(catalogTools[0]).toMatchObject({
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      toolName: "typeless_tool",
+      inputSchema: { type: "object", properties: { query: { type: "string" } } },
+    });
+  });
+
   it("holds a runtime lease until the materialized tool runtime is disposed", async () => {
     let activeLeases = 0;
     const runtime = {
