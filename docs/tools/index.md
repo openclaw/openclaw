@@ -228,3 +228,50 @@ changing global defaults:
   },
 }
 ```
+
+### Owner-only tools
+
+Some tools are gated behind **owner verification** and are silently removed
+from the agent's tool list when the sender is not recognized as an owner.
+This means the agent won't even know these tools exist unless ownership is
+configured.
+
+**Owner-only tools:**
+
+| Tool      | What it does                        |
+| --------- | ----------------------------------- |
+| `gateway` | Restart or manage the gateway       |
+| `cron`    | Create and manage scheduled jobs    |
+| `nodes`   | Discover and control paired devices |
+
+**Configuring ownership:**
+
+Set `commands.ownerAllowFrom` with your channel-native sender IDs:
+
+```bash
+openclaw config set commands.ownerAllowFrom '["YOUR_SENDER_ID"]' --strict-json
+```
+
+Examples by channel:
+
+```json5
+{
+  commands: {
+    ownerAllowFrom: [
+      "473674681023725588", // Discord user ID
+      // "whatsapp:+15551234567" // WhatsApp (with channel prefix)
+      // "telegram:123456789"    // Telegram
+    ],
+  },
+}
+```
+
+To find your sender ID, check the gateway logs when you send a message — your
+channel-native ID is logged with each inbound message. For Discord, right-click
+your username and select "Copy User ID" (requires Developer Mode in settings).
+
+Without this configuration, the agent silently falls back to CLI workarounds
+(e.g. `exec` with `openclaw cron add`) instead of using the native tools
+directly. If your agent seems to be missing `cron`, `gateway`, or `nodes`
+tools despite having `tools.profile: "full"`, this is almost certainly the
+cause.
