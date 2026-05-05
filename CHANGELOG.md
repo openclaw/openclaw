@@ -107,7 +107,6 @@ Docs: https://docs.openclaw.ai
 - Model switching: include the exact additive allowlist repair command when `/model ... --runtime ...` targets a blocked model, and make Telegram's model picker say that it changes only the session model while leaving the runtime unchanged. Thanks @vincentkoc.
 - Mattermost: clarify that the model picker only changes the session model and that runtime switches require `/oc_model <provider/model> --runtime <runtime>`. Thanks @vincentkoc.
 - Doctor/config: keep active `auth.profiles` metadata intact when `doctor --fix` strips stale secret fields from configs, repairing legacy `<provider>:default` API-key profile metadata when model fallbacks or explicit `model@profile` refs still depend on it. Fixes #77400.
-- Doctor/device pairing: stop suggesting `openclaw devices rotate --role <role>` for stale local cached device auth when that role is no longer approved by the gateway pairing record, so doctor no longer points users at a command that must be denied. Thanks @Conan-Scott.
 - Doctor/plugins: include `plugins.allow`-only official plugin ids in the release configured-plugin repair set, so `doctor --fix` installs official external plugins that are configured but not yet loaded instead of removing them as stale allow entries. Fixes #77155. Thanks @hclsys.
 - Doctor/sessions: clear auto-created stale session routing state from the sessions store when `doctor --fix` sees plugin-owned model/runtime/auth/session bindings outside the current configured route, while leaving explicit user model choices for manual review. Refs #68615.
 - CLI/update: disable and skip plugins that fail package-update plugin sync, so a broken npm/ClawHub/git/marketplace plugin cannot turn a successful OpenClaw package update into a failed update result. Thanks @vincentkoc.
@@ -310,6 +309,7 @@ Docs: https://docs.openclaw.ai
 - Agents/replay-history: drop trailing assistant turns whose content is empty or carries only the stream-error sentinel before sending the transcript to the provider, so prefill-strict providers (such as github-copilot/claude-opus-4.6) no longer reject the request with `400 The conversation must end with a user message` after a session whose last turn errored before producing content. Refs #77228. (#77287) Thanks @openperf.
 - Gateway/sessions: cache selected model override resolution while building session-list rows so `openclaw sessions` and Control UI session lists stay responsive on model-heavy stores. (#77650) Thanks @ragesaq.
 - Agents/session-file-repair: drop `type: "message"` entries with a missing, `null`, or blank role during the on-disk repair pass so sessions that accumulated null-role JSONL corruption (such as the 935+ corrupt entries in #77228) get fully cleaned up rather than carried forward into the repaired file. Refs #77228. (#77288) Thanks @openperf.
+- Doctor/device pairing: stop suggesting `openclaw devices rotate --role <role>` for stale local cached device auth when that role is no longer approved by the gateway pairing record, so doctor no longer points users at a command that must be denied. (#77688) Thanks @Conan-Scott.
 
 ## 2026.5.3-1
 
