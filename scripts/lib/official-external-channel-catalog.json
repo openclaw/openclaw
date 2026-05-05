@@ -97,7 +97,7 @@
           "label": "Weixin",
           "selectionLabel": "Weixin（微信）",
           "detailLabel": "Weixin",
-          "docsPath": "/plugins/community#weixin",
+          "docsPath": "/channels/wechat",
           "docsLabel": "weixin",
           "blurb": "Personal WeChat messaging via QR-code login.",
           "aliases": ["weixin", "wechat", "微信"],
