@@ -130,4 +130,29 @@ describe("status.scan.config-shared", () => {
 
     expect(result.secretDiagnostics).toEqual([]);
   });
+
+  it("does not add a status diagnostic for remote gateway mode", async () => {
+    const sourceConfig = {
+      gateway: {
+        mode: "remote" as const,
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    };
+    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readBestEffortConfig,
+      resolveConfig,
+      env: { VITEST: "true", OPENCLAW_GATEWAY_TOKEN: "env-token" },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toEqual([]);
+  });
 });

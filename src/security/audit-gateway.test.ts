@@ -134,4 +134,19 @@ describe("security audit gateway config findings", () => {
 
     expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
   });
+
+  it("does not warn about local gateway auth token precedence in remote mode", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    };
+    const findings = collectGatewayConfigFindings(cfg, cfg, {
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+    });
+
+    expect(hasFinding("gateway.env_token_overrides_config", findings)).toBe(false);
+  });
 });

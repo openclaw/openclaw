@@ -22,6 +22,10 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     return null;
   }
 
+  if (params.cfg.gateway?.mode === "remote") {
+    return null;
+  }
+
   const authMode = params.cfg.gateway?.auth?.mode;
   if (authMode === "password" || authMode === "none" || authMode === "trusted-proxy") {
     return null;
