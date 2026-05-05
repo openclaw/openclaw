@@ -166,6 +166,31 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(context.contextFiles).toEqual([]);
   });
 
+  it("still runs agent:bootstrap hooks when skipBootstrap is true so hook-injected files reach the prompt", async () => {
+    // Regression for the codex follow-up on PR #75217: the previous implementation
+    // returned `[]` early when skipBootstrap was true, bypassing
+    // applyBootstrapHookOverrides entirely. That broke setups that opt out of
+    // default workspace bootstrap files but still rely on
+    // hook-provided context (e.g. the bundled bootstrap-extra-files handler in
+    // src/hooks/bundled/bootstrap-extra-files/handler.ts). The current path
+    // skips only the workspace file load — the hook still runs against an
+    // empty file list and its injected files survive into prompt assembly.
+    registerExtraBootstrapFileHook();
+    const workspaceDir = await makeTempWorkspace("openclaw-skip-bootstrap-hooks-");
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "workspace rules", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: { agents: { defaults: { skipBootstrap: true } } } as never,
+    });
+
+    // Workspace AGENTS.md is suppressed (skipBootstrap), but hook-injected
+    // EXTRA.md still appears.
+    expect(files.some((file) => file.name === "AGENTS.md")).toBe(false);
+    const extra = files.find((file) => file.name === "EXTRA.md");
+    expect(extra?.content).toBe("extra");
+  });
+
   it("still resolves workspace bootstrap files when skipBootstrap is false or unset", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-skip-bootstrap-off-");
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "workspace rules", "utf8");
