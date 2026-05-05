@@ -45,15 +45,12 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file });
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
-    expect(result.backupPath).toBeTruthy();
+    expect(result.backupPath).toBeUndefined();
 
     const repaired = await fs.readFile(file, "utf-8");
     expect(repaired.trim().split("\n")).toHaveLength(2);
-
-    if (result.backupPath) {
-      const backup = await fs.readFile(result.backupPath, "utf-8");
-      expect(backup).toBe(content);
-    }
+    const backups = (await fs.readdir(path.dirname(file))).filter((name) => name.includes(".bak-"));
+    expect(backups).toEqual([]);
   });
 
   it("does not drop CRLF-terminated JSONL lines", async () => {
@@ -134,7 +131,7 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    expect(result.backupPath).toBeTruthy();
+    expect(result.backupPath).toBeUndefined();
     expect(debug).toHaveBeenCalledTimes(1);
     const debugMessage = debug.mock.calls[0]?.[0] as string;
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
@@ -620,7 +617,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(3);
-    expect(result.backupPath).toBeTruthy();
+    expect(result.backupPath).toBeUndefined();
 
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");
