@@ -18,6 +18,7 @@ import {
 } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
@@ -35,14 +36,14 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export const NATIVE_HOOK_RELAY_EVENTS = [
+const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
   "post_tool_use",
   "permission_request",
   "before_agent_finalize",
 ] as const;
 
-export const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
+const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
 
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
 export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
@@ -81,6 +82,7 @@ export type NativeHookRelayRegistration = {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
+  config?: OpenClawConfig;
   runId: string;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
@@ -98,6 +100,7 @@ export type RegisterNativeHookRelayParams = {
   agentId?: string;
   sessionId: string;
   sessionKey?: string;
+  config?: OpenClawConfig;
   runId: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
   ttlMs?: number;
@@ -299,6 +302,7 @@ export function registerNativeHookRelay(
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents,
     expiresAtMs: Date.now() + normalizePositiveInteger(params.ttlMs, DEFAULT_RELAY_TTL_MS),
@@ -321,7 +325,7 @@ export function registerNativeHookRelay(
   };
 }
 
-export function unregisterNativeHookRelay(relayId: string): void {
+function unregisterNativeHookRelay(relayId: string): void {
   unregisterNativeHookRelayBridge(relayId);
   relays.delete(relayId);
   removeNativeHookRelayInvocations(relayId);
@@ -878,6 +882,7 @@ async function runNativeHookRelayPreToolUse(params: {
       ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
       sessionId: params.registration.sessionId,
       ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+      ...(params.registration.config ? { config: params.registration.config } : {}),
       runId: params.registration.runId,
     },
   });

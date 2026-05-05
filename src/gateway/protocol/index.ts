@@ -171,6 +171,18 @@ import {
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
+  type EnvironmentSummary,
+  EnvironmentSummarySchema,
+  type EnvironmentsListParams,
+  EnvironmentsListParamsSchema,
+  type EnvironmentsListResult,
+  EnvironmentsListResultSchema,
+  type EnvironmentsStatusParams,
+  EnvironmentsStatusParamsSchema,
+  type EnvironmentsStatusResult,
+  EnvironmentsStatusResultSchema,
+  type EnvironmentStatus,
+  EnvironmentStatusSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -256,6 +268,8 @@ import {
   SessionsAbortParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
+  type SessionsCleanupParams,
+  SessionsCleanupParamsSchema,
   type SessionsCompactionBranchParams,
   SessionsCompactionBranchParamsSchema,
   type SessionsCompactionGetParams,
@@ -268,6 +282,8 @@ import {
   SessionsCreateParamsSchema,
   type SessionsDeleteParams,
   SessionsDeleteParamsSchema,
+  type SessionsDescribeParams,
+  SessionsDescribeParamsSchema,
   type SessionsListParams,
   SessionsListParamsSchema,
   type SessionsMessagesSubscribeParams,
@@ -407,6 +423,12 @@ export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
 );
 export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateEnvironmentsListParams = ajv.compile<EnvironmentsListParams>(
+  EnvironmentsListParamsSchema,
+);
+export const validateEnvironmentsStatusParams = ajv.compile<EnvironmentsStatusParams>(
+  EnvironmentsStatusParamsSchema,
+);
 export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -444,8 +466,14 @@ export const validateSecretsResolveResult = ajv.compile<SecretsResolveResult>(
   SecretsResolveResultSchema,
 );
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(SessionsListParamsSchema);
+export const validateSessionsCleanupParams = ajv.compile<SessionsCleanupParams>(
+  SessionsCleanupParamsSchema,
+);
 export const validateSessionsPreviewParams = ajv.compile<SessionsPreviewParams>(
   SessionsPreviewParamsSchema,
+);
+export const validateSessionsDescribeParams = ajv.compile<SessionsDescribeParams>(
+  SessionsDescribeParamsSchema,
 );
 export const validateSessionsResolveParams = ajv.compile<SessionsResolveParams>(
   SessionsResolveParamsSchema,
@@ -660,6 +688,12 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  EnvironmentStatusSchema,
+  EnvironmentSummarySchema,
+  EnvironmentsListParamsSchema,
+  EnvironmentsListResultSchema,
+  EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -693,7 +727,9 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsCleanupParamsSchema,
   SessionsPreviewParamsSchema,
+  SessionsDescribeParamsSchema,
   SessionsResolveParamsSchema,
   SessionsCompactionListParamsSchema,
   SessionsCompactionGetParamsSchema,
@@ -903,6 +939,12 @@ export type {
   SkillsDetailResult,
   SkillsInstallParams,
   SkillsUpdateParams,
+  EnvironmentStatus,
+  EnvironmentSummary,
+  EnvironmentsListParams,
+  EnvironmentsListResult,
+  EnvironmentsStatusParams,
+  EnvironmentsStatusResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,
@@ -918,7 +960,9 @@ export type {
   NodePendingEnqueueParams,
   NodePendingEnqueueResult,
   SessionsListParams,
+  SessionsCleanupParams,
   SessionsPreviewParams,
+  SessionsDescribeParams,
   SessionsResolveParams,
   SessionsPatchParams,
   SessionsPatchResult,

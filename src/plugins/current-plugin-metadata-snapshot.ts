@@ -5,9 +5,21 @@ import {
   setCurrentPluginMetadataSnapshotState,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadata-config-fingerprint.js";
+import {
+  resolvePluginControlPlaneFingerprint,
+  type ResolvePluginControlPlaneContextParams,
+} from "./plugin-control-plane-context.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-export { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadata-config-fingerprint.js";
+
+export function resolvePluginMetadataControlPlaneFingerprint(
+  config?: OpenClawConfig,
+  options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
+): string {
+  return resolvePluginControlPlaneFingerprint({
+    config,
+    ...options,
+  });
+}
 
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
 // never accumulate historical metadata snapshots here.
@@ -18,7 +30,7 @@ export function setCurrentPluginMetadataSnapshot(
   setCurrentPluginMetadataSnapshotState(
     snapshot,
     snapshot
-      ? resolvePluginMetadataSnapshotConfigFingerprint(options.config, {
+      ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
           env: options.env,
           index: snapshot.index,
           policyHash: snapshot.policyHash,
@@ -37,6 +49,7 @@ export function getCurrentPluginMetadataSnapshot(
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
     workspaceDir?: string;
+    allowWorkspaceScopedSnapshot?: boolean;
   } = {},
 ): PluginMetadataSnapshot | undefined {
   const { snapshot: rawSnapshot, configFingerprint } = getCurrentPluginMetadataSnapshotState();
@@ -50,16 +63,16 @@ export function getCurrentPluginMetadataSnapshot(
   ) {
     return undefined;
   }
+  const requestedWorkspaceDir =
+    params.workspaceDir ??
+    (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
   if (params.config) {
-    const requestedConfigFingerprint = resolvePluginMetadataSnapshotConfigFingerprint(
-      params.config,
-      {
-        env: params.env,
-        index: snapshot.index,
-        policyHash: snapshot.policyHash,
-        workspaceDir: params.workspaceDir,
-      },
-    );
+    const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
+      env: params.env,
+      index: snapshot.index,
+      policyHash: snapshot.policyHash,
+      workspaceDir: requestedWorkspaceDir,
+    });
     if (configFingerprint && configFingerprint !== requestedConfigFingerprint) {
       return undefined;
     }
@@ -67,12 +80,12 @@ export function getCurrentPluginMetadataSnapshot(
       return undefined;
     }
   }
-  if (snapshot.workspaceDir !== undefined && params.workspaceDir === undefined) {
+  if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
     return undefined;
   }
   if (
-    params.workspaceDir !== undefined &&
-    (snapshot.workspaceDir ?? "") !== (params.workspaceDir ?? "")
+    requestedWorkspaceDir !== undefined &&
+    (snapshot.workspaceDir ?? "") !== (requestedWorkspaceDir ?? "")
   ) {
     return undefined;
   }

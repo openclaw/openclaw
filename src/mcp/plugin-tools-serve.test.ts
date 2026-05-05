@@ -11,6 +11,7 @@ const callGatewayTool = vi.hoisted(() => vi.fn());
 const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
 const createToolsMcpServerMock = vi.hoisted(() => vi.fn(() => ({ close: vi.fn() })));
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
+const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
 
@@ -34,6 +35,7 @@ vi.mock("../plugins/tools.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/tools.js")>();
   return {
     ...actual,
+    ensureStandalonePluginToolRegistryLoaded: ensureStandalonePluginToolRegistryLoadedMock,
     resolvePluginTools: resolvePluginToolsMock,
   };
 });
@@ -48,6 +50,7 @@ afterEach(() => {
   callGatewayTool.mockReset();
   connectToolsMcpServerToStdioMock.mockReset();
   createToolsMcpServerMock.mockClear();
+  ensureStandalonePluginToolRegistryLoadedMock.mockReset();
   getRuntimeConfigMock.mockClear();
   resolvePluginToolsMock.mockReset();
   resolvePluginToolsMock.mockReturnValue([]);
@@ -71,11 +74,43 @@ describe("plugin tools MCP server", () => {
     await servePluginToolsMcp();
 
     expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: { config: { plugins: { enabled: true } } },
+    });
     expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
+    expect(ensureStandalonePluginToolRegistryLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(routeLogsToStderrMock.mock.invocationCallOrder[0]).toBeLessThan(
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
     );
     expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
+  });
+
+  it("threads global plugin tool policy into plugin resolution", async () => {
+    getRuntimeConfigMock.mockReturnValueOnce({
+      plugins: { enabled: true },
+      tools: {
+        alsoAllow: ["memory_search"],
+        deny: ["memory_forget"],
+      },
+    } as never);
+    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+
+    await servePluginToolsMcp();
+
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAllowlist: expect.arrayContaining(["memory_search"]),
+        toolDenylist: ["memory_forget"],
+      }),
+    );
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolAllowlist: expect.arrayContaining(["memory_search"]),
+        toolDenylist: ["memory_forget"],
+      }),
+    );
   });
 
   it("lists registered plugin tools and serializes non-array tool content", async () => {

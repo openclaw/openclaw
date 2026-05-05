@@ -8,7 +8,10 @@ import {
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
 import type { PollInput } from "../../polls.js";
-import type { PluginModuleLoaderCache } from "../plugin-module-loader-cache.js";
+import {
+  createPluginModuleLoaderCache,
+  type PluginModuleLoaderCache,
+} from "../plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import {
   loadPluginBoundaryModule,
@@ -95,13 +98,11 @@ type WebChannelHeavyRuntimeModule = {
   ) => Promise<AgentToolResult<unknown>>;
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
-  runWebHeartbeatOnce: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
   waitForWaConnection: (sock: unknown) => Promise<void>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
   extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
-  resolveHeartbeatRecipients: (...args: unknown[]) => unknown;
 };
 
 type WebChannelRuntimeModuleKind = "heavy" | "light";
@@ -115,7 +116,7 @@ const webChannelRuntimeModuleCache = new Map<
   CachedWebChannelRuntimeModule
 >();
 
-const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
   return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {
@@ -332,12 +333,6 @@ export async function optimizeImageToJpeg(
   return await optimizeImageToJpegImpl(...args);
 }
 
-export async function runWebHeartbeatOnce(
-  ...args: Parameters<WebChannelHeavyRuntimeModule["runWebHeartbeatOnce"]>
-): ReturnType<WebChannelHeavyRuntimeModule["runWebHeartbeatOnce"]> {
-  return (await getHeavyExport("runWebHeartbeatOnce"))(...args);
-}
-
 export async function startWebLoginWithQr(
   ...args: Parameters<WebChannelHeavyRuntimeModule["startWebLoginWithQr"]>
 ): ReturnType<WebChannelHeavyRuntimeModule["startWebLoginWithQr"]> {
@@ -367,10 +362,4 @@ export function getDefaultLocalRoots(
   ...args: Parameters<typeof getDefaultLocalRootsImpl>
 ): ReturnType<typeof getDefaultLocalRootsImpl> {
   return getDefaultLocalRootsImpl(...args);
-}
-
-export function resolveHeartbeatRecipients(
-  ...args: Parameters<WebChannelHeavyRuntimeModule["resolveHeartbeatRecipients"]>
-): ReturnType<WebChannelHeavyRuntimeModule["resolveHeartbeatRecipients"]> {
-  return loadCurrentHeavyModuleSync().resolveHeartbeatRecipients(...args);
 }

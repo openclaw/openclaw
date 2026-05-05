@@ -6,6 +6,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
+  createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
@@ -24,9 +25,9 @@ const publicSurfaceLocationCache = new Map<
   {
     modulePath: string;
     boundaryRoot: string;
-  } | null
+  }
 >();
-const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -83,11 +84,14 @@ function resolvePublicSurfaceLocation(params: {
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
   const key = createResolutionKey(params);
-  if (publicSurfaceLocationCache.has(key)) {
-    return publicSurfaceLocationCache.get(key) ?? null;
+  const cached = publicSurfaceLocationCache.get(key);
+  if (cached) {
+    return cached;
   }
   const resolved = resolvePublicSurfaceLocationUncached(params);
-  publicSurfaceLocationCache.set(key, resolved);
+  if (resolved) {
+    publicSurfaceLocationCache.set(key, resolved);
+  }
   return resolved;
 }
 

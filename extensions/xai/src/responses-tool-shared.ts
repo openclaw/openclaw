@@ -18,7 +18,7 @@ function extractUrlCitations(annotations: unknown): string[] {
     .map((annotation) => annotation.url as string);
 }
 
-export const XAI_RESPONSES_BASE_URL = "https://api.x.ai/v1";
+const XAI_RESPONSES_BASE_URL = "https://api.x.ai/v1";
 export const XAI_RESPONSES_ENDPOINT = `${XAI_RESPONSES_BASE_URL}/responses`;
 
 function trimString(value: unknown): string | undefined {

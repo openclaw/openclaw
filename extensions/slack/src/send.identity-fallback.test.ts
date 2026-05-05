@@ -189,6 +189,7 @@ describe("sendMessageSlack customize-scope fallback", () => {
         token: "xoxb-test",
         cfg: SLACK_TEST_CFG,
         client,
+        threadTs: "171234.100",
       }),
     ).rejects.toThrow(
       "An API error occurred: missing_scope (needed: im:write; granted: chat:write)",

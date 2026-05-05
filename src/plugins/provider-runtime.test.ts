@@ -93,6 +93,9 @@ let providerRuntimeTesting: typeof import("./provider-runtime.js").__testing;
 let runProviderDynamicModel: typeof import("./provider-runtime.js").runProviderDynamicModel;
 let validateProviderReplayTurnsWithPlugin: typeof import("./provider-runtime.js").validateProviderReplayTurnsWithPlugin;
 let wrapProviderStreamFn: typeof import("./provider-runtime.js").wrapProviderStreamFn;
+let createEmptyPluginRegistry: typeof import("./registry.js").createEmptyPluginRegistry;
+let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
+let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
 
 const MODEL: ProviderRuntimeModel = {
   id: "demo-model",
@@ -316,9 +319,12 @@ describe("provider-runtime", () => {
       validateProviderReplayTurnsWithPlugin,
       wrapProviderStreamFn,
     } = await import("./provider-runtime.js"));
+    ({ createEmptyPluginRegistry } = await import("./registry.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
   });
 
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -367,6 +373,73 @@ describe("provider-runtime", () => {
       provider: "claude-cli",
       expectedPluginId: "anthropic",
     });
+  });
+
+  it("uses the active startup registry for provider hook lookup", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+      prepareExtraParams: ({ extraParams }) => ({
+        ...extraParams,
+        fromActiveRegistry: true,
+      }),
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: DEMO_PROVIDER_ID,
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    expect(
+      prepareProviderExtraParams({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        context: createDemoRuntimeContext({
+          extraParams: {},
+        }),
+      }),
+    ).toEqual({
+      fromActiveRegistry: true,
+    });
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("matches active provider hooks through a custom provider's native api owner", () => {
+    const provider: ProviderPlugin = {
+      id: "ollama",
+      label: "Ollama",
+      auth: [],
+      createStreamFn: vi.fn(() => vi.fn()),
+    };
+    const registry = createEmptyPluginRegistry();
+    registry.providers.push({
+      pluginId: "ollama",
+      provider,
+      source: "test",
+    });
+    setActivePluginRegistry(registry, "startup-registry", "gateway-bindable", "/tmp/workspace");
+
+    const plugin = resolveProviderRuntimePlugin({
+      provider: "ollama-spark",
+      workspaceDir: "/tmp/workspace",
+      config: {
+        models: {
+          providers: {
+            "ollama-spark": {
+              api: "ollama",
+              baseUrl: "http://127.0.0.1:11434",
+              models: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(plugin).toMatchObject({ id: "ollama", pluginId: "ollama" });
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
   it("uses current provider-ref owner plugin config for provider hooks", () => {
@@ -840,6 +913,25 @@ describe("provider-runtime", () => {
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
     expect(contribution?.sectionOverrides?.interaction_style).toContain(
       "This is a live chat, not a memo.",
+    );
+    expect(contribution?.sectionOverrides?.interaction_style).not.toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
+    );
+  });
+
+  it("passes heartbeat trigger context to the shared GPT-5 prompt overlay", () => {
+    const contribution = resolveProviderSystemPromptContribution({
+      provider: "openrouter",
+      context: {
+        provider: "openrouter",
+        modelId: "openai/gpt-5.4",
+        promptMode: "full",
+        trigger: "heartbeat",
+      } as never,
+    });
+
+    expect(contribution?.sectionOverrides?.interaction_style).toContain(
+      "The purpose of heartbeats is to make you feel magical and proactive.",
     );
   });
 

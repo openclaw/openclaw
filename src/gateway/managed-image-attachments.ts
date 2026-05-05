@@ -717,7 +717,10 @@ async function getSessionManagedOutgoingAttachmentIndex(
     }
   }
 
-  const messages = await readSessionMessagesAsync(sessionId, storePath, entry.sessionFile);
+  const messages = await readSessionMessagesAsync(sessionId, storePath, entry.sessionFile, {
+    mode: "full",
+    reason: "managed outgoing attachment index",
+  });
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.__openclaw;

@@ -161,15 +161,17 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-The official OpenClaw Docker release image includes the bundled
-`diagnostics-otel` plugin source. To enable export, allow and enable the
+Install the official `@openclaw/diagnostics-otel` plugin from ClawHub in
+packaged Docker installs before enabling export. Custom source-built images can
+still include the local plugin source with
+`OPENCLAW_EXTENSIONS=diagnostics-otel`. To enable export, allow and enable the
 `diagnostics-otel` plugin in config, then set
-`diagnostics.otel.enabled=true` or use the config example in
-[OpenTelemetry export](/gateway/opentelemetry). Collector auth headers are
-configured through `diagnostics.otel.headers`, not through Docker environment
-variables.
+`diagnostics.otel.enabled=true` or use the config example in [OpenTelemetry
+export](/gateway/opentelemetry). Collector auth headers are configured through
+`diagnostics.otel.headers`, not through Docker environment variables.
 
-Prometheus metrics use the already-published Gateway port. Enable the
+Prometheus metrics use the already-published Gateway port. Install
+`clawhub:@openclaw/diagnostics-prometheus`, enable the
 `diagnostics-prometheus` plugin, then scrape:
 
 ```text
@@ -330,7 +332,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     `openclaw-cli` uses `network_mode: "service:openclaw-gateway"` so CLI
     commands can reach the gateway over `127.0.0.1`. Treat this as a shared
     trust boundary. The compose config drops `NET_RAW`/`NET_ADMIN` and enables
-    `no-new-privileges` on `openclaw-cli`.
+    `no-new-privileges` on both `openclaw-gateway` and `openclaw-cli`.
   </Accordion>
 
   <Accordion title="Permissions and EACCES">

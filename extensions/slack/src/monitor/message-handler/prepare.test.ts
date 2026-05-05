@@ -399,6 +399,42 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared?.ackReactionPromise).toBeNull();
   });
 
+  it("primes Slack status reactions when channel replies are message-tool-only", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+          groupChat: { visibleReplies: "message_tool" },
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            replyToMode: "all",
+          },
+        },
+      } as OpenClawConfig,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@B1> hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared?.ackReactionMessageTs).toBe("1.000");
+    expect(prepared?.ackReactionValue).toBe("eyes");
+    expect(prepared?.ackReactionPromise).toBeTruthy();
+    expect(await prepared!.ackReactionPromise).toBe(true);
+  });
+
   it("includes forwarded shared attachment text in raw body", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
@@ -500,7 +536,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       subtype: "bot_message",
       attachments: [
         {
-          text: "Readiness probe failed: Get http://10.42.13.132:8000/status: context deadline exceeded",
+          text: "Readiness probe failed: Get https://status.example.test/readiness: context deadline exceeded",
         },
       ],
     });
@@ -509,6 +545,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+    // Slack message attachments can carry the user-visible body even when the
+    // top-level message text is empty.
+    expect(prepared!.ctxPayload.CommandBody).toBe("");
+    expect(prepared!.ctxPayload.BodyForCommands).toBe("");
+    expect(prepared!.ctxPayload.BodyForAgent).toContain("Readiness probe failed");
   });
 
   it("drops bot-authored room messages when allowBots is true but no owner is present (#59284)", async () => {
@@ -693,6 +734,58 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.isRoomish).toBe(true);
     expect(prepared!.ctxPayload.ChatType).toBe("group");
     expect(prepared!.ctxPayload.From).toBe("slack:group:G123");
+  });
+
+  it("matches route bindings that use Slack target syntax for peers (#41608)", async () => {
+    const cases = [
+      {
+        peer: { kind: "group", id: "channel:C0AJUGWG5L6" },
+        message: createSlackMessage({
+          channel: "C0AJUGWG5L6",
+          channel_type: "channel",
+          text: "strategy ping",
+        }),
+        expectedSessionKey: "agent:strategist:slack:channel:c0ajugwg5l6",
+      },
+      {
+        peer: { kind: "direct", id: "user:U0ROUTE42" },
+        message: createSlackMessage({
+          channel: "D0ROUTE42",
+          channel_type: "im",
+          user: "U0ROUTE42",
+          text: "dm ping",
+        }),
+        expectedSessionKey: "agent:strategist:direct:u0route42",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { dmScope: "per-peer" },
+          agents: {
+            list: [{ id: "main", default: true }, { id: "strategist" }],
+          },
+          bindings: [
+            {
+              agentId: "strategist",
+              match: { channel: "slack", peer: testCase.peer },
+            },
+          ],
+          channels: { slack: { enabled: true, groupPolicy: "open" } },
+        } as OpenClawConfig,
+        defaultRequireMention: false,
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "strategy", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(slackCtx, createSlackAccount(), testCase.message);
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.route.agentId).toBe("strategist");
+      expect(prepared!.route.matchedBy).toBe("binding.peer");
+      expect(prepared!.ctxPayload.SessionKey).toBe(testCase.expectedSessionKey);
+    }
   });
 
   it("respects replyToModeByChatType.direct override for DMs", async () => {

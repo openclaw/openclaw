@@ -46,6 +46,10 @@ export type SessionListResult = {
   sessions?: SessionRow[];
 };
 
+export type SessionDescribeResult = {
+  session?: SessionRow | null;
+};
+
 export type ChatHistoryResult = {
   messages?: Array<{ id?: string; role?: string; content?: unknown; [key: string]: unknown }>;
 };
@@ -142,6 +146,16 @@ export function summarizeResult(
 ): { content: Array<{ type: "text"; text: string }> } {
   return {
     content: [{ type: "text", text: `${label}: ${count}` }],
+  };
+}
+
+export function summarizeStructuredResult(
+  label: string,
+  count: number,
+  payload: unknown,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{ type: "text", text: `${label}: ${count}\n\n${JSON.stringify(payload, null, 2)}` }],
   };
 }
 

@@ -13,6 +13,7 @@ import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
+  createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
@@ -23,6 +24,10 @@ import {
   shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
+import {
+  findUndeclaredPluginToolNames,
+  normalizePluginToolContractNames,
+} from "./tool-contracts.js";
 import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -196,7 +201,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
   const registry = createEmptyPluginRegistry();
-  const moduleLoaders: PluginModuleLoaderCache = new Map();
+  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
   const getModuleLoader = (modulePath: string) => {
     const tryNative =
@@ -476,17 +481,32 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           rootDir: record.rootDir,
         })),
       );
-      registry.tools.push(
-        ...captured.tools.map((tool) => ({
+      const declaredToolNames = normalizePluginToolContractNames(record.contracts);
+      for (const tool of captured.tools) {
+        const undeclared = findUndeclaredPluginToolNames({
+          declaredNames: declaredToolNames,
+          toolNames: [tool.name],
+        });
+        if (undeclared.length > 0) {
+          registry.diagnostics.push({
+            level: "error",
+            pluginId: record.id,
+            source: record.source,
+            message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+          });
+          continue;
+        }
+        registry.tools.push({
           pluginId: record.id,
           pluginName: record.name,
           factory: () => tool,
           names: [tool.name],
+          declaredNames: declaredToolNames,
           optional: false,
           source: record.source,
           rootDir: record.rootDir,
-        })),
-      );
+        });
+      }
       registry.plugins.push(record);
     } catch (error) {
       recordCapabilityLoadError(registry, record, String(error));

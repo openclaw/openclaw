@@ -48,9 +48,15 @@ export type PluginMetadataSnapshot = {
   metrics: PluginMetadataSnapshotMetrics;
 };
 
+export type PluginMetadataRegistryView = Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;
+
+export type PluginMetadataManifestView = Pick<PluginMetadataSnapshot, "index" | "plugins">;
+
 export type LoadPluginMetadataSnapshotParams = {
   config: OpenClawConfig;
   workspaceDir?: string;
+  stateDir?: string;
   env: NodeJS.ProcessEnv;
   index?: InstalledPluginIndex;
+  preferPersisted?: boolean;
 };

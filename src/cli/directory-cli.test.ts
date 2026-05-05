@@ -233,4 +233,36 @@ describe("registerDirectoryCli", () => {
       JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
     );
   });
+
+  it("reports unsupported directory capability instead of continuing setup for installed plugins", async () => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "openclaw-weixin": {} } },
+      channelId: "openclaw-weixin",
+      plugin: {
+        id: "openclaw-weixin",
+      },
+      configChanged: false,
+      pluginInstalled: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await expect(
+      program.parseAsync(["directory", "peers", "list", "--channel", "openclaw-weixin"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("exit:1");
+
+    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawChannel: "openclaw-weixin",
+        allowInstall: true,
+      }),
+    );
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Channel openclaw-weixin does not support directory peers"),
+    );
+  });
 });

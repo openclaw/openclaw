@@ -345,13 +345,20 @@ export function stripMinimaxToolCallXml(text: string): string {
     return text;
   }
 
-  // Remove <invoke ...>...</invoke> blocks (non-greedy to handle multiple).
-  let cleaned = text.replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "");
-
-  // Remove stray minimax tool tags.
-  cleaned = cleaned.replace(/<\/?minimax:tool_call>/gi, "");
-
-  return cleaned;
+  const codeRegions = findCodeRegions(text);
+  const minimaxToolXmlRe = /<invoke\b[^>]*>[\s\S]*?<\/invoke>|<\/?minimax:tool_call>/gi;
+  let result = "";
+  let cursor = 0;
+  for (const match of text.matchAll(minimaxToolXmlRe)) {
+    const start = match.index ?? 0;
+    if (isInsideCode(start, codeRegions)) {
+      continue;
+    }
+    result += text.slice(cursor, start);
+    cursor = start + match[0].length;
+  }
+  result += text.slice(cursor);
+  return result;
 }
 
 function isLegacyBracketToolCallPayload(value: string): boolean {

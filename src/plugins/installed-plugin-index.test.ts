@@ -90,15 +90,16 @@ function createPluginCandidate(params: {
   };
 }
 
-function createRichPluginFixture(params: { packageVersion?: string } = {}) {
+function createRichPluginFixture(params: { id?: string; packageVersion?: string } = {}) {
   const rootDir = makeTempDir();
+  const id = params.id ?? "demo";
   writeRuntimeEntry(rootDir);
   writePackageJson(rootDir, {
-    name: "@vendor/demo-plugin",
+    name: `@vendor/${id}`,
     version: params.packageVersion ?? "1.2.3",
   });
   writePluginManifest(rootDir, {
-    id: "demo",
+    id,
     name: "Demo",
     configSchema: { type: "object" },
     providers: ["demo"],
@@ -564,6 +565,39 @@ describe("installed plugin index", () => {
       enabled: false,
     });
     expect(isInstalledPluginEnabled(index, "demo", config)).toBe(false);
+  });
+
+  it("keeps an index-disabled plugin disabled when config only enables another plugin", () => {
+    const enabledFixture = createRichPluginFixture({ id: "enabled-demo" });
+    const disabledFixture = createRichPluginFixture({ id: "disabled-demo" });
+    const index = loadInstalledPluginIndex({
+      candidates: [enabledFixture.candidate, disabledFixture.candidate],
+      config: {
+        plugins: {
+          entries: {
+            "disabled-demo": {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins.find((plugin) => plugin.pluginId === "disabled-demo")?.enabled).toBe(
+      false,
+    );
+    expect(
+      isInstalledPluginEnabled(index, "disabled-demo", {
+        plugins: {
+          entries: {
+            "enabled-demo": {
+              enabled: true,
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("uses runtime plugin id normalization for legacy enablement aliases", () => {

@@ -1,7 +1,11 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.4.25",
+  "version": "2026.5.4",
   "description": "OpenClaw Matrix channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@matrix-org/matrix-sdk-crypto-nodejs": "^0.5.1",
@@ -17,7 +21,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.25"
+    "openclaw": ">=2026.5.4"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -75,10 +79,7 @@
       }
     },
     "install": {
-      "npmSpec": "@openclaw/matrix",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10",
-      "allowInvalidConfigRecovery": true
+      "minHostVersion": ">=2026.4.10"
     }
   }
 }

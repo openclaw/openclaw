@@ -7,30 +7,17 @@ import {
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   parsePluginReleaseArgs,
-  parsePluginReleaseSelection,
-  parsePluginReleaseSelectionMode,
   resolvePublishablePluginVersion,
   resolveGitCommitSha,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
-  type ParsedPluginReleaseArgs,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
-export {
-  collectChangedExtensionIdsFromPaths,
-  parsePluginReleaseArgs,
-  parsePluginReleaseSelection,
-  parsePluginReleaseSelectionMode,
-  resolveChangedPublishablePluginPackages,
-  resolveSelectedPublishablePluginPackages,
-  type GitRangeSelection,
-  type ParsedPluginReleaseArgs,
-  type PluginReleaseSelectionMode,
-};
+export { parsePluginReleaseArgs };
 
-export type PluginPackageJson = {
+type PluginPackageJson = {
   name?: string;
   version?: string;
   private?: boolean;
@@ -59,21 +46,27 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
 };
 
-export type PluginReleasePlanItem = PublishablePluginPackage & {
+type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
 };
 
-export type PluginReleasePlan = {
+type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
 };
 
-export type ClawHubPublishablePluginPackageFilters = {
+type ClawHubPackageOwnerDetail = {
+  owner?: {
+    handle?: unknown;
+  } | null;
+};
+
+type ClawHubPublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
 };
@@ -89,6 +82,7 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/plugin-clawhub-owner-preflight.ts",
   "scripts/openclaw-npm-release-check.ts",
   "scripts/plugin-clawhub-publish.sh",
   "scripts/plugin-clawhub-release-check.ts",
@@ -167,7 +161,12 @@ export function collectClawHubPublishablePluginPackages(
       packageName,
       version,
       channel: parsedVersion.channel,
-      publishTag: parsedVersion.channel === "beta" ? "beta" : "latest",
+      publishTag:
+        parsedVersion.channel === "alpha"
+          ? "alpha"
+          : parsedVersion.channel === "beta"
+            ? "beta"
+            : "latest",
     });
   }
 
@@ -319,7 +318,7 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-export async function isPluginVersionPublishedOnClawHub(
+async function isPluginVersionPublishedOnClawHub(
   packageName: string,
   version: string,
   options: {
@@ -349,6 +348,59 @@ export async function isPluginVersionPublishedOnClawHub(
   throw new Error(
     `Failed to query ClawHub for ${packageName}@${version}: ${response.status} ${response.statusText}`,
   );
+}
+
+export async function collectClawHubOpenClawOwnerErrors(params: {
+  plugins: readonly Pick<PublishablePluginPackage, "packageName">[];
+  requiredOwnerHandle?: string;
+  registryBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+}): Promise<string[]> {
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const requiredOwnerHandle = params.requiredOwnerHandle ?? "openclaw";
+  const errors: string[] = [];
+
+  await Promise.all(
+    params.plugins.map(async (plugin) => {
+      if (!plugin.packageName.startsWith("@openclaw/")) {
+        return;
+      }
+
+      const url = new URL(
+        `/api/v1/packages/${encodeURIComponent(plugin.packageName)}`,
+        getRegistryBaseUrl(params.registryBaseUrl),
+      );
+      const response = await fetchImpl(url, {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      });
+
+      if (response.status === 404) {
+        errors.push(
+          `${plugin.packageName}: ClawHub package row must already exist under @${requiredOwnerHandle} before OpenClaw release publish.`,
+        );
+        return;
+      }
+      if (!response.ok) {
+        errors.push(
+          `${plugin.packageName}: failed to query ClawHub owner: ${response.status} ${response.statusText}`,
+        );
+        return;
+      }
+
+      const detail = (await response.json()) as ClawHubPackageOwnerDetail;
+      const ownerHandle = typeof detail.owner?.handle === "string" ? detail.owner.handle : null;
+      if (ownerHandle !== requiredOwnerHandle) {
+        errors.push(
+          `${plugin.packageName}: ClawHub package owner must be @${requiredOwnerHandle}; got ${ownerHandle ? `@${ownerHandle}` : "<missing>"}.`,
+        );
+      }
+    }),
+  );
+
+  return errors.toSorted();
 }
 
 export async function collectPluginClawHubReleasePlan(params?: {

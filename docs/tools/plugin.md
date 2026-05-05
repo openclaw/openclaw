@@ -18,6 +18,9 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
 ## Quick start
 
+For copy-paste install, list, uninstall, update, and publishing examples, see
+[Manage plugins](/plugins/manage-plugins).
+
 <Steps>
   <Step title="See what is loaded">
     ```bash
@@ -55,6 +58,16 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
   </Step>
 
+  <Step title="Chat-native management">
+    In a running Gateway, owner-only `/plugins enable` and `/plugins disable`
+    trigger the Gateway config reloader. The Gateway reloads plugin runtime
+    surfaces in process, and new agent turns rebuild their tool list from the
+    refreshed registry. `/plugins install` changes plugin source code, so the
+    Gateway requests a restart instead of pretending the current process can
+    safely reload already-imported modules.
+
+  </Step>
+
   <Step title="Verify the plugin">
     ```bash
     openclaw plugins inspect <plugin-id> --runtime --json
@@ -80,17 +93,16 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
 `clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `git:<repo>`, or bare package
-spec (ClawHub first, then npm fallback).
+spec through npm.
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
 reinstall path for plugins that opt into
 `openclaw.install.allowInvalidConfigRecovery`.
-During Gateway startup, invalid config for one plugin is isolated to that plugin:
-startup logs the `plugins.entries.<id>.config` issue, skips that plugin during
-load, and keeps other plugins and channels online. Run `openclaw doctor --fix`
-to quarantine the bad plugin config by disabling that plugin entry and removing
-its invalid config payload; the normal config backup keeps the previous values.
+During Gateway startup, invalid plugin config fails closed like any other invalid
+config. Run `openclaw doctor --fix` to quarantine the bad plugin config by
+disabling that plugin entry and removing its invalid config payload; the normal
+config backup keeps the previous values.
 When a channel config references a plugin that is no longer discoverable but the
 same stale plugin id remains in plugin config or install records, Gateway startup
 logs warnings and skips that channel instead of blocking every other channel.
@@ -110,8 +122,17 @@ installed under OpenClaw's managed plugin roots. npm dependencies may be hoisted
 within OpenClaw's managed npm root; install/update scans that managed root before
 trust and uninstall removes npm-managed packages through npm. External plugins
 and custom load paths must still be installed through `openclaw plugins install`.
+Use `openclaw plugins list --json` to see the static `dependencyStatus` for each
+visible plugin without importing runtime code or repairing dependencies.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
+
+For npm installs, mutable selectors such as `latest` or a dist-tag are resolved
+before installation and then pinned to the exact verified version in OpenClaw's
+managed npm root. After npm finishes, OpenClaw verifies the installed
+`package-lock.json` entry still matches the resolved version and integrity. If
+npm writes different package metadata, the install fails and the managed package
+is rolled back instead of accepting a different plugin artifact.
 
 Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
 plugins, run `pnpm install`; OpenClaw then loads bundled plugins from
@@ -139,6 +160,9 @@ Native plugin npm packages must declare `openclaw.extensions` in `package.json`.
 Each entry must stay inside the package directory and resolve to a readable
 runtime file, or to a TypeScript source file with an inferred built JavaScript
 peer such as `src/index.ts` to `dist/index.js`.
+Packaged installs must ship that JavaScript runtime output. The TypeScript
+source fallback is for source checkouts and local development paths, not for
+npm packages installed into OpenClaw's managed plugin root.
 
 Use `openclaw.runtimeExtensions` when published runtime files do not live at the
 same paths as the source entries. When present, `runtimeExtensions` must contain
@@ -236,14 +260,15 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 }
 ```
 
-| Field            | Description                                               |
-| ---------------- | --------------------------------------------------------- |
-| `enabled`        | Master toggle (default: `true`)                           |
-| `allow`          | Plugin allowlist (optional)                               |
-| `deny`           | Plugin denylist (optional; deny wins)                     |
-| `load.paths`     | Extra plugin files/directories                            |
-| `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
-| `entries.\<id\>` | Per-plugin toggles + config                               |
+| Field              | Description                                               |
+| ------------------ | --------------------------------------------------------- |
+| `enabled`          | Master toggle (default: `true`)                           |
+| `allow`            | Plugin allowlist (optional)                               |
+| `bundledDiscovery` | Bundled plugin discovery mode (`allowlist` by default)    |
+| `deny`             | Plugin denylist (optional; deny wins)                     |
+| `load.paths`       | Extra plugin files/directories                            |
+| `slots`            | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
+| `entries.\<id\>`   | Per-plugin toggles + config                               |
 
 `plugins.allow` is exclusive. When it is non-empty, only listed plugins can load
 or expose tools, even if `tools.allow` contains `"*"` or a specific plugin-owned
@@ -251,20 +276,26 @@ tool name. If a tool allowlist references plugin tools, add the owning plugin id
 to `plugins.allow` or remove `plugins.allow`; `openclaw doctor` warns about this
 shape.
 
-Config changes **require a gateway restart**. If the Gateway is running with config
-watch + in-process restart enabled (the default `openclaw gateway` path), that
-restart is usually performed automatically a moment after the config write lands.
-There is no supported hot-reload path for native plugin runtime code or lifecycle
-hooks; restart the Gateway process that is serving the live channel before
-expecting updated `register(api)` code, `api.on(...)` hooks, tools, services, or
-provider/runtime hooks to run.
+`plugins.bundledDiscovery` defaults to `"allowlist"` for new configs, so a
+restrictive `plugins.allow` inventory also blocks omitted bundled provider
+plugins, including runtime web-search provider discovery. Doctor stamps older
+restrictive allowlist configs with `"compat"` during migration so upgrades keep
+legacy bundled provider behavior until the operator opts into the stricter mode.
+An empty `plugins.allow` is still treated as unset/open.
+
+Config changes made through `/plugins enable` or `/plugins disable` trigger an
+in-process Gateway plugin reload. New agent turns rebuild their tool list from
+the refreshed plugin registry. Source-changing operations such as install,
+update, and uninstall still restart the Gateway process because already-imported
+plugin modules cannot be safely replaced in place.
 
 `openclaw plugins list` is a local plugin registry/config snapshot. An
 `enabled` plugin there means the persisted registry and current config allow the
 plugin to participate. It does not prove that an already-running remote Gateway
-child has restarted into the same plugin code. On VPS/container setups with
-wrapper processes, send restarts to the actual `openclaw gateway run` process,
-or use `openclaw gateway restart` against the running Gateway.
+has reloaded or restarted into the same plugin code. On VPS/container setups
+with wrapper processes, send restarts or reload-triggering writes to the actual
+`openclaw gateway run` process, or use `openclaw gateway restart` against the
+running Gateway when the reload reports a failure.
 
 <Accordion title="Plugin states: disabled vs missing vs invalid">
   - **Disabled**: plugin exists but enablement rules turned it off. Config is preserved.
@@ -368,6 +399,12 @@ including plugin id, declared tool names, result shape, and whether the tool is
 optional. Slow lines are promoted to warnings when a single factory takes at
 least 1s or total plugin tool factory prep takes at least 5s.
 
+OpenClaw caches successful plugin tool factory results for repeated resolutions
+with the same effective request context. The cache key includes the effective
+runtime config, workspace, agent/session ids, sandbox policy, browser settings,
+delivery context, requester identity, and ownership state, so factories that
+depend on those trusted fields are re-run when the context changes.
+
 If one plugin dominates the timing, inspect its runtime registrations:
 
 ```bash
@@ -450,7 +487,7 @@ openclaw plugins registry                  # inspect persisted registry state
 openclaw plugins registry --refresh        # rebuild persisted registry
 openclaw doctor --fix                      # repair plugin registry state
 
-openclaw plugins install <package>         # install (ClawHub first, then npm)
+openclaw plugins install <package>         # install from npm by default
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
 openclaw plugins install npm:<pkg>         # install from npm only
 openclaw plugins install git:<repo>        # install from git
@@ -509,6 +546,9 @@ Passing the package name without a version moves an exact pinned install back to
 the registry's default release line. If the installed npm plugin already matches
 the resolved version and recorded artifact identity, OpenClaw skips the update
 without downloading, reinstalling, or rewriting config.
+When `openclaw update` runs on the beta channel, default-line npm and ClawHub
+plugin records try `@beta` first and fall back to default/latest when no plugin
+beta release exists. Exact versions and explicit tags stay pinned.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.
