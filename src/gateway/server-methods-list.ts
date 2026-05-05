@@ -20,6 +20,7 @@ const BASE_METHODS = [
   "channels.status",
   "channels.start",
   "channels.stop",
+  "channels.restart",
   "channels.logout",
   "status",
   "usage.status",

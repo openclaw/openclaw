@@ -15,6 +15,7 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
+const lifecycleActions = ["start", "stop", "restart"] as const;
 
 const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
   () => import("../commands/channels.js"),
@@ -162,6 +163,27 @@ export function registerChannelsCli(program: Command) {
         await channelsLogsCommand(opts, defaultRuntime);
       });
     });
+
+  for (const action of lifecycleActions) {
+    const description =
+      action === "start"
+        ? "Start an existing linked channel account"
+        : action === "stop"
+          ? "Stop a channel account without logging it out"
+          : "Stop then start an existing linked channel account";
+    channels
+      .command(action)
+      .description(description)
+      .option("--channel <name>", `Channel (${channelNames})`)
+      .option("--account <id>", "Account id (default when omitted)")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        await runChannelsCommand(async () => {
+          const { channelsLifecycleCommand } = await loadChannelsCommands();
+          await channelsLifecycleCommand(action, opts, defaultRuntime);
+        });
+      });
+  }
 
   addChannelSetupOptions(
     channels

@@ -330,6 +330,14 @@ export const ChannelsLogoutParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChannelsStartParamsSchema = Type.Object(
+  {
+    channel: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const ChannelsStopParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -338,7 +346,7 @@ export const ChannelsStopParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const ChannelsStartParamsSchema = Type.Object(
+export const ChannelsRestartParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
     accountId: Type.Optional(Type.String()),

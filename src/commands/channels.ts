@@ -4,6 +4,8 @@ export type { ChannelsCapabilitiesOptions } from "./channels/capabilities.js";
 export { channelsCapabilitiesCommand } from "./channels/capabilities.js";
 export type { ChannelsListOptions } from "./channels/list.js";
 export { channelsListCommand } from "./channels/list.js";
+export type { ChannelLifecycleAction, ChannelsLifecycleOptions } from "./channels/lifecycle.js";
+export { channelsLifecycleCommand } from "./channels/lifecycle.js";
 export type { ChannelsLogsOptions } from "./channels/logs.js";
 export { channelsLogsCommand } from "./channels/logs.js";
 export type { ChannelsRemoveOptions } from "./channels/remove.js";

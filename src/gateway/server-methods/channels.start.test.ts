@@ -183,8 +183,10 @@ describe("channelsHandlers channels.stop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
+      gateway: { startAccount: vi.fn(), logoutAccount: vi.fn() },
       config: {
         defaultAccountId: () => "default-account",
         listAccountIds: () => ["default-account"],
@@ -193,13 +195,23 @@ describe("channelsHandlers channels.stop", () => {
     });
   });
 
-  it("stops a channel account without clearing auth state", async () => {
-    const stopChannel = vi.fn(async () => undefined);
+  it("stops the channel runtime without logging out or clearing credentials", async () => {
+    const stopChannel = vi.fn();
+    const logoutAccount = vi.fn();
     const respond = vi.fn();
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      gateway: { startAccount: vi.fn(), logoutAccount },
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: () => ({}),
+      },
+    });
 
     await channelsHandlers["channels.stop"](
       createOptions(
-        { channel: "whatsapp" },
+        { channel: "whatsapp", accountId: "acct-1" },
         {
           respond,
           context: {
@@ -210,8 +222,8 @@ describe("channelsHandlers channels.stop", () => {
                 channels: {},
                 channelAccounts: {
                   whatsapp: {
-                    "default-account": {
-                      accountId: "default-account",
+                    "acct-1": {
+                      accountId: "acct-1",
                       running: false,
                     },
                   },
@@ -223,13 +235,167 @@ describe("channelsHandlers channels.stop", () => {
       ),
     );
 
-    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default-account");
+    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "acct-1");
+    expect(logoutAccount).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       true,
       {
         channel: "whatsapp",
-        accountId: "default-account",
+        accountId: "acct-1",
         stopped: true,
+      },
+      undefined,
+    );
+  });
+
+  it("reports an actionable error when the plugin has no lifecycle stop support", async () => {
+    const respond = vi.fn();
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      gateway: {},
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: () => ({}),
+      },
+    });
+
+    await channelsHandlers["channels.stop"](createOptions({ channel: "whatsapp" }, { respond }));
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "channel whatsapp does not support runtime stop",
+      }),
+    );
+  });
+
+  it("uses the existing validation error style for invalid params", async () => {
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.stop"](createOptions({ channel: "" }, { respond }));
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("invalid channels.stop params"),
+      }),
+    );
+  });
+
+  it("does not stop when the requested account cannot be resolved", async () => {
+    const stopChannel = vi.fn();
+    const respond = vi.fn();
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      gateway: { startAccount: vi.fn() },
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: vi.fn(() => {
+          throw new Error("unknown account");
+        }),
+      },
+    });
+
+    await channelsHandlers["channels.stop"](
+      createOptions(
+        { channel: "whatsapp", accountId: "missing" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            stopChannel,
+            getRuntimeSnapshot: vi.fn(
+              (): ChannelRuntimeSnapshot => ({
+                channels: {},
+                channelAccounts: {},
+              }),
+            ),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("unknown account"),
+      }),
+    );
+  });
+});
+
+describe("channelsHandlers channels.restart", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.getChannelPlugin.mockReturnValue({
+      id: "whatsapp",
+      gateway: { startAccount: vi.fn() },
+      config: {
+        defaultAccountId: () => "default-account",
+        listAccountIds: () => ["default-account"],
+        resolveAccount: () => ({}),
+      },
+    });
+  });
+
+  it("stops then starts the channel account in order", async () => {
+    const calls: string[] = [];
+    const stopChannel = vi.fn(async () => {
+      calls.push("stop");
+    });
+    const startChannel = vi.fn(async () => {
+      calls.push("start");
+    });
+    const respond = vi.fn();
+    let running = false;
+
+    await channelsHandlers["channels.restart"](
+      createOptions(
+        { channel: "whatsapp", accountId: "acct-1" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            stopChannel,
+            startChannel,
+            getRuntimeSnapshot: vi.fn((): ChannelRuntimeSnapshot => {
+              const snapshot = {
+                channels: {},
+                channelAccounts: {
+                  whatsapp: {
+                    "acct-1": {
+                      accountId: "acct-1",
+                      running,
+                    },
+                  },
+                },
+              };
+              running = true;
+              return snapshot;
+            }),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    expect(calls).toEqual(["stop", "start"]);
+    expect(stopChannel).toHaveBeenCalledWith("whatsapp", "acct-1");
+    expect(startChannel).toHaveBeenCalledWith("whatsapp", "acct-1");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        channel: "whatsapp",
+        accountId: "acct-1",
+        stopped: true,
+        started: true,
       },
       undefined,
     );
