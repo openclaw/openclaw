@@ -22,7 +22,16 @@ type PrunableContextAgent = {
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
-function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
+interface HistoryImagePruneOptions {
+  /** Number of most-recent completed turns to preserve.
+   * Must be >= 0. Values < 0 are clamped to 0. */
+  preserveRecentCompletedTurns?: number;
+}
+
+function resolvePruneBeforeIndex(
+  messages: AgentMessage[],
+  options?: HistoryImagePruneOptions,
+): number {
   const completedTurnStarts: number[] = [];
   let currentTurnStart = -1;
   let currentTurnHasAssistantReply = false;
@@ -52,10 +61,21 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
     completedTurnStarts.push(currentTurnStart);
   }
 
-  if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
+  const preserveRecentCompletedTurns = Math.max(
+    0,
+    options?.preserveRecentCompletedTurns ?? PRESERVE_RECENT_COMPLETED_TURNS,
+  );
+
+  if (preserveRecentCompletedTurns === 0) {
+    // Prune all completed turns — caller has fresh images and wants no
+    // stale visual baggage from history.
+    return completedTurnStarts.length > 0 ? messages.length : -1;
+  }
+
+  if (completedTurnStarts.length <= preserveRecentCompletedTurns) {
     return -1;
   }
-  return completedTurnStarts[completedTurnStarts.length - PRESERVE_RECENT_COMPLETED_TURNS];
+  return completedTurnStarts[completedTurnStarts.length - preserveRecentCompletedTurns];
 }
 
 function pruneHistoryMediaReferenceText(text: string): string {
@@ -80,8 +100,11 @@ function cloneMessageWithContent(
  * same boundary because detectAndLoadPromptImages treats them as fresh prompt
  * image references when old history is replayed into a later prompt.
  */
-export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMessage[] | null {
-  const pruneBeforeIndex = resolvePruneBeforeIndex(messages);
+export function pruneProcessedHistoryImages(
+  messages: AgentMessage[],
+  options?: HistoryImagePruneOptions,
+): AgentMessage[] | null {
+  const pruneBeforeIndex = resolvePruneBeforeIndex(messages, options);
   if (pruneBeforeIndex < 0) {
     return null;
   }
@@ -148,14 +171,26 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+/** Current-turn image state shared between attempt.ts and the provider
+ *  replay transform so both paths prune consistently. */
+let activeTurnHasFreshImages = false;
+
+export function setActiveTurnHasFreshImages(value: boolean): void {
+  activeTurnHasFreshImages = value;
+}
+
 export function installHistoryImagePruneContextTransform(agent: PrunableContextAgent): () => void {
   const originalTransformContext = agent.transformContext;
+  // The session transcript (activeSession.messages) is intentionally left
+  // intact — only the replay/prompt view is pruned, per the pruning docs
+  // (docs/concepts/session-pruning.md).
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
     const transformed = originalTransformContext
       ? await originalTransformContext.call(agent, messages, signal)
       : messages;
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    return pruneProcessedHistoryImages(sourceMessages) ?? sourceMessages;
+    const options = activeTurnHasFreshImages ? { preserveRecentCompletedTurns: 0 } : undefined;
+    return pruneProcessedHistoryImages(sourceMessages, options) ?? sourceMessages;
   };
   return () => {
     agent.transformContext = originalTransformContext;

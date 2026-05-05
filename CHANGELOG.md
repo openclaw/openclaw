@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Bug fixes
+
+- **Multimodal:** Prune all history images when the current turn carries fresh attachments, preventing stale image data from contaminating new image analysis. The aggressive pruning is now applied to both the prompt-build hook path and the provider replay transform, keeping the session transcript intact per pruning docs. (#76732, fixes #66702)
+
 ### Highlights
 
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.

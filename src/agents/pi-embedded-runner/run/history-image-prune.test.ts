@@ -300,6 +300,28 @@ describe("pruneProcessedHistoryImages", () => {
     expect(originalOldContent[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
+  it("prunes even recent history images when current turn already has images", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: [{ type: "text", text: "recent" }, { ...image }],
+      }),
+      assistantTurn(),
+    ];
+
+    const result = pruneProcessedHistoryImages(messages, {
+      preserveRecentCompletedTurns: 0,
+    });
+
+    expect(result).not.toBeNull();
+    // Original messages are left intact (pruning returns a clone)
+    const originalContent = expectArrayMessageContent(messages[0], "original intact");
+    expect(originalContent[1]).toMatchObject({ type: "image", data: "abc" });
+    // Returned clone has the image replaced with the pruned marker
+    const prunedContent = expectArrayMessageContent(result![0], "pruned result");
+    expect(prunedContent[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+  });
+
   it("does not change messages when no assistant turn exists", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
