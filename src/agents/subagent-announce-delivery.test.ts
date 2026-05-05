@@ -1202,7 +1202,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("requires message-tool delivery for generated media completions in default group routes", async () => {
+  it("falls back to direct send for generated media completions in default group routes", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [
@@ -1241,8 +1241,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(result).toEqual(
       expect.objectContaining({
-        delivered: false,
-        path: "direct",
+        delivered: true,
+        path: "direct-fallback",
       }),
     );
     expect(callGateway).toHaveBeenCalledWith(
@@ -1257,7 +1257,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         }),
       }),
     );
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: undefined,
+        content: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        requesterSessionKey: "agent:main:slack:channel:C123",
+        bestEffort: true,
+        idempotencyKey: "announce-channel-media-message-tool",
+      }),
+    );
   });
 
   it("uses a direct channel fallback when announce-agent returns no visible output", async () => {

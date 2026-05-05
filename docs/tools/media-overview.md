@@ -93,7 +93,9 @@ id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
 OpenClaw wakes the agent with the generated media paths so it can tell the
 user and, when required by source-delivery policy, relay the result through
-the message tool.
+the message tool. For message-tool-only group/channel routes, OpenClaw treats
+missing message-tool delivery evidence as a failed completion attempt and sends
+the generated media fallback directly to the original channel.
 
 ## Speech-to-text and Voice Call
 
