@@ -70,6 +70,8 @@ const BASE_METHODS = [
   "tools.catalog",
   "tools.effective",
   "tools.invoke",
+  "environments.list",
+  "environments.status",
   "agents.list",
   "agents.create",
   "agents.update",
