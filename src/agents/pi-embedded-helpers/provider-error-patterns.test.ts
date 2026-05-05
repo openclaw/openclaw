@@ -19,6 +19,7 @@ vi.mock("../../plugins/provider-runtime.js", async () => {
 import {
   classifyFailoverReason,
   classifyProviderRuntimeFailureKind,
+  formatAssistantErrorText,
   isContextOverflowError,
 } from "./errors.js";
 import {
@@ -228,5 +229,86 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
     const jsonRateLimit =
       '429 {"error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}';
     expect(classifyFailoverReason(jsonRateLimit)).toBe("rate_limit");
+  });
+
+  it("classifies 403 Cloudflare challenge as cloudflare_challenge", () => {
+    const cfChallenge403 =
+      "403 <!doctype html><html><head><title>Just a moment...</title></head>" +
+      "<body><h1>Please wait while we verify you are human</h1>" +
+      '<div id="cf-browser-verification"></div>' +
+      '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js"></script>' +
+      "<p>Ray ID: 8a1b2c3d4e5f6789</p></body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfChallenge403 })).toBe(
+      "cloudflare_challenge",
+    );
+  });
+
+  it("classifies non-Cloudflare 403 HTML as auth_html_403 (regression guard)", () => {
+    const genericHtml403 =
+      "403 <!doctype html><html><head><title>403 Forbidden</title></head>" +
+      "<body><h1>Access Denied</h1><p>You do not have permission.</p></body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: genericHtml403 })).toBe(
+      "auth_html_403",
+    );
+  });
+
+  it("does not classify 403 HTML with only 'just a moment' as cloudflare_challenge", () => {
+    const genericWait403 =
+      "403 <!doctype html><html><head><title>403 Forbidden</title></head>" +
+      "<body><p>Please wait just a moment while we process your request.</p>" +
+      "<p>Ray ID: 8a1b2c3d4e5f6789</p></body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: genericWait403 })).toBe(
+      "auth_html_403",
+    );
+  });
+
+  it("does not classify Cloudflare WAF block page as cloudflare_challenge", () => {
+    const cfWafBlock =
+      "403 <!doctype html><html><head><title>Access denied | example.com</title></head>" +
+      "<body><h1>Sorry, you have been blocked</h1>" +
+      "<p>You are unable to access example.com</p>" +
+      "<p>Ray ID: 8a1b2c3d4e5f6789 &bull; 2026-04-25</p>" +
+      "</body></html>";
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfWafBlock })).toBe(
+      "auth_html_403",
+    );
+  });
+
+  it("formats Cloudflare challenge error with browser challenge guidance", () => {
+    const cfChallenge403 =
+      '403 <!doctype html><html><body><div id="cf-browser-verification"></div></body></html>';
+
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: cfChallenge403 })).toBe(
+      "cloudflare_challenge",
+    );
+
+    const msg = {
+      stopReason: "error" as const,
+      errorMessage: cfChallenge403,
+      provider: "openai-codex",
+      role: "assistant" as const,
+      content: [],
+      api: "openai" as const,
+      model: "gpt-4",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+    };
+
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Cloudflare returned a browser challenge");
+    expect(result).toContain("browser-compatible proxy");
+    expect(result).not.toContain("TLS fingerprint");
+    expect(result).not.toContain("Cloudflare blocked");
   });
 });

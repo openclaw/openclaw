@@ -94,6 +94,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
     const shouldSuppressRawErrorConsoleSuffix =
       observedError.providerRuntimeFailureKind === "auth_html_403" ||
+      observedError.providerRuntimeFailureKind === "cloudflare_challenge" ||
       observedError.providerRuntimeFailureKind === "auth_scope" ||
       observedError.providerRuntimeFailureKind === "auth_refresh";
     const rawErrorConsoleSuffix =
