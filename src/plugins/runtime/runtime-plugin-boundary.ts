@@ -1,13 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveBundledRuntimeDependencyJitiAliasMap } from "../bundled-runtime-deps-jiti-aliases.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { buildPluginLoaderAliasMap, shouldPreferNativeJiti } from "../sdk-alias.js";
+import {
+  isJavaScriptModulePath,
+  tryNativeRequireJavaScriptModule,
+} from "../native-module-require.js";
+import {
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugin-module-loader-cache.js";
+import type { PluginOrigin } from "../plugin-origin.types.js";
 
 type PluginRuntimeRecord = {
-  origin?: string;
+  origin?: PluginOrigin;
   rootDir?: string;
   source: string;
 };
@@ -106,30 +112,32 @@ export function resolvePluginRuntimeModulePath(
   return null;
 }
 
-export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoaderCache) {
-  const tryNative = shouldPreferNativeJiti(modulePath);
-  const runtimeAliasMap = resolveBundledRuntimeDependencyJitiAliasMap();
-  return getCachedPluginJitiLoader({
+function getPluginBoundarySourceLoader(modulePath: string, loaders: PluginModuleLoaderCache) {
+  return getCachedPluginSourceModuleLoader({
     cache: loaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
-    ...(runtimeAliasMap
-      ? {
-          aliasMap: {
-            ...buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
-            ...runtimeAliasMap,
-          },
-        }
-      : {}),
-    tryNative,
+    loaderFilename: import.meta.url,
   });
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
-export function loadPluginBoundaryModuleWithJiti<TModule>(
+export function loadPluginBoundaryModule<TModule>(
   modulePath: string,
-  loaders: PluginJitiLoaderCache,
+  loaders: PluginModuleLoaderCache,
+  options: { origin?: PluginOrigin } = {},
 ): TModule {
-  return getPluginBoundaryJiti(modulePath, loaders)(modulePath) as TModule;
+  if (isJavaScriptModulePath(modulePath)) {
+    const native = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
+    if (native.ok) {
+      return native.moduleExport as TModule;
+    }
+    if (options.origin === "bundled") {
+      throw new Error(`bundled plugin runtime module must load natively: ${modulePath}`);
+    }
+  } else if (options.origin === "bundled") {
+    throw new Error(`bundled plugin runtime module must be built JavaScript: ${modulePath}`);
+  }
+
+  return getPluginBoundarySourceLoader(modulePath, loaders)(modulePath) as TModule;
 }

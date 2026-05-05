@@ -758,6 +758,24 @@
     "imageGenerationProviders": ["openai"],
     "videoGenerationProviders": ["openai"]
   },
+  "imageGenerationProviderMetadata": {
+    "openai": {
+      "aliases": ["openai-codex"],
+      "authSignals": [
+        {
+          "provider": "openai"
+        },
+        {
+          "provider": "openai-codex",
+          "providerBaseUrl": {
+            "provider": "openai",
+            "defaultBaseUrl": "https://api.openai.com/v1",
+            "allowedBaseUrls": ["https://api.openai.com/v1"]
+          }
+        }
+      ]
+    }
+  },
   "mediaUnderstandingProviderMetadata": {
     "openai": {
       "capabilities": ["image", "audio"],
@@ -771,9 +789,14 @@
       }
     },
     "openai-codex": {
-      "capabilities": ["image"],
+      "capabilities": ["image", "audio"],
       "defaultModels": {
-        "image": "gpt-5.5"
+        "image": "gpt-5.5",
+        "audio": "gpt-4o-transcribe"
+      },
+      "autoPriority": {
+        "image": 20,
+        "audio": 20
       }
     }
   },

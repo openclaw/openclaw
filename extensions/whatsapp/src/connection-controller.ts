@@ -131,8 +131,20 @@ function createLiveConnection(params: {
   };
 }
 
-export function closeWaSocket(sock: { ws?: { close?: () => void } } | null | undefined): void {
+export function closeWaSocket(
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
+): void {
   try {
+    if (typeof sock?.end === "function") {
+      sock.end(new Error("OpenClaw WhatsApp socket close"));
+      return;
+    }
     sock?.ws?.close?.();
   } catch {
     // ignore best-effort shutdown failures
@@ -140,7 +152,13 @@ export function closeWaSocket(sock: { ws?: { close?: () => void } } | null | und
 }
 
 export function closeWaSocketSoon(
-  sock: { ws?: { close?: () => void } } | null | undefined,
+  sock:
+    | {
+        end?: (error: Error | undefined) => void;
+        ws?: { close?: () => void };
+      }
+    | null
+    | undefined,
   delayMs = 500,
 ): void {
   setTimeout(() => {

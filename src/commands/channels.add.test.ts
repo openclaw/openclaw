@@ -520,7 +520,7 @@ describe("channelsAddCommand", () => {
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({ installRuntimeDeps: false }),
+      expect.objectContaining({ forceSetupOnlyChannelPlugins: true }),
     );
     expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -554,7 +554,7 @@ describe("channelsAddCommand", () => {
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
-      expect.objectContaining({ installRuntimeDeps: false }),
+      expect.objectContaining({ forceSetupOnlyChannelPlugins: true }),
     );
     expectExternalChatEnabledConfigWrite();
   });

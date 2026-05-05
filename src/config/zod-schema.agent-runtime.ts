@@ -101,7 +101,7 @@ export const HeartbeatSchema = z
   })
   .optional();
 
-export const SandboxDockerSchema = z
+const SandboxDockerSchema = z
   .object({
     image: z.string().optional(),
     containerPrefix: z.string().optional(),
@@ -213,7 +213,7 @@ export const SandboxDockerSchema = z
   })
   .optional();
 
-export const SandboxBrowserSchema = z
+const SandboxBrowserSchema = z
   .object({
     enabled: z.boolean().optional(),
     image: z.string().optional(),
@@ -243,7 +243,7 @@ export const SandboxBrowserSchema = z
   .strict()
   .optional();
 
-export const SandboxPruneSchema = z
+const SandboxPruneSchema = z
   .object({
     idleHours: z.number().int().nonnegative().optional(),
     maxAgeDays: z.number().int().nonnegative().optional(),
@@ -261,7 +261,7 @@ export const AgentContextLimitsSchema = z
   .strict()
   .optional();
 
-export const AgentSkillsLimitsSchema = z
+const AgentSkillsLimitsSchema = z
   .object({
     maxSkillsPromptChars: z.number().int().min(0).optional(),
   })
@@ -317,7 +317,7 @@ const CodexUserLocationSchema = z
   })
   .optional();
 
-export const ToolsWebSearchSchema = z
+const ToolsWebSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     provider: z.string().optional(),
@@ -339,7 +339,7 @@ export const ToolsWebSearchSchema = z
   .strict()
   .optional();
 
-export const ToolsWebFetchSchema = z
+const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
     provider: z.string().optional(),
@@ -351,6 +351,7 @@ export const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    useTrustedEnvProxy: z.boolean().optional(),
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
@@ -375,7 +376,7 @@ export const ToolsWebFetchSchema = z
   .strict()
   .optional();
 
-export const ToolsWebXSearchSchema = z
+const ToolsWebXSearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     model: z.string().optional(),
@@ -387,7 +388,7 @@ export const ToolsWebXSearchSchema = z
   .strict()
   .optional();
 
-export const ToolsWebSchema = z
+const ToolsWebSchema = z
   .object({
     search: ToolsWebSearchSchema,
     fetch: ToolsWebFetchSchema,
@@ -396,7 +397,7 @@ export const ToolsWebSchema = z
   .strict()
   .optional();
 
-export const ToolProfileSchema = z
+const ToolProfileSchema = z
   .union([z.literal("minimal"), z.literal("coding"), z.literal("messaging"), z.literal("full")])
   .optional();
 
@@ -418,7 +419,7 @@ function addAllowAlsoAllowConflictIssue(
   }
 }
 
-export const ToolPolicyWithProfileSchema = z
+const ToolPolicyWithProfileSchema = z
   .object({
     allow: z.array(z.string()).optional(),
     alsoAllow: z.array(z.string()).optional(),
@@ -501,6 +502,13 @@ const ToolLoopDetectionDetectorSchema = z
   .strict()
   .optional();
 
+const ToolLoopPostCompactionGuardSchema = z
+  .object({
+    windowSize: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -510,6 +518,7 @@ const ToolLoopDetectionSchema = z
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
+    postCompactionGuard: ToolLoopPostCompactionGuardSchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -539,7 +548,7 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
-export const SandboxSshSchema = z
+const SandboxSshSchema = z
   .object({
     target: z.string().min(1).optional(),
     command: z.string().min(1).optional(),
@@ -595,7 +604,7 @@ const CommonToolPolicyFields = {
   byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
 };
 
-export const AgentToolsSchema = z
+const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     elevated: z
@@ -813,7 +822,6 @@ const AgentRuntimeSchema = z
 export const AgentEmbeddedHarnessSchema = z
   .object({
     runtime: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();
@@ -821,7 +829,6 @@ export const AgentEmbeddedHarnessSchema = z
 export const AgentRuntimePolicySchema = z
   .object({
     id: z.string().optional(),
-    fallback: z.enum(["pi", "none"]).optional(),
   })
   .strict()
   .optional();
@@ -840,6 +847,8 @@ export const AgentEntrySchema = z
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
+    verboseDefault: z.enum(["off", "on", "full"]).optional(),
+    toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
