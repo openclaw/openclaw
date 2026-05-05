@@ -1,9 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSandboxBridgeReadFile,
   resolveSandboxedBridgeMediaPath,
 } from "./sandbox-media-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+
+const assertSandboxPath = vi.hoisted(() => vi.fn());
+
+vi.mock("./sandbox-paths.js", async () => {
+  const actual = await vi.importActual<typeof import("./sandbox-paths.js")>("./sandbox-paths.js");
+  return { ...actual, assertSandboxPath };
+});
 
 describe("createSandboxBridgeReadFile", () => {
   it("delegates reads through the sandbox bridge with sandbox root cwd", async () => {
@@ -41,5 +48,201 @@ describe("createSandboxBridgeReadFile", () => {
 
     expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
     expect(stat).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveSandboxedBridgeMediaPath media:// URIs", () => {
+  beforeEach(() => {
+    assertSandboxPath.mockReset();
+  });
+  it("resolves media://inbound URI via fallback dir instead of mangling through bridge", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      hostPath: `/host/${filePath}`,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/claim-check-test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    // Should rewrite to fallback path and resolve through bridge
+    expect(resolved.rewrittenFrom).toBe("media://inbound/claim-check-test.png");
+    expect(resolved.resolved).toBe("/host/media/inbound/claim-check-test.png");
+    // resolvePath should be called with the fallback path, not the raw URI
+    expect(resolvePath).toHaveBeenCalledWith({
+      filePath: "media/inbound/claim-check-test.png",
+      cwd: "/workspace",
+    });
+  });
+
+  it("returns raw media:// URI when inbound fallback stat fails", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => null);
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/missing.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    // Should return the raw URI so loadWebMedia can resolve it
+    expect(resolved.resolved).toBe("media://inbound/missing.png");
+    expect(resolved.rewrittenFrom).toBeUndefined();
+    // resolvePath should NOT have been called with the mangled URI
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("returns raw media:// URI when no inbound fallback dir is provided", async () => {
+    const resolvePath = vi.fn();
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/test.png",
+    });
+
+    expect(resolved.resolved).toBe("media://inbound/test.png");
+    // Bridge resolvePath should never be called for media:// URIs
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("does not intercept non-media:// paths", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      hostPath: `/host/${filePath}`,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "images/photo.png",
+    });
+
+    expect(resolved.resolved).toBe("/host/images/photo.png");
+    // Normal paths still go through bridge resolution
+    expect(resolvePath).toHaveBeenCalledWith({
+      filePath: "images/photo.png",
+      cwd: "/workspace",
+    });
+  });
+
+  it("enforces workspace boundary on valid media:// fallback when workspaceOnly is true", async () => {
+    assertSandboxPath.mockRejectedValueOnce(new Error("path escapes sandbox root"));
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      hostPath: `/host/${filePath}`,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    await expect(
+      resolveSandboxedBridgeMediaPath({
+        sandbox: {
+          root: "/workspace",
+          workspaceOnly: true,
+          bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+        },
+        mediaPath: "media://inbound/test.png",
+        inboundFallbackDir: "media/inbound",
+      }),
+    ).rejects.toThrow("path escapes sandbox root");
+
+    expect(assertSandboxPath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        filePath: expect.any(String),
+        cwd: "/workspace",
+        root: "/workspace",
+      }),
+    );
+  });
+
+  it("returns raw unsupported media:// URI without probing fallback", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://other/test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "media://other/test.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("returns raw nested media://inbound URI without probing fallback", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/nested/test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "media://inbound/nested/test.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("returns raw encoded path separator media://inbound URI without probing fallback", async () => {
+    const resolvePath = vi.fn();
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/nested%2Ftest.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved).toEqual({ resolved: "media://inbound/nested%2Ftest.png" });
+    expect(stat).not.toHaveBeenCalled();
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
+
+  it("skips workspace boundary on media:// fallback when workspaceOnly is falsy", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      relativePath: filePath,
+      hostPath: `/host/${filePath}`,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+    const stat = vi.fn(async () => ({ type: "file" as const, size: 100, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/workspace",
+        bridge: { resolvePath, stat } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/test.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(resolved.resolved).toBe("/host/media/inbound/test.png");
+    expect(assertSandboxPath).not.toHaveBeenCalled();
   });
 });
