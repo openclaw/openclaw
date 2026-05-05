@@ -213,7 +213,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       }
     }
     try {
-      fs.symlinkSync(target, linkPath, "dir");
+      fs.symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
     } catch (err) {
       log.warn(`failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`);
     }
