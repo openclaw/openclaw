@@ -39,6 +39,15 @@ import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpe
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
+let transcriptRuntimePromise:
+  | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
+  | undefined;
+
+async function loadTranscriptRuntime() {
+  transcriptRuntimePromise ??= import("../../config/sessions/transcript.runtime.js");
+  return await transcriptRuntimePromise;
+}
+
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
@@ -655,6 +664,13 @@ export async function dispatchCronDelivery(
       const mirrorProjection = projectOutboundPayloadPlanForMirror(
         createOutboundPayloadPlan(payloadsForDelivery),
       );
+      const transcriptMirror = {
+        sessionKey: deliverySessionKey,
+        agentId: params.agentId,
+        text: mirrorProjection.text || undefined,
+        mediaUrls: mirrorProjection.mediaUrls.length ? mirrorProjection.mediaUrls : undefined,
+        idempotencyKey: deliveryIdempotencyKey,
+      };
 
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
@@ -677,13 +693,6 @@ export async function dispatchCronDelivery(
           threadId: delivery.threadId,
           payloads: payloadsForDelivery,
           session: deliverySession,
-          mirror: {
-            sessionKey: deliverySessionKey,
-            agentId: params.agentId,
-            text: mirrorProjection.text || undefined,
-            mediaUrls: mirrorProjection.mediaUrls.length ? mirrorProjection.mediaUrls : undefined,
-            idempotencyKey: deliveryIdempotencyKey,
-          },
           identity,
           bestEffort: params.deliveryBestEffort,
           deps: createOutboundSendDeps(params.deps),
@@ -708,6 +717,10 @@ export async function dispatchCronDelivery(
       // Intentionally leave partial success uncached: replay may duplicate the
       // successful subset, but caching it here would permanently drop the
       // failed payloads by converting the replay into delivered=true.
+      if (delivered) {
+        const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+        await appendAssistantMessageToSessionTranscript(transcriptMirror);
+      }
       if (
         delivered &&
         shouldQueueCronAwareness({

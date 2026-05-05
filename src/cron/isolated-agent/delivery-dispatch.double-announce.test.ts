@@ -22,6 +22,10 @@ const { countActiveDescendantRunsMock, maybeApplyTtsToPayloadMock, retireSession
     retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
   }));
 
+vi.mock("../../config/sessions/transcript.runtime.js", () => ({
+  appendAssistantMessageToSessionTranscript: vi.fn().mockResolvedValue({ ok: true }),
+}));
+
 vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
   resolveMainSessionKey: vi.fn(() => "global"),
@@ -86,6 +90,7 @@ import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 // Import after mocks
 import { countActiveDescendantRuns } from "../../agents/subagent-registry-read.js";
 import { callGateway } from "../../gateway/call.runtime.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.runtime.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -788,6 +793,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(first.delivered).toBe(false);
     expect(second.delivered).toBe(false);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
   it("prunes the completed-delivery cache back to the entry cap", async () => {
@@ -1072,15 +1078,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       sessionKey: "agent:main:session:dest-session-id",
     });
     expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mirror: {
-          sessionKey: "agent:main:session:dest-session-id",
-          agentId: "main",
-          text: "hello from cron",
-          idempotencyKey: expect.stringContaining("test-job"),
-        },
-      }),
+      expect.not.objectContaining({ mirror: expect.anything() }),
     );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main:session:dest-session-id",
+      agentId: "main",
+      text: "hello from cron",
+      mediaUrls: undefined,
+      idempotencyKey: expect.stringContaining("test-job"),
+    });
   });
 
   it("mirrors the filtered direct-delivery payload projection including media", async () => {
@@ -1111,15 +1117,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
             mediaUrls: ["https://example.com/report.pdf"],
           },
         ],
-        mirror: {
-          sessionKey: "agent:main:session:dest-session-id",
-          agentId: "main",
-          text: undefined,
-          mediaUrls: ["https://example.com/report.pdf"],
-          idempotencyKey: expect.stringContaining("test-job"),
-        },
       }),
     );
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      sessionKey: "agent:main:session:dest-session-id",
+      agentId: "main",
+      text: undefined,
+      mediaUrls: ["https://example.com/report.pdf"],
+      idempotencyKey: expect.stringContaining("test-job"),
+    });
   });
 
   it("passes threaded telegram delivery through to the outbound adapter", async () => {
