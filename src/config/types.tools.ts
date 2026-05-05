@@ -145,9 +145,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Enable direct channel sends for async media generation tasks that support
-     * direct completion delivery. Music generation stays requester-session mediated.
-     * Default: false.
+     * Deprecated compatibility flag. Async media generation completions stay
+     * requester-session mediated so source delivery policy remains agent-owned.
      */
     directSend?: boolean;
   };
