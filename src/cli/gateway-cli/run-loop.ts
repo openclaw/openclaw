@@ -392,7 +392,7 @@ export async function runGatewayLoop(params: {
               `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
             );
             if (taskBlockers) {
-              gatewayLog.warn(`restart blocked by active task run(s): ${taskBlockers}`);
+              gatewayLog.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
             }
             if (restartIntent?.force) {
               gatewayLog.warn("forced restart requested; skipping active work drain");

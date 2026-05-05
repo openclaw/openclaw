@@ -168,7 +168,9 @@ worktrees, runs `discord-status-reactions-tool-only` against each worktree, and
 uploads `baseline/`, `candidate/`, `comparison.json`, and `mantis-report.md` as
 Actions artifacts. It also renders each lane's timeline HTML in a Crabbox
 desktop browser and publishes those VNC screenshots beside the deterministic
-timeline PNGs in the PR comment. The workflow builds the Crabbox CLI from
+timeline PNGs in the PR comment. The same PR comment links to the desktop MP4
+recordings captured during the VNC browser render, while the screenshots stay
+inline for quick review. The workflow builds the Crabbox CLI from
 `openclaw/crabbox` main so it can use the current desktop/browser lease flags
 before the next Crabbox binary release is cut.
 
