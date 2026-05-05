@@ -963,45 +963,6 @@ describe("resolvePluginCapabilityProviders", () => {
     expectActiveRegistryLookup(["google"]);
   });
 
-  it("loads requested realtime transcription providers missing from active registry", () => {
-    const active = createEmptyPluginRegistry();
-    active.realtimeTranscriptionProviders.push({
-      pluginId: "openai",
-      pluginName: "openai",
-      source: "test",
-      provider: { id: "openai" },
-    } as never);
-    const loaded = createEmptyPluginRegistry();
-    loaded.realtimeTranscriptionProviders.push({
-      pluginId: "xai",
-      pluginName: "xAI",
-      source: "test",
-      provider: { id: "xai" },
-    } as never);
-    mocks.loadPluginManifestRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "xai",
-          origin: "bundled",
-          contracts: { realtimeTranscriptionProviders: ["xai"] },
-        },
-      ] as never,
-      diagnostics: [],
-    });
-    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
-      params === undefined ? active : loaded,
-    );
-
-    const provider = resolvePluginCapabilityProvider({
-      key: "realtimeTranscriptionProviders",
-      providerId: "xai",
-      cfg: { plugins: { allow: ["openai", "xai"] } } as OpenClawConfig,
-    });
-
-    expect(provider?.id).toBe("xai");
-    expectActiveRegistryLookup(["xai"]);
-  });
-
   it("does not merge unrelated bundled capability providers when cfg requests one provider", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({

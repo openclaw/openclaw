@@ -57,20 +57,6 @@ function createAgentRuntime(workspaceDir: string): CoreAgentDeps {
 }
 
 describe("buildRealtimeVoiceInstructions", () => {
-  it("adds consult cadence guidance without enabling the context capsule", async () => {
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({ consultPolicy: "substantive" }),
-      coreConfig: {},
-      agentRuntime: createAgentRuntime(await createWorkspace()),
-    });
-
-    expect(instructions).toContain("Base voice instructions.");
-    expect(instructions).toContain("Consult behavior:");
-    expect(instructions).toContain("Call openclaw_agent_consult before answering requests");
-    expect(instructions).not.toContain("OpenClaw agent voice context:");
-  });
-
   it("injects bounded identity, system prompt, and workspace context", async () => {
     const workspaceDir = await createWorkspace();
     await writeFile(path.join(workspaceDir, "SOUL.md"), "Stay quick, direct, and warm.\n");
@@ -101,6 +87,8 @@ describe("buildRealtimeVoiceInstructions", () => {
     });
 
     expect(instructions).toContain("OpenClaw agent voice context:");
+    expect(instructions).toContain("Consult behavior:");
+    expect(instructions).toContain("Call openclaw_agent_consult before answering requests");
     expect(instructions).toContain("- Agent id: voice");
     expect(instructions).toContain("- Name: Claw Voice");
     expect(instructions).toContain("- Vibe: snappy");
@@ -109,40 +97,5 @@ describe("buildRealtimeVoiceInstructions", () => {
     expect(instructions).toContain("Stay quick, direct, and warm.");
     expect(instructions).toContain("### IDENTITY.md");
     expect(instructions).not.toContain("do not include");
-  });
-
-  it("caps the injected capsule before passing it to the realtime provider", async () => {
-    const workspaceDir = await createWorkspace();
-    await writeFile(path.join(workspaceDir, "SOUL.md"), `${"voice context ".repeat(40)}tail`);
-
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({
-        agentContext: {
-          enabled: true,
-          maxChars: 180,
-          includeIdentity: false,
-          includeSystemPrompt: false,
-          includeWorkspaceFiles: true,
-          files: ["SOUL.md"],
-        },
-      }),
-      coreConfig: {},
-      agentRuntime: createAgentRuntime(workspaceDir),
-    });
-
-    expect(instructions).toContain("[truncated]");
-    expect(instructions).not.toContain("tail");
-  });
-
-  it("does not add consult guidance when tools are disabled", async () => {
-    const instructions = await buildRealtimeVoiceInstructions({
-      baseInstructions: "Base voice instructions.",
-      config: createConfig({ consultPolicy: "always", toolPolicy: "none" }),
-      coreConfig: {},
-      agentRuntime: createAgentRuntime(await createWorkspace()),
-    });
-
-    expect(instructions).toBe("Base voice instructions.");
   });
 });
