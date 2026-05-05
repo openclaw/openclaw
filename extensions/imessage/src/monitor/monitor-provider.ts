@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
@@ -20,7 +21,7 @@ import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-ru
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -34,13 +35,18 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
+import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "../client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "../constants.js";
 import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
-import { probeIMessage } from "../probe.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+  probeIMessage,
+} from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
@@ -83,10 +89,44 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
     // Fallback: match host-only before imsg command (e.g., ssh -T mac-mini imsg)
     const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
     return hostOnlyMatch?.[1];
-  } catch {
+  } catch (err) {
+    // ENOENT / ENOTDIR are expected for non-script cliPaths (just an
+    // executable on disk). Anything else (EACCES, broken symlink) is
+    // worth flagging — silent failure means attachments will fail to find
+    // remote media because remoteHost stays undefined.
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      logVerbose(
+        `imessage: failed to inspect cliPath ${cliPath} for remoteHost detection: ${String(err)}`,
+      );
+    }
     return undefined;
   }
 }
+
+/** One-shot warning when typing/read are gated off due to old imsg build. */
+const warnIfImsgUpgradeNeeded = (() => {
+  let fired = false;
+  return {
+    fireOnce: (
+      rpcMethods: readonly string[],
+      runtime: { log?: (msg: string) => void; error?: (msg: string) => void },
+    ) => {
+      if (fired) return;
+      fired = true;
+      const detail =
+        rpcMethods.length === 0
+          ? "imsg build pre-dates the rpc_methods capability list"
+          : `imsg rpc_methods=[${rpcMethods.join(", ")}] does not include typing/read`;
+      runtime.log?.(
+        warn(
+          `imessage: typing indicators / read receipts gated off (${detail}). ` +
+            `Upgrade imsg (current bridge needs typing+read in rpc_methods).`,
+        ),
+      );
+    },
+  };
+})();
 
 function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   return /imsg rpc timeout \(watch\.subscribe\)|imsg rpc (closed|exited|not running)/i.test(
@@ -361,7 +401,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           });
         },
         onReplyError: (err) => {
-          logVerbose(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
+          // Pairing relies on the user receiving the challenge — silent
+          // failure here is the user's only "pairing seems broken" signal.
+          runtime.error?.(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
         },
       });
       return;
@@ -405,14 +447,82 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
+    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
+    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
+    if (privateApiStatus?.available === true) {
+      // Surface a single warning per restart when the bridge is up but we
+      // had to gate off typing/read because the imsg build pre-dates the
+      // capability list. Otherwise the user sees no typing bubble / no
+      // "Read" receipt with no visible reason.
+      if (!supportsTyping || !supportsRead) {
+        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
+      }
+    }
+    const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
+    const typingTarget = ctxPayload.To;
+
+    if (supportsRead && sendReadReceipts && typingTarget) {
+      try {
+        await markIMessageChatRead(typingTarget, {
+          cfg,
+          accountId: accountInfo.accountId,
+          client: getActiveClient(),
+        });
+      } catch (err) {
+        runtime.error?.(`imessage: mark read failed: ${String(err)}`);
+      }
+    }
+
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg,
       agentId: decision.route.agentId,
       channel: "imessage",
       accountId: decision.route.accountId,
+      typing:
+        supportsTyping && typingTarget
+          ? {
+              start: async () => {
+                await sendIMessageTyping(typingTarget, true, {
+                  cfg,
+                  accountId: accountInfo.accountId,
+                  client: getActiveClient(),
+                });
+              },
+              stop: async () => {
+                await sendIMessageTyping(typingTarget, false, {
+                  cfg,
+                  accountId: accountInfo.accountId,
+                  client: getActiveClient(),
+                });
+              },
+              onStartError: (err) => {
+                logTypingFailure({
+                  log: (msg) => logVerbose(msg),
+                  channel: "imessage",
+                  action: "start",
+                  target: typingTarget,
+                  error: err,
+                });
+              },
+              onStopError: (err) => {
+                logTypingFailure({
+                  log: (msg) => logVerbose(msg),
+                  channel: "imessage",
+                  action: "stop",
+                  target: typingTarget,
+                  error: err,
+                });
+              },
+            }
+          : undefined,
     });
 
-    const dispatcher = createReplyDispatcher({
+    const {
+      dispatcher,
+      replyOptions: typingReplyOptions,
+      markDispatchIdle,
+    } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
       deliver: async (payload, info) => {
@@ -513,20 +623,30 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () => settleReplyDispatcher({ dispatcher }),
-          runDispatch: () =>
-            dispatchInboundMessage({
-              ctx: ctxPayload,
-              cfg,
+          onPreDispatchFailure: () =>
+            settleReplyDispatcher({
               dispatcher,
-              replyOptions: {
-                disableBlockStreaming:
-                  typeof accountInfo.config.blockStreaming === "boolean"
-                    ? !accountInfo.config.blockStreaming
-                    : undefined,
-                onModelSelected,
-              },
+              onSettled: () => markDispatchIdle(),
             }),
+          runDispatch: async () => {
+            try {
+              return await dispatchInboundMessage({
+                ctx: ctxPayload,
+                cfg,
+                dispatcher,
+                replyOptions: {
+                  ...typingReplyOptions,
+                  disableBlockStreaming:
+                    typeof accountInfo.config.blockStreaming === "boolean"
+                      ? !accountInfo.config.blockStreaming
+                      : undefined,
+                  onModelSelected,
+                },
+              });
+            } finally {
+              markDispatchIdle();
+            }
+          },
         }),
       },
     });
@@ -535,7 +655,16 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const handleMessage = async (raw: unknown) => {
     const message = parseIMessageNotification(raw);
     if (!message) {
-      logVerbose("imessage: dropping malformed RPC message payload");
+      // A malformed RPC notification means imsg shipped a payload shape
+      // we do not understand — almost always a real bridge bug. Surface
+      // the keys so an operator can correlate without leaking content.
+      const shape =
+        raw && typeof raw === "object" && !Array.isArray(raw)
+          ? Object.keys(raw as Record<string, unknown>)
+              .sort()
+              .join(",")
+          : typeof raw;
+      runtime.error?.(`imessage: dropping malformed RPC message payload (keys=${shape})`);
       return;
     }
     await inboundDebouncer.enqueue({ message });

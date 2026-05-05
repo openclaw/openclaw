@@ -1,5 +1,5 @@
 ---
-summary: "Native iMessage support via imsg (JSON-RPC over stdio). Preferred for new OpenClaw iMessage setups when host requirements fit."
+summary: "Native iMessage support via imsg (JSON-RPC over stdio), with private API actions for replies, tapbacks, effects, attachments, and group management. Preferred for new OpenClaw iMessage setups when host requirements fit."
 read_when:
   - Setting up iMessage support
   - Debugging iMessage send/receive
@@ -14,9 +14,12 @@ For OpenClaw iMessage deployments, use `imsg` on a signed-in macOS Messages host
 BlueBubbles is deprecated and no longer ships as a bundled OpenClaw channel. Migrate `channels.bluebubbles` configs to `channels.imessage`; OpenClaw now supports iMessage through `imsg` only. If you still need a BlueBubbles-backed bridge, publish or install it as a third-party plugin outside core.
 </Warning>
 
-Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port).
+Status: native external CLI integration. Gateway spawns `imsg rpc` and communicates over JSON-RPC on stdio (no separate daemon/port). Advanced actions require `imsg launch` and a successful private API probe.
 
 <CardGroup cols={3}>
+  <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
+    Replies, tapbacks, effects, attachments, and group management.
+  </Card>
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
   </Card>
@@ -38,6 +41,8 @@ Status: native external CLI integration. Gateway spawns `imsg rpc` and communica
 ```bash
 brew install steipete/tap/imsg
 imsg rpc --help
+imsg launch
+openclaw channels status --probe
 ```
 
       </Step>
@@ -339,6 +344,72 @@ imsg chats --limit 20
   </Accordion>
 </AccordionGroup>
 
+## Private API actions
+
+When `imsg launch` is running and `openclaw channels status --probe` reports `privateApi.available: true`, the message tool can use iMessage-native actions in addition to normal text sends.
+
+```json5
+{
+  channels: {
+    imessage: {
+      actions: {
+        reactions: true,
+        edit: true,
+        unsend: true,
+        reply: true,
+        sendWithEffect: true,
+        sendAttachment: true,
+        renameGroup: true,
+        setGroupIcon: true,
+        addParticipant: true,
+        removeParticipant: true,
+        leaveGroup: true,
+      },
+    },
+  },
+}
+```
+
+<AccordionGroup>
+  <Accordion title="Available actions">
+    - **react**: Add/remove iMessage tapbacks (`messageId`, `emoji`, `remove`). Supported tapbacks map to love, like, dislike, laugh, emphasize, and question.
+    - **reply**: Send a threaded reply to an existing message (`messageId`, `text` or `message`, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`).
+    - **sendWithEffect**: Send text with an iMessage effect (`text` or `message`, `effect` or `effectId`).
+    - **edit**: Edit a sent message on supported macOS/private API versions (`messageId`, `text` or `newText`).
+    - **unsend**: Retract a sent message on supported macOS/private API versions (`messageId`).
+    - **upload-file**: Send media/files (`buffer` as base64 or a hydrated `media`/`path`/`filePath`, `filename`, optional `asVoice`). Legacy alias: `sendAttachment`.
+    - **renameGroup**, **setGroupIcon**, **addParticipant**, **removeParticipant**, **leaveGroup**: Manage group chats when the current target is a group conversation.
+
+  </Accordion>
+
+  <Accordion title="Message IDs">
+    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs when available. Short IDs are scoped to the recent in-memory reply cache and are checked against the current chat before use. If a short ID has expired or belongs to another chat, retry with the full `MessageSidFull`.
+
+  </Accordion>
+
+  <Accordion title="Capability detection">
+    OpenClaw hides private API actions only when the cached probe status says the bridge is unavailable. If the status is unknown, actions remain visible and dispatch probes lazily so the first action can succeed after `imsg launch` without a separate manual status refresh.
+
+  </Accordion>
+
+  <Accordion title="Read receipts and typing">
+    When the private API bridge is up, accepted inbound chats are marked read before dispatch and a typing bubble is shown to the sender while the agent generates. Disable read-marking with:
+
+```json5
+{
+  channels: {
+    imessage: {
+      sendReadReceipts: false,
+    },
+  },
+}
+```
+
+    Older `imsg` builds that pre-date the per-method capability list will gate off typing/read silently; OpenClaw logs a one-time warning per restart so the missing receipt is attributable.
+
+  </Accordion>
+</AccordionGroup>
+
 ## Config writes
 
 iMessage allows channel-initiated config writes by default (for `/config set|unset` when `commands.config: true`).
@@ -363,10 +434,11 @@ Disable:
 
 ```bash
 imsg rpc --help
+imsg status --json
 openclaw channels status --probe
 ```
 
-    If probe reports RPC unsupported, update `imsg`. If the Gateway is not running on macOS, use the Remote Mac over SSH setup above instead of the default local `imsg` path.
+    If probe reports RPC unsupported, update `imsg`. If private API actions are unavailable, run `imsg launch` in the logged-in macOS user session and probe again. If the Gateway is not running on macOS, use the Remote Mac over SSH setup above instead of the default local `imsg` path.
 
   </Accordion>
 
