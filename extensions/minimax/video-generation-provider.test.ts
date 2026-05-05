@@ -64,6 +64,7 @@ describe("minimax video generation provider", () => {
       prompt: "A fox sprints across snowy hills",
       cfg: {},
       durationSeconds: 5,
+      resolution: "720P",
     });
 
     expect(postJsonRequestMock).toHaveBeenCalledWith(
@@ -71,6 +72,7 @@ describe("minimax video generation provider", () => {
         url: "https://api.minimax.io/v1/video_generation",
         body: expect.objectContaining({
           duration: 6,
+          resolution: "768P",
         }),
       }),
     );

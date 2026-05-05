@@ -322,7 +322,6 @@ async function generateGoogleVideoViaRest(params: {
   durationSeconds?: number;
   aspectRatio?: "16:9" | "9:16";
   resolution?: "720p" | "1080p";
-  audio?: boolean;
 }): Promise<unknown> {
   let operation = await requestGoogleVideoJson({
     url: `${params.baseUrl}/${resolveGoogleVideoRestModelPath(params.model)}:predictLongRunning`,
@@ -337,7 +336,6 @@ async function generateGoogleVideoViaRest(params: {
           : {}),
         ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
         ...(params.resolution ? { resolution: params.resolution } : {}),
-        ...(params.audio === true ? { generateAudio: true } : {}),
       },
     },
   });
@@ -429,7 +427,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
             ...(aspectRatio ? { aspectRatio } : {}),
             ...(resolution ? { resolution } : {}),
-            ...(req.audio === true ? { generateAudio: true } : {}),
           },
         });
       } catch (error) {
@@ -446,7 +443,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           durationSeconds,
           aspectRatio,
           resolution,
-          audio: req.audio,
         });
       }
 
@@ -480,7 +476,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           durationSeconds,
           aspectRatio,
           resolution,
-          audio: req.audio,
         });
         generatedVideos = extractGeneratedVideos(operation);
       }

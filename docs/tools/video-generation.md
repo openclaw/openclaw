@@ -198,9 +198,9 @@ role or use `first_frame` for single-image image-to-video.
 ### Style controls
 
 <ParamField path="aspectRatio" type="string">
-  `1:1`, `2:3`, `3:2`, `3:4`, `4:3`, `4:5`, `5:4`, `9:16`, `16:9`, `21:9`, or `adaptive`.
+  Aspect-ratio hint such as `1:1`, `16:9`, `9:16`, `adaptive`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.
 </ParamField>
-<ParamField path="resolution" type="string">`480P`, `720P`, `768P`, or `1080P`.</ParamField>
+<ParamField path="resolution" type="string">Resolution hint such as `480P`, `720P`, `768P`, `1080P`, `4K`, or a provider-specific value. OpenClaw normalizes or ignores unsupported values per provider.</ParamField>
 <ParamField path="durationSeconds" type="number">
   Target duration in seconds (rounded to nearest provider-supported value).
 </ParamField>
