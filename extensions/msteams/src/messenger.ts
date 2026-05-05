@@ -576,5 +576,9 @@ export async function sendMSTeamsMessages(params: {
     return messageIds;
   }
 
-  return await sendProactively(messages, 0);
+  // For non-thread replyStyle, still preserve channel thread routing if the
+  // stored conversationRef has a threadId — otherwise replies to channel
+  // @mentions that fall through to the proactive path (e.g. via outbound.ts
+  // → send.ts) land top-level instead of in the original thread.
+  return await sendProactively(messages, 0, resolvedThreadId);
 }

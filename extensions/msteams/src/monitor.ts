@@ -491,7 +491,7 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): unknown {
     return ctx;
   }
   const sdkCtx = ctx as {
-    activity?: { id?: string; conversation?: { id?: string } };
+    activity?: { id?: string; conversation?: { id?: string; conversationType?: string } };
     reply?: (activity: unknown) => Promise<unknown>;
     send?: (activity: unknown) => Promise<unknown>;
     stream?: {
@@ -506,10 +506,16 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): unknown {
     return ctx;
   }
   const conversationId = sdkCtx.activity?.conversation?.id ?? "";
-  // Use send() not reply(): reply() prepends a blockquote to message activities
-  // and passes typing activities through TypingActivity.from() which strips
-  // custom entities (including streaminfo). send() passes the activity as-is.
-  const sendActivity = (activity: unknown) => sdkCtx.send!(activity);
+  const conversationType = (sdkCtx.activity?.conversation?.conversationType ?? "").toLowerCase();
+  const isThreadable = conversationType === "channel" || conversationType === "groupchat";
+  // For Teams channels and group chats, use ctx.reply() so the SDK threads the
+  // outbound activity to the inbound one (via replyToId + the inbound's
+  // serviceUrl/conversation routing). For personal DMs, use ctx.send() instead
+  // because reply() prepends a blockquote of the user's message — fine in
+  // threaded surfaces where the visual nesting indicates context, but ugly in
+  // 1:1 chat. Streaming chunks go through ctx.stream.emit/close separately.
+  const sendActivity = (activity: unknown) =>
+    isThreadable ? sdkCtx.reply!(activity) : sdkCtx.send!(activity);
   return Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
     sendActivity,
     sendActivities: async (activities: unknown[]) => {
