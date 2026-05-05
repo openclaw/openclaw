@@ -19,7 +19,10 @@ async function readLatestHandoff(): Promise<string> {
   return fs.readFile(path.join(scopesDir, scopes[0] ?? "", "latest.md"), "utf8");
 }
 
-function buildTelegramParams(commandBody: string): HandleCommandsParams {
+function buildTelegramParams(
+  commandBody: string,
+  sessionEntry?: Partial<HandleCommandsParams["sessionEntry"]>,
+): HandleCommandsParams {
   const cfg = {
     ...baseCommandTestConfig,
     channels: { telegram: { allowFrom: ["*"] } },
@@ -46,6 +49,7 @@ function buildTelegramParams(commandBody: string): HandleCommandsParams {
       updatedAt: Date.now(),
       totalTokens: 158_100,
       totalTokensFresh: true,
+      ...sessionEntry,
     },
   };
 }
@@ -87,6 +91,44 @@ describe("handleHandoffCommand", () => {
     expect(content).toContain("Source session: agent:telegram:telegram:direct:7215741815");
     expect(content).toContain("Token risk: 158k: handoff recommended");
     expect(content).toContain("/new alone starts fresh");
+  });
+
+  it("awaits session transcript loaders when a session file is available", async () => {
+    const sessionsDir = path.join(stateDir, "agents", "telegram", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-telegram.jsonl");
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 1,
+          id: "session-telegram",
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "msg-1",
+          parentId: null,
+          message: { role: "user", content: "Please keep the architecture mainline." },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "msg-2",
+          parentId: "msg-1",
+          message: { role: "assistant", content: "Architecture mainline acknowledged." },
+        }),
+      ].join("\n") + "\n",
+    );
+
+    const params = buildTelegramParams("/handoff include transcript", {
+      sessionFile,
+    });
+    const result = await handleHandoffCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    const content = await readLatestHandoff();
+    expect(content).toContain("Please keep the architecture mainline.");
+    expect(content).toContain("Architecture mainline acknowledged.");
   });
 
   it("reports handoff status without creating a model turn", async () => {
