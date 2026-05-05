@@ -38,7 +38,6 @@ import type { DiscordMonitorStatusSink } from "./status.js";
 type PreflightDiscordMessage =
   typeof import("./message-handler.preflight.js").preflightDiscordMessage;
 type CreateDiscordReplyTypingFeedback = typeof createDiscordReplyTypingFeedback;
-type DiscordAcceptedTypingMode = "never" | "instant" | "thinking" | "message";
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -67,40 +66,23 @@ function shouldSkipInitialTypingSignal(createFeedback?: CreateDiscordReplyTyping
   return !createFeedback && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-function resolveAcceptedTypingMode(ctx: DiscordMessagePreflightContext): DiscordAcceptedTypingMode {
-  const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
-  if (configuredTypingMode) {
-    return configuredTypingMode;
-  }
-  if (!ctx.isGuildMessage && !ctx.isGroupDm) {
-    return "instant";
-  }
-  if (ctx.effectiveWasMentioned) {
-    return "instant";
-  }
-  return "message";
-}
-
-function shouldCreateAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
+function shouldStartAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
   if (ctx.abortSignal?.aborted) {
     return false;
   }
   if (!ctx.messageText.trim()) {
     return false;
   }
-  return resolveAcceptedTypingMode(ctx) !== "never";
+  const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
+  return configuredTypingMode !== "never";
 }
 
-function shouldPreStartAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
-  return resolveAcceptedTypingMode(ctx) === "instant";
-}
-
-function prepareAcceptedTypingFeedback(params: {
+function startAcceptedTypingFeedback(params: {
   ctx: DiscordMessagePreflightContext;
   createFeedback?: CreateDiscordReplyTypingFeedback;
 }): DiscordReplyTypingFeedback | undefined {
   const { ctx, createFeedback } = params;
-  if (shouldSkipInitialTypingSignal(createFeedback) || !shouldCreateAcceptedTypingFeedback(ctx)) {
+  if (shouldSkipInitialTypingSignal(createFeedback) || !shouldStartAcceptedTypingFeedback(ctx)) {
     return undefined;
   }
   const replyTypingFeedback =
@@ -115,11 +97,9 @@ function prepareAcceptedTypingFeedback(params: {
       },
     });
   ctx.replyTypingFeedback = replyTypingFeedback;
-  if (shouldPreStartAcceptedTypingFeedback(ctx)) {
-    void replyTypingFeedback.onReplyStart().catch((err) => {
-      ctx.runtime.error?.(danger(`discord accepted typing failed: ${String(err)}`));
-    });
-  }
+  void replyTypingFeedback.onReplyStart().catch((err) => {
+    ctx.runtime.error?.(danger(`discord accepted typing failed: ${String(err)}`));
+  });
   return replyTypingFeedback;
 }
 
@@ -222,7 +202,7 @@ export function createDiscordMessageHandler(
             await commitDiscordInboundReplay({ replayKeys, replayGuard });
             return;
           }
-          prepareAcceptedTypingFeedback({
+          startAcceptedTypingFeedback({
             ctx,
             createFeedback: params.__testing?.createReplyTypingFeedback,
           });
@@ -275,7 +255,7 @@ export function createDiscordMessageHandler(
           await commitDiscordInboundReplay({ replayKeys, replayGuard });
           return;
         }
-        prepareAcceptedTypingFeedback({
+        startAcceptedTypingFeedback({
           ctx,
           createFeedback: params.__testing?.createReplyTypingFeedback,
         });
