@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import { normalizeOptionalString } from "./string-utils.js";
@@ -10,7 +11,16 @@ type SqliteVecModule = {
 const SQLITE_VEC_MODULE_ID = "sqlite-vec";
 
 async function loadSqliteVecModule(): Promise<SqliteVecModule> {
-  return import(SQLITE_VEC_MODULE_ID) as Promise<SqliteVecModule>;
+  try {
+    // Resolve from the current module's location (openclaw install dir)
+    // to support global npm installs where cwd != openclaw root.
+    const require = createRequire(import.meta.url);
+    const resolved = require.resolve(SQLITE_VEC_MODULE_ID);
+    return import(resolved) as Promise<SqliteVecModule>;
+  } catch {
+    // Fallback to bare import
+    return import(SQLITE_VEC_MODULE_ID) as Promise<SqliteVecModule>;
+  }
 }
 
 export async function loadSqliteVecExtension(params: {
