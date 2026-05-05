@@ -38,6 +38,7 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
 ```
 
 - The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`.
+- The helper is intentionally cache-friendly for gitcrawl-backed `gh`: it rounds repo-local windows to the UTC day, rounds global contribution windows to the UTC hour, and counts PRs/issues from one paginated issues response before fetching commits separately. Prefer reusing the helper instead of hand-rolling several `gh api` loops.
 - Report activity compactly, for example `OpenClaw last 12mo: 4 PRs, 2 issues, 11 commits; GitHub public last 12mo: 86 commits, 9 PRs, 3 issues, 12 reviews`.
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
