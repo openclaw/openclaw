@@ -41,6 +41,21 @@ export class GatewayDrainingError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when a command is rejected because the
+ * target lane is currently suspended (e.g. during model failover).
+ */
+export class LaneSuspendedError extends Error {
+  constructor(
+    public readonly laneId: string,
+    public readonly reason: "quota" | "manual" | "circuit_open",
+    public readonly resumeAfterMs?: number,
+  ) {
+    super(`Lane "${laneId}" is suspended: ${reason}`);
+    this.name = "LaneSuspendedError";
+  }
+}
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -311,8 +326,12 @@ export function markGatewayDraining(): void {
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);
-  state.maxConcurrent = Math.max(1, Math.floor(maxConcurrent));
-  drainLane(cleaned);
+  const isProbeLane = cleaned.startsWith("auth-probe:") || cleaned.startsWith("session:probe-");
+  const minConcurrent = isProbeLane ? 1 : 0;
+  state.maxConcurrent = Math.max(minConcurrent, Math.floor(maxConcurrent));
+  if (state.maxConcurrent > 0) {
+    drainLane(cleaned);
+  }
 }
 
 export function enqueueCommandInLane<T>(

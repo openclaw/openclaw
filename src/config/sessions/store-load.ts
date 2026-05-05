@@ -12,6 +12,7 @@ import {
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
+  pruneQuotaSuspensions,
   pruneStaleEntries,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
@@ -155,6 +156,11 @@ export function loadSessionStore(
     const beforeCount = Object.keys(store).length;
     if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
       const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+      const suspensionsPruned = pruneQuotaSuspensions({
+        store,
+        now: Date.now(),
+        log: false,
+      });
       const countAfterPrune = Object.keys(store).length;
       const capped = shouldRunSessionEntryMaintenance({
         entryCount: countAfterPrune,
@@ -163,7 +169,7 @@ export function loadSessionStore(
         ? capEntryCount(store, maintenance.maxEntries, { log: false })
         : 0;
       const afterCount = Object.keys(store).length;
-      if (pruned > 0 || capped > 0) {
+      if (pruned > 0 || capped > 0 || suspensionsPruned > 0) {
         serializedFromDisk = undefined;
         log.info("applied load-time maintenance to oversized session store", {
           storePath,
@@ -171,6 +177,7 @@ export function loadSessionStore(
           after: afterCount,
           pruned,
           capped,
+          suspensionsPruned,
           maxEntries: maintenance.maxEntries,
         });
       }

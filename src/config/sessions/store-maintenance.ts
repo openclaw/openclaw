@@ -201,6 +201,34 @@ export function pruneStaleEntries(
   return pruned;
 }
 
+export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+/**
+ * Remove expired quota suspensions from session entries.
+ * Mutates `store` in-place.
+ */
+export function pruneQuotaSuspensions(params: {
+  store: Record<string, SessionEntry>;
+  now: number;
+  ttlMs?: number;
+  log?: boolean;
+}): number {
+  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
+  let pruned = 0;
+  for (const entry of Object.values(params.store)) {
+    if (entry.quotaSuspension) {
+      if (params.now - entry.quotaSuspension.suspendedAt > ttlMs) {
+        delete entry.quotaSuspension;
+        pruned++;
+      }
+    }
+  }
+  if (pruned > 0 && params.log !== false) {
+    log.info("pruned expired quota suspensions", { pruned, ttlMs });
+  }
+  return pruned;
+}
+
 function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
