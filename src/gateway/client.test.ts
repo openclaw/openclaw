@@ -1011,6 +1011,7 @@ describe("GatewayClient connect auth payload", () => {
       const onReconnectPaused = vi.fn();
       const client = new GatewayClient({
         url: "ws://127.0.0.1:18789",
+        maxReconnectAttempts: 30,
         onReconnectPaused,
       });
 
@@ -1056,6 +1057,7 @@ describe("GatewayClient connect auth payload", () => {
       const onReconnectPaused = vi.fn();
       const client = new GatewayClient({
         url: "ws://127.0.0.1:18789",
+        maxReconnectAttempts: 10,
         onReconnectPaused,
       });
 
@@ -1071,17 +1073,19 @@ describe("GatewayClient connect auth payload", () => {
       // Now succeed — complete the handshake
       const goodWs = getLatestWs();
       goodWs.emitOpen();
+      // Find the connect frame the client sent so we can reply with its id
+      const lastSent = goodWs.sent.at(-1);
+      const connectFrameId = lastSent ? JSON.parse(lastSent).id : "unknown";
       goodWs.emitMessage(
         JSON.stringify({
-          type: "connect",
-          id: "handshake-1",
+          type: "res",
+          id: connectFrameId,
           ok: true,
-          result: {
-            hello: {
-              sessionId: "test-session",
-              protocol: 1,
-              policy: { tickIntervalMs: 30000 },
-            },
+          payload: {
+            type: "hello-ok",
+            sessionId: "test-session",
+            protocol: 1,
+            policy: { tickIntervalMs: 30000 },
           },
         }),
       );
