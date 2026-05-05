@@ -30,10 +30,37 @@ type SkillsWatchState = {
   debounceMs: number;
   timer?: ReturnType<typeof setTimeout>;
   pendingPath?: string;
+  lastEnsuredAt: number;
 };
 
 const log = createSubsystemLogger("gateway/skills");
 const watchers = new Map<string, SkillsWatchState>();
+
+/**
+ * Watchers idle longer than this are considered abandoned and torn down
+ * opportunistically on the next `ensureSkillsWatcher` call. Each session
+ * update for a workspace re-runs `ensureSkillsWatcher` and refreshes the
+ * timestamp, so workspaces with active sessions never get evicted.
+ */
+const SKILLS_WATCHER_IDLE_TTL_MS = 60 * 60_000; // 1 hour
+
+function disposeSkillsWatcher(workspaceDir: string, state: SkillsWatchState): void {
+  watchers.delete(workspaceDir);
+  if (state.timer) {
+    clearTimeout(state.timer);
+  }
+  void state.watcher.close().catch(() => {});
+  clearSkillsSnapshotVersionForWorkspace(workspaceDir);
+}
+
+function evictIdleSkillsWatchers(now: number): void {
+  const cutoff = now - SKILLS_WATCHER_IDLE_TTL_MS;
+  for (const [workspaceDir, state] of watchers) {
+    if (state.lastEnsuredAt < cutoff) {
+      disposeSkillsWatcher(workspaceDir, state);
+    }
+  }
+}
 
 setSkillsChangeListenerErrorHandler((err) => {
   log.warn(`skills change listener failed: ${String(err)}`);
@@ -108,6 +135,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   if (!workspaceDir) {
     return;
   }
+  const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
   const debounceMsRaw = params.config?.skills?.load?.watchDebounceMs;
   const debounceMs =
@@ -118,19 +146,17 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   const existing = watchers.get(workspaceDir);
   if (!watchEnabled) {
     if (existing) {
-      watchers.delete(workspaceDir);
-      if (existing.timer) {
-        clearTimeout(existing.timer);
-      }
-      void existing.watcher.close().catch(() => {});
-      clearSkillsSnapshotVersionForWorkspace(workspaceDir);
+      disposeSkillsWatcher(workspaceDir, existing);
     }
+    evictIdleSkillsWatchers(now);
     return;
   }
 
   const watchTargets = resolveWatchTargets(workspaceDir, params.config);
   const pathsKey = watchTargets.join("|");
   if (existing && existing.pathsKey === pathsKey && existing.debounceMs === debounceMs) {
+    existing.lastEnsuredAt = now;
+    evictIdleSkillsWatchers(now);
     return;
   }
   if (existing) {
@@ -150,7 +176,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
     ignored: shouldIgnoreSkillsWatchPath,
   });
 
-  const state: SkillsWatchState = { watcher, pathsKey, debounceMs };
+  const state: SkillsWatchState = { watcher, pathsKey, debounceMs, lastEnsuredAt: now };
 
   const schedule = (changedPath?: string) => {
     state.pendingPath = changedPath ?? state.pendingPath;
@@ -178,6 +204,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   });
 
   watchers.set(workspaceDir, state);
+  evictIdleSkillsWatchers(now);
 }
 
 export async function resetSkillsRefreshForTest(): Promise<void> {
