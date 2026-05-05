@@ -1,7 +1,11 @@
 import fs from "node:fs";
+import path from "node:path";
+import { resolveAgentSessionDirsFromAgentsDir } from "../../agents/session-dirs.js";
+import { resolveStateDir } from "../../config/paths.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  resolveSessionTranscriptsDirForAgent,
 } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -22,7 +26,11 @@ import {
   type DiscoveredSession,
   type UsageCacheStatus,
 } from "../../infra/session-cost-usage.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
@@ -64,6 +72,14 @@ type CostUsageCacheEntry = {
 };
 
 const costUsageCache = new Map<string, CostUsageCacheEntry>();
+const NON_FATAL_USAGE_DISCOVERY_ERROR_CODES = new Set([
+  "EACCES",
+  "ELOOP",
+  "ENOENT",
+  "ENOTDIR",
+  "EPERM",
+  "ESTALE",
+]);
 
 function findCostUsageCacheEvictionKey(): string | undefined {
   for (const [key, entry] of costUsageCache) {
@@ -86,17 +102,39 @@ function setCostUsageCache(cacheKey: string, entry: CostUsageCacheEntry): void {
   costUsageCache.set(cacheKey, entry);
 }
 
-function resolveSessionUsageFileOrRespond(
+async function resolveDiscoveredSessionFile(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  sessionId: string;
+}): Promise<string | undefined> {
+  const targets = await listUsageDiscoveryTargets(params.config);
+  for (const target of targets) {
+    if (target.agentId !== params.agentId) {
+      continue;
+    }
+    const sessions = await discoverAllSessions({
+      agentId: target.agentId,
+      sessionsDir: target.sessionsDir,
+    });
+    const match = sessions.find((session) => session.sessionId === params.sessionId);
+    if (match?.sessionFile) {
+      return match.sessionFile;
+    }
+  }
+  return undefined;
+}
+
+async function resolveSessionUsageFileOrRespond(
   key: string,
   respond: RespondFn,
   config: OpenClawConfig,
-): {
+): Promise<{
   config: OpenClawConfig;
   entry: SessionEntry | undefined;
   agentId: string | undefined;
   sessionId: string;
   sessionFile: string;
-} | null {
+} | null> {
   const { entry, storePath } = loadSessionEntry(key);
 
   // For discovered sessions (not in store), try using key as sessionId directly
@@ -115,6 +153,17 @@ function resolveSessionUsageFileOrRespond(
       errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session key: ${key}`),
     );
     return null;
+  }
+
+  if (!fs.existsSync(sessionFile) && agentId) {
+    const discoveredSessionFile = await resolveDiscoveredSessionFile({
+      config,
+      agentId,
+      sessionId,
+    });
+    if (discoveredSessionFile) {
+      sessionFile = discoveredSessionFile;
+    }
   }
 
   return { config, entry, agentId, sessionId, sessionFile };
@@ -274,6 +323,7 @@ const parseDateRange = (params: {
 };
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
+type UsageDiscoveryTarget = { agentId: string; sessionsDir: string };
 
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
@@ -302,21 +352,79 @@ function buildStoreBySessionId(
   return storeBySessionId;
 }
 
+function shouldSkipUsageDiscoveryError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && NON_FATAL_USAGE_DISCOVERY_ERROR_CODES.has(code);
+}
+
+function shouldSkipUsageDiscoveredAgentDirName(dirName: string, agentId: string): boolean {
+  return agentId === DEFAULT_AGENT_ID && dirName.trim().toLowerCase() !== DEFAULT_AGENT_ID;
+}
+
+async function listUsageDiscoveryTargets(config: OpenClawConfig): Promise<UsageDiscoveryTarget[]> {
+  const seenSessionsDirs = new Set<string>();
+  const orderedTargets: UsageDiscoveryTarget[] = [];
+  const addTarget = (target: UsageDiscoveryTarget) => {
+    const resolvedSessionsDir = path.resolve(target.sessionsDir);
+    if (seenSessionsDirs.has(resolvedSessionsDir)) {
+      return;
+    }
+    seenSessionsDirs.add(resolvedSessionsDir);
+    orderedTargets.push(target);
+  };
+
+  for (const agent of listAgentsForGateway(config).agents) {
+    addTarget({
+      agentId: agent.id,
+      sessionsDir: resolveSessionTranscriptsDirForAgent(agent.id),
+    });
+  }
+
+  try {
+    const diskTargets = (
+      await resolveAgentSessionDirsFromAgentsDir(path.join(resolveStateDir(), "agents"))
+    )
+      .map((sessionsDir) => {
+        const dirName = path.basename(path.dirname(sessionsDir));
+        const agentId = normalizeAgentId(dirName);
+        if (!agentId || shouldSkipUsageDiscoveredAgentDirName(dirName, agentId)) {
+          return undefined;
+        }
+        return { agentId, sessionsDir };
+      })
+      .filter((target): target is UsageDiscoveryTarget => Boolean(target))
+      .toSorted(
+        (a, b) => a.agentId.localeCompare(b.agentId) || a.sessionsDir.localeCompare(b.sessionsDir),
+      );
+
+    for (const target of diskTargets) {
+      addTarget(target);
+    }
+  } catch (err) {
+    if (!shouldSkipUsageDiscoveryError(err)) {
+      throw err;
+    }
+  }
+
+  return orderedTargets;
+}
+
 async function discoverAllSessionsForUsage(params: {
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
 }): Promise<DiscoveredSessionWithAgent[]> {
-  const agents = listAgentsForGateway(params.config).agents;
+  const targets = await listUsageDiscoveryTargets(params.config);
   const results = await Promise.all(
-    agents.map(async (agent) => {
+    targets.map(async (target) => {
       const sessions = await discoverAllSessions({
-        agentId: agent.id,
+        agentId: target.agentId,
+        sessionsDir: target.sessionsDir,
         startMs: params.startMs,
         endMs: params.endMs,
         includeFirstUserMessage: false,
       });
-      return sessions.map((session) => Object.assign({}, session, { agentId: agent.id }));
+      return sessions.map((session) => Object.assign({}, session, { agentId: target.agentId }));
     }),
   );
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
@@ -519,6 +627,17 @@ export const usageHandlers: GatewayRequestHandlers = {
           errorShape(ErrorCodes.INVALID_REQUEST, `Invalid session reference: ${specificKey}`),
         );
         return;
+      }
+
+      if ((!sessionFile || !fs.existsSync(sessionFile)) && agentIdFromKey) {
+        const discoveredSessionFile = await resolveDiscoveredSessionFile({
+          config,
+          agentId: agentIdFromKey,
+          sessionId,
+        });
+        if (discoveredSessionFile) {
+          sessionFile = discoveredSessionFile;
+        }
       }
 
       if (sessionFile) {
@@ -897,7 +1016,11 @@ export const usageHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
+    const resolved = await resolveSessionUsageFileOrRespond(
+      key,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }
@@ -935,7 +1058,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(key, respond, context.getRuntimeConfig());
+    const resolved = await resolveSessionUsageFileOrRespond(
+      key,
+      respond,
+      context.getRuntimeConfig(),
+    );
     if (!resolved) {
       return;
     }
