@@ -188,7 +188,7 @@ preset and adapt the provider block:
       providers: {
         inworld: {
           apiKey: "${INWORLD_API_KEY}",
-          modelId: "inworld-tts-1.5-max",
+          modelId: "inworld-tts-2",
           voiceId: "Sarah",
           temperature: 0.7,
         },
@@ -866,7 +866,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
-    <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
+    <ParamField path="modelId" type="string">Default `inworld-tts-2` (Realtime TTS-2). Also: `inworld-tts-1.5-max` (Realtime TTS-1.5-Max), `inworld-tts-1.5-mini` (Realtime TTS-1.5-Mini), `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
     <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
     <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
 
