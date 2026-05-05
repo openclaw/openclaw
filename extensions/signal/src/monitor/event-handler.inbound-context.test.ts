@@ -1,7 +1,6 @@
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildInboundUserContextPrefix } from "../../../../src/auto-reply/reply/inbound-meta.js";
 import type { SignalReactionMessage } from "./event-handler.types.js";
 vi.useRealTimers();
 const [
@@ -649,11 +648,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.ReplyToBody).toBe("@+15550004444 sent the details");
     expect(capture.ctx?.ReplyToIsQuote).toBe(true);
     expect((capture.ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
-
-    const userContext = buildInboundUserContextPrefix(capture.ctx!);
-    expect(userContext).toContain("Reply target of current user message (untrusted, for context):");
-    expect(userContext).toContain('"sender_label": "+15550003333"');
-    expect(userContext).toContain('"body": "@+15550004444 sent the details"');
   });
 
   it("keeps quote-only messages when the user sends no new text", async () => {

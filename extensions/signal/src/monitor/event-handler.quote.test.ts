@@ -1,6 +1,5 @@
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildInboundUserContextPrefix } from "../../../../src/auto-reply/reply/inbound-meta.js";
-import type { MsgContext } from "../../../../src/auto-reply/templating.js";
 import { createSignalEventHandler } from "./event-handler.js";
 import {
   createBaseSignalEventHandlerDeps,
@@ -30,8 +29,10 @@ function getCapturedCtx() {
   return capturedCtx as CapturedSignalQuoteContext;
 }
 
-vi.mock("../../../../src/auto-reply/dispatch.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../../src/auto-reply/dispatch.js")>();
+vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/reply-runtime")>(
+    "openclaw/plugin-sdk/reply-runtime",
+  );
   return {
     ...actual,
     dispatchInboundMessage: dispatchInboundMessageMock,
@@ -46,10 +47,16 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../../../../src/pairing/pairing-store.js", () => ({
-  readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
-  upsertChannelPairingRequest: vi.fn(),
-}));
+vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
+    "openclaw/plugin-sdk/conversation-runtime",
+  );
+  return {
+    ...actual,
+    readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
+    upsertChannelPairingRequest: vi.fn(),
+  };
+});
 
 function createQuoteHandler(overrides: Partial<SignalEventHandlerDeps> = {}) {
   return createSignalEventHandler(
@@ -177,10 +184,8 @@ describe("signal quote reply handling", () => {
     expect(ctx).toBeTruthy();
     expect(ctx?.BodyForAgent).toBe("");
     expect(ctx?.ReplyToBody).toBe("Original message to quote");
-    const userContext = buildInboundUserContextPrefix(ctx as MsgContext);
-    expect(userContext).toContain("Reply target of current user message (untrusted, for context):");
-    expect(userContext).toContain('"body": "Original message to quote"');
-    expect(userContext).toContain('"sender_label": "+15550002222"');
+    expect(ctx?.ReplyToSender).toBe("+15550002222");
+    expect(ctx?.ReplyToIsQuote).toBe(true);
   });
 
   it("hydrates Signal mentions inside quoted text before surfacing reply context", async () => {
