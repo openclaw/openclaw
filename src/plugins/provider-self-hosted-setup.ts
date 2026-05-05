@@ -42,6 +42,9 @@ type OpenAICompatModelsResponse = {
 };
 
 type LlamaCppPropsResponse = {
+  default_generation_settings?: {
+    n_ctx?: unknown;
+  };
   n_ctx?: unknown;
 };
 
@@ -111,7 +114,10 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
         return undefined;
       }
       const data = (await response.json()) as LlamaCppPropsResponse;
-      return readPositiveInteger(data.n_ctx);
+      return (
+        readPositiveInteger(data.default_generation_settings?.n_ctx) ??
+        readPositiveInteger(data.n_ctx)
+      );
     } finally {
       await release();
     }
