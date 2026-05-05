@@ -19,6 +19,7 @@ import {
   sendRawConnectReq,
   startGatewayServer,
   TEST_OPERATOR_CLIENT,
+  testState,
   waitForWsClose,
   withGatewayServer,
   withRuntimeVersionEnv,
@@ -396,6 +397,53 @@ export function registerDefaultAuthTokenSuite(): void {
       );
       expect(connectRes.error?.details?.reason).toBe("device-signature");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    });
+
+    test("rate-limits repeated invalid device signatures", async () => {
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
+      };
+      await withGatewayServer(async ({ port: isolatedPort }) => {
+        const firstWs = await openWs(isolatedPort);
+        const firstNonce = await readConnectChallengeNonce(firstWs);
+        const { device: firstDevice } = await createSignedDevice({
+          token: "secret",
+          scopes: ["operator.admin"],
+          clientId: GATEWAY_CLIENT_NAMES.TEST,
+          clientMode: GATEWAY_CLIENT_MODES.TEST,
+          nonce: firstNonce,
+        });
+        const first = await sendRawConnectReq(firstWs, {
+          id: "c-invalid-device-signature-1",
+          token: "secret",
+          device: firstDevice,
+        });
+        expect(first.ok).toBe(false);
+        expect(first.error?.details?.code).toBe(
+          ConnectErrorDetailCodes.DEVICE_AUTH_SIGNATURE_INVALID,
+        );
+        firstWs.close();
+
+        const secondWs = await openWs(isolatedPort);
+        const secondNonce = await readConnectChallengeNonce(secondWs);
+        const { device: secondDevice } = await createSignedDevice({
+          token: "secret",
+          scopes: ["operator.admin"],
+          clientId: GATEWAY_CLIENT_NAMES.TEST,
+          clientMode: GATEWAY_CLIENT_MODES.TEST,
+          nonce: secondNonce,
+        });
+        const second = await sendRawConnectReq(secondWs, {
+          id: "c-invalid-device-signature-2",
+          token: "secret",
+          device: secondDevice,
+        });
+        expect(second.ok).toBe(false);
+        expect(second.error?.details?.code).toBe(ConnectErrorDetailCodes.AUTH_RATE_LIMITED);
+        secondWs.close();
+      });
     });
 
     test("sends connect challenge on open", async () => {

@@ -54,7 +54,10 @@ import {
   isWebchatClient,
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+  type AuthRateLimiter,
+} from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
@@ -767,6 +770,32 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
           const rejectDeviceSignatureInvalid = () =>
             rejectDeviceAuthInvalid("device-signature", "device signature invalid");
+          const deviceSignatureRateCheck = authRateLimiter?.check(
+            browserRateLimitClientIp,
+            AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+          );
+          if (deviceSignatureRateCheck && !deviceSignatureRateCheck.allowed) {
+            setHandshakeState("failed");
+            setCloseCause("device-auth-invalid", {
+              reason: "device-signature-rate-limited",
+              client: connectParams.client.id,
+              deviceId: device.id,
+            });
+            send({
+              type: "res",
+              id: frame.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature rate limited", {
+                details: {
+                  code: ConnectErrorDetailCodes.AUTH_RATE_LIMITED,
+                  retryAfterMs: deviceSignatureRateCheck.retryAfterMs,
+                  reason: "device-signature-rate-limited",
+                },
+              }),
+            });
+            close(1008, "device signature rate limited");
+            return;
+          }
           const payloadVersion = resolveDeviceSignaturePayloadVersion({
             device,
             connectParams,
@@ -776,9 +805,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             nonce: providedNonce,
           });
           if (!payloadVersion) {
+            authRateLimiter?.recordFailure(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+            );
             rejectDeviceSignatureInvalid();
             return;
           }
+          authRateLimiter?.reset(browserRateLimitClientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE);
           deviceAuthPayloadVersion = payloadVersion;
           devicePublicKey = normalizeDevicePublicKeyBase64Url(device.publicKey);
           if (!devicePublicKey) {

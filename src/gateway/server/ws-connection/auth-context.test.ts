@@ -9,6 +9,8 @@ type VerifyBootstrapTokenFn = Parameters<
 
 function createRateLimiter(params?: { allowed?: boolean; retryAfterMs?: number }): {
   limiter: AuthRateLimiter;
+  check: ReturnType<typeof vi.fn>;
+  recordFailure: ReturnType<typeof vi.fn>;
   reset: ReturnType<typeof vi.fn>;
 } {
   const allowed = params?.allowed ?? true;
@@ -22,6 +24,8 @@ function createRateLimiter(params?: { allowed?: boolean; retryAfterMs?: number }
       reset,
       recordFailure,
     } as unknown as AuthRateLimiter,
+    check,
+    recordFailure,
     reset,
   };
 }
@@ -141,11 +145,14 @@ describe("resolveConnectAuthDecision", () => {
   });
 
   it("accepts valid bootstrap tokens before device-token fallback", async () => {
+    const rateLimiter = createRateLimiter();
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({ ok: true }));
     const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
     const decision = await resolveDeviceTokenDecision({
       verifyBootstrapToken,
       verifyDeviceToken,
+      rateLimiter: rateLimiter.limiter,
+      clientIp: "203.0.113.23",
       stateOverrides: {
         bootstrapTokenCandidate: "bootstrap-token",
         deviceTokenCandidate: "device-token",
@@ -154,10 +161,12 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authOk).toBe(true);
     expect(decision.authMethod).toBe("bootstrap-token");
     expect(verifyBootstrapToken).toHaveBeenCalledOnce();
+    expect(rateLimiter.reset).toHaveBeenCalledWith("203.0.113.23", "bootstrap-token");
     expect(verifyDeviceToken).not.toHaveBeenCalled();
   });
 
   it("reports invalid bootstrap tokens when no device token fallback is available", async () => {
+    const rateLimiter = createRateLimiter();
     const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({
       ok: false,
       reason: "bootstrap_token_invalid",
@@ -166,6 +175,8 @@ describe("resolveConnectAuthDecision", () => {
     const decision = await resolveDeviceTokenDecision({
       verifyBootstrapToken,
       verifyDeviceToken,
+      rateLimiter: rateLimiter.limiter,
+      clientIp: "203.0.113.21",
       stateOverrides: {
         bootstrapTokenCandidate: "bootstrap-token",
         deviceTokenCandidate: undefined,
@@ -175,6 +186,31 @@ describe("resolveConnectAuthDecision", () => {
     expect(decision.authOk).toBe(false);
     expect(decision.authResult.reason).toBe("bootstrap_token_invalid");
     expect(verifyBootstrapToken).toHaveBeenCalledOnce();
+    expect(rateLimiter.check).toHaveBeenCalledWith("203.0.113.21", "bootstrap-token");
+    expect(rateLimiter.recordFailure).toHaveBeenCalledWith("203.0.113.21", "bootstrap-token");
+    expect(verifyDeviceToken).not.toHaveBeenCalled();
+  });
+
+  it("returns rate-limited auth result without verifying bootstrap token", async () => {
+    const rateLimiter = createRateLimiter({ allowed: false, retryAfterMs: 60_000 });
+    const verifyBootstrapToken = vi.fn<VerifyBootstrapTokenFn>(async () => ({ ok: true }));
+    const verifyDeviceToken = vi.fn<VerifyDeviceTokenFn>(async () => ({ ok: true }));
+    const decision = await resolveDeviceTokenDecision({
+      verifyBootstrapToken,
+      verifyDeviceToken,
+      rateLimiter: rateLimiter.limiter,
+      clientIp: "203.0.113.22",
+      stateOverrides: {
+        bootstrapTokenCandidate: "bootstrap-token",
+        deviceTokenCandidate: undefined,
+        deviceTokenCandidateSource: undefined,
+      },
+    });
+
+    expect(decision.authOk).toBe(false);
+    expect(decision.authResult.reason).toBe("rate_limited");
+    expect(decision.authResult.retryAfterMs).toBe(60_000);
+    expect(verifyBootstrapToken).not.toHaveBeenCalled();
     expect(verifyDeviceToken).not.toHaveBeenCalled();
   });
 
