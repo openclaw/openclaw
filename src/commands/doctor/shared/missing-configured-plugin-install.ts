@@ -676,7 +676,7 @@ async function repairMissingPluginInstalls(params: {
       }
       delete nextRecords[pluginId];
       changes.push(
-        `Deferred missing configured plugin "${pluginId}" install repair until post-update doctor.`,
+        `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`,
       );
     }
   }

@@ -151,6 +151,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(packageUpdateCore.lanes.map((lane) => lane.name)).toEqual([
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "upgrade-survivor",
@@ -164,6 +165,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         }),
         expect.objectContaining({
           name: "npm-onboard-discord-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "npm-onboard-slack-channel-agent",
           stateScenario: "empty",
         }),
         expect.objectContaining({

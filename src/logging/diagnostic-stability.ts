@@ -24,6 +24,7 @@ export type DiagnosticStabilityEventRecord = {
   outcome?: string;
   mode?: string;
   level?: string;
+  phase?: string;
   detector?: string;
   deliveryKind?: string;
   toolName?: string;
@@ -292,6 +293,17 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.active = event.active;
       record.waiting = event.waiting;
       record.queued = event.queued;
+      record.phase = event.phase;
+      if (event.activeWorkLabels?.length) {
+        record.source = event.activeWorkLabels[0];
+      } else if (event.queuedWorkLabels?.length) {
+        record.source = event.queuedWorkLabels[0];
+      }
+      break;
+    case "diagnostic.phase.completed":
+      record.phase = event.name;
+      record.durationMs = event.durationMs;
+      record.cpuCoreRatio = event.cpuCoreRatio;
       break;
     case "tool.loop":
       record.toolName = event.toolName;

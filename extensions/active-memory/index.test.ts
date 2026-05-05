@@ -125,6 +125,23 @@ describe("active-memory plugin", () => {
       "utf8",
     );
   };
+  const makeMemoryToolAllowlistError = (
+    reason: string,
+    sources = "runtime toolsAllow: memory_recall, memory_search, memory_get",
+  ) =>
+    new Error(
+      `No callable tools remain after resolving explicit tool allowlist ` +
+        `(${sources}); ${reason}. ` +
+        `Fix the allowlist or enable the plugin that registers the requested tool.`,
+    );
+  const hasDebugLine = (needle: string) =>
+    vi
+      .mocked(api.logger.debug)
+      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
+  const hasWarnLine = (needle: string) =>
+    vi
+      .mocked(api.logger.warn)
+      .mock.calls.some((call: unknown[]) => String(call[0]).includes(needle));
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -1644,6 +1661,133 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
+  });
+
+  it("skips the recall subagent when no registered memory tools match", async () => {
+    const sessionKey = "agent:main:missing-memory-tools";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError("no registered tools matched");
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasWarnLine("No callable tools remain")).toBe(false);
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=empty")]);
+    expect(lines.join("\n")).not.toContain("status=unavailable");
+  });
+
+  it("skips missing memory tools when the allowlist error includes inherited sources", async () => {
+    const sessionKey = "agent:main:missing-memory-tools-with-policy-source";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools-with-policy-source",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      "tools.allow: *, lobster; runtime toolsAllow: memory_recall, memory_search, memory_get",
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(true);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools with policy", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(true);
+    expect(hasWarnLine("No callable tools remain")).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=empty"),
+    ]);
+  });
+
+  it("keeps memory-tool allowlist errors visible when upstream policy can filter memory tools", async () => {
+    const sessionKey = "agent:main:memory-tools-filtered-by-policy";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-memory-tools-filtered-by-policy",
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(
+      "no registered tools matched",
+      "tools.allow: read, exec; runtime toolsAllow: memory_recall, memory_search, memory_get",
+    );
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? memory tools filtered by policy", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(hasWarnLine("No callable tools remain")).toBe(true);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+    ]);
+  });
+
+  it.each([
+    ["disabled tools", "tools are disabled for this run"],
+    ["models without tool support", "the selected model does not support tools"],
+  ])("keeps allowlist errors for %s visible", async (_label, reason) => {
+    const sessionKey = `agent:main:${reason.replace(/\W+/g, "-")}`;
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: `s-${reason.replace(/\W+/g, "-")}`,
+      updatedAt: 0,
+    };
+    const error = makeMemoryToolAllowlistError(reason);
+    expect(__testing.isMissingRegisteredMemoryToolsError(error)).toBe(false);
+    runEmbeddedPiAgent.mockRejectedValueOnce(error);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: `what wings should i order? ${reason}`, messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(hasWarnLine(reason)).toBe(true);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=unavailable"),
+    ]);
+  });
+
+  it("does not skip missing memory-tool allowlist errors after abort", async () => {
+    const sessionKey = "agent:main:missing-memory-tools-after-abort";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-missing-memory-tools-after-abort",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { abortSignal?: AbortSignal }) => {
+      Object.defineProperty(params.abortSignal as AbortSignal, "aborted", {
+        configurable: true,
+        value: true,
+      });
+      throw makeMemoryToolAllowlistError("no registered tools matched");
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? missing memory tools after abort", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hasDebugLine("no memory tools registered")).toBe(false);
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=timeout"),
+    ]);
   });
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
