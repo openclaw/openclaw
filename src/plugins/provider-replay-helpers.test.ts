@@ -178,6 +178,32 @@ describe("provider replay helpers", () => {
     });
   });
 
+  it("drops reasoning from history for non-Claude models on anthropic-messages (#77625)", () => {
+    const minimaxPolicy = buildHybridAnthropicOrOpenAIReplayPolicy(
+      {
+        provider: "minimax",
+        modelApi: "anthropic-messages",
+        modelId: "MiniMax-M2.7",
+      } as never,
+      { anthropicModelDropThinkingBlocks: true },
+    );
+    expect(minimaxPolicy).toMatchObject({
+      validateAnthropicTurns: true,
+      dropReasoningFromHistory: true,
+    });
+
+    // Claude models should NOT get dropReasoningFromHistory
+    const claudePolicy = buildHybridAnthropicOrOpenAIReplayPolicy(
+      {
+        provider: "minimax",
+        modelApi: "anthropic-messages",
+        modelId: "claude-sonnet-4-6",
+      } as never,
+      { anthropicModelDropThinkingBlocks: true },
+    );
+    expect(claudePolicy).not.toHaveProperty("dropReasoningFromHistory");
+  });
+
   it("builds Gemini replay helpers and tagged reasoning mode", () => {
     expect(buildGoogleGeminiReplayPolicy()).toMatchObject({
       validateGeminiTurns: true,

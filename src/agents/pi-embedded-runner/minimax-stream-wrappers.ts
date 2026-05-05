@@ -49,6 +49,10 @@ export function createMinimaxFastModeWrapper(
  * provider cannot process this format and leaks the reasoning text as visible
  * content. Disable thinking in the outgoing payload so MiniMax does not produce
  * reasoning_content deltas during streaming.
+ *
+ * This MUST override any previously-set thinking value (e.g. from
+ * reasoningDefault:"stream") because MiniMax cannot emit thinking blocks in a
+ * format the runtime can safely replay without creating a feedback loop (#77625).
  */
 export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -63,11 +67,7 @@ export function createMinimaxThinkingDisabledWrapper(baseStreamFn: StreamFn | un
       onPayload: (payload) => {
         if (payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
-          // Only inject if thinking is not already explicitly set.
-          // This preserves any intentional override from other wrappers.
-          if (payloadObj.thinking === undefined) {
-            payloadObj.thinking = { type: "disabled" };
-          }
+          payloadObj.thinking = { type: "disabled" };
         }
         return originalOnPayload?.(payload, model);
       },

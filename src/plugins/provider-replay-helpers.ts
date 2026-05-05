@@ -127,12 +127,18 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
     const isClaude = normalizeLowercaseStringOrEmpty(ctx.modelId).includes("claude");
-    return buildStrictAnthropicReplayPolicy({
-      dropThinkingBlocks:
-        options.anthropicModelDropThinkingBlocks &&
-        isClaude &&
-        !shouldPreserveThinkingBlocks(ctx.modelId),
-    });
+    return {
+      ...buildStrictAnthropicReplayPolicy({
+        dropThinkingBlocks:
+          options.anthropicModelDropThinkingBlocks &&
+          isClaude &&
+          !shouldPreserveThinkingBlocks(ctx.modelId),
+      }),
+      // Non-Claude models on the Anthropic-messages API (e.g. MiniMax) cannot
+      // produce replayable thinking blocks. Strip leaked reasoning from history
+      // to prevent feedback loops when reasoningDefault is "stream" (#77625).
+      ...(!isClaude ? { dropReasoningFromHistory: true } : {}),
+    };
   }
 
   return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });
