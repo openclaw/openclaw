@@ -36,6 +36,10 @@
     "target": "频道消息 API"
   },
   {
+    "source": "Talk mode",
+    "target": "Talk 模式"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },

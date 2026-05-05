@@ -77,6 +77,97 @@ Current bundled provider examples:
 - OpenRouter keeps provider builder and onboarding/config helpers in its own
   `api.ts`
 
+## Talk and realtime voice migration plan
+
+Realtime voice, telephony, meeting, and browser Talk code is moving from
+surface-local turn bookkeeping to a shared Talk session controller exported by
+`openclaw/plugin-sdk/realtime-voice`. The new controller owns the common Talk
+event envelope, active turn state, capture state, output-audio state, recent
+event history, and stale-turn rejection. Provider plugins should keep owning
+vendor-specific realtime sessions; surface plugins should keep owning capture,
+playback, telephony, and meeting quirks.
+
+This migration is intentionally adapter-first:
+
+1. Add shared controller/runtime primitives to `plugin-sdk/realtime-voice`.
+2. Keep existing public Gateway RPCs such as `talk.realtime.session`,
+   `talk.realtime.relayAudio`, `talk.transcription.session`, and
+   `talk.handoff.*` as compatibility adapters.
+3. Move bundled surfaces onto the shared controller: browser relay, managed-room
+   handoff, voice-call realtime, voice-call streaming STT, Google Meet realtime,
+   and VoiceClaw realtime.
+4. Advertise all Talk event channels in Gateway `hello-ok.features.events` so
+   clients can discover `talk.event`, `talk.realtime.relay`, and
+   `talk.transcription.relay`.
+5. Expose the versioned `talk.session.*` API for Gateway-managed Talk sessions
+   after the adapters are internally backed by the same controller.
+
+New code should not call `createTalkEventSequencer(...)` directly unless it is
+implementing a low-level adapter or test fixture. Prefer the shared controller
+so turn-scoped events cannot be emitted without a turn id, stale `turnEnd` /
+`turnCancel` calls cannot clear a newer active turn, and output-audio lifecycle
+events stay consistent across telephony, meetings, browser relay, managed-room
+handoff, and native Talk clients.
+
+The target public API shape is:
+
+```typescript
+// Versioned Gateway-managed Talk session API.
+await gateway.request("talk.session.create", {
+  mode: "realtime",
+  transport: "gateway-relay",
+  brain: "agent-consult",
+  sessionKey: "main",
+});
+await gateway.request("talk.session.inputAudio", { sessionId, audioBase64 });
+await gateway.request("talk.session.control", { sessionId, type: "turn.cancel" });
+await gateway.request("talk.session.toolResult", { sessionId, callId, result });
+await gateway.request("talk.session.close", { sessionId });
+```
+
+Browser-owned WebRTC/provider-websocket sessions stay on
+`talk.realtime.session`, because the browser owns the provider negotiation and
+media transport. `talk.session.*` is the common Gateway-managed surface for
+gateway-relay realtime, gateway-relay transcription, and managed-room native
+STT/TTS sessions.
+
+Legacy configs that placed realtime selectors beside `talk.provider` /
+`talk.providers` should be repaired with `openclaw doctor --fix`; runtime Talk
+does not reinterpret speech/TTS provider config as realtime provider config.
+
+The supported `talk.session.create` combinations are intentionally small:
+
+| Mode            | Transport       | Brain           | Owner              | Notes                                                                                                              |
+| --------------- | --------------- | --------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `realtime`      | `gateway-relay` | `agent-consult` | Gateway            | Full-duplex provider audio bridged through the Gateway; tool calls are routed through the agent-consult tool.      |
+| `transcription` | `gateway-relay` | `none`          | Gateway            | Streaming STT only; callers send input audio and receive transcript events.                                        |
+| `stt-tts`       | `managed-room`  | `agent-consult` | Native/client room | Push-to-talk and walkie-talkie style rooms where the client owns capture/playback and the Gateway owns turn state. |
+| `stt-tts`       | `managed-room`  | `direct-tools`  | Native/client room | Admin-only room mode for trusted first-party surfaces that execute Gateway tool actions directly.                  |
+
+Everything else should stay on the existing owner-specific adapter until there
+is a real Gateway-managed transport for it:
+
+| Existing adapter        | Keep using it for                                                                        |
+| ----------------------- | ---------------------------------------------------------------------------------------- |
+| `talk.realtime.session` | Browser-owned WebRTC and provider-websocket realtime sessions.                           |
+| `talk.realtime.relay*`  | Compatibility for existing browser relay clients while they migrate to `talk.session.*`. |
+| `talk.transcription.*`  | Compatibility for existing streaming STT clients while they migrate to `talk.session.*`. |
+| `talk.handoff.*`        | Compatibility for room-style native clients; internally this is the managed-room shape.  |
+
+The unified control vocabulary is also deliberately narrow:
+
+| Method                    | Applies to                                              | Contract                                                                                                 |
+| ------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `talk.session.inputAudio` | `realtime/gateway-relay`, `transcription/gateway-relay` | Append a base64 PCM audio chunk to the provider session owned by the same Gateway connection.            |
+| `talk.session.control`    | all unified sessions                                    | `turn.cancel` for relay sessions; `turn.start`, `turn.end`, and `turn.cancel` for managed-room sessions. |
+| `talk.session.toolResult` | `realtime/gateway-relay`                                | Complete a provider tool call emitted by the relay.                                                      |
+| `talk.session.close`      | all unified sessions                                    | Stop relay sessions or revoke managed-room handoff state, then forget the unified session id.            |
+
+Do not introduce provider or platform special cases in core to make this work.
+Core owns Talk session semantics. Provider plugins own vendor session setup.
+Voice-call and Google Meet own telephony/meeting adapters. Browser and native
+apps own device capture/playback UX.
+
 ## Compatibility policy
 
 For external plugins, compatibility work follows this order:
@@ -497,7 +588,7 @@ releases.
   | `plugin-sdk/speech` | Speech helpers | Speech provider types plus provider-facing directive, registry, validation helpers, and OpenAI-compatible TTS builder |
   | `plugin-sdk/speech-core` | Shared speech core | Speech provider types, registry, directives, normalization |
   | `plugin-sdk/realtime-transcription` | Realtime transcription helpers | Provider types, registry helpers, and shared WebSocket session helper |
-  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, and bridge session helpers |
+  | `plugin-sdk/realtime-voice` | Realtime voice helpers | Provider types, registry/resolution helpers, bridge session helpers, shared agent talk-back queues, transcript/event health, echo suppression, and fast context consult helpers |
   | `plugin-sdk/image-generation` | Image-generation helpers | Image generation provider types plus image asset/data URL helpers and the OpenAI-compatible image provider builder |
   | `plugin-sdk/image-generation-core` | Shared image-generation core | Image-generation types, failover, auth, and registry helpers |
   | `plugin-sdk/music-generation` | Music-generation helpers | Music-generation provider/request/result types |

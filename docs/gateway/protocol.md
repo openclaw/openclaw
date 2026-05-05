@@ -253,7 +253,8 @@ base method scope:
 
 Nodes declare capability claims at connect time:
 
-- `caps`: high-level capability categories.
+- `caps`: high-level capability categories such as `camera`, `canvas`, `screen`,
+  `location`, `voice`, and `talk`.
 - `commands`: command allowlist for invoke.
 - `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
 
@@ -361,8 +362,17 @@ enumeration of `src/gateway/server-methods/*.ts`.
   </Accordion>
 
   <Accordion title="Talk and TTS">
+    - `talk.catalog` returns the read-only Talk provider catalog for speech, streaming transcription, and realtime voice. It includes provider ids, labels, configured state, exposed model/voice ids, canonical modes, transports, brain strategies, and realtime audio/capability flags without returning provider secrets or mutating global config.
     - `talk.config` returns the effective Talk config payload; `includeSecrets` requires `operator.talk.secrets` (or `operator.admin`).
+    - `talk.handoff.create` creates an expiring managed-room handoff for an existing session key. The result contains a room id, room URL, bearer token, optional session-scoped provider/model/voice selection, mode, transport, brain strategy, and expiry for a first-party walkie-talkie client. `brain: "direct-tools"` requires `operator.admin`.
+    - `talk.handoff.join` validates a handoff id plus bearer token, emits `session.ready` or `session.replaced` room events as needed, and returns room/session metadata plus recent Talk events without the plaintext token or stored token hash.
+    - `talk.handoff.turnStart`, `talk.handoff.turnEnd`, and `talk.handoff.turnCancel` let a first-party managed-room client drive the room turn lifecycle with `turn.started`, `turn.ended`, and `turn.cancelled` Talk events.
+    - `talk.handoff.revoke` invalidates an unexpired handoff, emits `session.closed`, and makes later joins fail.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
+    - `talk.realtime.session` creates a browser realtime session using canonical transports (`webrtc`, `provider-websocket`, or `gateway-relay`). It accepts optional `mode`, `transport`, and `brain` selectors, but currently only public browser `mode: "realtime"` plus `brain: "agent-consult"` is supported; `managed-room` remains reserved for handoff clients until the browser owns a real room client.
+    - `talk.realtime.relayAudio`, `talk.realtime.relayCancel`, `talk.realtime.relayMark`, `talk.realtime.relayStop`, and `talk.realtime.relayToolResult` control Gateway-owned realtime relay sessions. Relay cancellation clears provider output and aborts any linked agent consult run.
+    - `talk.realtime.toolCall` lets browser-owned realtime transports forward provider tool calls to Gateway policy. The first supported tool is `openclaw_agent_consult`; clients receive a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Gateway relay clients include `relaySessionId` so turn cancellation can abort the consult.
+    - `talk.transcription.session` creates a transcription-only Gateway relay over the configured streaming STT provider. Clients send PCM frames through `talk.transcription.relayAudio`, cancel an active turn with `talk.transcription.relayCancel`, receive `talk.transcription.relay` events with common Talk envelopes, and close with `talk.transcription.relayStop`.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
     - `tts.status` returns TTS enabled state, active provider, fallback providers, and provider config state.
     - `tts.providers` returns the visible TTS provider inventory.
