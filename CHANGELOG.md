@@ -71,6 +71,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/plugins: preserve plugin-owned async response claims through inbound dispatch so Telegram does not send a silent-reply fallback before the plugin's response arrives. Fixes #70286. (#70288) Thanks @jdm0830.
 - Doctor/status: warn when `OPENCLAW_GATEWAY_TOKEN` would shadow a different active `gateway.auth.token` source for local CLI commands, while avoiding false positives when config points at the same env token. Fixes #74271. Thanks @yelog.
 - Gateway/OpenAI-compatible: send the assistant role SSE chunk as soon as streaming chat-completion headers are accepted, so cold agent setup cannot leave `/v1/chat/completions` clients with a bodyless 200 response until their idle timeout fires.
 - Agents/media: avoid direct generated-media completion fallback while the announce-agent run is still pending, so async video and music completions do not duplicate raw media messages. (#77754)

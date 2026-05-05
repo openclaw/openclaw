@@ -834,7 +834,8 @@ export async function dispatchReplyFromConfig(
           recordProcessed("completed", { reason: "plugin-bound-handled" });
           commitInboundDedupeIfClaimed();
           return attachSourceReplyDeliveryMode({
-            queuedFinal: false,
+            finalResponseCommitted: true,
+            queuedFinal: true,
             counts: dispatcher.getQueuedCounts(),
           });
         }

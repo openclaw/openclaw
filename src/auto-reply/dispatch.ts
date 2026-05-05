@@ -130,7 +130,7 @@ function finalizeDispatchResult(
     (failedCounts?.final ?? 0) > 0;
   return {
     ...result,
-    queuedFinal: result.queuedFinal && counts.final > 0,
+    queuedFinal: result.queuedFinal && (result.finalResponseCommitted === true || counts.final > 0),
     counts,
     ...(hasFailedCounts ? { failedCounts } : {}),
   };
