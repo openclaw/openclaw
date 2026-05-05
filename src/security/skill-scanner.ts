@@ -506,6 +506,18 @@ function isExecutionSegment(segment: string): boolean {
   return false;
 }
 
+function markdownCommandCandidates(line: string): string[] {
+  const trimmed = line.trim();
+  const candidates = [trimmed];
+  for (const match of trimmed.matchAll(/`([^`\n]+)`/g)) {
+    const inlineCommand = match[1]?.trim();
+    if (inlineCommand) {
+      candidates.push(inlineCommand);
+    }
+  }
+  return candidates;
+}
+
 function findMarkdownDownloadExecMatch(params: {
   lines: string[];
 }): { line: number; evidence: string } | null {
@@ -515,13 +527,15 @@ function findMarkdownDownloadExecMatch(params: {
       continue;
     }
 
-    const segments = splitShellPipeline(trimmed);
-    for (let index = 0; index < segments.length - 1; index += 1) {
-      if (
-        isDownloadCommandSegment(segments[index] ?? "") &&
-        isExecutionSegment(segments[index + 1] ?? "")
-      ) {
-        return { line: logicalLine.line, evidence: trimmed };
+    for (const candidate of markdownCommandCandidates(trimmed)) {
+      const segments = splitShellPipeline(candidate);
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        if (
+          isDownloadCommandSegment(segments[index] ?? "") &&
+          isExecutionSegment(segments[index + 1] ?? "")
+        ) {
+          return { line: logicalLine.line, evidence: trimmed };
+        }
       }
     }
   }
