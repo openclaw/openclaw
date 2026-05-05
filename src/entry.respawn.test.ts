@@ -38,6 +38,35 @@ describe("buildCliRespawnPlan", () => {
     expect(plan?.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
   });
 
+  it.each(["tui", "terminal", "chat"] as const)(
+    "preserves NODE_EXTRA_CA_CERTS respawn for interactive %s",
+    (command) => {
+      const plan = buildCliRespawnPlan({
+        argv: ["node", "openclaw", command],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      });
+
+      expect(plan).not.toBeNull();
+      expect(plan?.argv).toEqual(["openclaw", command]);
+      expect(plan?.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
+      expect(plan?.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
+      expect(plan?.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+    },
+  );
+
+  it("does not respawn interactive commands for warning suppression only", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "tui"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: undefined,
+      }),
+    ).toBeNull();
+  });
+
   it("does not overwrite an existing NODE_EXTRA_CA_CERTS value", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],

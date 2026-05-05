@@ -1,7 +1,10 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
-import { shouldSkipRespawnForArgv } from "./cli/respawn-policy.js";
+import {
+  shouldSkipRespawnForArgv,
+  shouldSkipStartupEnvironmentRespawnForArgv,
+} from "./cli/respawn-policy.js";
 import { isTruthyEnvValue } from "./infra/env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
@@ -71,7 +74,10 @@ export function buildCliRespawnPlan(
   const execPath = params.execPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
 
-  if (shouldSkipRespawnForArgv(argv) || isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)) {
+  if (
+    shouldSkipStartupEnvironmentRespawnForArgv(argv) ||
+    isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
+  ) {
     return null;
   }
 
@@ -101,6 +107,7 @@ export function buildCliRespawnPlan(
   }
 
   if (
+    !shouldSkipRespawnForArgv(argv) &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {

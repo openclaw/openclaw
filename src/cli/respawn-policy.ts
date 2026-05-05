@@ -48,3 +48,11 @@ export function shouldSkipRespawnForArgv(argv: string[]): boolean {
     (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
   );
 }
+
+export function shouldSkipStartupEnvironmentRespawnForArgv(argv: string[]): boolean {
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.hasHelpOrVersion ||
+    (invocation.primary === "gateway" && isForegroundGatewayRunArgv(argv))
+  );
+}
