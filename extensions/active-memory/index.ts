@@ -41,7 +41,21 @@ const DEFAULT_QMD_SEARCH_MODE = "search" as const;
 const DEFAULT_TRANSCRIPT_DIR = "active-memory";
 const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
-const ACTIVE_MEMORY_TOOL_ALLOWLIST = ["memory_recall", "memory_search", "memory_get"] as const;
+const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
+const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
+const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
+  "*",
+  "apply_patch",
+  "browser",
+  "exec",
+  "message",
+  "read",
+  "subagents",
+  "update_plan",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -100,6 +114,7 @@ type ActiveRecallPluginConfig = {
     | "recall-heavy"
     | "precision-heavy"
     | "preference-only";
+  toolsAllow?: string[];
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs?: number;
@@ -140,6 +155,7 @@ type ResolvedActiveRecallPluginConfig = {
     | "recall-heavy"
     | "precision-heavy"
     | "preference-only";
+  toolsAllow: string[];
   promptOverride?: string;
   promptAppend?: string;
   timeoutMs: number;
@@ -397,6 +413,34 @@ function normalizeChatIdList(value: unknown): string[] {
   return out;
 }
 
+function normalizeToolsAllow(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const trimmed = entry.trim();
+    if (!trimmed || isReservedActiveMemoryToolsAllowEntry(trimmed) || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    out.push(trimmed);
+    if (out.length >= MAX_ACTIVE_MEMORY_TOOLS_ALLOW) {
+      break;
+    }
+  }
+  return out.length > 0 ? out : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+}
+
+function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
+}
+
 function normalizePromptConfigText(value: unknown): string | undefined {
   const text = typeof value === "string" ? value.trim() : "";
   return text ? text : undefined;
@@ -495,7 +539,14 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
+function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
+  return `runtime toolsAllow: ${toolsAllow.join(", ")}`;
+}
+
+function isMissingRegisteredMemoryToolsError(
+  error: unknown,
+  toolsAllow: readonly string[] = DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+): boolean {
   if (!(error instanceof Error)) {
     return false;
   }
@@ -507,24 +558,12 @@ function isMissingRegisteredMemoryToolsError(error: unknown): boolean {
     return false;
   }
   const sources = message.slice(prefix.length, -suffix.length);
-  const runtimeSource = `runtime toolsAllow: ${ACTIVE_MEMORY_TOOL_ALLOWLIST.join(", ")}`;
+  const runtimeSource = formatRuntimeToolsAllowSource(toolsAllow);
   const sourceParts = sources
     .split(";")
     .map((source) => source.trim())
     .filter(Boolean);
-  if (!sourceParts.includes(runtimeSource)) {
-    return false;
-  }
-  return sourceParts.every((source) => {
-    if (source === runtimeSource) {
-      return true;
-    }
-    const entries = source
-      .slice(source.indexOf(":") + 1)
-      .split(",")
-      .map((entry) => entry.trim());
-    return entries.includes("*");
-  });
+  return sourceParts.includes(runtimeSource);
 }
 
 function resolveRecallRunChannelContext(params: {
@@ -811,6 +850,7 @@ function normalizePluginConfig(pluginConfig: unknown): ResolvedActiveRecallPlugi
     deniedChatIds: normalizeChatIdList(raw.deniedChatIds),
     thinking: resolveThinkingLevel(raw.thinking),
     promptStyle: resolvePromptStyle(raw.promptStyle, raw.queryMode),
+    toolsAllow: normalizeToolsAllow(raw.toolsAllow),
     promptOverride: normalizePromptConfigText(raw.promptOverride),
     promptAppend: normalizePromptConfigText(raw.promptAppend),
     timeoutMs: clampInt(
@@ -982,11 +1022,11 @@ function buildRecallPrompt(params: {
     "Your job is to search memory and return only the most relevant memory context for that model.",
     "You receive a bounded search query plus conversation context, including the user's latest message.",
     "Use only the available memory tools.",
-    "Use the bounded search query as the memory_search or memory_recall query.",
+    "Use the bounded search query with the configured memory tools.",
+    `Configured memory tools: ${params.config.toolsAllow.join(", ")}.`,
     "Do not use channel metadata, provider metadata, debug output, or the full conversation context as the memory tool query.",
-    "Prefer memory_recall when available.",
-    "If memory_recall is unavailable, use memory_search and memory_get.",
-    "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
+    "If the available memory tools find nothing useful, reply with NONE.",
+    "When searching for preference or habit recall, use permissive search limits or thresholds before deciding that no useful memory exists.",
     "Do not answer the user directly.",
     `Prompt style: ${params.config.promptStyle}.`,
     ...buildPromptStyleLines(params.config.promptStyle),
@@ -2427,7 +2467,7 @@ async function runRecallSubagent(params: {
       timeoutMs: embeddedTimeoutMs,
       runId: subagentSessionId,
       trigger: "manual",
-      toolsAllow: [...ACTIVE_MEMORY_TOOL_ALLOWLIST],
+      toolsAllow: [...params.config.toolsAllow],
       disableMessageTool: true,
       allowGatewaySubagentBinding: true,
       bootstrapContextMode: "lightweight",
@@ -2470,9 +2510,19 @@ async function runRecallSubagent(params: {
       const searchDebug = partialReply ? await readActiveMemorySearchDebug(sessionFile) : undefined;
       attachPartialTimeoutData(error, partialReply, searchDebug);
     }
-    if (!params.abortSignal?.aborted && isMissingRegisteredMemoryToolsError(error)) {
+    if (
+      !params.abortSignal?.aborted &&
+      isMissingRegisteredMemoryToolsError(error, params.config.toolsAllow)
+    ) {
       params.api.logger.debug?.(
-        `active-memory: no memory tools registered (memory-core or memory-lancedb required); skipping sub-agent`,
+        `active-memory: no configured memory tools available; skipping sub-agent`,
+      );
+      return { rawReply: "NONE" };
+    }
+    if (!params.abortSignal?.aborted) {
+      const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+      params.api.logger.warn?.(
+        `active-memory: memory sub-agent failed, skipping recall: ${message}`,
       );
       return { rawReply: "NONE" };
     }
@@ -2741,10 +2791,10 @@ async function maybeResolveActiveRecall(params: {
     }
     const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
     if (params.config.logging) {
-      params.api.logger.warn?.(`${logPrefix} failed error=${message}`);
+      params.api.logger.warn?.(`${logPrefix} failed error=${message}; skipping recall`);
     }
     const result: ActiveRecallResult = {
-      status: "unavailable",
+      status: "empty",
       elapsedMs: Date.now() - startedAt,
       summary: null,
     };
