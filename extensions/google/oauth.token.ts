@@ -39,6 +39,7 @@ async function buildGeminiCliCredentials(params: {
   };
   refreshTokenFallback?: string;
   existing?: Pick<GeminiCliOAuthCredentials, "email" | "projectId">;
+  allowIdentityFallback?: boolean;
 }): Promise<GeminiCliOAuthCredentials> {
   const accessToken = params.tokenResponse.access_token;
   if (!accessToken) {
@@ -54,7 +55,10 @@ async function buildGeminiCliCredentials(params: {
         projectId: identity.projectId ?? discovered.projectId,
       };
     }
-  } catch {
+  } catch (error) {
+    if (!params.allowIdentityFallback || (!params.existing?.email && !params.existing?.projectId)) {
+      throw error;
+    }
     // If identity discovery is temporarily unavailable during refresh, keep the
     // already-stored identity binding instead of failing token renewal.
   }
@@ -129,5 +133,6 @@ export async function refreshTokensForGeminiCli(credentials: {
       email: credentials.email,
       projectId: credentials.projectId,
     },
+    allowIdentityFallback: true,
   });
 }
