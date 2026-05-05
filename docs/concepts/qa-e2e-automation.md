@@ -132,11 +132,36 @@ pnpm openclaw qa mantis slack-desktop-smoke \
 
 That command leases a Crabbox desktop/browser machine, runs the Slack live lane
 inside the VM, opens Slack Web in the VNC browser, captures the desktop, and
-copies `slack-qa/` plus `slack-desktop-smoke.png` back to the Mantis artifact
-directory. Reuse `--lease-id <cbx_...>` after logging in to Slack Web manually
+copies `slack-qa/`, `slack-desktop-smoke.png`, and `slack-desktop-smoke.mp4`
+when video capture is available back to the Mantis artifact directory. Reuse `--lease-id <cbx_...>` after logging in to Slack Web manually
 through VNC. With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack
 gateway running inside the VM on port `38973`; without it, the command runs the
 normal bot-to-bot Slack QA lane and exits after artifact capture.
+
+For an agent/CV style desktop task, run:
+
+```bash
+pnpm openclaw qa mantis visual-task \
+  --browser-url https://example.net \
+  --expect-text "Example Domain" \
+  --vision-model openai/gpt-5.4
+```
+
+`visual-task` leases or reuses a Crabbox desktop/browser machine, starts
+`crabbox record --while`, drives the visible browser through a nested
+`visual-driver`, captures `visual-task.png`, runs `openclaw infer image describe`
+against the screenshot when `--vision-mode image-describe` is selected, and
+writes `visual-task.mp4`, `mantis-visual-task-summary.json`,
+`mantis-visual-task-driver-result.json`, and `mantis-visual-task-report.md`.
+When `--expect-text` is set, the vision prompt asks for a structured JSON
+verdict and only passes when the model reports positive visible evidence; a
+negative response that merely quotes the target text fails the assertion.
+Use `--vision-mode metadata` for a no-model smoke that proves the desktop,
+browser, screenshot, and video plumbing without calling an image-understanding
+provider. Recording is a required artifact for `visual-task`; if Crabbox records
+no non-empty `visual-task.mp4`, the task fails even when the visual driver
+passed. On failure, Mantis keeps the lease for VNC unless the task had already
+passed and `--keep-lease` was not set.
 
 Before using pooled live credentials, run:
 
@@ -232,6 +257,8 @@ Scenarios (`extensions/qa-lab/src/live-transports/telegram/telegram-live.runtime
 - `telegram-tools-compact-command`
 - `telegram-whoami-command`
 - `telegram-context-command`
+- `telegram-long-final-reuses-preview`
+- `telegram-long-final-three-chunks`
 
 Output artifacts:
 
@@ -264,7 +291,7 @@ Scenarios (`extensions/qa-lab/src/live-transports/discord/discord-live.runtime.t
 - `discord-canary`
 - `discord-mention-gating`
 - `discord-native-help-command-registration`
-- `discord-status-reactions-tool-only` — opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus an HTML/PNG visual artifact.
+- `discord-status-reactions-tool-only` — opt-in Mantis scenario. Runs by itself because it switches the SUT to always-on, tool-only guild replies with `messages.statusReactions.enabled=true`, then captures a REST reaction timeline plus HTML/PNG visual artifacts. Mantis before/after reports also preserve scenario-provided MP4 artifacts as `baseline.mp4` and `candidate.mp4`.
 
 Run the Mantis status-reaction scenario explicitly:
 
