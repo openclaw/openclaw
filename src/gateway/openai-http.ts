@@ -732,6 +732,9 @@ export async function handleOpenAiHttpRequest(
     unsubscribe();
   });
 
+  wroteRole = true;
+  writeAssistantRoleChunk(res, { runId, model });
+
   void (async () => {
     try {
       const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
