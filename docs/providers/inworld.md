@@ -22,7 +22,7 @@ the standard reply-audio pipeline.
 | Auth env var  | `INWORLD_API_KEY` (HTTP Basic, Base64 dashboard credential)     |
 | Base URL      | `https://api.inworld.ai`                                        |
 | Default voice | `Sarah`                                                         |
-| Default model | `inworld-tts-1.5-max`                                           |
+| Default model | `inworld-tts-2` (Realtime TTS-2)                                |
 | Output        | MP3 (default), OGG_OPUS (voice notes), PCM 22050 Hz (telephony) |
 | Website       | [inworld.ai](https://inworld.ai)                                |
 | Docs          | [docs.inworld.ai/tts/tts](https://docs.inworld.ai/tts/tts)      |
@@ -51,7 +51,7 @@ the standard reply-audio pipeline.
           providers: {
             inworld: {
               voiceId: "Sarah",
-              modelId: "inworld-tts-1.5-max",
+              modelId: "inworld-tts-2",
             },
           },
         },
@@ -73,7 +73,7 @@ the standard reply-audio pipeline.
 | `apiKey`      | `messages.tts.providers.inworld.apiKey`      | Base64 dashboard credential. Falls back to `INWORLD_API_KEY`.     |
 | `baseUrl`     | `messages.tts.providers.inworld.baseUrl`     | Override Inworld API base URL (default `https://api.inworld.ai`). |
 | `voiceId`     | `messages.tts.providers.inworld.voiceId`     | Voice identifier (default `Sarah`).                               |
-| `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-1.5-max`).                     |
+| `modelId`     | `messages.tts.providers.inworld.modelId`     | TTS model id (default `inworld-tts-2`).                           |
 | `temperature` | `messages.tts.providers.inworld.temperature` | Sampling temperature `0..2` (optional).                           |
 
 ## Notes
@@ -87,8 +87,10 @@ the standard reply-audio pipeline.
     See [TTS auth notes](/tools/tts#inworld-primary) for the same callout.
   </Accordion>
   <Accordion title="Models">
-    Supported model ids: `inworld-tts-1.5-max` (default),
-    `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.
+    Supported model ids: `inworld-tts-2` (Realtime TTS-2, default),
+    `inworld-tts-1.5-max` (Realtime TTS-1.5-Max),
+    `inworld-tts-1.5-mini` (Realtime TTS-1.5-Mini), `inworld-tts-1-max`,
+    `inworld-tts-1`.
   </Accordion>
   <Accordion title="Audio outputs">
     Replies use MP3 by default. When the channel target is `voice-note`
