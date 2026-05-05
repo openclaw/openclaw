@@ -622,6 +622,38 @@ describe("GatewayBrowserClient", () => {
     vi.useRealTimers();
   });
 
+  it("flushes pending requests with structured connect errors on close", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    const pendingRequest = client.request("cron.list", { quiet: true });
+
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: "PAIRING_REQUIRED" },
+      },
+    });
+
+    await vi.waitFor(() => expect(ws.readyState).toBe(3));
+    ws.emitClose(4008, "connect failed");
+
+    const err = await pendingRequest.catch((caught) => caught);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).name).toBe("GatewayRequestError");
+    expect(err).toMatchObject({
+      gatewayCode: "INVALID_REQUEST",
+      details: { code: "PAIRING_REQUIRED" },
+    });
+  });
+
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
     vi.useFakeTimers();
     localStorage.clear();
