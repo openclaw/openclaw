@@ -494,6 +494,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       cli: {
         type: "object",
         properties: {
+          locale: {
+            anyOf: [
+              {
+                type: "string",
+                const: "en",
+              },
+              {
+                type: "string",
+                const: "zh-CN",
+              },
+            ],
+          },
           banner: {
             type: "object",
             properties: {
