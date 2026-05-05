@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/sessions: surface archived `.jsonl.reset.<ts>` and `.jsonl.deleted.<ts>` transcripts in the Sessions row's expanded panel and add `sessions.archived.list` / `sessions.archived.read` Gateway RPCs so prior conversations and their image attachments stay viewable from the Control UI after a session reset instead of looking deleted while still on disk. Fixes #77819.
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.
