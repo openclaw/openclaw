@@ -1,5 +1,6 @@
+import { privateStateStore, type PrivateStateStore } from "@openclaw/fs-safe/advanced";
+
 export {
-  privateFileStore,
   readPrivateJson,
   readPrivateJsonSync,
   readPrivateText,
@@ -8,5 +9,9 @@ export {
   writePrivateJsonAtomicSync,
   writePrivateTextAtomic,
   writePrivateTextAtomicSync,
-  type PrivateFileStore,
+  type PrivateStateStore as PrivateFileStore,
 } from "@openclaw/fs-safe/advanced";
+
+export function privateFileStore(rootDir: string): PrivateStateStore {
+  return privateStateStore({ rootDir });
+}
