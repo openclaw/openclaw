@@ -386,9 +386,13 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
+  const runtimeContextProvider = resolveStatusAuthProvider({
+    provider: modelRefs.active.provider || provider,
+    effectiveHarness,
+  });
   const runtimeContextTokens = await resolveStatusRuntimeContextTokens({
     cfg,
-    provider: modelRefs.active.provider || provider,
+    provider: runtimeContextProvider,
     model: modelRefs.active.model || model,
   });
   return buildStatusMessage({
