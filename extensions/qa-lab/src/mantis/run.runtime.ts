@@ -51,6 +51,7 @@ type LaneResult = {
   screenshotPath?: string;
   status: string;
   summaryPath: string;
+  videoPath?: string;
 };
 
 type Comparison = {
@@ -60,6 +61,7 @@ type Comparison = {
     reproduced: boolean;
     screenshotPath?: string;
     status: string;
+    videoPath?: string;
   };
   candidate: {
     expected: "queued -> thinking -> done";
@@ -67,6 +69,7 @@ type Comparison = {
     ref: string;
     screenshotPath?: string;
     status: string;
+    videoPath?: string;
   };
   pass: boolean;
   scenario: string;
@@ -157,12 +160,14 @@ async function readLaneResult(params: {
     summary.scenarios?.find((entry) => entry.id === params.scenario) ?? summary.scenarios?.[0];
   const status = scenarioSummary?.status ?? "fail";
   const screenshotPath = scenarioSummary?.artifactPaths?.screenshot;
+  const videoPath = scenarioSummary?.artifactPaths?.video;
   return {
     outputDir: params.publishedLaneDir,
     scenarioDetails: scenarioSummary?.details,
     screenshotPath,
     status,
     summaryPath,
+    videoPath,
   } satisfies LaneResult;
 }
 
@@ -189,6 +194,9 @@ function renderReport(params: {
     params.baseline.screenshotPath
       ? `- Screenshot: \`${path.join("baseline", path.basename(params.baseline.screenshotPath))}\``
       : "- Screenshot: missing",
+    params.baseline.videoPath
+      ? `- Video: \`${path.join("baseline", path.basename(params.baseline.videoPath))}\``
+      : "- Video: missing",
     params.baseline.scenarioDetails ? `- Details: ${params.baseline.scenarioDetails}` : undefined,
     "",
     "## Candidate",
@@ -200,6 +208,9 @@ function renderReport(params: {
     params.candidate.screenshotPath
       ? `- Screenshot: \`${path.join("candidate", path.basename(params.candidate.screenshotPath))}\``
       : "- Screenshot: missing",
+    params.candidate.videoPath
+      ? `- Video: \`${path.join("candidate", path.basename(params.candidate.videoPath))}\``
+      : "- Video: missing",
     params.candidate.scenarioDetails ? `- Details: ${params.candidate.scenarioDetails}` : undefined,
     "",
   ].filter((line) => line !== undefined);
@@ -214,6 +225,18 @@ async function copyScreenshot(params: { lane: "baseline" | "candidate"; result: 
     ? params.result.screenshotPath
     : path.join(params.result.outputDir, params.result.screenshotPath);
   const target = path.join(params.result.outputDir, `${params.lane}.png`);
+  await fs.copyFile(source, target);
+  return target;
+}
+
+async function copyVideo(params: { lane: "baseline" | "candidate"; result: LaneResult }) {
+  if (!params.result.videoPath) {
+    return undefined;
+  }
+  const source = path.isAbsolute(params.result.videoPath)
+    ? params.result.videoPath
+    : path.join(params.result.outputDir, params.result.videoPath);
+  const target = path.join(params.result.outputDir, `${params.lane}.mp4`);
   await fs.copyFile(source, target);
   return target;
 }
@@ -300,9 +323,11 @@ async function runLane(params: {
     scenario: params.scenario,
   });
   const copiedScreenshot = await copyScreenshot({ lane: params.lane, result });
+  const copiedVideo = await copyVideo({ lane: params.lane, result });
   return {
     ...result,
     screenshotPath: copiedScreenshot ?? result.screenshotPath,
+    videoPath: copiedVideo ?? result.videoPath,
   } satisfies LaneResult;
 }
 
@@ -373,6 +398,7 @@ export async function runMantisBeforeAfter(
         reproduced: baselineResult.status === "fail",
         screenshotPath: baselineResult.screenshotPath,
         status: baselineResult.status,
+        videoPath: baselineResult.videoPath,
       },
       candidate: {
         expected: "queued -> thinking -> done",
@@ -380,6 +406,7 @@ export async function runMantisBeforeAfter(
         ref: candidate,
         screenshotPath: candidateResult.screenshotPath,
         status: candidateResult.status,
+        videoPath: candidateResult.videoPath,
       },
       pass: baselineResult.status === "fail" && candidateResult.status === "pass",
       scenario,

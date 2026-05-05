@@ -250,12 +250,24 @@ function createCodexAppServerInstallConfig(params: {
   };
 }
 
-function createInstalledPackageDir(params: { name?: string; version: string }): string {
+function createInstalledPackageDir(params: {
+  name?: string;
+  version: string;
+  peerDependencies?: Record<string, string>;
+}): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-update-test-"));
   tempDirs.push(dir);
   fs.writeFileSync(
     path.join(dir, "package.json"),
-    JSON.stringify({ name: params.name ?? "test-plugin", version: params.version }, null, 2),
+    JSON.stringify(
+      {
+        name: params.name ?? "test-plugin",
+        version: params.version,
+        ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+      },
+      null,
+      2,
+    ),
   );
   return dir;
 }
@@ -704,6 +716,119 @@ describe("updateNpmInstalledPlugins", () => {
         currentVersion: "0.9.0",
         nextVersion: "0.9.0",
         message: "lossless-claw is up to date (0.9.0).",
+      },
+    ]);
+  });
+
+  it("repairs missing openclaw peer links before skipping unchanged npm plugins", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      peerDependencies: { openclaw: ">=2026.5.3" },
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.5.3",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.3",
+          resolvedSpec: "@openclaw/codex@2026.5.3",
+        },
+      }),
+    );
+    const config: OpenClawConfig = {
+      plugins: {
+        installs: {
+          codex: {
+            source: "npm",
+            spec: "@openclaw/codex",
+            installPath,
+            resolvedName: "@openclaw/codex",
+            resolvedVersion: "2026.5.3",
+            resolvedSpec: "@openclaw/codex@2026.5.3",
+            integrity: "sha512-same",
+            shasum: "same",
+          },
+        },
+      },
+    };
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["codex"],
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex",
+        mode: "update",
+        expectedPluginId: "codex",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "unchanged",
+        currentVersion: "2026.5.3",
+        nextVersion: "2026.5.3",
+        message: "codex already at 2026.5.3.",
+      },
+    ]);
+  });
+
+  it("skips unchanged npm plugins when the openclaw peer link already resolves", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      peerDependencies: { openclaw: ">=2026.5.3" },
+    });
+    fs.mkdirSync(path.join(installPath, "node_modules", "openclaw"), { recursive: true });
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.3",
+      integrity: "sha512-same",
+      shasum: "same",
+    });
+    installPluginFromNpmSpecMock.mockRejectedValue(new Error("installer should not run"));
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            codex: {
+              source: "npm",
+              spec: "@openclaw/codex",
+              installPath,
+              resolvedName: "@openclaw/codex",
+              resolvedVersion: "2026.5.3",
+              resolvedSpec: "@openclaw/codex@2026.5.3",
+              integrity: "sha512-same",
+              shasum: "same",
+            },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "codex",
+        status: "unchanged",
+        currentVersion: "2026.5.3",
+        nextVersion: "2026.5.3",
+        message: "codex is up to date (2026.5.3).",
       },
     ]);
   });

@@ -322,7 +322,10 @@ Use `release_profile` to select live/provider breadth:
 
 Use `run_release_soak=true` with `stable` when the release-blocking lanes are
 green and you want the exhaustive live/E2E, Docker release-path, and
-all-since-2026.4.23 upgrade-survivor sweep before promotion. `full` implies
+bounded published upgrade-survivor sweep before promotion. That sweep covers
+the latest four stable packages plus pinned `2026.4.23` and `2026.5.2`
+baselines plus older `2026.4.15` coverage, with duplicate baselines removed and
+each baseline sharded into its own Docker runner job. `full` implies
 `run_release_soak=true`.
 
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the target

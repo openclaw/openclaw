@@ -70,7 +70,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor/update-migration; use all-since-2026.4.23, release-history, or exact versions
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use last-stable-4, all-since-2026.4.23, release-history, or exact versions
         required: false
         default: ""
         type: string
@@ -150,7 +150,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor/update-migration; use all-since-2026.4.23, release-history, or exact versions
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use last-stable-4, all-since-2026.4.23, release-history, or exact versions
         required: false
         default: ""
         type: string
@@ -442,7 +442,7 @@ jobs:
           fi
           releases_json=""
           npm_versions_json=""
-          if [[ "$REQUESTED_BASELINES" == *"release-history"* || "$REQUESTED_BASELINES" == *"all-since-"* ]]; then
+          if [[ "$REQUESTED_BASELINES" == *"release-history"* || "$REQUESTED_BASELINES" == *"all-since-"* || "$REQUESTED_BASELINES" == *"last-stable-"* ]]; then
             releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
             npm_versions_json=".artifacts/package-candidate-input/openclaw-npm-versions.json"
             mkdir -p "$(dirname "$releases_json")"
