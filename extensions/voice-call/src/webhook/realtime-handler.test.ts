@@ -629,6 +629,86 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
+  it("does not carry a final transcript into the next direct voice turn", async () => {
+    let callbacks:
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    const processEvent = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    );
+    const handler = makeHandler(undefined, {
+      manager: {
+        processEvent,
+        getCallByProviderCallId: vi.fn(
+          (): CallRecord => ({
+            callId: "call-1",
+            providerCallId: "CA-direct-turns",
+            provider: "twilio",
+            direction: "inbound",
+            state: "ringing",
+            from: "+15550001234",
+            to: "+15550009999",
+            startedAt: Date.now(),
+            transcript: [],
+            processedEventIds: [],
+            metadata: {},
+          }),
+        ),
+      },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-direct-turns", callSid: "CA-direct-turns" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onTranscript?.("user", "Hello there.", true);
+        callbacks?.onTranscript?.("user", "How are you?", true);
+
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.speech",
+            transcript: "Hello there.",
+          }),
+        );
+        expect(processEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.speech",
+            transcript: "How are you?",
+          }),
+        );
+        expect(processEvent).not.toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "call.speech",
+            transcript: "Hello there. How are you?",
+          }),
+        );
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
   it("uses the latest partial transcript when provider consult args omit a question", async () => {
     let callbacks:
       | {

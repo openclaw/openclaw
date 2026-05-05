@@ -40,6 +40,7 @@ const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
 const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
+const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -252,6 +253,11 @@ export class RealtimeCallHandler {
   >();
   private readonly partialUserTranscriptsByCallId = new Map<string, string>();
   private readonly partialUserTranscriptUpdatedAtByCallId = new Map<string, number>();
+  private readonly recentFinalUserTranscriptsByCallId = new Map<string, string>();
+  private readonly recentFinalUserTranscriptTimersByCallId = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly forcedConsultTimersByCallId = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly forcedConsultInFlightByCallId = new Set<string>();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
@@ -545,6 +551,8 @@ export class RealtimeCallHandler {
         }
         if (role === "user") {
           const transcript = this.recordPartialUserTranscript(callId, text);
+          this.clearPartialUserTranscript(callId);
+          this.setRecentFinalUserTranscript(callId, transcript);
           console.log(
             `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
           );
@@ -601,7 +609,7 @@ export class RealtimeCallHandler {
         this.activeBridgesByCallId.delete(callSid);
         this.activeTelephonyClosersByCallId.delete(callId);
         this.activeTelephonyClosersByCallId.delete(callSid);
-        this.clearPartialUserTranscript(callId);
+        this.clearUserTranscriptState(callId);
         if (reason !== "error") {
           return;
         }
@@ -644,7 +652,7 @@ export class RealtimeCallHandler {
       this.activeBridgesByCallId.delete(callSid);
       this.activeTelephonyClosersByCallId.delete(callId);
       this.activeTelephonyClosersByCallId.delete(callSid);
-      this.clearPartialUserTranscript(callId);
+      this.clearUserTranscriptState(callId);
       this.clearForcedConsultState(callId);
       audioPacer.close();
       closeSession();
@@ -673,6 +681,40 @@ export class RealtimeCallHandler {
     this.partialUserTranscriptUpdatedAtByCallId.delete(callId);
   }
 
+  private setRecentFinalUserTranscript(callId: string, text: string): void {
+    this.clearRecentFinalUserTranscript(callId);
+    this.recentFinalUserTranscriptsByCallId.set(callId, text);
+    const timer = setTimeout(() => {
+      if (this.recentFinalUserTranscriptsByCallId.get(callId) === text) {
+        this.recentFinalUserTranscriptsByCallId.delete(callId);
+      }
+      this.recentFinalUserTranscriptTimersByCallId.delete(callId);
+    }, RECENT_FINAL_USER_TRANSCRIPT_TTL_MS);
+    timer.unref?.();
+    this.recentFinalUserTranscriptTimersByCallId.set(callId, timer);
+  }
+
+  private clearRecentFinalUserTranscript(callId: string): void {
+    const timer = this.recentFinalUserTranscriptTimersByCallId.get(callId);
+    if (timer) {
+      clearTimeout(timer);
+      this.recentFinalUserTranscriptTimersByCallId.delete(callId);
+    }
+    this.recentFinalUserTranscriptsByCallId.delete(callId);
+  }
+
+  private clearUserTranscriptState(callId: string): void {
+    this.clearPartialUserTranscript(callId);
+    this.clearRecentFinalUserTranscript(callId);
+  }
+
+  private resolveUserTranscriptContext(callId: string): string | undefined {
+    return (
+      this.partialUserTranscriptsByCallId.get(callId) ??
+      this.recentFinalUserTranscriptsByCallId.get(callId)
+    );
+  }
+
   private consumePartialUserTranscript(callId: string, consumed: string | undefined): void {
     const text = consumed?.trim();
     if (!text) {
@@ -693,6 +735,13 @@ export class RealtimeCallHandler {
       } else {
         this.clearPartialUserTranscript(callId);
       }
+    }
+    const recent = this.recentFinalUserTranscriptsByCallId.get(callId);
+    if (!recent) {
+      return;
+    }
+    if (recent === text || recent.toLowerCase().startsWith(text.toLowerCase())) {
+      this.clearRecentFinalUserTranscript(callId);
     }
   }
 
@@ -971,7 +1020,7 @@ export class RealtimeCallHandler {
       state.promise = (async () => {
         await this.waitForConsultTranscriptSettle(callId, startedAt);
         const context = {
-          partialUserTranscript: this.partialUserTranscriptsByCallId.get(callId),
+          partialUserTranscript: this.resolveUserTranscriptContext(callId),
         };
         state.partialUserTranscript = context.partialUserTranscript;
         const handlerArgs = withFallbackConsultQuestion(args, context.partialUserTranscript);
@@ -1013,7 +1062,7 @@ export class RealtimeCallHandler {
       `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
     );
     const context = {
-      partialUserTranscript: this.partialUserTranscriptsByCallId.get(callId),
+      partialUserTranscript: this.resolveUserTranscriptContext(callId),
     };
     const handlerArgs =
       name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
