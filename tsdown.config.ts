@@ -32,6 +32,7 @@ type ExternalOptionFunction = (
 const env = {
   NODE_ENV: "production",
 };
+const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -122,6 +123,7 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
     env,
     fixedExtension: false,
     platform: "node",
+    sourcemap: OUTPUT_SOURCE_MAPS,
     inputOptions: buildInputOptions,
   };
 }
