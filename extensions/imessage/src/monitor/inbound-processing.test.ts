@@ -253,6 +253,112 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.kind).toBe("dispatch");
   });
 
+  it("drops group echoes persisted under chat_guid scope", () => {
+    // Outbound `send` to a group keyed by chat_guid persists the echo scope
+    // as `${accountId}:chat_guid:${chatGuid}` (see send.ts:resolveOutboundEchoScope).
+    // The inbound side has chat_id, chat_guid, and chat_identifier all
+    // populated by chat.db. Without the multi-scope check, the chat_guid-keyed
+    // echo would never be matched against the chat_id-only inbound scope and
+    // the agent would react to its own message.
+    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
+      return scope === "default:chat_guid:iMessage;+;chat0000" && lookup.messageId === "9001";
+    });
+
+    const decision = resolveDecision({
+      message: {
+        id: 9001,
+        chat_id: 42,
+        chat_guid: "iMessage;+;chat0000",
+        chat_identifier: "chat0000",
+        sender: "+15555550123",
+        text: "echo",
+        is_group: true,
+      },
+      messageText: "echo",
+      bodyText: "echo",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+    // The match should land on the chat_guid scope variant.
+    const calls = echoHas.mock.calls.map(([scope]) => scope);
+    expect(calls).toContain("default:chat_guid:iMessage;+;chat0000");
+  });
+
+  it("drops group echoes persisted under chat_identifier scope", () => {
+    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
+      return scope === "default:chat_identifier:chat0000" && lookup.messageId === "9001";
+    });
+
+    const decision = resolveDecision({
+      message: {
+        id: 9001,
+        chat_id: 42,
+        chat_guid: "iMessage;+;chat0000",
+        chat_identifier: "chat0000",
+        sender: "+15555550123",
+        text: "echo",
+        is_group: true,
+      },
+      messageText: "echo",
+      bodyText: "echo",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+    const calls = echoHas.mock.calls.map(([scope]) => scope);
+    expect(calls).toContain("default:chat_identifier:chat0000");
+  });
+
+  it("drops group echoes persisted under chat_id scope (baseline)", () => {
+    const echoHas = vi.fn((scope: string, lookup: { text?: string; messageId?: string }) => {
+      return scope === "default:chat_id:42" && lookup.messageId === "9001";
+    });
+
+    const decision = resolveDecision({
+      message: {
+        id: 9001,
+        chat_id: 42,
+        chat_guid: "iMessage;+;chat0000",
+        chat_identifier: "chat0000",
+        sender: "+15555550123",
+        text: "echo",
+        is_group: true,
+      },
+      messageText: "echo",
+      bodyText: "echo",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision).toEqual({ kind: "drop", reason: "echo" });
+    const calls = echoHas.mock.calls.map(([scope]) => scope);
+    expect(calls).toContain("default:chat_id:42");
+  });
+
+  it("does not drop a group inbound when echo cache holds an unrelated chat_guid", () => {
+    const echoHas = vi.fn(
+      (scope: string, lookup: { text?: string; messageId?: string }) =>
+        scope === "default:chat_guid:iMessage;+;OTHER" && lookup.messageId === "9001",
+    );
+
+    const decision = resolveDecision({
+      message: {
+        id: 9001,
+        chat_id: 42,
+        chat_guid: "iMessage;+;chat0000",
+        chat_identifier: "chat0000",
+        sender: "+15555550123",
+        text: "fresh inbound",
+        is_group: true,
+      },
+      messageText: "fresh inbound",
+      bodyText: "fresh inbound",
+      echoCache: { has: echoHas },
+    });
+
+    expect(decision.kind).toBe("dispatch");
+  });
+
   it("sanitizes reflected duplicate previews before logging", () => {
     const selfChatCache = createSelfChatCache();
     const logVerbose = vi.fn();
