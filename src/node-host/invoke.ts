@@ -134,6 +134,27 @@ function requireExecApprovalsBaseHash(
   }
 }
 
+/**
+ * Resolve the exit-code and error for a child process exit event.
+ *
+ * When a process is terminated by a signal (SIGKILL from OOM, SIGTERM, etc.)
+ * and the kill was NOT caused by an intentional timeout, surface the signal as
+ * a structured error string. Timeout-kills preserve the legacy contract:
+ * `timedOut: true, error: null`.
+ *
+ * @internal Exported for testing; not part of the public API.
+ */
+export function resolveExitResult(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  timedOut: boolean,
+): { exitCode: number | undefined; error: string | null } {
+  if (code === null && signal && !timedOut) {
+    return { exitCode: undefined, error: `process killed by signal ${signal}` };
+  }
+  return { exitCode: code === null ? undefined : code, error: null };
+}
+
 async function runCommand(
   argv: string[],
   cwd: string | undefined,
@@ -219,8 +240,9 @@ async function runCommand(
     child.on("error", (err) => {
       finalize(undefined, err.message);
     });
-    child.on("exit", (code) => {
-      finalize(code === null ? undefined : code, null);
+    child.on("exit", (code, signal) => {
+      const result = resolveExitResult(code, signal, timedOut);
+      finalize(result.exitCode, result.error);
     });
   });
 }
