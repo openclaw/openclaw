@@ -26,7 +26,7 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
   type: "function",
   name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   description:
-    "Ask the full OpenClaw agent for deeper reasoning, current information, or tool-backed help before speaking.",
+    "Delegate the caller's request to the configured OpenClaw agent for normal tool-backed work, context, memory, or reasoning before speaking.",
   parameters: {
     type: "object",
     properties: {
@@ -114,7 +114,11 @@ export function resolveRealtimeVoiceAgentConsultToolsAllow(
 }
 
 export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {
-  const question = readConsultStringArg(args, "question");
+  const question =
+    readConsultStringArg(args, "question") ??
+    readConsultStringArg(args, "prompt") ??
+    readConsultStringArg(args, "query") ??
+    readConsultStringArg(args, "task");
   if (!question) {
     throw new Error("question required");
   }
@@ -155,14 +159,14 @@ export function buildRealtimeVoiceAgentConsultPrompt(params: {
     .join("\n");
 
   return [
-    `You are helping an OpenClaw realtime voice agent during ${params.surface}.`,
-    `Answer the ${questionSourceLabel}'s question with the strongest useful reasoning and available tools.`,
-    "Return only the concise answer the realtime voice agent should speak next.",
-    "Do not include markdown, citations unless needed, tool logs, or private reasoning.",
+    `Live voice request from the ${questionSourceLabel} during ${params.surface}.`,
+    "Act as the configured OpenClaw agent on behalf of this user. Use available tools when the request asks you to do work.",
+    "When finished, return only the concise result the realtime voice agent should speak back.",
+    "Do not include markdown, tool logs, or private reasoning. Include citations only when the spoken answer needs them.",
     parsed.responseStyle ? `Spoken style: ${parsed.responseStyle}` : undefined,
-    transcript ? `Recent transcript:\n${transcript}` : undefined,
-    parsed.context ? `Additional context:\n${parsed.context}` : undefined,
-    `Question:\n${parsed.question}`,
+    transcript ? `Recent voice transcript for context:\n${transcript}` : undefined,
+    parsed.context ? `Additional realtime context:\n${parsed.context}` : undefined,
+    `User request:\n${parsed.question}`,
   ]
     .filter(Boolean)
     .join("\n\n");

@@ -1256,6 +1256,7 @@ describe("google-meet plugin", () => {
       dtmfSequence: "123456#",
       logger: expect.objectContaining({ info: expect.any(Function) }),
       message: "Say exactly: I'm here and listening.",
+      sessionKey: expect.stringMatching(/^voice:google-meet:meet_/),
     });
   });
 
