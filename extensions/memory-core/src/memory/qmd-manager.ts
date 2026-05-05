@@ -66,6 +66,13 @@ const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
+// Bump SESSION_EXPORT_RENDER_VERSION when changing renderSessionMarkdown,
+// redactSensitiveText, line-wrapping, or anything else that affects the bytes
+// written to <qmdDir>/sessions/*.md. The persistent export-state cache uses
+// this to invalidate stale entries cleanly across deploys.
+const SESSION_EXPORT_RENDER_VERSION = 1;
+const SESSION_EXPORT_STATE_FILE = ".export-state.json";
+const SESSION_EXPORT_STATE_FORMAT_VERSION = 1;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
@@ -319,9 +326,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     {
       hash: string;
       mtimeMs: number;
+      size: number;
       target: string;
     }
   >();
+  private exportedSessionStateLoaded = false;
   private readonly maxQmdOutputChars = MAX_QMD_OUTPUT_CHARS;
   private readonly sessionExporter: SessionExporterConfig | null;
   private updateTimer: NodeJS.Timeout | null = null;
@@ -2203,13 +2212,39 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const exportDir = this.sessionExporter.dir;
     await fs.mkdir(exportDir, { recursive: true });
+    if (!this.exportedSessionStateLoaded) {
+      await this.loadExportedSessionState();
+      this.exportedSessionStateLoaded = true;
+    }
     const files = await listSessionFilesForAgent(this.agentId);
     const keep = new Set<string>();
     const tracked = new Set<string>();
     const cutoff = this.sessionExporter.retentionMs
       ? Date.now() - this.sessionExporter.retentionMs
       : null;
+    let stateMutated = false;
     for (const sessionFile of files) {
+      let stat: Awaited<ReturnType<typeof fs.stat>>;
+      try {
+        stat = await fs.stat(sessionFile);
+      } catch {
+        // File vanished between listing and stat; let orphan cleanup handle
+        // any stale export below.
+        continue;
+      }
+      const cached = this.exportedSessionState.get(sessionFile);
+      // Fast path: source bytes look unchanged (size + mtime match) AND we
+      // know the export target qmd should consume. Skip the entry build,
+      // redaction, hashing, and write entirely.
+      if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
+        if (cutoff && stat.mtimeMs < cutoff) {
+          continue;
+        }
+        tracked.add(sessionFile);
+        keep.add(cached.target);
+        continue;
+      }
+      // Slow path: rebuild the entry and write the markdown if needed.
       const entry = await buildSessionEntry(sessionFile);
       if (!entry) {
         continue;
@@ -2220,8 +2255,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
       const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
-      const state = this.exportedSessionState.get(sessionFile);
-      if (!state || state.hash !== entry.hash || state.mtimeMs !== entry.mtimeMs) {
+      if (!cached || cached.hash !== entry.hash || cached.mtimeMs !== entry.mtimeMs) {
         await writeFileWithinRoot({
           rootDir: exportDir,
           relativePath: targetName,
@@ -2232,8 +2266,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.exportedSessionState.set(sessionFile, {
         hash: entry.hash,
         mtimeMs: entry.mtimeMs,
+        size: stat.size,
         target,
       });
+      stateMutated = true;
       keep.add(target);
     }
     const exported = await fs.readdir(exportDir).catch(() => []);
@@ -2244,12 +2280,126 @@ export class QmdMemoryManager implements MemorySearchManager {
       const full = path.join(exportDir, name);
       if (!keep.has(full)) {
         await fs.rm(full, { force: true });
+        stateMutated = true;
       }
     }
     for (const [sessionFile, state] of this.exportedSessionState) {
       if (!tracked.has(sessionFile) || !state.target.startsWith(exportDir + path.sep)) {
         this.exportedSessionState.delete(sessionFile);
+        stateMutated = true;
       }
+    }
+    if (stateMutated) {
+      await this.persistExportedSessionState();
+    }
+  }
+
+  private get sessionExportStatePath(): string | null {
+    if (!this.sessionExporter) {
+      return null;
+    }
+    return path.join(this.sessionExporter.dir, SESSION_EXPORT_STATE_FILE);
+  }
+
+  private async loadExportedSessionState(): Promise<void> {
+    const statePath = this.sessionExportStatePath;
+    if (!statePath || !this.sessionExporter) {
+      return;
+    }
+    let raw: string;
+    try {
+      raw = await fs.readFile(statePath, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.debug(`qmd export-state load failed for agent "${this.agentId}": ${String(err)}`);
+      }
+      return;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (err) {
+      log.debug(
+        `qmd export-state parse failed for agent "${this.agentId}": ${String(err)}; ignoring cache`,
+      );
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return;
+    }
+    const candidate = parsed as {
+      version?: unknown;
+      renderVersion?: unknown;
+      exportDir?: unknown;
+      entries?: unknown;
+    };
+    if (
+      candidate.version !== SESSION_EXPORT_STATE_FORMAT_VERSION ||
+      candidate.renderVersion !== SESSION_EXPORT_RENDER_VERSION ||
+      candidate.exportDir !== this.sessionExporter.dir ||
+      !Array.isArray(candidate.entries)
+    ) {
+      // Schema, render rules, or export dir changed — invalidate quietly.
+      return;
+    }
+    let loaded = 0;
+    for (const item of candidate.entries) {
+      if (!Array.isArray(item) || item.length !== 2) {
+        continue;
+      }
+      const [sessionFile, payload] = item;
+      if (typeof sessionFile !== "string" || !payload || typeof payload !== "object") {
+        continue;
+      }
+      const record = payload as {
+        hash?: unknown;
+        mtimeMs?: unknown;
+        size?: unknown;
+      };
+      if (
+        typeof record.hash !== "string" ||
+        typeof record.mtimeMs !== "number" ||
+        typeof record.size !== "number"
+      ) {
+        continue;
+      }
+      const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
+      this.exportedSessionState.set(sessionFile, {
+        hash: record.hash,
+        mtimeMs: record.mtimeMs,
+        size: record.size,
+        target: path.join(this.sessionExporter.dir, targetName),
+      });
+      loaded += 1;
+    }
+    if (loaded > 0) {
+      log.debug(`qmd export-state loaded for agent "${this.agentId}" entries=${loaded}`);
+    }
+  }
+
+  private async persistExportedSessionState(): Promise<void> {
+    if (!this.sessionExporter) {
+      return;
+    }
+    const entries: Array<[string, { hash: string; mtimeMs: number; size: number }]> = [];
+    for (const [sessionFile, state] of this.exportedSessionState) {
+      entries.push([sessionFile, { hash: state.hash, mtimeMs: state.mtimeMs, size: state.size }]);
+    }
+    const payload = JSON.stringify({
+      version: SESSION_EXPORT_STATE_FORMAT_VERSION,
+      renderVersion: SESSION_EXPORT_RENDER_VERSION,
+      exportDir: this.sessionExporter.dir,
+      entries,
+    });
+    try {
+      await writeFileWithinRoot({
+        rootDir: this.sessionExporter.dir,
+        relativePath: SESSION_EXPORT_STATE_FILE,
+        data: payload,
+        encoding: "utf-8",
+      });
+    } catch (err) {
+      log.warn(`qmd export-state persist failed for agent "${this.agentId}": ${String(err)}`);
     }
   }
 
