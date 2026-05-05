@@ -18,6 +18,38 @@ export function createSandboxBridgeReadFile(params: {
     });
 }
 
+function parseInboundMediaFallbackName(rawPath: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(rawPath);
+  } catch {
+    return null;
+  }
+  if (url.protocol.toLowerCase() !== "media:" || url.hostname !== "inbound") {
+    return null;
+  }
+  const rawName = url.pathname.startsWith("/") ? url.pathname.slice(1) : url.pathname;
+  if (!rawName || rawName.includes("/")) {
+    return null;
+  }
+  let decodedName: string;
+  try {
+    decodedName = decodeURIComponent(rawName);
+  } catch {
+    return null;
+  }
+  if (
+    !decodedName ||
+    decodedName === "." ||
+    decodedName === ".." ||
+    decodedName.includes("/") ||
+    decodedName.includes("\\")
+  ) {
+    return null;
+  }
+  return decodedName;
+}
+
 export async function resolveSandboxedBridgeMediaPath(params: {
   sandbox: SandboxedBridgeMediaPathConfig;
   mediaPath: string;
@@ -42,9 +74,9 @@ export async function resolveSandboxedBridgeMediaPath(params: {
   // by POSIX path.resolve (which turns media://inbound/x into workspace/media:/inbound/x).
   if (/^media:\/\//i.test(filePath)) {
     const fallbackDir = params.inboundFallbackDir?.trim();
-    if (fallbackDir) {
-      const basename = path.basename(new URL(filePath).pathname);
-      const fallbackPath = path.join(fallbackDir, basename);
+    const inboundName = parseInboundMediaFallbackName(filePath);
+    if (fallbackDir && inboundName) {
+      const fallbackPath = path.join(fallbackDir, inboundName);
       let fallbackStat: Awaited<ReturnType<SandboxFsBridge["stat"]>> | null = null;
       try {
         fallbackStat = await params.sandbox.bridge.stat({
