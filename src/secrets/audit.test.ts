@@ -16,6 +16,7 @@ type AuditFixture = {
 };
 
 const OPENAI_API_KEY_MARKER = "OPENAI_API_KEY"; // pragma: allowlist secret
+const OPENAI_API_KEY_TEMPLATE = `\${${OPENAI_API_KEY_MARKER}}`;
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
@@ -584,6 +585,92 @@ describe("secrets audit", () => {
           entry.code === "PLAINTEXT_FOUND" &&
           entry.file === fixture.configPath &&
           entry.jsonPath === "models.providers.openai.headers.X-Proxy-Region",
+      ),
+    ).toBe(false);
+  });
+
+  it("reports exact env interpolation on SecretRef-capable config fields as migration guidance", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: OPENAI_API_KEY_TEMPLATE,
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "MIGRATION_RECOMMENDED" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(true);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.apiKey",
+      ),
+    ).toBe(false);
+    expect(report.summary.migrationRecommendedCount).toBe(1);
+  });
+
+  it("keeps mixed env interpolation strings flagged as plaintext on SecretRef-capable config fields", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: { source: "env", provider: "default", id: OPENAI_API_KEY_MARKER },
+            headers: {
+              Authorization: `Bearer ${OPENAI_API_KEY_TEMPLATE}`,
+            },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await fs.writeFile(fixture.envPath, "", "utf8");
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "PLAINTEXT_FOUND" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.headers.Authorization",
+      ),
+    ).toBe(true);
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "MIGRATION_RECOMMENDED" &&
+          entry.file === fixture.configPath &&
+          entry.jsonPath === "models.providers.openai.headers.Authorization",
       ),
     ).toBe(false);
   });
