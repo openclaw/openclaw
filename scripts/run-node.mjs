@@ -19,7 +19,10 @@ import {
   writeBuildStamp as writeDistBuildStamp,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
-import { listStaticExtensionAssetSources } from "./lib/static-extension-assets.mjs";
+import {
+  discoverStaticExtensionAssets,
+  listStaticExtensionAssetSources,
+} from "./lib/static-extension-assets.mjs";
 import {
   extensionRestartMetadataFiles,
   isBuildRelevantRunNodePath,
@@ -418,7 +421,7 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
 
 const listRequiredStaticExtensionAssetOutputs = (deps) => {
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
-  return runtimePostBuildStaticAssets
+  return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
     .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
     .map((asset) => path.join(distRoot, normalizePath(asset.dest).replace(/^dist\//u, "")))
     .toSorted((left, right) => left.localeCompare(right));
