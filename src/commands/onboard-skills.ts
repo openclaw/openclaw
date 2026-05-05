@@ -117,6 +117,13 @@ export async function setupSkills(
       Boolean(skill.primaryEnv) && skill.missing.env.length > 0 && skill.missing.bins.length === 0,
   );
   const configurable = [...installable, ...envOnlyConfigurable];
+  // Track names of skills the user actually saw in the install multiselect so
+  // the API-key gate below only fires for skills that were genuinely offered.
+  // Skills with missing bins + primaryEnv but no install options
+  // (`install.length === 0` so they aren't in `installable`, and
+  // `missing.bins.length > 0` so they aren't in `envOnlyConfigurable`) never
+  // appear in the multiselect — those should still get API-key prompts.
+  const presentableNames = new Set(configurable.map((skill) => skill.name));
   let next: OpenClawConfig = cfg;
   if (installable.length === 0 && missing.length === 0) {
     await prompter.note(
@@ -267,7 +274,13 @@ export async function setupSkills(
     }
     // API keys entered here patch the skill entry, not process.env, so future
     // agent sessions can resolve the same skill configuration.
-    if (!installSelected.has(skill.name)) {
+    //
+    // Only skip the API-key prompt when the skill was actually presented in
+    // the install multiselect and the user did not pick it. Skills that were
+    // never presented (bins required + primaryEnv but no install options)
+    // still get prompted — otherwise we silently stop asking for required
+    // env keys for a documented pattern (see docs/tools/skills.md).
+    if (presentableNames.has(skill.name) && !installSelected.has(skill.name)) {
       continue;
     }
     const wantsKey = await prompter.confirm({
