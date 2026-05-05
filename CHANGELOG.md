@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/startup: treat channels whose config contains only `enabled: true` as meaningfully configured, so explicitly enabled channels are no longer skipped at Gateway startup. Refs #77946.
 - Diagnostics: keep webhook/message OTEL attributes and Prometheus delivery labels low-cardinality and omit raw chat/message IDs from spans, so progress-draft and message-tool modes do not leak high-cardinality messaging identifiers.
 - Google Meet: stop advertising legacy `mode: "realtime"` to agents and config UIs, while keeping it as a hidden compatibility alias for `mode: "agent"`, so new joins use the STT -> OpenClaw agent -> TTS path instead of selecting the direct realtime voice fallback.
 - Google Meet: add `chrome.audioBufferBytes` for generated command-pair SoX audio commands and lower the default buffer from SoX's 8192 bytes to 4096 bytes to reduce Chrome talk-back latency.

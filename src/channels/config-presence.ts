@@ -37,7 +37,9 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  if (value.enabled === true) return true;
+  if (value.enabled === true) {
+    return true;
+  }
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
