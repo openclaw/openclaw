@@ -425,6 +425,34 @@ describe("infra runtime", () => {
         process.removeListener("SIGUSR1", handler);
       }
     });
+
+    it("bypasses restart cooldown when requested", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "first" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
+        markGatewaySigusr1RestartHandled();
+
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipCooldown: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+        expect(forced.delayMs).toBe(0);
+        expect(forced.cooldownMsApplied).toBe(0);
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(2);
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
   });
 
   describe("pre-restart deferral check", () => {
@@ -478,6 +506,85 @@ describe("infra runtime", () => {
         pending = 0;
         await vi.advanceTimersByTimeAsync(500);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("bypasses the pre-restart deferral check when requested", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const pendingCheck = vi.fn(() => 5);
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(pendingCheck);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(pendingCheck).not.toHaveBeenCalled();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("upgrades an already scheduled restart to bypass deferral", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const pendingCheck = vi.fn(() => 5);
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(pendingCheck);
+        scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(pendingCheck).not.toHaveBeenCalled();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("bypasses an active restart deferral when a forced restart arrives", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const staleBeforeEmit = vi.fn(async () => {});
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => 5);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "config.patch",
+          emitHooks: { beforeEmit: staleBeforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(staleBeforeEmit).not.toHaveBeenCalled();
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

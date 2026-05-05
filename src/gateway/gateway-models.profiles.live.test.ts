@@ -30,6 +30,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
+import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
@@ -49,7 +50,7 @@ import {
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.impl.js";
-import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
+import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -157,8 +158,11 @@ function resolveGatewayLiveSuiteTimeoutMs(maxModels: number): number {
   if (maxModels <= 0) {
     return GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS;
   }
-  // Gateway live runs multiple probes per model; scale timeout by model cap.
-  const estimated = 5 * 60 * 1000 + maxModels * 90 * 1000;
+  // Gateway live runs multiple probes per model and may retry with another
+  // profile key before moving on, so the suite budget has to scale with the
+  // model timeout rather than only the first prompt.
+  const perModelBudgetMs = Math.max(3 * 60 * 1000, GATEWAY_LIVE_MODEL_TIMEOUT_MS * 3);
+  const estimated = 10 * 60 * 1000 + maxModels * perModelBudgetMs;
   return Math.max(
     GATEWAY_LIVE_DEFAULT_TIMEOUT_MS,
     Math.min(GATEWAY_LIVE_MAX_TIMEOUT_MS, estimated),
@@ -532,6 +536,20 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
   });
 });
 
+describe("resolveGatewayLiveSuiteTimeoutMs", () => {
+  it("leaves uncapped explicit sweeps bounded by the unbounded live timeout", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(0)).toBe(GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS);
+  });
+
+  it("scales model-capped sweeps for multi-probe retries", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(3)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
+  });
+
+  it("caps very large model sweeps", () => {
+    expect(resolveGatewayLiveSuiteTimeoutMs(999)).toBe(GATEWAY_LIVE_MAX_TIMEOUT_MS);
+  });
+});
+
 describe("resolveGatewayLiveMaxModels", () => {
   const originalGatewayModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS;
   const originalGatewayMax = process.env.OPENCLAW_LIVE_GATEWAY_MAX_MODELS;
@@ -685,6 +703,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
     provider === "minimax" ||
     provider === "opencode" ||
     provider === "opencode-go" ||
+    provider === "openrouter" ||
     provider === "xai" ||
     provider === "zai"
   ) {
@@ -703,6 +722,7 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "minimax/minimax-m1", expected: true },
     { modelKey: "opencode/big-pickle", expected: true },
     { modelKey: "opencode-go/glm-5", expected: true },
+    { modelKey: "openrouter/ai21/jamba-large-1.7", expected: true },
     { modelKey: "xai/grok-4.1-fast", expected: true },
     { modelKey: "zai/glm-5.1", expected: true },
     { modelKey: "google/gemini-3-flash-preview", expected: true },
@@ -1155,12 +1175,15 @@ function extractTranscriptMessageText(message: unknown): string {
     .trim();
 }
 
-function readSessionAssistantTexts(sessionKey: string, modelKey?: string): string[] {
+async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
+    mode: "full",
+    reason: "live model assistant text verification",
+  });
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -1187,7 +1210,7 @@ async function waitForSessionAssistantText(params: {
   let lastHeartbeatAt = startedAt;
   let delayMs = 50;
   while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
-    const assistantTexts = readSessionAssistantTexts(params.sessionKey, params.modelKey);
+    const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     if (assistantTexts.length > params.baselineAssistantCount) {
       const freshText = assistantTexts
         .slice(params.baselineAssistantCount)
@@ -1223,9 +1246,8 @@ async function requestGatewayAgentText(params: {
     content: string;
   }>;
 }) {
-  const baselineAssistantCount = readSessionAssistantTexts(
-    params.sessionKey,
-    params.modelKey,
+  const baselineAssistantCount = (
+    await readSessionAssistantTexts(params.sessionKey, params.modelKey)
   ).length;
   const accepted = await withGatewayLiveProbeTimeout(
     params.client.request("agent", {
@@ -1961,6 +1983,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (google rate limit)`);
+            break;
+          }
+          if (isBillingErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (billing drift)`);
             break;
           }
           if (

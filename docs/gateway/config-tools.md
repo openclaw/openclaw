@@ -54,6 +54,14 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 }
 ```
 
+`write` and `apply_patch` are separate tool ids. `allow: ["write"]` also enables `apply_patch` for compatible models, but `deny: ["write"]` does not deny `apply_patch`. To block all file mutation, deny `group:fs` or list each mutating tool explicitly:
+
+```json5
+{
+  tools: { deny: ["write", "edit", "apply_patch"] },
+}
+```
+
 ### `tools.byProvider`
 
 Further restrict tools for specific providers or models. Order: base profile → provider profile → allow/deny.
@@ -201,7 +209,7 @@ Configures inbound media understanding (image/audio/video):
     media: {
       concurrency: 2,
       asyncCompletion: {
-        directSend: false, // opt-in: send finished async music/video directly to the channel
+        directSend: false, // deprecated: completions stay agent-mediated
       },
       audio: {
         enabled: true,
@@ -254,7 +262,7 @@ Configures inbound media understanding (image/audio/video):
 
     **Async completion fields:**
 
-    - `asyncCompletion.directSend`: when `true`, completed async `music_generate` and `video_generate` tasks try direct channel delivery first. Default: `false` (legacy requester-session wake/model-delivery path).
+    - `asyncCompletion.directSend`: deprecated compatibility flag. Completed async media tasks stay requester-session mediated so the agent receives the result, decides how to tell the user, and uses the message tool when source delivery requires it.
 
   </Accordion>
 </AccordionGroup>

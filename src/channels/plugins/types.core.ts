@@ -112,7 +112,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   dangerouslyAllowPrivateNetwork?: boolean;
-  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
+  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
@@ -407,6 +407,8 @@ export type ChannelThreadingAdapter = {
    */
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
+   * @deprecated Use allowExplicitReplyTagsWhenOff.
+   *
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
    * Kept for compatibility with older plugin surfaces.
    */
@@ -473,6 +475,12 @@ export type ChannelThreadingToolContext = {
 
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
+  /**
+   * Provider prefixes accepted in explicit targets, including aliases not used
+   * as channel-selection aliases. Core uses these to reject cross-channel
+   * targets before plugin-specific normalization.
+   */
+  targetPrefixes?: readonly string[];
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -535,6 +543,8 @@ export type ChannelMessagingAdapter = {
     parentConversationCandidates?: string[];
   } | null;
   /**
+   * @deprecated Return parentConversationCandidates from resolveSessionConversation.
+   *
    * Legacy compatibility hook for parent fallbacks when a plugin does not need
    * to customize `id` or `threadId`. Core only uses this when
    * `resolveSessionConversation(...)` does not return

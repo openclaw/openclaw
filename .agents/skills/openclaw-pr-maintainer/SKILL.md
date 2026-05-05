@@ -24,10 +24,65 @@ gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hyb
 gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
+## Surface opener identity
+
+- For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
+- Get the login from `gh issue view` / `gh pr view` (`author.login`), then fetch profile metadata once with `gh api users/<login> --jq '{login,name,created_at,type}'`.
+- Report account age as created date plus rough age, for example `Opened by Jane Doe (@jane, account created 2021-04-03, ~5y old)`.
+- Also show recent GitHub activity when it informs maintainer risk: OpenClaw PRs, issues, and commits in the last 12 months; for linked issue-fixing PRs, include both the PR author and issue opener when they differ.
+- Prefer the bundled helper for activity lookups:
+
+```bash
+.agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh <login> [other-login...]
+.agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh --global <login>
+```
+
+- The helper reports repo-local activity first and can fetch public GitHub contribution totals for the same window with `--global`.
+- The helper is intentionally cache-friendly for gitcrawl-backed `gh`: it rounds repo-local windows to the UTC day, rounds global contribution windows to the UTC hour, and counts PRs/issues from one paginated issues response before fetching commits separately. Prefer reusing the helper instead of hand-rolling several `gh api` loops.
+- Report activity compactly, for example `OpenClaw last 12mo: 4 PRs, 2 issues, 11 commits; GitHub public last 12mo: 86 commits, 9 PRs, 3 issues, 12 reviews`.
+- If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
+- Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
+
+## Suppress top-maintainer items in issue triage
+
+When Peter asks for issue triage, hot issues, pressing bugs, Discord-correlated issues, or "what is still open", do not surface issues or PRs authored by top maintainers by default. He wants external/user-reported hot issues and external PRs, not maintainer-owned work queues.
+
+Suppress by default when the opener/author is one of:
+
+- `@vincentkoc`
+- `@Takhoffman`
+- `@gumadeiras`
+- `@obviyus`
+- `@shakkernerd`
+- `@mbelinky`
+- `@joshavant`
+- `@ngutman`
+- `@vignesh07`
+- `@huntharo`
+
+Also suppress lower-priority maintainer-owned noise from the broader keep/top-maintainer group unless it is directly relevant:
+
+- `@thewilloftheshadow`
+- `@onutc` / `@osolmaz`
+- `@jacobtomlinson`
+- `@tyler6204`
+- `@velvet-shark`
+- `@jalehman`
+- `@frankekn`
+- `@ImLukeF`
+- `@mcaxtr`
+
+Exceptions:
+
+- Show maintainer-authored items when Peter explicitly asks for maintainer PRs/issues, PR landing candidates, release-blocking maintainer work, or a specific PR/issue number.
+- Show a maintainer-authored item when it is the canonical fix for an external hot issue, but frame it as the fix path rather than as a user-facing issue candidate.
+- Do not close, label, or deprioritize solely because an item is maintainer-authored; this section only controls what appears in triage shortlists.
+
 ## Apply close and triage labels correctly
 
 - If an issue or PR matches an auto-close reason, apply the label and let `.github/workflows/auto-response.yml` handle the comment/close/lock flow.
 - Do not manually close plus manually comment for these reasons.
+- If an issue/PR is already fixed on current `main` or solved by a new release, comment with proof plus the canonical commit/PR/release, then close it.
 - `r:*` labels can be used on both issues and PRs.
 - Current reasons:
   - `r: skill`
@@ -40,6 +95,34 @@ gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --
   - `r: spam`
   - `invalid`
   - `dirty` for PRs only
+
+## Select small high-confidence triage candidates
+
+When asked for `X` issues or PRs to triage, `X` means qualified candidates, not sampled threads.
+
+Triage is read/prove/patch-local by default. Do not commit unless Peter writes
+`commit` in the current instruction for the exact diff being handled. Do not
+treat earlier messages, inferred intent, "next", sweep momentum, or bundled
+publish language as commit permission. If Peter asks for follow-up work without
+saying `commit`, keep the files dirty after local fixes and proof.
+
+Only list candidates that pass all gates:
+
+- small owner/surface, with a likely narrow fix and focused regression test
+- symptom is reproducible or provable with logs, failing test, live command, dependency contract, or current-main behavior
+- root cause is traceable to code with file/line and the proposed fix touches that path
+- no strong smell that a broader refactor, ownership rethink, migration, or product decision is the better fix
+- dependency-backed behavior checked against upstream docs/source/types; live or web proof used when local proof is insufficient
+
+Loop:
+
+1. Use `gitcrawl` / `gh` to gather candidate clusters.
+2. Read issue/PR body, comments, current code, adjacent tests, and dependency contracts.
+3. Try focused repro or proof.
+4. Reject unclear, stale, speculative, broad-refactor, or owner-ambiguous items.
+5. Continue until `X` qualified candidates or the bounded search is exhausted.
+
+Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch, why small, expected test/gate. If none qualify, say so; do not pad.
 
 ## Enforce the bug-fix evidence bar
 

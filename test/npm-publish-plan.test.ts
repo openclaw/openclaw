@@ -32,6 +32,16 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
     ).toBe(true);
   });
 
+  it("treats stable correction releases as latest publishes with beta mirroring", () => {
+    const plan = resolveNpmPublishPlan("2026.4.1-1");
+
+    expect(plan).toEqual({
+      channel: "stable",
+      publishTag: "latest",
+      mirrorDistTags: ["beta"],
+    });
+  });
+
   it("does not require auth when there are no mirror dist-tags", () => {
     const plan = resolveNpmPublishPlan("2026.4.1-beta.1");
     const auth = resolveNpmDistTagMirrorAuth({});
@@ -43,6 +53,16 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
         hasAuth: auth.hasAuth,
       }),
     ).toBe(false);
+  });
+
+  it("publishes alpha prereleases without dist-tag mirroring", () => {
+    const plan = resolveNpmPublishPlan("2026.4.1-alpha.1");
+
+    expect(plan).toEqual({
+      channel: "alpha",
+      publishTag: "alpha",
+      mirrorDistTags: [],
+    });
   });
 
   it("does not require auth when a publish already has npm auth", () => {

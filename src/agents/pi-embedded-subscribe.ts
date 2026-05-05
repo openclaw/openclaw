@@ -16,6 +16,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "./pi-embedded-runner/delivery-evidence.js";
 import {
   createEmbeddedRunReplayState,
   mergeEmbeddedRunReplayState,
@@ -111,11 +112,7 @@ function collectPendingMediaFromInternalEvents(
   return pending;
 }
 
-export type {
-  BlockReplyChunking,
-  SubscribeEmbeddedPiSessionParams,
-  ToolResultFormat,
-} from "./pi-embedded-subscribe.types.js";
+export type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 
 export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionParams) {
   const reasoningMode = params.reasoningMode ?? "off";
@@ -174,6 +171,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     messagingToolSentTexts: [],
     messagingToolSentTextsNormalized: [],
     messagingToolSentTargets: [],
+    heartbeatToolResponse: undefined,
     messagingToolSentMediaUrls: [],
     pendingMessagingTexts: new Map(),
     pendingMessagingTargets: new Map(),
@@ -241,10 +239,14 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   };
   const emitBlockReply = (
     payload: BlockReplyPayload,
-    options?: { assistantMessageIndex?: number },
+    options?: { assistantMessageIndex?: number; consumePendingToolMedia?: boolean },
   ) => {
     const withAssistantDirectives = consumePendingAssistantReplyDirectivesIntoReply(state, payload);
-    emitBlockReplySafely(consumePendingToolMediaIntoReply(state, withAssistantDirectives), options);
+    const withToolMedia =
+      options?.consumePendingToolMedia === false
+        ? withAssistantDirectives
+        : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    emitBlockReplySafely(withToolMedia, options);
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -700,13 +702,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     return output;
   };
 
-  const emitBlockChunk = (text: string, options?: { assistantMessageIndex?: number }) => {
+  const emitBlockChunk = (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => {
     if (state.suppressBlockChunks || params.silentExpected) {
       return;
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = stripDowngradedToolCallText(stripBlockTags(text, state.blockState)).trimEnd();
+    const chunk = stripDowngradedToolCallText(
+      stripBlockTags(text, state.blockState, { final: options?.final === true }),
+    ).trimEnd();
     if (!chunk) {
       return;
     }
@@ -758,6 +765,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       },
       {
         assistantMessageIndex: options?.assistantMessageIndex ?? state.assistantMessageIndex,
+        consumePendingToolMedia:
+          options?.final === true || Boolean(mediaUrls?.length || audioAsVoice),
       },
     );
   };
@@ -769,16 +778,41 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const flushBlockReplyBuffer = (options?: {
     assistantMessageIndex?: number;
+    final?: boolean;
   }): void | Promise<void> => {
     if (!params.onBlockReply) {
       return;
     }
     if (blockChunker?.hasBuffered()) {
-      blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
+      if (options?.final) {
+        let pendingChunk: string | undefined;
+        blockChunker.drain({
+          force: true,
+          emit: (text) => {
+            if (pendingChunk !== undefined) {
+              emitBlockChunk(pendingChunk, {
+                assistantMessageIndex: options.assistantMessageIndex,
+              });
+            }
+            pendingChunk = text;
+          },
+        });
+        if (pendingChunk !== undefined) {
+          emitBlockChunk(pendingChunk, {
+            assistantMessageIndex: options.assistantMessageIndex,
+            final: true,
+          });
+        }
+      } else {
+        blockChunker.drain({ force: true, emit: (text) => emitBlockChunk(text, options) });
+      }
       blockChunker.reset();
     } else if (state.blockBuffer.length > 0) {
       emitBlockChunk(state.blockBuffer, options);
       state.blockBuffer = "";
+    }
+    if (options?.final) {
+      emitBlockChunk("", options);
     }
     if (pendingBlockReplyTasks.size === 0) {
       return;
@@ -828,8 +862,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
       state.hadDeterministicSideEffect === true ||
-      messagingToolSentTexts.length > 0 ||
-      messagingToolSentMediaUrls.length > 0 ||
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+      }) ||
       state.successfulCronAdds > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -963,13 +1000,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     getMessagingToolSentMediaUrls: () => messagingToolSentMediaUrls.slice(),
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
+    getHeartbeatToolResponse: () =>
+      state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
-    didSendViaMessagingTool: () => messagingToolSentTexts.length > 0,
+    didSendViaMessagingTool: () =>
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+      }),
     didSendDeterministicApprovalPrompt: () => state.deterministicApprovalPromptSent,
     getLastToolError: () => (state.lastToolError ? { ...state.lastToolError } : undefined),
     getUsageTotals,

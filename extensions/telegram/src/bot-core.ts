@@ -128,10 +128,48 @@ function extractTelegramApiMethod(input: TelegramFetchInput): string | null {
   }
 }
 
-const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set(["deletewebhook", "getme", "setwebhook"]);
-
+const TELEGRAM_TIMEOUT_FALLBACK_METHODS = new Set([
+  "deletemycommands",
+  "deletewebhook",
+  "getme",
+  "sendchataction",
+  "setmycommands",
+  "setwebhook",
+]);
 function shouldRetryTimedOutTelegramControlRequest(method: string | null): boolean {
   return method !== null && TELEGRAM_TIMEOUT_FALLBACK_METHODS.has(method);
+}
+
+function resolveTelegramClientTimeoutSeconds(params: {
+  value: unknown;
+  minimum?: number;
+}): number | undefined {
+  const { value, minimum } = params;
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const configured = Math.max(1, Math.floor(value));
+  if (typeof minimum !== "number" || !Number.isFinite(minimum)) {
+    return configured;
+  }
+  return Math.max(configured, Math.max(1, Math.floor(minimum)));
+}
+
+function resolveTelegramClientTimeoutMinimumSeconds(values: readonly (number | undefined)[]) {
+  let minimum: number | undefined;
+  for (const value of values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      continue;
+    }
+    const normalized = Math.max(1, Math.ceil(value));
+    minimum = minimum === undefined ? normalized : Math.max(minimum, normalized);
+  }
+  return minimum;
+}
+
+function resolveTelegramOutboundClientTimeoutFloorSeconds(timeoutSeconds: unknown) {
+  const timeoutMs = resolveTelegramRequestTimeoutMs("sendmessage", timeoutSeconds);
+  return timeoutMs === undefined ? undefined : timeoutMs / 1000;
 }
 
 export function createTelegramBotCore(
@@ -194,7 +232,7 @@ export function createTelegramBotCore(
     // causing "signals[0] must be an instance of AbortSignal" errors).
     finalFetch = async (input: TelegramFetchInput, init?: TelegramFetchInit) => {
       const method = extractTelegramApiMethod(input);
-      const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method);
+      const requestTimeoutMs = resolveTelegramRequestTimeoutMs(method, telegramCfg?.timeoutSeconds);
       const shutdownSignal = isTelegramAbortSignalLike(opts.fetchAbortSignal)
         ? opts.fetchAbortSignal
         : undefined;
@@ -292,10 +330,13 @@ export function createTelegramBotCore(
     };
   }
 
-  const timeoutSeconds =
-    typeof telegramCfg?.timeoutSeconds === "number" && Number.isFinite(telegramCfg.timeoutSeconds)
-      ? Math.max(1, Math.floor(telegramCfg.timeoutSeconds))
-      : undefined;
+  const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
+    value: telegramCfg?.timeoutSeconds,
+    minimum: resolveTelegramClientTimeoutMinimumSeconds([
+      opts.minimumClientTimeoutSeconds,
+      resolveTelegramOutboundClientTimeoutFloorSeconds(telegramCfg?.timeoutSeconds),
+    ]),
+  });
   const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
   const client: ApiClientOptions | undefined =
@@ -307,7 +348,11 @@ export function createTelegramBotCore(
         }
       : undefined;
 
-  const bot = new botRuntime.Bot(opts.token, client ? { client } : undefined);
+  const botConfig =
+    client || opts.botInfo
+      ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
+      : undefined;
+  const bot = new botRuntime.Bot(opts.token, botConfig);
   bot.api.config.use(botRuntime.apiThrottler());
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {

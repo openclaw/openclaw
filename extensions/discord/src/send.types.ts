@@ -1,6 +1,6 @@
-import type { RequestClient } from "@buape/carbon";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
+import type { RequestClient } from "./internal/discord.js";
 
 export class DiscordSendError extends Error {
   kind?: "missing-permissions" | "dm-blocked";
@@ -150,7 +150,7 @@ export type DiscordChannelCreate = {
   nsfw?: boolean;
 };
 
-export type DiscordForumTag = {
+type DiscordForumTag = {
   id?: string;
   name: string;
   moderated?: boolean;

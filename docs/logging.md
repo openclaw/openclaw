@@ -73,9 +73,10 @@ In JSON mode, the CLI emits `type`-tagged objects:
 - `notice`: truncation / rotation hints
 - `raw`: unparsed log line
 
-If the local loopback Gateway asks for pairing, `openclaw logs` falls back to
-the configured local log file automatically. Explicit `--url` targets do not
-use this fallback.
+If the implicit local loopback Gateway asks for pairing, closes during connect,
+or times out before `logs.tail` answers, `openclaw logs` falls back to the
+configured Gateway file log automatically. Explicit `--url` targets do not use
+this fallback.
 
 If the Gateway is unreachable, the CLI prints a short hint to run:
 
@@ -218,6 +219,10 @@ File logs and session transcripts stay JSONL, but matching secret values are
 masked before the line or message is written to disk. Redaction is best-effort:
 it applies to text-bearing message content and log strings, not every
 identifier or binary payload field.
+
+The built-in defaults cover common API credentials and payment-credential field
+names such as card number, CVC/CVV, shared payment token, and payment credential
+when they appear as JSON fields, URL parameters, CLI flags, or assignments.
 
 `logging.redactSensitive: "off"` only disables this general log/transcript
 policy. OpenClaw still redacts safety-boundary payloads that can be shown to UI

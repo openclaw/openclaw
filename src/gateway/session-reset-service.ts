@@ -47,7 +47,7 @@ import {
 import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readSessionMessages,
+  readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
@@ -434,14 +434,14 @@ export async function cleanupSessionBeforeMutation(params: {
   });
 }
 
-function emitGatewayBeforeResetPluginHook(params: {
+async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
   reason: "new" | "reset";
-}): void {
+}): Promise<void> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_reset")) {
     return;
@@ -455,7 +455,10 @@ function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = readSessionMessages(sessionId, params.storePath, sessionFile);
+      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
+        mode: "full",
+        reason: "before_reset hook payload",
+      });
     }
   } catch (err) {
     logVerbose(
@@ -632,7 +635,7 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
-  emitGatewayBeforeResetPluginHook({
+  await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
     target,

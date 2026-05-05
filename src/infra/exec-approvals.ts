@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -21,6 +22,8 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+
+export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = normalizeOptionalLowercaseString(value);
@@ -36,6 +39,30 @@ export function normalizeExecTarget(value?: string | null): ExecTarget | null {
     return normalized;
   }
   return normalizeExecHost(normalized);
+}
+
+export function requireValidExecTarget(value?: unknown): ExecTarget | null {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    throw new Error(
+      `Invalid exec host value type ${typeof value}. Allowed values: ${EXEC_TARGET_VALUES.join(
+        ", ",
+      )}.`,
+    );
+  }
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
+    return null;
+  }
+  const target = normalizeExecTarget(normalized);
+  if (target) {
+    return target;
+  }
+  throw new Error(
+    `Invalid exec host "${value}". Allowed values: ${EXEC_TARGET_VALUES.join(", ")}.`,
+  );
 }
 
 /** Coerce a raw JSON field to string, returning undefined for non-string types. */
@@ -95,6 +122,7 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  commandAnalysis?: CommandExplanationSummary | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;

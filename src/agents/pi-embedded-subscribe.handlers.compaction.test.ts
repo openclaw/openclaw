@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  drainSessionStoreLockQueuesForTest,
-  resetSessionStoreLockRuntimeForTests,
-  setSessionWriteLockAcquirerForTests,
-} from "../config/sessions.js";
+import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import {
   readCompactionCount,
@@ -79,9 +75,6 @@ function createCompactionContext(params: {
 }
 
 beforeEach(() => {
-  setSessionWriteLockAcquirerForTests(async () => ({
-    release: async () => {},
-  }));
   hookRunnerMocks.hasHooks.mockReset();
   hookRunnerMocks.runBeforeCompaction.mockReset();
   hookRunnerMocks.runAfterCompaction.mockReset();
@@ -90,8 +83,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  resetSessionStoreLockRuntimeForTests();
-  await drainSessionStoreLockQueuesForTest();
+  await drainSessionStoreWriterQueuesForTest();
 });
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
