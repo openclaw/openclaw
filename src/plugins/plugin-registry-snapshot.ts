@@ -191,6 +191,39 @@ function hasRecoveredInstallRecordsMissingFromPersistedIndex(
   );
 }
 
+// Short-lived result memo. The full discovery + freshness check walks the
+// filesystem with sync syscalls; on slow filesystems (WSL2, NFS, network
+// mounts) one pass costs 5-10s. The gateway hammers this from channels.status
+// and channel-restart paths, blocking the event loop on each call. A small TTL
+// is enough to coalesce repeated calls within the same operation while still
+// picking up real plugin changes within a couple of seconds.
+type RegistrySnapshotCacheEntry = {
+  paramsKey: string;
+  result: PluginRegistrySnapshotResult;
+  cachedAt: number;
+};
+
+const REGISTRY_SNAPSHOT_CACHE_TTL_MS = 2_000;
+let registrySnapshotCache: RegistrySnapshotCacheEntry | null = null;
+
+function buildRegistrySnapshotCacheKey(params: LoadPluginRegistryParams): string {
+  // Skip env (large + rarely changes mid-process) and installRecords (used
+  // only for one freshness check, dominated by the persisted index path).
+  // Config identity is captured by its policy hash when present.
+  const policyHash = params.config ? resolveInstalledPluginIndexPolicyHash(params.config) : "";
+  return [
+    params.stateDir ?? "",
+    params.filePath ?? "",
+    params.pluginIndexFilePath ?? "",
+    params.preferPersisted === undefined ? "u" : String(params.preferPersisted),
+    policyHash,
+  ].join("|");
+}
+
+export function resetPluginRegistrySnapshotCache(): void {
+  registrySnapshotCache = null;
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -200,6 +233,16 @@ export function loadPluginRegistrySnapshotWithMetadata(
       source: "provided",
       diagnostics: [],
     };
+  }
+
+  const cacheKey = buildRegistrySnapshotCacheKey(params);
+  const now = Date.now();
+  if (
+    registrySnapshotCache &&
+    registrySnapshotCache.paramsKey === cacheKey &&
+    now - registrySnapshotCache.cachedAt < REGISTRY_SNAPSHOT_CACHE_TTL_MS
+  ) {
+    return registrySnapshotCache.result;
   }
 
   const env = params.env ?? process.env;
@@ -256,11 +299,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
             "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
-        return {
+        const result: PluginRegistrySnapshotResult = {
           snapshot: persistedIndex,
           source: "persisted",
           diagnostics,
         };
+        registrySnapshotCache = { paramsKey: cacheKey, result, cachedAt: now };
+        return result;
       }
     } else if (persistedReadsEnabled) {
       diagnostics.push({
@@ -279,7 +324,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   }
 
-  return {
+  const result: PluginRegistrySnapshotResult = {
     snapshot: loadInstalledPluginIndex({
       ...params,
       ...(persistedInstallRecordReadsEnabled
@@ -289,6 +334,8 @@ export function loadPluginRegistrySnapshotWithMetadata(
     source: "derived",
     diagnostics,
   };
+  registrySnapshotCache = { paramsKey: cacheKey, result, cachedAt: now };
+  return result;
 }
 
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {
