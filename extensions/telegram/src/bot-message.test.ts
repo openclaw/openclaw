@@ -57,6 +57,7 @@ describe("telegram bot message processor", () => {
 
   async function processSampleMessage(
     processMessage: ReturnType<typeof createTelegramMessageProcessor>,
+    options: Parameters<ReturnType<typeof createTelegramMessageProcessor>>[3] = {},
   ) {
     await processMessage(
       {
@@ -67,7 +68,7 @@ describe("telegram bot message processor", () => {
       } as unknown as Parameters<typeof processMessage>[0],
       [],
       [],
-      {},
+      options,
     );
   }
 
@@ -89,10 +90,16 @@ describe("telegram bot message processor", () => {
     return { processMessage, runtimeError };
   }
 
-  it("dispatches when context is available", async () => {
+  it("dispatches when context is available and sends admitted early typing", async () => {
     const sendTyping = vi.fn().mockResolvedValue(undefined);
     buildTelegramMessageContext.mockResolvedValue({
       chatId: 123,
+      ctxPayload: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        ChatType: "direct",
+      },
       route: { sessionKey: "agent:main:main" },
       sendTyping,
     });
@@ -107,6 +114,48 @@ describe("telegram bot message processor", () => {
     );
   });
 
+  it("suppresses early typing for Telegram system events", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      ctxPayload: {
+        Provider: "cron-event",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        ChatType: "direct",
+      },
+      route: { sessionKey: "agent:main:main" },
+      sendTyping,
+    });
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage, { systemEvent: true });
+
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses early typing for internal background run kinds", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue({
+      chatId: 123,
+      ctxPayload: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        ChatType: "direct",
+      },
+      route: { sessionKey: "agent:main:main" },
+      sendTyping,
+    });
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage, { runKind: "background-internal" });
+
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);
@@ -114,10 +163,16 @@ describe("telegram bot message processor", () => {
     expect(dispatchTelegramMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps dispatch running when the early typing cue fails", async () => {
+  it("keeps dispatch running when the admitted early typing cue fails", async () => {
     const sendTyping = vi.fn().mockRejectedValue(new Error("typing failed"));
     buildTelegramMessageContext.mockResolvedValue({
       chatId: 123,
+      ctxPayload: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:123",
+        ChatType: "direct",
+      },
       route: { sessionKey: "agent:main:main" },
       sendTyping,
     });

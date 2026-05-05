@@ -21,7 +21,7 @@ import {
   isTelegramExecApprovalHandlerConfigured,
   shouldHandleTelegramExecApprovalRequest,
 } from "./exec-approvals.js";
-import { editMessageReplyMarkupTelegram, sendMessageTelegram, sendTypingTelegram } from "./send.js";
+import { editMessageReplyMarkupTelegram, sendMessageTelegram } from "./send.js";
 
 const log = createSubsystemLogger("telegram/approvals");
 
@@ -37,7 +37,7 @@ type TelegramPendingDelivery = {
 
 export type TelegramExecApprovalHandlerDeps = {
   nowMs?: () => number;
-  sendTyping?: typeof sendTypingTelegram;
+  sendTyping?: never;
   sendMessage?: typeof sendMessageTelegram;
   editReplyMarkup?: typeof editMessageReplyMarkupTelegram;
 };
@@ -147,16 +147,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!resolved) {
         return null;
       }
-      const sendTyping = resolved.context.deps?.sendTyping ?? sendTypingTelegram;
       const sendMessage = resolved.context.deps?.sendMessage ?? sendMessageTelegram;
-      await sendTyping(preparedTarget.chatId, {
-        cfg,
-        token: resolved.context.token,
-        accountId: resolved.accountId,
-        ...(preparedTarget.messageThreadId != null
-          ? { messageThreadId: preparedTarget.messageThreadId }
-          : {}),
-      }).catch(() => {});
       const result = await sendMessage(preparedTarget.chatId, pendingPayload.text, {
         cfg,
         token: resolved.context.token,

@@ -77,10 +77,86 @@ export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => bo
   return createVerboseGate(params, (level) => level === "full");
 };
 
+export type RunActivityKind =
+  | "run-start"
+  | "message-start"
+  | "text-delta"
+  | "reasoning-delta"
+  | "visible-tool"
+  | "tool-result"
+  | "final-payload"
+  | "followup-delivery"
+  | "background-internal"
+  | "subagent-internal"
+  | "yield-wait";
+
+export type RunActivityTypingParams = {
+  kind?: RunActivityKind;
+  toolName?: string;
+  channel?: string;
+  hasVisibleDeliveryRoute?: boolean;
+};
+
+function normalizeActivityText(value: string | undefined): string | undefined {
+  const trimmed = value?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+export function classifyToolRunActivity(params: { toolName?: string }): RunActivityKind {
+  const toolName = normalizeActivityText(params.toolName);
+  if (toolName === "sessions_yield") {
+    return "yield-wait";
+  }
+  if (toolName === "sessions_spawn" || toolName === "subagents") {
+    return "subagent-internal";
+  }
+  if (toolName === "exec" || toolName === "process") {
+    return "background-internal";
+  }
+  return "visible-tool";
+}
+
+export function shouldSignalTypingForRunActivity(params: RunActivityTypingParams = {}): boolean {
+  const channel = normalizeActivityText(params.channel);
+  if (channel !== "telegram") {
+    return true;
+  }
+  const kind = params.kind ?? classifyToolRunActivity({ toolName: params.toolName });
+  if (kind === "background-internal" || kind === "subagent-internal" || kind === "yield-wait") {
+    return false;
+  }
+  if (kind === "tool-result") {
+    return classifyToolRunActivity({ toolName: params.toolName }) === "visible-tool";
+  }
+  if (kind === "followup-delivery") {
+    return params.hasVisibleDeliveryRoute === true;
+  }
+  return true;
+}
+
+export function readToolNameFromReplyPayload(payload: ReplyPayload): string | undefined {
+  const record = payload as ReplyPayload & { name?: unknown; toolName?: unknown };
+  if (typeof record.toolName === "string" && record.toolName.trim()) {
+    return record.toolName;
+  }
+  if (typeof record.name === "string" && record.name.trim()) {
+    return record.name;
+  }
+  const channelData = payload.channelData;
+  if (typeof channelData?.toolName === "string" && channelData.toolName.trim()) {
+    return channelData.toolName;
+  }
+  return undefined;
+}
+
 export const signalTypingIfNeeded = async (
   payloads: ReplyPayload[],
   typingSignals: TypingSignaler,
+  params: RunActivityTypingParams = {},
 ): Promise<void> => {
+  if (!shouldSignalTypingForRunActivity(params)) {
+    return;
+  }
   const shouldSignalTyping = payloads.some((payload) =>
     hasOutboundReplyContent(payload, { trimText: true }),
   );

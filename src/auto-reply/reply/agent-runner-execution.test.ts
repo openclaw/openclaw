@@ -21,6 +21,9 @@ const state = vi.hoisted(() => ({
   runWithModelFallbackMock: vi.fn(),
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
+  resolveMessageChannelMock: vi.fn<(channel?: string, fallback?: string) => string>(
+    () => "whatsapp",
+  ),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
 }));
 
@@ -124,7 +127,8 @@ vi.mock("../../runtime.js", () => ({
 
 vi.mock("../../utils/message-channel.js", () => ({
   isMarkdownCapableMessageChannel: () => true,
-  resolveMessageChannel: () => "whatsapp",
+  resolveMessageChannel: (channel?: string, fallback?: string) =>
+    state.resolveMessageChannelMock(channel, fallback),
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
@@ -189,7 +193,12 @@ type FallbackRunnerParams = {
 
 type EmbeddedAgentParams = {
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onToolResult?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    channelData?: Record<string, unknown>;
+    toolName?: string;
+  }) => Promise<void> | void;
   onItemEvent?: (payload: {
     itemId?: string;
     kind?: string;
@@ -400,6 +409,8 @@ describe("runAgentTurnWithFallback", () => {
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
+    state.resolveMessageChannelMock.mockReset();
+    state.resolveMessageChannelMock.mockReturnValue("whatsapp");
     state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
@@ -991,6 +1002,93 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("The user is saying hello");
     expect(onToolResult).toHaveBeenCalledWith({ text: "The user is saying hello" });
+  });
+
+  it("does not signal Telegram typing for internal tool result payloads", async () => {
+    const onToolResult = vi.fn();
+    state.resolveMessageChannelMock.mockReturnValue("telegram");
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onToolResult?.({ text: "Approval required", channelData: { toolName: "exec" } });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const pendingToolTasks = new Set<Promise<void>>();
+    const typingSignals = createMockTypingSignaler();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { onToolResult } satisfies GetReplyOptions,
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks,
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    await Promise.all(pendingToolTasks);
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalTextDelta).not.toHaveBeenCalledWith("Approval required");
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "Approval required",
+      channelData: { toolName: "exec" },
+    });
+  });
+
+  it("does not signal Telegram typing for internal tool start events", async () => {
+    state.resolveMessageChannelMock.mockReturnValue("telegram");
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: { phase: "start", name: "process", toolCallId: "tool-1" },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const typingSignals = createMockTypingSignaler();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {} satisfies GetReplyOptions,
+      typingSignals,
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set<Promise<void>>(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(typingSignals.signalToolStart).not.toHaveBeenCalled();
   });
 
   it("continues delivering later streamed tool results after an earlier delivery failure", async () => {

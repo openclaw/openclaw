@@ -73,6 +73,11 @@ import {
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
+  classifyToolRunActivity,
+  readToolNameFromReplyPayload,
+  shouldSignalTypingForRunActivity,
+} from "./agent-runner-helpers.js";
+import {
   buildEmbeddedRunExecutionParams,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
@@ -1597,7 +1602,7 @@ export async function runAgentTurnWithFallback(params: {
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
-                    params.sessionCtx.Surface,
+                    params.sessionCtx.OriginatingChannel ?? params.sessionCtx.Surface,
                     params.sessionCtx.Provider,
                   );
                   if (!channel) {
@@ -1660,7 +1665,22 @@ export async function runAgentTurnWithFallback(params: {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
                     if (phase === "start" || phase === "update") {
-                      await params.typingSignals.signalToolStart();
+                      const channel = resolveMessageChannel(
+                        params.sessionCtx.OriginatingChannel ??
+                          params.sessionCtx.Surface ??
+                          params.sessionCtx.Provider,
+                        params.followupRun.run.messageProvider,
+                      );
+                      const activityKind = classifyToolRunActivity({ toolName: name });
+                      if (
+                        shouldSignalTypingForRunActivity({
+                          kind: activityKind,
+                          toolName: name,
+                          channel,
+                        })
+                      ) {
+                        await params.typingSignals.signalToolStart();
+                      }
                       await params.opts?.onToolStart?.({
                         name,
                         phase,
@@ -1834,7 +1854,21 @@ export async function runAgentTurnWithFallback(params: {
                             if (skip) {
                               return;
                             }
-                            if (text !== undefined) {
+                            const toolName = readToolNameFromReplyPayload(payload);
+                            const channel = resolveMessageChannel(
+                              params.sessionCtx.OriginatingChannel ??
+                                params.sessionCtx.Surface ??
+                                params.sessionCtx.Provider,
+                              params.followupRun.run.messageProvider,
+                            );
+                            if (
+                              text !== undefined &&
+                              shouldSignalTypingForRunActivity({
+                                kind: "tool-result",
+                                toolName,
+                                channel,
+                              })
+                            ) {
                               await params.typingSignals.signalTextDelta(text);
                             }
                             await onToolResult({

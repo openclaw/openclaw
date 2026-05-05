@@ -18,9 +18,12 @@ vi.mock("../../config/sessions.js", async () => {
 });
 
 const {
+  classifyToolRunActivity,
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
   isAudioPayload,
+  readToolNameFromReplyPayload,
+  shouldSignalTypingForRunActivity,
   signalTypingIfNeeded,
 } = await import("./agent-runner-helpers.js");
 
@@ -108,6 +111,46 @@ describe("agent runner helpers", () => {
     expect(fallbackFull()).toBe(true);
   });
 
+  it("classifies internal tool activity", () => {
+    expect(classifyToolRunActivity({ toolName: "exec" })).toBe("background-internal");
+    expect(classifyToolRunActivity({ toolName: "process" })).toBe("background-internal");
+    expect(classifyToolRunActivity({ toolName: "sessions_spawn" })).toBe("subagent-internal");
+    expect(classifyToolRunActivity({ toolName: "sessions_yield" })).toBe("yield-wait");
+    expect(classifyToolRunActivity({ toolName: "read" })).toBe("visible-tool");
+  });
+
+  it("suppresses Telegram typing for internal tool activity only", () => {
+    expect(
+      shouldSignalTypingForRunActivity({ kind: "background-internal", channel: "telegram" }),
+    ).toBe(false);
+    expect(
+      shouldSignalTypingForRunActivity({
+        kind: "tool-result",
+        toolName: "exec",
+        channel: "telegram",
+      }),
+    ).toBe(false);
+    expect(
+      shouldSignalTypingForRunActivity({
+        kind: "tool-result",
+        toolName: "read",
+        channel: "telegram",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSignalTypingForRunActivity({ kind: "background-internal", channel: "whatsapp" }),
+    ).toBe(true);
+  });
+
+  it("reads tool names from direct and channel payload metadata", () => {
+    expect(readToolNameFromReplyPayload({ text: "x", channelData: { toolName: "exec" } })).toBe(
+      "exec",
+    );
+    expect(readToolNameFromReplyPayload({ text: "x", toolName: "process" } as ReplyPayload)).toBe(
+      "process",
+    );
+  });
+
   it("signals typing only when any payload has text or media", async () => {
     const signalRunStart = vi.fn().mockResolvedValue(undefined);
     const typingSignals = { signalRunStart } as unknown as TypingSignaler;
@@ -116,6 +159,12 @@ describe("agent runner helpers", () => {
     expect(signalRunStart).not.toHaveBeenCalled();
 
     await signalTypingIfNeeded([{ mediaUrl: "https://example.test/img.png" }], typingSignals);
+    expect(signalRunStart).toHaveBeenCalledOnce();
+
+    await signalTypingIfNeeded([{ text: "internal" }], typingSignals, {
+      kind: "background-internal",
+      channel: "telegram",
+    });
     expect(signalRunStart).toHaveBeenCalledOnce();
   });
 });

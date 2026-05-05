@@ -475,19 +475,21 @@ async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildExecApprovalPendingReplyPayload } = await loadExecApprovalReply();
-      await ctx.params.onToolResult(
-        buildExecApprovalPendingReplyPayload({
-          approvalId: approvalPending.approvalId,
-          approvalSlug: approvalPending.approvalSlug,
-          allowedDecisions: approvalPending.allowedDecisions,
-          command: approvalPending.command,
-          cwd: approvalPending.cwd,
-          host: approvalPending.host,
-          nodeId: approvalPending.nodeId,
-          expiresAtMs: approvalPending.expiresAtMs,
-          warningText: approvalPending.warningText,
-        }),
-      );
+      const payload = buildExecApprovalPendingReplyPayload({
+        approvalId: approvalPending.approvalId,
+        approvalSlug: approvalPending.approvalSlug,
+        allowedDecisions: approvalPending.allowedDecisions,
+        command: approvalPending.command,
+        cwd: approvalPending.cwd,
+        host: approvalPending.host,
+        nodeId: approvalPending.nodeId,
+        expiresAtMs: approvalPending.expiresAtMs,
+        warningText: approvalPending.warningText,
+      });
+      await ctx.params.onToolResult({
+        ...payload,
+        channelData: { ...payload.channelData, toolName },
+      });
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
       ctx.state.deterministicApprovalPromptSent = false;
@@ -505,16 +507,18 @@ async function emitToolResultOutput(params: {
     ctx.state.deterministicApprovalPromptPending = true;
     try {
       const { buildExecApprovalUnavailableReplyPayload } = await loadExecApprovalReply();
-      await ctx.params.onToolResult?.(
-        buildExecApprovalUnavailableReplyPayload({
-          reason: approvalUnavailable.reason,
-          warningText: approvalUnavailable.warningText,
-          channel: approvalUnavailable.channel,
-          channelLabel: approvalUnavailable.channelLabel,
-          accountId: approvalUnavailable.accountId,
-          sentApproverDms: approvalUnavailable.sentApproverDms,
-        }),
-      );
+      const payload = buildExecApprovalUnavailableReplyPayload({
+        reason: approvalUnavailable.reason,
+        warningText: approvalUnavailable.warningText,
+        channel: approvalUnavailable.channel,
+        channelLabel: approvalUnavailable.channelLabel,
+        accountId: approvalUnavailable.accountId,
+        sentApproverDms: approvalUnavailable.sentApproverDms,
+      });
+      await ctx.params.onToolResult?.({
+        ...payload,
+        channelData: { ...payload.channelData, toolName },
+      });
       ctx.state.deterministicApprovalPromptSent = true;
     } catch {
       ctx.state.deterministicApprovalPromptSent = false;
