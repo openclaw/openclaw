@@ -595,26 +595,26 @@ describe("resolveAgentConfig", () => {
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
   });
 
-  it("non-default agent uses agents.defaults.workspace as base (#59789)", () => {
+  it("uses sibling workspace-<id> path for non-default agents regardless of agents.defaults.workspace", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/state");
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { workspace: "/shared-ws" },
-        list: [{ id: "main" }, { id: "work", default: true, workspace: "/work-ws" }],
+        defaults: { workspace: "/state/workspace" },
+        list: [{ id: "main", default: true }, { id: "newbot" }],
       },
     };
-    const workspace = resolveAgentWorkspaceDir(cfg, "main");
-    expect(workspace).toBe(path.resolve("/shared-ws/main"));
+    expect(resolveAgentWorkspaceDir(cfg, "newbot")).toBe("/state/workspace-newbot");
   });
 
-  it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
+  it("uses agents.defaults.workspace for the default agent", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/state");
     const cfg: OpenClawConfig = {
       agents: {
-        defaults: { workspace: "/shared-ws" },
-        list: [{ id: "main" }, { id: "work", default: true }],
+        defaults: { workspace: "/custom/ws" },
+        list: [{ id: "main", default: true }],
       },
     };
-    const workspace = resolveAgentWorkspaceDir(cfg, "work");
-    expect(workspace).toBe(path.resolve("/shared-ws"));
+    expect(resolveAgentWorkspaceDir(cfg, "main")).toBe("/custom/ws");
   });
 
   it("non-default agent without defaults.workspace falls back to stateDir", () => {

@@ -162,16 +162,15 @@ export function resolveAgentWorkspaceDir(
     return stripNullBytes(resolveUserPath(configured, env));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
-  const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
+    const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
       return stripNullBytes(resolveUserPath(fallback, env));
     }
     return stripNullBytes(resolveDefaultAgentWorkspaceDir(env));
   }
-  if (fallback) {
-    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
-  }
+  // Non-default agents always use the sibling workspace-<id> layout so that TUI
+  // routing cannot confuse them with the default agent's workspace subtree.
   const stateDir = resolveStateDir(env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
