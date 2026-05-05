@@ -522,6 +522,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
         ],
       }),
     );
+    expect(getTelegramReplyFenceSizeForTests()).toBe(0);
   });
 
   it("streams drafts in private threads and forwards thread id", async () => {

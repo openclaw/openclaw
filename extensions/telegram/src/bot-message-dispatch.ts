@@ -902,33 +902,34 @@ export const dispatchTelegramMessage = async ({
           text: reliabilityPromptText,
           commandSource: ctxPayload.CommandSource,
         });
-  if (longInputGuard.guarded && longInputGuard.message) {
-    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
-      replies: [{ text: longInputGuard.message }],
-      ...deliveryBaseOptions,
-      silent: false,
-      mediaLoader: telegramDeps.loadWebMedia,
-    });
-    markTelegramReliabilityFailed({
-      telegramDeps,
-      accountId: route.accountId,
-      inflightId,
-      errorKind: result.delivered ? "context_overflow" : "delivery_failure",
-      errorText: "Large Telegram input blocked before dispatch.",
-    });
-    if (statusReactionController) {
-      void finalizeTelegramStatusReaction({
-        outcome: "error",
-        hasFinalResponse: result.delivered,
-      }).catch((err: unknown) => {
-        logVerbose(`telegram: status reaction guard finalize failed: ${String(err)}`);
-      });
-    }
-    clearGroupHistory();
-    return;
-  }
 
   try {
+    if (longInputGuard.guarded && longInputGuard.message) {
+      const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+        replies: [{ text: longInputGuard.message }],
+        ...deliveryBaseOptions,
+        silent: false,
+        mediaLoader: telegramDeps.loadWebMedia,
+      });
+      markTelegramReliabilityFailed({
+        telegramDeps,
+        accountId: route.accountId,
+        inflightId,
+        errorKind: result.delivered ? "context_overflow" : "delivery_failure",
+        errorText: "Large Telegram input blocked before dispatch.",
+      });
+      if (statusReactionController) {
+        void finalizeTelegramStatusReaction({
+          outcome: "error",
+          hasFinalResponse: result.delivered,
+        }).catch((err: unknown) => {
+          logVerbose(`telegram: status reaction guard finalize failed: ${String(err)}`);
+        });
+      }
+      clearGroupHistory();
+      return;
+    }
+
     const sticker = ctxPayload.Sticker;
     if (sticker?.fileId && sticker.fileUniqueId && ctxPayload.MediaPath) {
       const agentDir = resolveAgentDir(cfg, route.agentId);
