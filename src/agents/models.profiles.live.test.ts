@@ -741,7 +741,7 @@ describeLive("live models (profile keys)", () => {
           ? {
               externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList }),
               skipExternalAuthProfiles: true,
-              syntheticAuthProviderRefs: providerList,
+              syntheticAuthProviderRefs: [],
             }
           : {}),
       });
