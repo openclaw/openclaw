@@ -11,6 +11,7 @@ import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
+import { normalizeWindowsArgv } from "./windows-argv.js";
 
 type ChannelsCommandsModule = typeof import("../commands/channels.js");
 type BundledPackageChannelMetadataModule =
@@ -46,7 +47,7 @@ function getOptionNames(command: Command): string[] {
 }
 
 function shouldRegisterChannelSetupOptions(argv: string[] = process.argv): boolean {
-  const { commandPath } = resolveCliArgvInvocation(argv);
+  const { commandPath } = resolveCliArgvInvocation(normalizeWindowsArgv(argv));
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
@@ -76,7 +77,7 @@ async function addChannelSetupOptions(command: Command): Promise<Command> {
   return command;
 }
 
-export async function registerChannelsCli(program: Command) {
+export async function registerChannelsCli(program: Command, argv: string[] = process.argv) {
   const channelNames = formatCliChannelOptions();
   const channels = program
     .command("channels")
@@ -195,7 +196,7 @@ export async function registerChannelsCli(program: Command) {
     .option("--auth-dir <path>", "Channel auth directory override")
     .option("--use-env", "Use env-backed credentials when supported", false);
 
-  if (shouldRegisterChannelSetupOptions()) {
+  if (shouldRegisterChannelSetupOptions(argv)) {
     await addChannelSetupOptions(addCommand);
   }
 
