@@ -34,6 +34,7 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+const SHORT_TERM_TMP_STALE_MS = 60 * 60 * 1000;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
@@ -177,6 +178,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedTempFiles: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };
@@ -671,6 +673,59 @@ async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> 
   await ensuring;
 }
 
+function isShortTermStoreTempFileName(fileName: string): boolean {
+  return (
+    (fileName.endsWith(".tmp") &&
+      (fileName.startsWith(`${path.basename(SHORT_TERM_STORE_RELATIVE_PATH)}.`) ||
+        fileName.startsWith(`${path.basename(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH)}.`) ||
+        fileName.startsWith(".fs-safe-"))) ||
+    fileName.startsWith(".tmp-")
+  );
+}
+
+async function removeStaleShortTermTempFiles(workspaceDir: string): Promise<number> {
+  const artifactsDir = resolveShortTermArtifactsDir(workspaceDir);
+  let entries: Array<{ name: string; isFile(): boolean }>;
+  try {
+    entries = await fs.readdir(artifactsDir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0;
+    }
+    throw err;
+  }
+
+  const nowMs = Date.now();
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isFile() || !isShortTermStoreTempFileName(entry.name)) {
+      continue;
+    }
+    const filePath = path.join(artifactsDir, entry.name);
+    let stat;
+    try {
+      stat = await fs.stat(filePath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+    if (nowMs - stat.mtimeMs <= SHORT_TERM_TMP_STALE_MS) {
+      continue;
+    }
+    try {
+      await fs.unlink(filePath);
+      removed += 1;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+  }
+  return removed;
+}
+
 function parseLockOwnerPid(raw: string): number | null {
   const match = raw.trim().match(/^(\d+):/);
   if (!match) {
@@ -858,8 +913,12 @@ async function readPhaseSignalStore(
       await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
       nowIso,
     );
-  } catch {
-    return emptyPhaseSignalStore(nowIso);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || err instanceof SyntaxError) {
+      return emptyPhaseSignalStore(nowIso);
+    }
+    throw err;
   }
 }
 
@@ -1939,6 +1998,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   let rewroteStore = false;
   let removedInvalidEntries = 0;
   let removedStaleLock = false;
+  let removedTempFiles = 0;
 
   try {
     const lockPath = resolveLockPath(workspaceDir);
@@ -1955,6 +2015,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   }
 
   await withShortTermLock(workspaceDir, async () => {
+    removedTempFiles = await removeStaleShortTermTempFiles(workspaceDir);
     const storePath = resolveStorePath(workspaceDir);
     try {
       const raw = await fs.readFile(storePath, "utf-8");
@@ -2006,8 +2067,9 @@ export async function repairShortTermPromotionArtifacts(params: {
   });
 
   return {
-    changed: rewroteStore || removedStaleLock,
+    changed: rewroteStore || removedStaleLock || removedTempFiles > 0,
     removedInvalidEntries,
+    removedTempFiles,
     rewroteStore,
     removedStaleLock,
   };
