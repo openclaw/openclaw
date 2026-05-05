@@ -59,7 +59,6 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       });
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
       if (normalizedMediaUrls.length === 0) {
-        text = normalizedPayload.text;
         continue;
       }
       mergedMediaUrls.push(...normalizedMediaUrls);
