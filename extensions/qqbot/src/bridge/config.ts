@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
-import { coerceSecretRef, normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  coerceSecretRef,
+  isEnvSecretProviderConfig,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
 import { getPlatformAdapter } from "../engine/adapter/index.js";
 import {
   DEFAULT_ACCOUNT_ID as ENGINE_DEFAULT_ACCOUNT_ID,
@@ -41,7 +45,11 @@ function resolveEnvSecretRefValue(params: {
 
   const providerConfig = params.cfg.secrets?.providers?.[ref.provider];
   if (providerConfig) {
-    if (providerConfig.source !== "env") {
+    // Use the type guard so the open `PluginSecretProviderConfig` arm is
+    // narrowed out cleanly — a literal `providerConfig.source !== "env"`
+    // check leaves the plugin variant in the union and breaks `.allowlist`
+    // typing.
+    if (!isEnvSecretProviderConfig(providerConfig)) {
       throw new Error(
         `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "env".`,
       );

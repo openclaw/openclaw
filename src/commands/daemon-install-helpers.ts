@@ -5,7 +5,7 @@ import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { isExecSecretProviderConfig, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 import {
@@ -211,7 +211,10 @@ function collectExecSecretRefPassEnvServiceEnvVars(params: {
       continue;
     }
     const provider = params.config.secrets?.providers?.[ref.provider];
-    if (!provider || provider.source !== "exec") {
+    // Use the type guard so the open `PluginSecretProviderConfig` arm is
+    // narrowed out cleanly — a literal `provider.source !== "exec"` check
+    // leaves the plugin variant in the union and breaks `.passEnv` typing.
+    if (!isExecSecretProviderConfig(provider)) {
       continue;
     }
     for (const rawKey of provider.passEnv ?? []) {
