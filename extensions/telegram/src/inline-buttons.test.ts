@@ -96,7 +96,7 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
   // snapshot has resolved channel credentials. Returning a benign default
   // instead of throwing keeps the embedded reply run alive.
 
-  it("returns the safe default scope when botToken is an unresolved SecretRef", () => {
+  it('returns "off" when botToken is an unresolved SecretRef so prompt prep does not advertise an unverified inline-buttons capability', () => {
     const cfg = {
       channels: {
         telegram: {
@@ -105,14 +105,17 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveTelegramInlineButtonsScope({ cfg })).not.toThrow();
-    // The DEFAULT_INLINE_BUTTONS_SCOPE is "all" — the contract is just that
-    // we do not crash. Verify isTelegramInlineButtonsEnabled also tolerates
-    // the same condition (used by describeMessageTool's buttonsEnabled flag).
-    expect(() => isTelegramInlineButtonsEnabled({ cfg })).not.toThrow();
+    // Codex follow-up on PR #75445: the previous fallback returned the
+    // default scope ("allowlist") which prompted the model to generate inline
+    // button payloads even when the account had `capabilities.inlineButtons:
+    // "off"`. The conservative fallback returns "off" so prompt-prep paths
+    // (e.g. agentPrompt.messageToolCapabilities) cannot misreport capability;
+    // the runtime send path uses the resolved snapshot and re-asks.
+    expect(resolveTelegramInlineButtonsScope({ cfg })).toBe("off");
+    expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(false);
   });
 
-  it("returns the safe default scope when scoped account token is an unresolved SecretRef", () => {
+  it('returns "off" when scoped account token is an unresolved SecretRef', () => {
     const cfg = {
       channels: {
         telegram: {
@@ -125,7 +128,7 @@ describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () =>
       },
     } as unknown as OpenClawConfig;
 
-    expect(() => resolveTelegramInlineButtonsScope({ cfg, accountId: "ops" })).not.toThrow();
-    expect(() => isTelegramInlineButtonsEnabled({ cfg, accountId: "ops" })).not.toThrow();
+    expect(resolveTelegramInlineButtonsScope({ cfg, accountId: "ops" })).toBe("off");
+    expect(isTelegramInlineButtonsEnabled({ cfg, accountId: "ops" })).toBe(false);
   });
 });
