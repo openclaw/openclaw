@@ -55,6 +55,32 @@ describe("agent defaults schema", () => {
     ).not.toThrow();
   });
 
+  it("accepts legacy models.allowlist=null as hosted-image compatibility", () => {
+    const result = AgentDefaultsSchema.parse({
+      models: {
+        allowlist: null,
+        "openrouter/google/gemini-2.5-flash-image-preview": {},
+      },
+    })!;
+
+    expect(result.models).toEqual({
+      allowlist: null,
+      "openrouter/google/gemini-2.5-flash-image-preview": {},
+    });
+  });
+
+  it("accepts legacy models.allowlist arrays", () => {
+    const result = AgentDefaultsSchema.parse({
+      models: {
+        allowlist: ["openrouter/google/gemini-2.5-flash-image-preview"],
+      },
+    })!;
+
+    expect(result.models).toEqual({
+      allowlist: ["openrouter/google/gemini-2.5-flash-image-preview"],
+    });
+  });
+
   it("accepts experimental.localModelLean", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {

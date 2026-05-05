@@ -651,6 +651,62 @@ describe("model-selection", () => {
       ]);
     });
 
+    it("ignores legacy models.allowlist=null instead of treating it as the only allowlisted model", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/google/gemini-2.5-flash-image-preview" },
+            models: {
+              allowlist: null,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          {
+            provider: "openrouter",
+            id: "google/gemini-2.5-flash-image-preview",
+            name: "Gemini Image Preview",
+          },
+        ],
+        defaultProvider: "openrouter",
+        defaultModel: "google/gemini-2.5-flash-image-preview",
+      });
+
+      expect(result.allowAny).toBe(true);
+      expect(result.allowedKeys.has("openrouter/google/gemini-2.5-flash-image-preview")).toBe(true);
+    });
+
+    it("accepts legacy models.allowlist arrays as model refs", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              allowlist: ["openrouter/google/gemini-2.5-flash-image-preview"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog: [
+          {
+            provider: "openrouter",
+            id: "google/gemini-2.5-flash-image-preview",
+            name: "Gemini Image Preview",
+          },
+        ],
+        defaultProvider: "openrouter",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedKeys.has("openrouter/google/gemini-2.5-flash-image-preview")).toBe(true);
+    });
+
     it("overlays configured provider metadata and alias onto matching catalog entries", () => {
       const cfg: OpenClawConfig = {
         agents: {
@@ -889,6 +945,39 @@ describe("model-selection", () => {
       expect(result).toEqual({
         key: "anthropic/claude-sonnet-4-6",
         ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
+    });
+
+    it("allows cron-style model overrides when legacy models.allowlist is null", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter/google/gemini-2.5-flash-image-preview" },
+            models: {
+              allowlist: null,
+            },
+          },
+        },
+        models: {
+          providers: {
+            openrouter: {
+              models: [{ id: "google/gemini-2.5-flash-image-preview" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "openrouter/google/gemini-2.5-flash-image-preview",
+        defaultProvider: "openrouter",
+        defaultModel: "google/gemini-2.5-flash-image-preview",
+      });
+
+      expect(result).toEqual({
+        key: "openrouter/google/gemini-2.5-flash-image-preview",
+        ref: { provider: "openrouter", model: "google/gemini-2.5-flash-image-preview" },
       });
     });
 
