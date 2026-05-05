@@ -100,6 +100,20 @@ export async function prepareGatewayPluginBootstrap(params: {
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
         });
+  if (pluginLookUpTable?.index) {
+    const { relinkOpenClawPeerDependenciesForInstalledPlugins } =
+      await import("../plugins/plugin-peer-link.js");
+    const result = await relinkOpenClawPeerDependenciesForInstalledPlugins({
+      index: pluginLookUpTable.index,
+      logger: params.log,
+    });
+    if (result.attempted > 0) {
+      params.log.debug(
+        `Checked openclaw peerDependency links for ${result.attempted} managed plugin(s).`,
+      );
+    }
+  }
+
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
   ];
