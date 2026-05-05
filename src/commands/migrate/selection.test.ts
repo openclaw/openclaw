@@ -252,6 +252,7 @@ describe("applyMigrationSkillSelection", () => {
 
     expect(
       reconcileInteractiveMigrationShortcutValues(
+        ["skill:alpha", "skill:beta"],
         [
           MIGRATION_SKILL_SELECTION_SKIP,
           MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
@@ -260,24 +261,29 @@ describe("applyMigrationSkillSelection", () => {
           "skill:beta",
         ],
         selectable,
+        "a",
       ),
-    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
+    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
 
     expect(
       reconcileInteractiveMigrationShortcutValues(
+        [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF],
         [
           MIGRATION_SKILL_SELECTION_SKIP,
           MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
           MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
         ],
         selectable,
+        "i",
       ),
     ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
 
     expect(
       reconcileInteractiveMigrationShortcutValues(
+        [MIGRATION_SKILL_SELECTION_SKIP],
         [MIGRATION_SKILL_SELECTION_SKIP, "skill:beta"],
         selectable,
+        "i",
       ),
     ).toEqual(["skill:beta"]);
   });

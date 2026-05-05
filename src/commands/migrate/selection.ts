@@ -229,9 +229,20 @@ export function reconcileInteractiveMigrationSkillToggleValues(
 }
 
 export function reconcileInteractiveMigrationShortcutValues(
+  previousValues: readonly string[],
   selectedValues: readonly string[],
   selectableValues: readonly string[],
+  key: "a" | "i",
 ): string[] {
+  const previousSelectable = previousValues.filter((value) => selectableValues.includes(value));
+  if (
+    key === "a" &&
+    !previousValues.includes(MIGRATION_SKILL_SELECTION_SKIP) &&
+    previousSelectable.length === selectableValues.length
+  ) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  }
+
   const selectedSelectable = selectedValues.filter((value) => selectableValues.includes(value));
   if (selectedSelectable.length === selectableValues.length) {
     return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];

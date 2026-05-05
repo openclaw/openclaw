@@ -169,6 +169,7 @@ export function promptMigrationSkillSelectionValues(
       }
     },
   });
+  let lastSelectedValues = [...(prompt.value ?? [])];
 
   prompt.on("cursor", (key) => {
     if (key !== "space") {
@@ -180,6 +181,7 @@ export function promptMigrationSkillSelectionValues(
       activatedValue,
       opts.selectableValues,
     );
+    lastSelectedValues = [...(prompt.value ?? [])];
   });
 
   prompt.on("key", (key) => {
@@ -187,9 +189,12 @@ export function promptMigrationSkillSelectionValues(
       return;
     }
     prompt.value = reconcileInteractiveMigrationShortcutValues(
+      lastSelectedValues,
       prompt.value ?? [],
       opts.selectableValues,
+      key,
     );
+    lastSelectedValues = [...(prompt.value ?? [])];
   });
 
   return prompt.prompt();
