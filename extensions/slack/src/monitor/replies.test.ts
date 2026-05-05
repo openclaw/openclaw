@@ -1,9 +1,29 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
+const messageHookRunner = vi.hoisted(() => ({
+  hasHooks: vi.fn((_name?: string) => false),
+  runMessageSent: vi.fn(async () => {}),
+}));
+const triggerInternalHook = vi.hoisted(() => vi.fn(async () => {}));
+
 vi.mock("../send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
 }));
+vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/hook-runtime")>();
+  return {
+    ...actual,
+    triggerInternalHook,
+  };
+});
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: () => messageHookRunner,
+  };
+});
 
 let deliverReplies: typeof import("./replies.js").deliverReplies;
 let createSlackReplyDeliveryPlan: typeof import("./replies.js").createSlackReplyDeliveryPlan;
@@ -38,6 +58,10 @@ describe("deliverReplies identity passthrough", () => {
 
   beforeEach(() => {
     sendMock.mockReset();
+    messageHookRunner.hasHooks.mockReset();
+    messageHookRunner.hasHooks.mockReturnValue(false);
+    messageHookRunner.runMessageSent.mockReset();
+    triggerInternalHook.mockReset();
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
     sendMock.mockResolvedValue(undefined);
@@ -111,6 +135,44 @@ describe("deliverReplies identity passthrough", () => {
     );
   });
 
+  it("uses Slack block fallback text for block-only message_sent content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1712345678.123456", channelId: "C123" });
+    const blocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "*Choose* a deployment target" },
+      },
+    ];
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            text: "",
+            channelData: {
+              slack: {
+                blocks,
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "*Choose* a deployment target",
+        success: true,
+        messageId: "1712345678.123456",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        messageId: "1712345678.123456",
+      }),
+    );
+  });
+
   it("renders interactive replies into Slack blocks during delivery", async () => {
     sendMock.mockResolvedValue(undefined);
 
@@ -149,6 +211,94 @@ describe("deliverReplies identity passthrough", () => {
         }),
       ],
     });
+  });
+
+  it("emits message_sent success with delivered Slack message id and session context", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1712345678.123456", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        accountId: "work",
+        sessionKeyForInternalHooks: "agent:test:slack:channel:C123",
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "C123",
+        content: "hello",
+        success: true,
+        messageId: "1712345678.123456",
+        sessionKey: "agent:test:slack:channel:C123",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "work",
+        conversationId: "C123",
+        sessionKey: "agent:test:slack:channel:C123",
+        messageId: "1712345678.123456",
+      }),
+    );
+  });
+
+  it("emits internal message:sent when session hook context is available", async () => {
+    sendMock.mockResolvedValue({ messageId: "1712345678.123456", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        accountId: "work",
+        sessionKeyForInternalHooks: "agent:test:slack:channel:C123",
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).not.toHaveBeenCalled();
+    expect(triggerInternalHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "message",
+        action: "sent",
+        sessionKey: "agent:test:slack:channel:C123",
+        context: expect.objectContaining({
+          to: "C123",
+          content: "hello",
+          success: true,
+          channelId: "slack",
+          accountId: "work",
+          conversationId: "C123",
+          messageId: "1712345678.123456",
+        }),
+      }),
+    );
+  });
+
+  it("emits message_sent failure payload before rethrowing Slack send errors", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+    sendMock.mockRejectedValue(new Error("slack down"));
+
+    await expect(
+      deliverReplies(
+        baseParams({
+          accountId: "work",
+          sessionKeyForInternalHooks: "agent:test:slack:channel:C123",
+        }),
+      ),
+    ).rejects.toThrow("slack down");
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "C123",
+        content: "hello",
+        success: false,
+        error: "slack down",
+        sessionKey: "agent:test:slack:channel:C123",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "work",
+        conversationId: "C123",
+        sessionKey: "agent:test:slack:channel:C123",
+      }),
+    );
   });
 
   it("rejects replies when merged Slack blocks exceed the platform limit", async () => {

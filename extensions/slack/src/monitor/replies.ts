@@ -1,4 +1,15 @@
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  buildCanonicalSentMessageHookContext,
+  createInternalHookEvent,
+  fireAndForgetHook,
+  toInternalMessageSentContext,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+  triggerInternalHook,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -12,10 +23,74 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { buildSlackBlocksFallbackText } from "../blocks-fallback.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
+import { truncateSlackText } from "../truncate.js";
 import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
+
+export type SlackMessageSentHookParams = {
+  sessionKeyForInternalHooks?: string;
+  target: string;
+  accountId?: string;
+  content: string;
+  success: boolean;
+  error?: string;
+  messageId?: string;
+};
+
+export function resolveSlackSentHookContent(
+  content: string,
+  slackBlocks?: ReturnType<typeof readSlackReplyBlocks>,
+): string {
+  const fallback = slackBlocks?.length ? buildSlackBlocksFallbackText(slackBlocks) : "";
+  return truncateSlackText(content || fallback, SLACK_TEXT_LIMIT);
+}
+
+export function emitSlackMessageSentHooks(params: SlackMessageSentHookParams): void {
+  const hookRunner = getGlobalHookRunner();
+  const hasMessageSentHooks = hookRunner?.hasHooks("message_sent") ?? false;
+  if (!hasMessageSentHooks && !params.sessionKeyForInternalHooks) {
+    return;
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    to: params.target,
+    content: params.content,
+    success: params.success,
+    error: params.error,
+    channelId: "slack",
+    accountId: params.accountId,
+    conversationId: params.target,
+    sessionKey: params.sessionKeyForInternalHooks,
+    messageId: params.messageId,
+  });
+  if (hasMessageSentHooks) {
+    fireAndForgetHook(
+      Promise.resolve(
+        hookRunner!.runMessageSent(
+          toPluginMessageSentEvent(canonical),
+          toPluginMessageContext(canonical),
+        ),
+      ),
+      "slack: message_sent plugin hook failed",
+    );
+  }
+  if (!params.sessionKeyForInternalHooks) {
+    return;
+  }
+  fireAndForgetHook(
+    triggerInternalHook(
+      createInternalHookEvent(
+        "message",
+        "sent",
+        params.sessionKeyForInternalHooks,
+        toInternalMessageSentContext(canonical),
+      ),
+    ),
+    "slack: message:sent internal hook failed",
+  );
+}
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
@@ -38,12 +113,41 @@ export async function deliverReplies(params: {
   target: string;
   token: string;
   accountId?: string;
+  sessionKeyForInternalHooks?: string;
   runtime: RuntimeEnv;
   textLimit: number;
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
 }) {
+  const sendWithSentHook = async (
+    content: string,
+    opts: Parameters<typeof sendMessageSlack>[2],
+    hookContent = content,
+  ) => {
+    try {
+      const result = await sendMessageSlack(params.target, content, opts);
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        target: params.target,
+        accountId: params.accountId,
+        content: hookContent,
+        success: true,
+        messageId: result?.messageId,
+      });
+      return result;
+    } catch (err) {
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        target: params.target,
+        accountId: params.accountId,
+        content: hookContent,
+        success: false,
+        error: formatErrorMessage(err),
+      });
+      throw err;
+    }
+  };
   for (const payload of params.replies) {
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
@@ -64,14 +168,18 @@ export async function deliverReplies(params: {
       if (trimmed && isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
-      await sendMessageSlack(params.target, trimmed, {
-        cfg: params.cfg,
-        token: params.token,
-        threadTs,
-        accountId: params.accountId,
-        ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-        ...(params.identity ? { identity: params.identity } : {}),
-      });
+      await sendWithSentHook(
+        trimmed,
+        {
+          cfg: params.cfg,
+          token: params.token,
+          threadTs,
+          accountId: params.accountId,
+          ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+          ...(params.identity ? { identity: params.identity } : {}),
+        },
+        resolveSlackSentHookContent(trimmed, slackBlocks),
+      );
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
     }
@@ -89,7 +197,7 @@ export async function deliverReplies(params: {
           }
         : undefined,
       sendText: async (trimmed) => {
-        await sendMessageSlack(params.target, trimmed, {
+        await sendWithSentHook(trimmed, {
           cfg: params.cfg,
           token: params.token,
           threadTs,
@@ -98,7 +206,7 @@ export async function deliverReplies(params: {
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
-        await sendMessageSlack(params.target, caption ?? "", {
+        await sendWithSentHook(caption ?? "", {
           cfg: params.cfg,
           token: params.token,
           mediaUrl,

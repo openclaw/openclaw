@@ -67,8 +67,10 @@ import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import {
   createSlackReplyDeliveryPlan,
   deliverReplies,
+  emitSlackMessageSentHooks,
   readSlackReplyBlocks,
   resolveDeliveredSlackReplyThreadTs,
+  resolveSlackSentHookContent,
   resolveSlackThreadTs,
 } from "../replies.js";
 import {
@@ -245,6 +247,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+  const sessionKeyForSentHooks = prepared.ctxPayload.SessionKey ?? route.sessionKey;
 
   // Resolve agent identity for Slack chat:write.customize overrides.
   const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
@@ -470,6 +473,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       });
   let streamSession: SlackStreamSession | null = null;
   let streamFailed = false;
+  let streamedSentHookContent = "";
+  let streamedFallbackSentHookContent = "";
+  let streamedSentHookEmitted = false;
   let usedReplyThreadTs: string | undefined;
   let usedBlockReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
@@ -518,12 +524,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         target: prepared.replyTarget,
         token: ctx.botToken,
         accountId: account.accountId,
+        sessionKeyForInternalHooks: sessionKeyForSentHooks,
         runtime,
         textLimit: ctx.textLimit,
         replyThreadTs: session.threadTs,
         replyToMode: prepared.replyToMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
+      streamedFallbackSentHookContent = streamedFallbackSentHookContent
+        ? `${streamedFallbackSentHookContent}\n${fallbackText}`
+        : fallbackText;
       markSlackStreamFallbackDelivered(session);
       observedReplyDelivery = true;
       usedReplyThreadTs ??= session.threadTs;
@@ -563,6 +573,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       target: prepared.replyTarget,
       token: ctx.botToken,
       accountId: account.accountId,
+      sessionKeyForInternalHooks: sessionKeyForSentHooks,
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
@@ -605,6 +616,38 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     });
     rememberDeliveredThreadTs(params.kind, params.session.threadTs);
     return true;
+  };
+
+  const emitNativeStreamSentHook = (
+    session: SlackStreamSession,
+    params?: { pendingText?: string },
+  ): void => {
+    if (streamedSentHookEmitted || !session.delivered) {
+      return;
+    }
+    let content = streamedSentHookContent.trim();
+    const pendingText = (params?.pendingText ?? streamedFallbackSentHookContent).trim();
+    if (pendingText) {
+      const maxOverlap = Math.min(content.length, pendingText.length);
+      for (let length = maxOverlap; length > 0; length -= 1) {
+        const fallbackPrefix = pendingText.slice(0, length);
+        if (content === fallbackPrefix || content.endsWith(`\n${fallbackPrefix}`)) {
+          content = content.slice(0, -length).trim();
+          break;
+        }
+      }
+    }
+    if (!content) {
+      return;
+    }
+    streamedSentHookEmitted = true;
+    emitSlackMessageSentHooks({
+      sessionKeyForInternalHooks: sessionKeyForSentHooks,
+      target: prepared.replyTarget,
+      accountId: account.accountId,
+      content,
+      success: true,
+    });
   };
 
   const deliverWithStreaming = async (params: {
@@ -671,6 +714,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           }),
           userId: message.user,
         });
+        streamedSentHookContent = text;
         // startSlackStream may only buffer locally. Count delivery only after
         // the SDK reports a real Slack response.
         if (streamSession.delivered) {
@@ -702,6 +746,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         session: streamSession,
         text: "\n" + text,
       });
+      streamedSentHookContent += "\n" + text;
       // appendSlackStream also buffers locally below the SDK threshold; avoid
       // optimistic "done" status until Slack acknowledges a flush.
       if (streamSession.delivered) {
@@ -835,8 +880,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             kind: info.kind,
           });
         },
-        onPreviewFinalized: (_preview) => {
+        onPreviewFinalized: (preview) => {
           const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
+          emitSlackMessageSentHooks({
+            sessionKeyForInternalHooks: sessionKeyForSentHooks,
+            target: prepared.replyTarget,
+            accountId: account.accountId,
+            content: resolveSlackSentHookContent(trimmedFinalText, slackBlocks),
+            success: true,
+            messageId: preview.messageId,
+          });
           observedReplyDelivery = true;
           replyPlan.markSent();
           deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
@@ -1227,8 +1280,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   if (finalStream && !finalStream.stopped) {
     try {
       await stopSlackStream({ session: finalStream });
+      emitNativeStreamSentHook(finalStream);
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
+        emitNativeStreamSentHook(finalStream, { pendingText: err.pendingText });
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
       } else {
         runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatErrorMessage(err)}`));

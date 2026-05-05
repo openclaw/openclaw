@@ -1749,12 +1749,21 @@ describe("deliverOutboundPayloads", () => {
       channel: "matrix",
       to: "!room:example",
       payloads: [{ text: "hello" }],
+      session: { key: "agent:test:matrix:room" },
       deps: { matrix: sendMatrix },
     });
 
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "!room:example", content: "hello", success: true }),
-      expect.objectContaining({ channelId: "matrix" }),
+      expect.objectContaining({
+        to: "!room:example",
+        content: "hello",
+        success: true,
+        sessionKey: "agent:test:matrix:room",
+      }),
+      expect.objectContaining({
+        channelId: "matrix",
+        sessionKey: "agent:test:matrix:room",
+      }),
     );
   });
 

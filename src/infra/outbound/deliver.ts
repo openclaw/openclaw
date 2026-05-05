@@ -698,6 +698,7 @@ function createMessageSentEmitter(params: {
       channelId: params.channel,
       accountId: params.accountId ?? undefined,
       conversationId: params.to,
+      sessionKey: params.sessionKeyForInternalHooks,
       messageId: event.messageId,
       isGroup: params.mirrorIsGroup,
       groupId: params.mirrorGroupId,
