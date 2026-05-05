@@ -229,6 +229,7 @@ jobs:
             keep_args=(--no-keep-lease)
           fi
 
+          set +e
           pnpm openclaw qa mantis slack-desktop-smoke \
             --repo-root "$candidate_repo" \
             --output-dir "$output_rel" \
@@ -245,6 +246,13 @@ jobs:
             --fast \
             --scenario "$SCENARIO_ID" \
             "${keep_args[@]}"
+          mantis_exit=$?
+          set -e
+
+          if [[ ! -f "$root/mantis-slack-desktop-smoke-summary.json" ]]; then
+            echo "Mantis Slack desktop smoke did not produce a summary." >&2
+            exit "$mantis_exit"
+          fi
 
           if [[ -f "$root/slack-desktop-smoke.mp4" ]]; then
             if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
@@ -295,6 +303,10 @@ jobs:
           if [[ "$status" != "pass" ]]; then
             echo "Slack desktop smoke failed." >&2
             exit 1
+          fi
+          if [[ "$mantis_exit" -ne 0 ]]; then
+            echo "Slack desktop smoke exited with $mantis_exit after reporting status $status." >&2
+            exit "$mantis_exit"
           fi
 
       - name: Upload Mantis Slack desktop artifacts
