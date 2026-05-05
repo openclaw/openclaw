@@ -33,13 +33,48 @@ function withDuplex(
     : ({ duplex: "half" as const } as RequestInitWithDuplex);
 }
 
+function hasEnumerableSymbolKeys(value: object): boolean {
+  return Object.getOwnPropertySymbols(value).some((symbol) =>
+    Object.prototype.propertyIsEnumerable.call(value, symbol),
+  );
+}
+
+function stripHeaderSymbolKeys(headers: HeadersInit | undefined): HeadersInit | undefined {
+  if (!headers || typeof headers !== "object") {
+    return headers;
+  }
+  if (typeof Headers !== "undefined" && headers instanceof Headers) {
+    return headers;
+  }
+  if (Array.isArray(headers)) {
+    return headers;
+  }
+  if (!hasEnumerableSymbolKeys(headers)) {
+    return headers;
+  }
+
+  const nextHeaders: Record<string, string> = Object.create(null);
+  for (const [key, value] of Object.entries(headers)) {
+    nextHeaders[key] = value;
+  }
+  return nextHeaders;
+}
+
+function withoutHeaderSymbolKeys(init: RequestInit | undefined): RequestInit | undefined {
+  const headers = stripHeaderSymbolKeys(init?.headers);
+  if (headers === init?.headers) {
+    return init;
+  }
+  return { ...init, headers };
+}
+
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
   if ((fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]) {
     return fetchImpl;
   }
 
   const wrapped = ((input: RequestInfo | URL, init?: RequestInit) => {
-    const patchedInit = withDuplex(init, input);
+    const patchedInit = withoutHeaderSymbolKeys(withDuplex(init, input));
     const signal = patchedInit?.signal;
     if (!signal) {
       return fetchImpl(input, patchedInit);

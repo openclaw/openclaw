@@ -97,6 +97,34 @@ describe("wrapFetchWithAbortSignal", () => {
     expect(getSeenInit()).toMatchObject({ duplex: "half" });
   });
 
+  it("strips enumerable symbol keys from plain header dictionaries", async () => {
+    const { fetchImpl, getSeenInit } = createSeenInitFetch();
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+    const sensitiveHeaders = Symbol("sensitiveHeaders");
+    const headers = {
+      Authorization: "Bot token",
+      [sensitiveHeaders]: ["authorization"],
+    } as HeadersInit & { [sensitiveHeaders]: string[] };
+
+    await wrapped("https://example.com", { headers });
+
+    const seenHeaders = getSeenInit()?.headers as Record<PropertyKey, unknown>;
+    expect(seenHeaders).not.toBe(headers);
+    expect(seenHeaders.Authorization).toBe("Bot token");
+    expect(Object.getOwnPropertySymbols(seenHeaders)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(headers)).toEqual([sensitiveHeaders]);
+  });
+
+  it("does not clone plain header dictionaries without enumerable symbol keys", async () => {
+    const { fetchImpl, getSeenInit } = createSeenInitFetch();
+    const wrapped = wrapFetchWithAbortSignal(fetchImpl);
+    const headers = { Authorization: "Bot token" };
+
+    await wrapped("https://example.com", { headers });
+
+    expect(getSeenInit()?.headers).toBe(headers);
+  });
+
   it("converts foreign abort signals to native controllers", async () => {
     const { fetchImpl, getSeenSignal } = createSeenSignalFetch();
     const wrapped = wrapFetchWithAbortSignal(fetchImpl);
