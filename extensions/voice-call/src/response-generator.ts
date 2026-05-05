@@ -24,6 +24,8 @@ export type VoiceResponseParams = {
   sessionKey?: string;
   /** Caller's phone number */
   from: string;
+  /** Pre-resolved agent id (caller should pass resolveCallAgentId(call, voiceConfig)). */
+  agentId?: string;
   /** Conversation transcript */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
@@ -211,7 +213,7 @@ export async function generateVoiceResponse(
     phone: from,
     explicitSessionKey: sessionKey,
   });
-  const agentId = voiceConfig.agentId ?? "main";
+  const agentId = params.agentId ?? voiceConfig.agentId ?? "main";
 
   // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });

@@ -87,19 +87,25 @@ export async function joinMeetViaVoiceCallGateway(params: {
   dtmfSequence?: string;
   logger?: RuntimeLogger;
   message?: string;
+  /** Per-call originating agent id; frozen on the voice-call CallRecord. */
+  agentId?: string;
+  /** Optional explicit Voice Call session key for per-agent/per-meeting isolation. */
+  sessionKey?: string;
 }): Promise<VoiceCallMeetJoinResult> {
   let client: VoiceCallGatewayClient | undefined;
 
   try {
     client = await createConnectedGatewayClient(params.config);
     params.logger?.info(
-      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "post-connect" : "none"}, intro=${params.message ? "delayed" : "none"})`,
+      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "post-connect" : "none"}, intro=${params.message ? "delayed" : "none"}, agentId=${params.agentId ?? "<unset>"}, sessionKey=${params.sessionKey ?? "<unset>"})`,
     );
     const start = (await client.request(
       "voicecall.start",
       {
         to: params.dialInNumber,
         mode: "conversation",
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
     )) as VoiceCallStartResult;

@@ -483,6 +483,14 @@ export class GoogleMeetRuntime {
                   this.params.config.voiceCall.introMessage ??
                   this.params.config.realtime.introMessage)
                 : undefined,
+              agentId: request.agentId,
+              // Per-meeting/per-agent session key isolates Voice Call sessions
+              // when multiple agents share a Twilio dial-in number. Pattern
+              // mirrors agent-consult.ts:55 (subagent namespace), distinct
+              // from the phone-leg namespace used here.
+              sessionKey: request.agentId
+                ? `agent:${request.agentId}:google-meet:${session.id}`
+                : undefined,
             })
           : undefined;
         delegatedTwilioSpoken = Boolean(voiceCallResult?.introSent);

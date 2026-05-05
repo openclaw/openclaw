@@ -157,6 +157,12 @@ export const CallRecordSchema = z.object({
   from: z.string(),
   to: z.string(),
   sessionKey: z.string().optional(),
+  /**
+   * Per-call originating agent id, frozen at call creation.
+   * Distinct from voiceConfig.agentId (DID-route default for inbound).
+   * Consumed only via resolveCallAgentId(call, effectiveConfig).
+   */
+  agentId: z.string().optional(),
   startedAt: z.number(),
   answeredAt: z.number().optional(),
   endedAt: z.number().optional(),
@@ -288,4 +294,17 @@ export type OutboundCallOptions = {
   mode?: CallMode;
   /** DTMF digits to send after the call is connected */
   dtmfSequence?: string;
+  /**
+   * Per-call agent identity override. Frozen on CallRecord at creation.
+   * Distinct from voiceConfig.agentId (DID-route default for inbound).
+   * Source: trusted plugin tool factory ctx.agentId — never user-provided RPC.
+   */
+  agentId?: string;
+  /**
+   * Optional explicit voice session key. When omitted, voice-call falls back
+   * to resolveVoiceCallSessionKey, which can collide across agents for shared
+   * dial-ins (e.g., Google Meet dial-in numbers). Callers that need
+   * per-meeting/per-agent isolation MUST pass an explicit sessionKey.
+   */
+  sessionKey?: string;
 };

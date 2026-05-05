@@ -172,6 +172,7 @@ export async function initiateCall(
       phone: to,
       explicitSessionKey: sessionKey,
     }),
+    ...(opts.agentId ? { agentId: opts.agentId } : {}),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],

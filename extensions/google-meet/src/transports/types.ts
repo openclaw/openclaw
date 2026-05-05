@@ -8,6 +8,12 @@ export type GoogleMeetJoinRequest = {
   mode?: GoogleMeetModeInput;
   message?: string;
   requesterSessionKey?: string;
+  /**
+   * Per-call originating agent id (from plugin tool ctx.agentId). Threaded
+   * through to the voice-call gateway so per-agent routing freezes on the
+   * outbound CallRecord at creation time.
+   */
+  agentId?: string;
   timeoutMs?: number;
   dialInNumber?: string;
   pin?: string;
