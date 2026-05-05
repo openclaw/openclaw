@@ -1,5 +1,33 @@
-import { describe, expect, it } from "vitest";
-import { isFeishuBackoffError, getBackoffCodeFromResponse, FeishuBackoffError } from "./typing.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
+
+const resolveFeishuRuntimeAccountMock = vi.hoisted(() => vi.fn());
+const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const shouldLogVerboseMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("./accounts.js", () => ({
+  resolveFeishuRuntimeAccount: resolveFeishuRuntimeAccountMock,
+}));
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: createFeishuClientMock,
+}));
+
+vi.mock("./runtime.js", () => ({
+  getFeishuRuntime: () => ({
+    logging: {
+      shouldLogVerbose: shouldLogVerboseMock,
+    },
+  }),
+}));
+
+import {
+  addTypingIndicator,
+  FeishuBackoffError,
+  getBackoffCodeFromResponse,
+  isFeishuBackoffError,
+  removeTypingIndicator,
+} from "./typing.js";
 
 describe("isFeishuBackoffError", () => {
   it("returns true for HTTP 429 (AxiosError shape)", () => {
@@ -123,22 +151,102 @@ describe("FeishuBackoffError", () => {
   });
 
   it("survives catch-and-rethrow pattern", () => {
-    // Simulates the exact pattern in addTypingIndicator/removeTypingIndicator:
-    // thrown inside try, caught by catch, isFeishuBackoffError must match
     let caught: unknown;
     try {
       try {
         throw new FeishuBackoffError(99991403);
       } catch (err) {
         if (isFeishuBackoffError(err)) {
-          throw err; // re-thrown — this is the fix
+          throw err;
         }
-        // would be silently swallowed with plain Error
         caught = "swallowed";
       }
     } catch (err) {
       caught = err;
     }
     expect(caught).toBeInstanceOf(FeishuBackoffError);
+  });
+});
+
+describe("typing indicator message id normalization", () => {
+  const reactionCreateMock = vi.fn();
+  const reactionDeleteMock = vi.fn();
+  const runtime = { log: vi.fn() } as unknown as RuntimeEnv;
+  const cfg = {} as ClawdbotConfig;
+  const syntheticMessageId = "om_dc132ca13c4c274d9a8d54aabfcafe00:reaction:thumbsup:uuid-1";
+  const normalizedMessageId = "om_dc132ca13c4c274d9a8d54aabfcafe00";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveFeishuRuntimeAccountMock.mockReturnValue({
+      configured: true,
+      accountId: "default",
+      appId: "app-id",
+      appSecret: "secret",
+    });
+    createFeishuClientMock.mockReturnValue({
+      im: {
+        messageReaction: {
+          create: reactionCreateMock,
+          delete: reactionDeleteMock,
+        },
+      },
+    });
+    reactionCreateMock.mockResolvedValue({
+      code: 0,
+      data: { reaction_id: "typing-reaction-1" },
+    });
+    reactionDeleteMock.mockResolvedValue({ code: 0, data: {} });
+  });
+
+  it("normalizes synthetic reaction ids before adding typing indicators", async () => {
+    const state = await addTypingIndicator({
+      cfg,
+      messageId: syntheticMessageId,
+      runtime,
+    });
+
+    expect(reactionCreateMock).toHaveBeenCalledWith({
+      path: { message_id: normalizedMessageId },
+      data: { reaction_type: { emoji_type: "Typing" } },
+    });
+    expect(state).toEqual({
+      messageId: normalizedMessageId,
+      reactionId: "typing-reaction-1",
+    });
+  });
+
+  it("uses the normalized id again when removing typing indicators", async () => {
+    await removeTypingIndicator({
+      cfg,
+      state: {
+        messageId: normalizedMessageId,
+        reactionId: "typing-reaction-1",
+      },
+      runtime,
+    });
+
+    expect(reactionDeleteMock).toHaveBeenCalledWith({
+      path: {
+        message_id: normalizedMessageId,
+        reaction_id: "typing-reaction-1",
+      },
+    });
+  });
+
+  it("returns a normalized state even when the account is not configured", async () => {
+    resolveFeishuRuntimeAccountMock.mockReturnValue({ configured: false });
+
+    const state = await addTypingIndicator({
+      cfg,
+      messageId: syntheticMessageId,
+      runtime,
+    });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(state).toEqual({
+      messageId: normalizedMessageId,
+      reactionId: null,
+    });
   });
 });

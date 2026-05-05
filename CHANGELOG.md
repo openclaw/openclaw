@@ -63,6 +63,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu: normalize synthetic reaction message IDs before adding or removing typing indicators, so reaction-triggered replies do not send suffixed IDs back to Feishu `message_id` fields. Fixes #34528. Thanks @yfge.
 - Slack/subagents: keep resumed parent `message.send` calls in the originating Slack thread when ambient session thread context is present, and suppress successful silent child completion rows from follow-up findings. Thanks @bek91.
 - Infra/Windows: skip the POSIX `/tmp/openclaw` preferred path on Windows in `resolvePreferredOpenClawTmpDir` so log files, TTS temp files, and other writes land in `%TEMP%\openclaw-<uid>` instead of `C:\tmp\openclaw`. Fixes #60713. Thanks @juan-flores077.
 - Gateway/diagnostics: make stuck-session recovery outcome-driven and generation-guarded, add `diagnostics.stuckSessionAbortMs`, and emit structured recovery requested/completed events so stale or skipped recovery no longer looks like a successful abort.
