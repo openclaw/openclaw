@@ -1283,14 +1283,6 @@ function renderAssistantAttachments(
           authToken,
           onRequestUpdate,
         );
-        const attachmentUrl =
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
-            : null;
-        const navigationUrl =
-          availability.status === "available"
-            ? buildAssistantAttachmentNavigationUrl(attachment.url, basePath, authToken)
-            : null;
         const renderStatusCard = (badge: "Checking..." | "Unavailable") =>
           renderAssistantAttachmentStatusCard({
             kind: attachment.kind,
@@ -1298,11 +1290,18 @@ function renderAssistantAttachments(
             badge,
             reason: availability.status === "unavailable" ? availability.reason : undefined,
           });
-        if (!attachmentUrl) {
+        if (availability.status !== "available") {
           return renderStatusCard(
             availability.status === "checking" ? "Checking..." : "Unavailable",
           );
         }
+        const mediaTicket = availability.mediaTicket;
+        const attachmentUrl = buildAssistantAttachmentUrl(attachment.url, basePath, mediaTicket);
+        const navigationUrl = buildAssistantAttachmentNavigationUrl(
+          attachment.url,
+          basePath,
+          authToken,
+        );
         const renderAvailableAttachment = (previewUrl: string, linkUrl = previewUrl) => {
           if (attachment.kind === "image") {
             return html`
@@ -1319,7 +1318,7 @@ function renderAssistantAttachments(
                     attachment.url,
                     basePath,
                     authToken,
-                    availability.mediaTicket,
+                    mediaTicket,
                   );
                   if (resolvedPreviewUrl) {
                     openExternalUrlSafe(resolvedPreviewUrl, { allowDataImage: true });
@@ -1379,7 +1378,7 @@ function renderAssistantAttachments(
             attachment.url,
             basePath,
             authToken,
-            availability.mediaTicket,
+            mediaTicket,
           ).then((previewUrl) =>
             previewUrl
               ? renderAvailableAttachment(previewUrl, attachmentUrl)

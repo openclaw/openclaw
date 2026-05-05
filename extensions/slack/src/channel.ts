@@ -546,7 +546,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return { lines, details };
       },
-      resolveAccountSnapshot: ({ account, runtime, probe }) => {
+      resolveAccountSnapshot: ({ account, probe }) => {
         const slackProbe = probe;
         const missingReadbackScopes = slackProbe?.readbackMissingScopes ?? [];
         const probeReadbackState = slackProbe?.readbackState;

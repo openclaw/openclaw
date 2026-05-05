@@ -1,5 +1,5 @@
 import type { ControlUiBuildProvenance } from "../../../src/gateway/control-ui-contract.js";
-import type { ChatDictationStatus, ChatSendOptions } from "./app-chat.ts";
+import type { ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
