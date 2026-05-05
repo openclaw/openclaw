@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   getActiveMemorySearchManager: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
+vi.mock("../../../src/plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: mocks.getActiveMemorySearchManager,
 }));
 
