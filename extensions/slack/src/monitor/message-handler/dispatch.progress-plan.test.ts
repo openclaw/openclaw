@@ -451,6 +451,34 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     );
   });
 
+  it("uses native plan task cards for live human-authored DMs when direct reply mode threads all replies", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        channel: "D0ATM6792E7",
+        threadTs: "1777974480.000100",
+        replyToMode: "all",
+        isDirectMessage: true,
+        replyTarget: "channel:D0ATM6792E7",
+        text: "DM-PROGRESS-TEST-2026-05-05-0948",
+        allowDirectMessagePlanStream: false,
+      }),
+    );
+
+    expect(startSlackChunkStreamMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "D0ATM6792E7",
+        threadTs: "1777974480.000100",
+        taskDisplayMode: "plan",
+      }),
+    );
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: "1777974480.000100",
+        replyToMode: "all",
+      }),
+    );
+  });
+
   it("keeps threaded room progress on Slack's native plan stream surface", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({

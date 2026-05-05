@@ -83,15 +83,19 @@ function resolveCanonicalDirectMessageThreadId(params: {
   const storedChannel =
     typeof entry.deliveryContext?.channel === "string"
       ? entry.deliveryContext.channel
-      : entry.lastChannel;
+      : (entry.lastChannel ??
+        (typeof entry.origin?.provider === "string" ? entry.origin.provider : undefined));
   const storedTo =
-    typeof entry.deliveryContext?.to === "string" ? entry.deliveryContext.to : entry.lastTo;
+    typeof entry.deliveryContext?.to === "string"
+      ? entry.deliveryContext.to
+      : (entry.lastTo ?? (typeof entry.origin?.to === "string" ? entry.origin.to : undefined));
   const storedAccountId =
     typeof entry.deliveryContext?.accountId === "string"
       ? entry.deliveryContext.accountId
-      : entry.lastAccountId;
+      : (entry.lastAccountId ??
+        (typeof entry.origin?.accountId === "string" ? entry.origin.accountId : undefined));
   const storedThreadId = normalizeStoredThreadId(
-    entry.deliveryContext?.threadId ?? entry.lastThreadId,
+    entry.deliveryContext?.threadId ?? entry.lastThreadId ?? entry.origin?.threadId,
   );
   if (storedChannel !== "slack") {
     return undefined;
@@ -202,11 +206,7 @@ export function resolveSlackRoutingContext(params: {
     isThreadReply,
     messageThreadId,
     allowDirectMessagePlanStream: Boolean(
-      isDirectMessage &&
-      !isThreadReply &&
-      replyToMode === "all" &&
-      canonicalDmThreadId &&
-      canonicalDmThreadId !== threadContext.messageTs,
+      isDirectMessage && !isThreadReply && replyToMode === "all" && canonicalThreadId,
     ),
     threadKeys,
     sessionKey,

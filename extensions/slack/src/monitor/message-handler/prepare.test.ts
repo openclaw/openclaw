@@ -811,10 +811,14 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.SessionKey).toContain(":thread:500.000");
     // MessageThreadId should be set for the reply
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
+    expect(prepared!.allowDirectMessagePlanStream).toBe(true);
   });
 
-  it("reuses an existing canonical DM thread binding for later top-level DM turns", async () => {
-    const targetSessionKey = "agent:main:thread:dm-thread-1";
+  async function expectCanonicalDmThreadReuse(params: {
+    storePath: string;
+    targetSessionKey?: string;
+  }) {
+    const targetSessionKey = params.targetSessionKey ?? "agent:main:thread:dm-thread-1";
     const binding: SessionBindingRecord = {
       bindingId: "dm-thread-binding",
       targetSessionKey,
@@ -847,20 +851,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     };
     registerSessionBindingAdapter(adapter);
     try {
-      const { storePath } = storeFixture.makeTmpStorePath();
-      await updateLastRoute({
-        storePath,
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "slack",
-          to: "user:U1",
-          accountId: "default",
-          threadId: "500.000",
-        },
-      });
       const slackCtx = createInboundSlackCtx({
         cfg: {
-          session: { store: storePath },
+          session: { store: params.storePath },
           channels: { slack: { enabled: true, replyToMode: "all" } },
         } as OpenClawConfig,
         replyToMode: "all",
@@ -888,6 +881,56 @@ describe("slack prepareSlackMessage inbound contract", () => {
     } finally {
       unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
     }
+  }
+
+  it("reuses an existing canonical DM thread binding for later top-level DM turns", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    await updateLastRoute({
+      storePath,
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "500.000",
+      },
+    });
+
+    await expectCanonicalDmThreadReuse({ storePath });
+  });
+
+  it("reuses canonical DM threads when the main session only keeps threadId in deliveryContext and Slack identity in origin", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    await updateLastRoute({
+      storePath,
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "500.000",
+      },
+    });
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, any>;
+    store["agent:main:main"] = {
+      ...store["agent:main:main"],
+      deliveryContext: { threadId: "500.000" },
+      lastThreadId: "500.000",
+      lastChannel: undefined,
+      lastTo: undefined,
+      lastAccountId: undefined,
+      origin: {
+        provider: "slack",
+        chatType: "direct",
+        to: "user:U1",
+        accountId: "default",
+        nativeChannelId: "D123",
+        threadId: "500.000",
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store, null, 2));
+
+    await expectCanonicalDmThreadReuse({ storePath });
   });
 
   it("routes Slack thread replies through runtime conversation bindings", async () => {

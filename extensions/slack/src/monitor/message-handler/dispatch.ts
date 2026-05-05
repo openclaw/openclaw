@@ -357,15 +357,25 @@ function shouldUseSlackProgressPlanStream(params: {
   mode: "off" | "partial" | "block" | "progress";
   isDirectMessage: boolean;
   allowDirectMessagePlanStream: boolean;
+  replyToMode: "off" | "first" | "all" | "batched";
   threadTs?: string;
 }): boolean {
   if (params.mode !== "progress") {
     return false;
   }
-  if (params.isDirectMessage) {
-    return params.allowDirectMessagePlanStream && typeof params.threadTs === "string";
+  if (typeof params.threadTs !== "string" || params.threadTs.length === 0) {
+    return false;
   }
-  return typeof params.threadTs === "string" && params.threadTs.length > 0;
+  if (params.isDirectMessage) {
+    // Live Slack DM events can arrive on the normal human-authored message path
+    // with a concrete reply thread already resolved from replyToMode="all", but
+    // without the prepare-time allow flag when older prepared payloads or
+    // runtime-bound routes are involved. The visible product contract is the
+    // reply mode: direct DMs configured to thread all replies should get the
+    // same native plan/task-card progress stream as channel threads.
+    return params.allowDirectMessagePlanStream || params.replyToMode === "all";
+  }
+  return true;
 }
 
 function shouldUseSlackAssistantThreadStatus(params: { threadTs?: string }): boolean {
@@ -713,6 +723,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     mode: slackStreaming.mode,
     isDirectMessage: prepared.isDirectMessage,
     allowDirectMessagePlanStream,
+    replyToMode: effectiveReplyToMode,
     threadTs: streamThreadHint,
   });
   const useStreaming = shouldUseStreaming({
