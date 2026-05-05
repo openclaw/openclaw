@@ -732,11 +732,18 @@ describeLive("live models (profile keys)", () => {
       }
 
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
+      const providerList = providers ? [...providers] : null;
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir, {
         config: cfg,
         env: process.env,
-        ...(providers ? { externalCli: externalCliDiscoveryForProviders({ cfg, providers }) } : {}),
+        ...(providerList
+          ? {
+              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList }),
+              skipExternalAuthProfiles: true,
+              syntheticAuthProviderRefs: providerList,
+            }
+          : {}),
       });
       logProgress("[live-models] loading model registry");
       const models = await withLiveStageTimeout(
