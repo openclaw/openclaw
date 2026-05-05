@@ -26,6 +26,7 @@
 
 ### Fixes
 
+- Matrix/E2EE: tolerate matrix-rust-sdk one-time-key ID collisions on `/keys/upload` by rewriting Synapse's `M_INVALID_PARAM: signed_curve25519:<id> already exists` 400 to a synthetic 200 with empty `one_time_key_counts`, which lets the rust crypto loop mint fresh OTKs on its next outgoing-request tick instead of wedging cross-signing bootstrap. Tracked upstream in matrix-rust-sdk#6520 [AI-assisted]. Thanks @nklock.
 - Matrix/E2EE: close the owner-side device verification loop when SAS lands via the CLI. `verify confirm-sas` now (1) awaits the rust-crypto verifier promise so the done-exchange and any cross-signing uploads triggered by `crossSignDevice` settle before the verb returns, (2) cross-signs the bot device on the auto-confirmed inbound SAS path (previously skipped), and (3) calls `trustOwnIdentityAfterSelfVerification` from the standalone `confirmMatrixVerificationSas` action so the operator's Element X clears the "Verify" prompt without waiting for a passive sync tick [AI-assisted]. Thanks @nklock.
 - Matrix/E2EE: stabilize recovery and broken-device QA flows while avoiding device-cleanup sync races that could leave shutdown-time crypto work running. Thanks @gumadeiras.
 
