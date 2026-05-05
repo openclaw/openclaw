@@ -59,6 +59,8 @@ export const AgentDefaultsSchema = z
     videoGenerationModel: AgentModelSchema.optional(),
     musicGenerationModel: AgentModelSchema.optional(),
     mediaGenerationAutoProviderFallback: z.boolean().optional(),
+    /** When true, auto-revert the session model override back to the primary model after image or PDF analysis completes. */
+    revertAfterImageModel: z.boolean().optional(),
     pdfModel: AgentModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),

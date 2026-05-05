@@ -208,6 +208,8 @@ export type AgentDefaultsConfig = {
    * fallbacks.
    */
   mediaGenerationAutoProviderFallback?: boolean;
+  /** When true, auto-revert the session model override back to the primary model after image or PDF analysis completes. */
+  revertAfterImageModel?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */

@@ -3560,6 +3560,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
               },
+              revertAfterImageModel: {
+                type: "boolean",
+                title: "Revert After Image Model",
+                description:
+                  "When true, auto-revert the session model override back to the primary model after image or PDF analysis completes. Default: false.",
+              },
               pdfModel: {
                 anyOf: [
                   {
@@ -27433,6 +27439,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Media Generation Auto Provider Fallback",
       help: "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
       tags: ["reliability"],
+    },
+    "agents.defaults.revertAfterImageModel": {
+      label: "Revert After Image Model",
+      help: "When true, auto-revert the session model override back to the primary model after image or PDF analysis completes. Default: false.",
+      tags: ["media"],
     },
     "agents.defaults.pdfModel.primary": {
       label: "PDF Model",
