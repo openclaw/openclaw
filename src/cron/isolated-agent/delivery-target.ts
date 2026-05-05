@@ -120,7 +120,7 @@ export async function resolveDeliveryTarget(
     accountId?: string;
     sessionKey?: string;
   },
-  options?: { dryRun?: boolean },
+  options?: { dryRun?: boolean; suppressSessionThreadId?: boolean },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
@@ -205,11 +205,12 @@ export async function resolveDeliveryTarget(
   let threadId =
     resolved.threadId &&
     (resolved.threadIdExplicit ||
-      deliveryTargetsShareThreadRoute({
-        channel,
-        to: resolved.to,
-        lastTo: resolved.lastTo,
-      }))
+      (!options?.suppressSessionThreadId &&
+        deliveryTargetsShareThreadRoute({
+          channel,
+          to: resolved.to,
+          lastTo: resolved.lastTo,
+        })))
       ? resolved.threadId
       : undefined;
 
