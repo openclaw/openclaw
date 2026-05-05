@@ -471,6 +471,45 @@ describe("createEmbeddedRunAuthController", () => {
       }
     });
 
+    it("refreshes aws-sdk runtime auth on auth errors when the provider returns a runtime token", async () => {
+      const harness = createMutableAuthControllerHarness();
+      const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
+
+      mocks.getApiKeyForModel.mockResolvedValue({
+        apiKey: undefined,
+        mode: "aws-sdk",
+        source: "aws-sdk default chain",
+      });
+      mocks.prepareProviderRuntimeAuth
+        .mockResolvedValueOnce({
+          apiKey: "__aws_sdk_auth__:1",
+        })
+        .mockResolvedValueOnce({
+          apiKey: "__aws_sdk_auth__:2",
+        });
+
+      const controller = createMutableEmbeddedRunAuthController({
+        harness,
+        setRuntimeApiKey,
+        profileCandidates: [undefined as unknown as string],
+      });
+
+      await controller.initializeAuthProfile();
+      await expect(
+        controller.maybeRefreshRuntimeAuthForAuthError(
+          "ExpiredTokenException: The security token included in the request is expired",
+          false,
+        ),
+      ).resolves.toBe(true);
+
+      expect(setRuntimeApiKey).toHaveBeenNthCalledWith(1, "custom-openai", "__aws_sdk_auth__:1");
+      expect(setRuntimeApiKey).toHaveBeenNthCalledWith(2, "custom-openai", "__aws_sdk_auth__:2");
+      expect(harness.runtimeAuthState).toMatchObject({
+        sourceApiKey: "__aws_sdk_auth__",
+        authMode: "aws-sdk",
+      });
+    });
+
     it("injects sentinel when prepareProviderRuntimeAuth throws", async () => {
       const harness = createMutableAuthControllerHarness();
       const setRuntimeApiKey = vi.fn<(provider: string, apiKey: string) => void>();
