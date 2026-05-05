@@ -594,7 +594,8 @@ export type DiagnosticEventPayload =
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
-  | DiagnosticTelemetryExporterEvent;
+  | DiagnosticTelemetryExporterEvent
+  | DiagnosticFailoverEvent;
 
 export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload

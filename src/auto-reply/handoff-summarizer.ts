@@ -1,6 +1,4 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export interface HandoffSnapshot {
   summary: string;
@@ -12,8 +10,9 @@ export interface HandoffSnapshot {
 }
 
 /**
- * Constructs a leader-subordinate hierarchy enforcement message.
- * This is injected into the first turn of a fallback model.
+ * Builds the recovery briefing injected as the first user-side turn after a
+ * model failover. The user role is used (not assistant) so the new model
+ * treats the content as input rather than its own prior output.
  */
 export function buildHierarchyReinforcementMessage(snapshot: HandoffSnapshot): AgentMessage {
   const subagentReport = snapshot.activeSubagents
@@ -21,8 +20,8 @@ export function buildHierarchyReinforcementMessage(snapshot: HandoffSnapshot): A
     .join("\n");
 
   const content = [
-    "⚠️ SYSTEM HANDOFF: PREVIOUS MODEL EXHAUSTED QUOTA ⚠️",
-    "You are the new LEADER (Orchestrator). Do not perform tasks assigned to subordinates.",
+    "[SYSTEM HANDOFF] The previous model exhausted its quota and a fallback model is now active.",
+    "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
     "",
     "ACTIVE SUBORDINATE UNITS:",
     subagentReport || "None active.",
@@ -33,17 +32,12 @@ export function buildHierarchyReinforcementMessage(snapshot: HandoffSnapshot): A
     "INSTRUCTIONS:",
     "1. Review the state and subordinate reports.",
     "2. Provide strategic guidance and commands to subordinates.",
-    "3. DO NOT repeat code or work already performed by subordinates.",
+    "3. Do not repeat work already performed by subordinates.",
   ].join("\n");
 
   return {
-    role: "assistant",
-    content: content,
-    // @ts-ignore - Internal metadata for routing and enforcement
-    metadata: {
-      kind: "subordinate_report",
-      enforce_role: "observer_only",
-      is_handoff: true,
-    },
+    role: "user",
+    content,
+    timestamp: Date.now(),
   };
 }

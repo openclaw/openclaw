@@ -2188,7 +2188,8 @@ export async function runEmbeddedAttempt(
             });
             const store = loadSessionStore(storePath);
             const sessionEntry = store[params.sessionKey];
-            if (sessionEntry?.quotaSuspension?.state === "resuming") {
+            const suspension = sessionEntry?.quotaSuspension;
+            if (suspension?.state === "resuming") {
               const subagents = Object.values(store)
                 .filter((s) => s.spawnedBy === sessionEntry.sessionId)
                 .map((s) => ({
@@ -2197,15 +2198,20 @@ export async function runEmbeddedAttempt(
                   lastStatus: s.status,
                 }));
               const handoffMsg = buildHierarchyReinforcementMessage({
-                summary: sessionEntry.quotaSuspension.snapshotRef ?? "No summary available.",
+                summary: suspension.summary ?? "No recovery briefing was captured.",
                 activeSubagents: subagents,
               });
               validated.push(handoffMsg);
-              void updateSessionStoreEntry({
+              await updateSessionStoreEntry({
                 storePath,
                 sessionKey: params.sessionKey,
-                patch: {
-                  quotaSuspension: { ...sessionEntry.quotaSuspension, state: "active" },
+                update: async (entry) => {
+                  if (entry.quotaSuspension?.state !== "resuming") {
+                    return null;
+                  }
+                  return {
+                    quotaSuspension: { ...entry.quotaSuspension, state: "active" },
+                  };
                 },
               });
             }

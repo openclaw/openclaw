@@ -2315,6 +2315,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "payload.large":
               return;
+            case "model.failover":
+              return;
           }
         } catch (err) {
           ctx.logger.error(

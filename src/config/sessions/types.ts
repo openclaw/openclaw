@@ -161,7 +161,12 @@ export interface QuotaSuspension {
   reason: "quota_exhausted" | "manual" | "circuit_open";
   failedProvider: string;
   failedModel: string;
-  snapshotRef?: string; // Reference to external store
+  /** Recovery briefing text injected into the next attempt when state === "resuming". */
+  summary?: string;
+  /** Opaque pointer to an external snapshot blob (path/key); not the briefing text itself. */
+  snapshotRef?: string;
+  /** Lane that was set to concurrency=0 when this suspension was issued. */
+  laneId?: string;
   expectedResumeBy?: number; // Reaper TTL (e.g. 30min)
   state: LaneExecutionState; // State machine check for hot-path
 }
