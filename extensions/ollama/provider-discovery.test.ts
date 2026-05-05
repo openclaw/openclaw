@@ -225,6 +225,28 @@ describe("Ollama provider", () => {
     });
   });
 
+  it("does not warn when Ollama is unreachable and OLLAMA_API_KEY is set but Ollama is not in config (#77942)", async () => {
+    // Users with a stale OLLAMA_API_KEY env var from a past setup should not see
+    // "Ollama could not be reached" on every invocation when Ollama is not configured.
+    await withoutAmbientOllamaEnv(async () => {
+      enableDiscoveryEnv();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const fetchMock = vi
+        .fn()
+        .mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:11434"));
+      vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
+
+      await runOllamaCatalog({
+        env: { OLLAMA_API_KEY: "real-stale-key", VITEST: "", NODE_ENV: "development" },
+      });
+
+      expect(
+        warnSpy.mock.calls.filter(([message]) => String(message).includes("Ollama")),
+      ).toHaveLength(0);
+      warnSpy.mockRestore();
+    });
+  });
+
   it("does not warn when Ollama is unreachable and not explicitly configured", async () => {
     await withoutAmbientOllamaEnv(async () => {
       enableDiscoveryEnv();
