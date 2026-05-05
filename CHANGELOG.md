@@ -69,6 +69,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.
 - Providers/Fireworks: expose Kimi models as thinking-off-only and keep K2.5/K2.6 requests on `thinking: disabled`, so manual model switches do not send Fireworks-rejected `reasoning*` parameters. Refs #74289. Thanks @frankekn.
