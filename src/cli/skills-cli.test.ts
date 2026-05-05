@@ -206,6 +206,18 @@ describe("skills-cli", () => {
       expect(output).toContain("Spreadsheet helpers");
     });
 
+    it("returns not found for ambiguous case-insensitive matches", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "First Skill", skillKey: "Excel-XLSX", description: "first" }),
+        createMockSkill({ name: "Second Skill", skillKey: "excel-xlsx", description: "second" }),
+      ]);
+
+      const output = formatSkillInfo(report, "EXCEL-XLSX", {});
+      expect(output).toContain("not found");
+      expect(output).not.toContain("first");
+      expect(output).not.toContain("second");
+    });
+
     it("returns not found for ambiguous normalized matches", () => {
       const report = createMockReport([
         createMockSkill({ name: "Excel/XLSX", skillKey: "excel-slash", description: "first" }),
