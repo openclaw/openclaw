@@ -18,7 +18,11 @@ export async function waitForFollowupQueueDrain(
     let total = 0;
     for (const queue of FOLLOWUP_QUEUES.values()) {
       // Add 1 for the in-flight item owned by an active drain loop.
-      const queuePending = queue.items.length + (queue.draining ? 1 : 0);
+      // Include droppedCount because scheduleFollowupDrain in drain.ts keeps
+      // looping while `items.length > 0 || droppedCount > 0` to flush
+      // summarize-on-overflow followups; ignoring droppedCount would let us
+      // report drained=true while a summary followup is still pending.
+      const queuePending = queue.items.length + queue.droppedCount + (queue.draining ? 1 : 0);
       total += queuePending;
     }
     return total;

@@ -90,4 +90,17 @@ describe("waitForFollowupQueueDrain", () => {
     const result = await waitForFollowupQueueDrain(1);
     expect(result).toEqual({ drained: false, remaining: 3 });
   });
+
+  it("counts droppedCount as pending so summarize-on-overflow followups aren't dropped", async () => {
+    // scheduleFollowupDrain in drain.ts keeps draining while
+    // `items.length > 0 || droppedCount > 0` to flush summary followups; the
+    // waiter must mirror that condition so we don't report drained=true while
+    // a summary followup is still pending.
+    const queue = createMockQueue({ droppedCount: 2 });
+    FOLLOWUP_QUEUES.set("test", queue);
+
+    const result = await waitForFollowupQueueDrain(100);
+    expect(result.drained).toBe(false);
+    expect(result.remaining).toBe(2);
+  });
 });

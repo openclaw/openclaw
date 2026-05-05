@@ -949,32 +949,34 @@ describe("flushAllInboundDebouncers", () => {
     vi.useRealTimers();
   });
 
-  it("auto-evicts stale debouncers idle >5 min even with a tight deadline", async () => {
+  it("keeps registered debouncers across restart sweeps so late ingress is still flushable", async () => {
     vi.useFakeTimers();
 
-    // Use a debounceMs longer than the staleness window so the debounce
-    // timeout does NOT fire when we advance the clock.
+    // Use a debounceMs longer than five minutes so the timer does not fire
+    // and the debouncer cannot actually drain on the first sweep.
     createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 10 * 60 * 1000,
       buildKey: (item) => item.key,
       onFlush: async () => {},
     });
 
-    // Advance past the 5-minute staleness window (debounce timer still pending)
+    // Advance the clock well past any prior staleness window.
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
 
-    // Flush with a zero-ms timeout. The deadline fires immediately so the
-    // debouncer cannot actually drain, but the staleness guard evicts it.
+    // First sweep with a zero-ms deadline drains nothing.
     await flushAllInboundDebouncers({ timeoutMs: 0 });
 
-    // Second flush should find nothing — stale entry was auto-evicted
+    // Second sweep finds the same handle still registered. There were never
+    // any buffered messages enqueued, so flushedCount is 0; the point is that
+    // the handle was not evicted between sweeps and could still rescue any
+    // message that arrives before server.close().
     const flushed2 = await flushAllInboundDebouncers();
     expect(flushed2).toBe(0);
 
     vi.useRealTimers();
   });
 
-  it("does not evict debouncers that have recent activity", async () => {
+  it("keeps debouncers with recent activity registered across sweeps", async () => {
     vi.useFakeTimers();
 
     const debouncer = createInboundDebouncer<{ key: string; id: string }>({
@@ -983,21 +985,17 @@ describe("flushAllInboundDebouncers", () => {
       onFlush: async () => {},
     });
 
-    // Advance 4 minutes (below staleness threshold)
     vi.advanceTimersByTime(4 * 60 * 1000);
 
-    // Enqueue refreshes the activity timestamp
     await debouncer.enqueue({ key: "session-1", id: "msg-1" });
 
-    // Advance another 4 minutes (8 total since creation, 4 since enqueue)
     vi.advanceTimersByTime(4 * 60 * 1000);
 
-    // Flush with zero timeout — debouncer can't drain, but it's NOT stale
-    // (only 4 min since last enqueue). It should remain registered.
+    // Flush with zero timeout — debouncer can't drain on the tight deadline,
+    // but it must remain registered for a subsequent full flush to pick up
+    // the buffered message.
     await flushAllInboundDebouncers({ timeoutMs: 0 });
 
-    // Debouncer should still be in the registry
-    // Do a full flush to verify it's still there
     const flushed = await flushAllInboundDebouncers();
     expect(flushed).toBe(1);
 
