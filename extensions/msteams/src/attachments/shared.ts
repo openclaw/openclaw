@@ -71,8 +71,16 @@ const DEFAULT_MEDIA_AUTH_HOST_ALLOWLIST = [
   "api.botframework.com",
   "botframework.com",
   // Bot Framework Service URL (smba.trafficmanager.net) used for outbound
-  // replies and inbound attachment downloads (clipboard-pasted images).
+  // replies and the BF v3 attachments proxy.
   "smba.trafficmanager.net",
+  // Skype/ASM CDN — Teams puts clipboard-pasted images and inline DM images
+  // directly on `*.asm.skype.com` URLs (e.g. `us-api.asm.skype.com/v1/objects/.../views/imgo`).
+  // The endpoint requires auth and accepts Bot Framework tokens for bot
+  // conversation attachments. Without these hosts in the auth-allowlist,
+  // openclaw's auth-fallback skips the retry and the plain GET 401 surfaces
+  // as a missing image to the agent.
+  "asm.skype.com",
+  "ams.skype.com",
   "graph.microsoft.com",
   "graph.microsoft.us",
   "graph.microsoft.de",
