@@ -108,15 +108,33 @@ function readPersistedEntries(): {
   return { entries: out.slice(-REPLY_CACHE_MAX), maxObservedShortId };
 }
 
+// reply-cache.jsonl maps gateway-allocated short-ids to message guids. A
+// hostile same-UID process could otherwise (a) read the file to learn
+// active conversation guids, or (b) inject lines so a future shortId
+// resolution returns an attacker-chosen guid (allowing the agent to
+// react/edit/unsend a message it never saw). Owner-only mode on both the
+// directory and file closes that vector — defaults are 0755/0644 which
+// are world-readable on a multi-user Mac.
+const REPLY_CACHE_DIR_MODE = 0o700;
+const REPLY_CACHE_FILE_MODE = 0o600;
+
 function writePersistedEntries(entries: IMessageReplyCacheEntry[]): void {
   const filePath = resolveReplyCachePath();
   try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: REPLY_CACHE_DIR_MODE });
     fs.writeFileSync(
       filePath,
       entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""),
-      "utf8",
+      { encoding: "utf8", mode: REPLY_CACHE_FILE_MODE },
     );
+    // mkdirSync's mode is masked by umask and only applies on creation. If
+    // the dir already existed from an older gateway version, clamp it now.
+    try {
+      fs.chmodSync(path.dirname(filePath), REPLY_CACHE_DIR_MODE);
+      fs.chmodSync(filePath, REPLY_CACHE_FILE_MODE);
+    } catch {
+      // best-effort — fs may not support chmod on every platform
+    }
   } catch (err) {
     reportPersistenceFailure("write", err);
   }
@@ -125,8 +143,20 @@ function writePersistedEntries(entries: IMessageReplyCacheEntry[]): void {
 function appendPersistedEntry(entry: IMessageReplyCacheEntry): void {
   const filePath = resolveReplyCachePath();
   try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, "utf8");
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: REPLY_CACHE_DIR_MODE });
+    const fileExisted = fs.existsSync(filePath);
+    fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`, {
+      encoding: "utf8",
+      mode: REPLY_CACHE_FILE_MODE,
+    });
+    if (!fileExisted) {
+      try {
+        fs.chmodSync(path.dirname(filePath), REPLY_CACHE_DIR_MODE);
+        fs.chmodSync(filePath, REPLY_CACHE_FILE_MODE);
+      } catch {
+        // best-effort
+      }
+    }
   } catch (err) {
     reportPersistenceFailure("append", err);
   }
