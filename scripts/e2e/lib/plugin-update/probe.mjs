@@ -121,16 +121,20 @@ function assertCorruptUpdate(updateJsonPath, pluginId) {
   if (!plugins) {
     throw new Error(`missing postUpdate.plugins in update output: ${JSON.stringify(payload)}`);
   }
-  if (plugins.status !== "ok") {
-    throw new Error(`expected post-update plugin status ok, got ${JSON.stringify(plugins.status)}`);
+  if (plugins.status !== "warning") {
+    throw new Error(
+      `expected post-update plugin status warning, got ${JSON.stringify(plugins.status)}`,
+    );
   }
   assertCorruptPluginDetails(plugins, pluginId);
 }
 
 function assertCorruptPluginResult(pluginJsonPath, pluginId) {
   const plugins = readJson(pluginJsonPath);
-  if (plugins.status !== "ok") {
-    throw new Error(`expected post-update plugin status ok, got ${JSON.stringify(plugins.status)}`);
+  if (plugins.status !== "warning") {
+    throw new Error(
+      `expected post-update plugin status warning, got ${JSON.stringify(plugins.status)}`,
+    );
   }
   assertCorruptPluginDetails(plugins, pluginId);
 }

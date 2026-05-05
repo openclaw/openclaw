@@ -1039,7 +1039,7 @@ describe("update-cli", () => {
         action: "aborted",
       },
     ]);
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("ok");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
       pluginId: "demo",
       guidance: [
@@ -1107,7 +1107,7 @@ describe("update-cli", () => {
       | UpdateRunResult
       | undefined;
     expect(jsonOutput?.status).toBe("ok");
-    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("ok");
+    expect(jsonOutput?.postUpdate?.plugins?.status).toBe("warning");
     expect(jsonOutput?.postUpdate?.plugins?.warnings?.[0]).toMatchObject({
       pluginId: "demo",
     });
@@ -1154,6 +1154,22 @@ describe("update-cli", () => {
     expect(logs).toContain("Run openclaw plugins inspect demo --runtime --json for details.");
   });
 
+  it("fails unexpected post-core plugin sync exceptions", async () => {
+    syncPluginsForUpdateChannel.mockRejectedValueOnce(new Error("plugin sync invariant broke"));
+
+    await expect(updateCommand({ json: true, restart: false })).rejects.toThrow(
+      "plugin sync invariant broke",
+    );
+  });
+
+  it("fails unexpected post-core npm update exceptions", async () => {
+    updateNpmInstalledPlugins.mockRejectedValueOnce(new Error("npm update invariant broke"));
+
+    await expect(updateCommand({ json: true, restart: false })).rejects.toThrow(
+      "npm update invariant broke",
+    );
+  });
+
   it("preserves fresh-process plugin warning details in parent json output", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce((_node, _argv, options) => {
@@ -1167,7 +1183,7 @@ describe("update-cli", () => {
           await fs.writeFile(
             resultPath,
             JSON.stringify({
-              status: "ok",
+              status: "warning",
               changed: false,
               warnings: [
                 {

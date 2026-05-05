@@ -58,7 +58,7 @@ export type UpdateRunResult = {
   durationMs: number;
   postUpdate?: {
     plugins?: {
-      status: "ok" | "skipped" | "error";
+      status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;
       warnings?: Array<{

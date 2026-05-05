@@ -266,21 +266,23 @@ function createPostUpdatePluginWarning(params: {
   };
 }
 
-function addPostUpdatePluginGuidance(outcome: PluginUpdateOutcome): PluginUpdateOutcome {
+function createGuidedPostUpdatePluginOutcome(outcome: PluginUpdateOutcome): {
+  outcome: PluginUpdateOutcome;
+  warning?: PostUpdatePluginWarning;
+} {
   if (outcome.status !== "error") {
-    return outcome;
+    return { outcome };
   }
-  const guidance = [
-    POST_UPDATE_PLUGIN_REPAIR_GUIDANCE,
-    formatPostUpdatePluginInspectGuidance(outcome.pluginId),
-  ];
-  const missing = guidance.filter((entry) => !outcome.message.includes(entry));
-  if (missing.length === 0) {
-    return outcome;
-  }
+  const warning = createPostUpdatePluginWarning({
+    ...(outcome.pluginId && outcome.pluginId !== "unknown" ? { pluginId: outcome.pluginId } : {}),
+    reason: outcome.message,
+  });
   return {
-    ...outcome,
-    message: `${outcome.message} ${missing.join(" ")}`,
+    outcome: {
+      ...outcome,
+      message: warning.message,
+    },
+    warning,
   };
 }
 
@@ -1125,25 +1127,6 @@ async function updatePluginsAfterCoreUpdate(params: {
       workspaceDir: params.root,
     }),
     logger: pluginLogger,
-  }).catch((error: unknown) => {
-    const warning = createPostUpdatePluginWarning({
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    warnings.push(warning);
-    if (!params.opts.json) {
-      defaultRuntime.log(theme.warn(warning.message));
-    }
-    return {
-      config: syncConfig,
-      changed: false,
-      summary: {
-        switchedToBundled: [],
-        switchedToClawHub: [],
-        switchedToNpm: [],
-        warnings: [warning.message],
-        errors: [],
-      },
-    };
   });
   for (const error of syncResult.summary.errors) {
     warnings.push(createPostUpdatePluginWarning({ reason: error }));
@@ -1218,41 +1201,16 @@ async function updatePluginsAfterCoreUpdate(params: {
     skipDisabledPlugins: true,
     logger: pluginLogger,
     onIntegrityDrift: onPluginIntegrityDrift,
-  }).catch((error: unknown) => {
-    const warning = createPostUpdatePluginWarning({
-      reason: error instanceof Error ? error.message : String(error),
-    });
-    warnings.push(warning);
-    if (!params.opts.json) {
-      defaultRuntime.log(theme.warn(warning.message));
-    }
-    return {
-      config: pluginConfig,
-      changed: false,
-      outcomes: [
-        {
-          pluginId: "unknown",
-          status: "error" as const,
-          message: warning.message,
-        },
-      ],
-    };
   });
   pluginConfig = npmResult.config;
   pluginsChanged ||= npmResult.changed;
   npmPluginsChanged ||= npmResult.changed;
-  const guidedNpmOutcomes = npmResult.outcomes.map(addPostUpdatePluginGuidance);
-  pluginUpdateOutcomes.push(...guidedNpmOutcomes);
-  for (const outcome of guidedNpmOutcomes) {
-    if (outcome.status !== "error") {
-      continue;
+  for (const rawOutcome of npmResult.outcomes) {
+    const guided = createGuidedPostUpdatePluginOutcome(rawOutcome);
+    pluginUpdateOutcomes.push(guided.outcome);
+    if (guided.warning) {
+      warnings.push(guided.warning);
     }
-    warnings.push(
-      createPostUpdatePluginWarning({
-        pluginId: outcome.pluginId,
-        reason: outcome.message,
-      }),
-    );
   }
 
   const remainingMissingPayloads = await collectMissingPluginInstallPayloads({
@@ -1297,7 +1255,7 @@ async function updatePluginsAfterCoreUpdate(params: {
 
   if (params.opts.json) {
     return {
-      status: "ok",
+      status: warnings.length > 0 ? "warning" : "ok",
       changed: pluginsChanged,
       warnings,
       sync: {
@@ -1367,7 +1325,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   }
 
   return {
-    status: "ok",
+    status: warnings.length > 0 ? "warning" : "ok",
     changed: pluginsChanged,
     warnings,
     sync: {
@@ -1719,7 +1677,10 @@ async function readPostCorePluginUpdateResultFile(
     if (
       parsed &&
       typeof parsed === "object" &&
-      (parsed.status === "ok" || parsed.status === "skipped" || parsed.status === "error")
+      (parsed.status === "ok" ||
+        parsed.status === "warning" ||
+        parsed.status === "skipped" ||
+        parsed.status === "error")
     ) {
       return parsed;
     }
@@ -2338,12 +2299,28 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
     ? {
         ...result,
+        status: postCorePluginUpdate.status === "error" ? "error" : result.status,
+        ...(postCorePluginUpdate.status === "error" ? { reason: "post-update-plugins" } : {}),
         postUpdate: {
           ...result.postUpdate,
           plugins: postCorePluginUpdate,
         },
       }
     : result;
+
+  if (postCorePluginUpdate?.status === "error") {
+    if (opts.json) {
+      defaultRuntime.writeJson(resultWithPostUpdate);
+    } else {
+      defaultRuntime.error(theme.error("Update failed during plugin post-update sync."));
+    }
+    await maybeRestartServiceAfterFailedPackageUpdate({
+      prePackageServiceStop,
+      jsonMode: Boolean(opts.json),
+    });
+    defaultRuntime.exit(1);
+    return;
+  }
 
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
