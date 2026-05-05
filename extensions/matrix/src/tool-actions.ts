@@ -269,10 +269,12 @@ export async function handleMatrixAction(
         const limit = readNumberParam(params, "limit", { integer: true });
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
+        const threadId = readStringParam(params, "threadId");
         const result = await readMatrixMessages(roomId, {
           limit: limit ?? undefined,
           before: before ?? undefined,
           after: after ?? undefined,
+          threadId: threadId ?? undefined,
           ...clientOpts,
         });
         return jsonResult({ ok: true, ...result });
