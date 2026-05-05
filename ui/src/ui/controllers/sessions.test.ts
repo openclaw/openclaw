@@ -35,6 +35,7 @@ function createState(request: RequestFn, overrides: Partial<SessionsState> = {})
     sessionsCheckpointLoadingKey: null,
     sessionsCheckpointBusyKey: null,
     sessionsCheckpointErrorByKey: {},
+    sessionsArchivedViewer: null,
     ...overrides,
   };
 }

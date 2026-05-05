@@ -214,6 +214,16 @@ export const en: TranslationMap = {
     noSummary: "No summary captured.",
     branchFromCheckpoint: "Branch from checkpoint",
     restoreCheckpoint: "Restore checkpoint",
+    checkpointsSectionTitle: "Compaction checkpoints",
+    archivedTranscripts: "Archived transcripts",
+    archivedTranscriptsHelp:
+      "Reset and delete actions archive transcripts on disk. Open one to read the prior conversation, including image attachments.",
+    archivedReasonReset: "Session reset",
+    archivedReasonDeleted: "Session deleted",
+    viewArchivedTranscript: "View transcript",
+    hideArchivedTranscript: "Hide transcript",
+    loadingArchivedTranscript: "Loading archived transcript…",
+    noArchivedMessages: "No messages found in this archived transcript.",
   },
   agents: {
     noAgents: "No agents",

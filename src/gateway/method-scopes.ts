@@ -108,6 +108,8 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "sessions.usage",
     "sessions.usage.timeseries",
     "sessions.usage.logs",
+    "sessions.archived.list",
+    "sessions.archived.read",
     "cron.list",
     "cron.status",
     "cron.runs",

@@ -398,6 +398,9 @@ export class OpenClawApp extends LitElement {
   @state() sessionsCheckpointLoadingKey: string | null = null;
   @state() sessionsCheckpointBusyKey: string | null = null;
   @state() sessionsCheckpointErrorByKey: Record<string, string> = {};
+  @state() sessionsArchivedViewer:
+    | import("./controllers/sessions.ts").SessionsArchivedViewerState
+    | null = null;
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

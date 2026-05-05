@@ -743,6 +743,28 @@ function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknow
   return message ? [message] : [];
 }
 
+export async function readMessagesFromTranscriptPathAsync(
+  filePath: string,
+  opts?: { limit?: number },
+): Promise<{ messages: unknown[]; totalMessages: number }> {
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { messages: [], totalMessages: 0 };
+  }
+  const allMessages = index.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry));
+  const totalMessages = allMessages.length;
+  const limit = opts?.limit;
+  const messages =
+    typeof limit === "number" && Number.isFinite(limit) && limit > 0 && limit < totalMessages
+      ? allMessages.slice(totalMessages - limit)
+      : allMessages;
+  const firstSeq = totalMessages - messages.length + 1;
+  const messagesWithSeq = messages.map((message, idx) =>
+    attachOpenClawTranscriptMeta(message, { seq: firstSeq + idx }),
+  );
+  return { messages: messagesWithSeq, totalMessages };
+}
+
 export {
   archiveFileOnDisk,
   archiveSessionTranscripts,

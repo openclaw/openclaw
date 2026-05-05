@@ -327,6 +327,69 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Pattern for archived transcript filenames produced by sessions.reset and
+ * sessions.delete. The shape is `<sessionId>.jsonl.<reason>.<isoTimestamp>`
+ * where `:` is rewritten to `-` in the timestamp portion. See
+ * src/config/sessions/artifacts.ts for the source of truth.
+ */
+export const ArchivedTranscriptFileNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 256,
+  pattern:
+    "^[A-Za-z0-9._-]+\\.jsonl\\.(reset|deleted)\\.\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}(?:\\.\\d{3})?Z$",
+});
+
+export const SessionsArchivedListParamsSchema = Type.Object(
+  {
+    key: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const ArchivedTranscriptInfoSchema = Type.Object(
+  {
+    archivedFileName: NonEmptyString,
+    archivedAt: Type.Integer({ minimum: 0 }),
+    reason: Type.Union([Type.Literal("reset"), Type.Literal("deleted")]),
+    sessionId: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 0 }),
+    agentId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsArchivedListResultSchema = Type.Object(
+  {
+    archived: Type.Array(ArchivedTranscriptInfoSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsArchivedReadParamsSchema = Type.Object(
+  {
+    archivedFileName: ArchivedTranscriptFileNameSchema,
+    agentId: Type.Optional(NonEmptyString),
+    key: Type.Optional(NonEmptyString),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsArchivedReadResultSchema = Type.Object(
+  {
+    archivedFileName: NonEmptyString,
+    archivedAt: Type.Integer({ minimum: 0 }),
+    reason: Type.Union([Type.Literal("reset"), Type.Literal("deleted")]),
+    sessionId: NonEmptyString,
+    agentId: NonEmptyString,
+    messages: Type.Array(Type.Unknown()),
+    totalMessages: Type.Integer({ minimum: 0 }),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns all sessions. */

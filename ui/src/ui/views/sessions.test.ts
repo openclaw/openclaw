@@ -66,6 +66,9 @@ function buildProps(result: SessionsListResult): SessionsProps {
     onToggleCheckpointDetails: () => undefined,
     onBranchFromCheckpoint: () => undefined,
     onRestoreCheckpoint: () => undefined,
+    archivedViewer: null,
+    onOpenArchivedTranscript: () => undefined,
+    onCloseArchivedTranscript: () => undefined,
   };
 }
 

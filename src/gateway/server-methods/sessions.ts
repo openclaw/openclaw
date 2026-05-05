@@ -64,6 +64,8 @@ import {
   validateSessionsPatchParams,
   validateSessionsPluginPatchParams,
   validateSessionsPreviewParams,
+  validateSessionsArchivedListParams,
+  validateSessionsArchivedReadParams,
   validateSessionsResetParams,
   validateSessionsResolveParams,
   validateSessionsSendParams,
@@ -76,6 +78,10 @@ import {
 } from "../session-compaction-checkpoints.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  enumerateArchivedTranscriptsInDir,
+  resolveArchivedTranscriptPathWithin,
+} from "../session-transcript-files.fs.js";
+import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
@@ -83,6 +89,7 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  readMessagesFromTranscriptPathAsync,
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
   readSessionMessageCountAsync,
@@ -1981,5 +1988,127 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "compact",
       compacted: true,
     });
+  },
+  "sessions.archived.list": ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsArchivedListParams,
+        "sessions.archived.list",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const p = params;
+    const requestedKey = readStringValue(p.key)?.trim();
+    const requestedAgentId = readStringValue(p.agentId)?.trim();
+    const agentId = (() => {
+      if (requestedAgentId) {
+        return normalizeAgentId(requestedAgentId);
+      }
+      if (requestedKey) {
+        const fromKey = resolveAgentIdFromSessionKey(requestedKey);
+        if (fromKey) {
+          return normalizeAgentId(fromKey);
+        }
+      }
+      return normalizeAgentId(resolveDefaultAgentId(cfg));
+    })();
+    const { storePath } = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: `agent:${agentId}:main`,
+    });
+    const archived = enumerateArchivedTranscriptsInDir(path.dirname(storePath)).map((info) => ({
+      archivedFileName: info.archivedFileName,
+      archivedAt: info.archivedAt,
+      reason: info.reason,
+      sessionId: info.sessionId,
+      sizeBytes: info.sizeBytes,
+      agentId,
+    }));
+    respond(true, { archived }, undefined);
+  },
+  "sessions.archived.read": async ({ params, respond, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsArchivedReadParams,
+        "sessions.archived.read",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const p = params;
+    const archivedFileName = p.archivedFileName.trim();
+    const requestedKey = readStringValue(p.key)?.trim();
+    const requestedAgentId = readStringValue(p.agentId)?.trim();
+    const agentId = (() => {
+      if (requestedAgentId) {
+        return normalizeAgentId(requestedAgentId);
+      }
+      if (requestedKey) {
+        const fromKey = resolveAgentIdFromSessionKey(requestedKey);
+        if (fromKey) {
+          return normalizeAgentId(fromKey);
+        }
+      }
+      return normalizeAgentId(resolveDefaultAgentId(cfg));
+    })();
+    const { storePath } = resolveGatewaySessionStoreTarget({
+      cfg,
+      key: `agent:${agentId}:main`,
+    });
+    const sessionsDir = path.dirname(storePath);
+    const resolvedPath = resolveArchivedTranscriptPathWithin(sessionsDir, archivedFileName);
+    if (!resolvedPath) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Archived transcript not found."),
+      );
+      return;
+    }
+    const entries = enumerateArchivedTranscriptsInDir(sessionsDir);
+    const meta = entries.find((entry) => entry.archivedFileName === archivedFileName);
+    if (!meta) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "Archived transcript metadata not found."),
+      );
+      return;
+    }
+    try {
+      const limit = typeof p.limit === "number" ? p.limit : 1000;
+      const { messages, totalMessages } = await readMessagesFromTranscriptPathAsync(resolvedPath, {
+        limit,
+      });
+      respond(
+        true,
+        {
+          archivedFileName: meta.archivedFileName,
+          archivedAt: meta.archivedAt,
+          reason: meta.reason,
+          sessionId: meta.sessionId,
+          agentId,
+          messages,
+          totalMessages,
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Failed to read archived transcript: ${formatErrorMessage(err)}`,
+        ),
+      );
+    }
   },
 };
