@@ -733,7 +733,7 @@ describe("createDiscordGatewayPlugin", () => {
     await runCase((plugin) => {
       (plugin as { isConnecting: boolean }).isConnecting = true;
     });
-    expect(baseRegisterClientSpy).not.toHaveBeenCalled();
+    expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes fallback gateway metadata on the next register attempt", async () => {

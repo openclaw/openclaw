@@ -66,7 +66,10 @@ function assignGatewayClient(
 
 function hasGatewaySocketStarted(plugin: discordGateway.GatewayPlugin): boolean {
   const state = plugin as unknown as DiscordGatewayRegistrationState;
-  return state.ws != null || state.isConnecting === true;
+  // `isConnecting` without an active socket is stale bookkeeping, not a
+  // started gateway transport. Treating that as started skips
+  // super.registerClient(), leaving startup to wait for READY on nothing.
+  return state.ws != null;
 }
 
 type ResolveDiscordGatewayIntentsParams = {
