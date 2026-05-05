@@ -36,6 +36,20 @@ describe("active-memory manifest config schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("rejects wildcard and group toolsAllow entries", () => {
+    const result = validateJsonSchemaValue({
+      schema: manifest.configSchema,
+      cacheKey: "active-memory.manifest.tools-allow.reserved",
+      value: {
+        enabled: true,
+        agents: ["main"],
+        toolsAllow: ["*", "group:plugins"],
+      },
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
   it("accepts timeoutMs values at the runtime ceiling", () => {
     const result = validateJsonSchemaValue({
       schema: manifest.configSchema,

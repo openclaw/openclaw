@@ -43,6 +43,19 @@ const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
 const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
 const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
 const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
+const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
+  "*",
+  "apply_patch",
+  "browser",
+  "exec",
+  "message",
+  "read",
+  "subagents",
+  "update_plan",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
 const TOGGLE_STATE_FILE = "session-toggles.json";
 const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
 const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
@@ -411,7 +424,7 @@ function normalizeToolsAllow(value: unknown): string[] {
       continue;
     }
     const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
+    if (!trimmed || isReservedActiveMemoryToolsAllowEntry(trimmed) || seen.has(trimmed)) {
       continue;
     }
     seen.add(trimmed);
@@ -421,6 +434,11 @@ function normalizeToolsAllow(value: unknown): string[] {
     }
   }
   return out.length > 0 ? out : [...DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW];
+}
+
+function isReservedActiveMemoryToolsAllowEntry(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  return normalized.startsWith("group:") || ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW.has(normalized);
 }
 
 function normalizePromptConfigText(value: unknown): string | undefined {

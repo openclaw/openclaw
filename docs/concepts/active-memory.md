@@ -476,6 +476,9 @@ names that plugin registers. Active Memory lists those tools in the recall
 prompt and passes the same list to the embedded sub-agent. If none of the
 configured tools are available, or the memory sub-agent fails, Active Memory
 skips recall for that turn and the main reply continues without memory context.
+`toolsAllow` only accepts concrete memory tool names. Wildcards, `group:*`
+entries, and core agent tools such as `read`, `exec`, `message`, and
+`web_search` are ignored before the hidden memory sub-agent starts.
 
 Breaking default-behavior note: Active Memory no longer includes
 `memory_recall` in the default allowlist. Existing `memory-lancedb` setups need
@@ -673,7 +676,7 @@ The most important fields are:
 | `config.deniedChatIds`       | `string[]`                                                                                           | Optional per-conversation denylist that overrides allowed session types and allowed ids                                                                                          |
 | `config.queryMode`           | `"message" \| "recent" \| "full"`                                                                    | Controls how much conversation the blocking memory sub-agent sees                                                                                                                |
 | `config.promptStyle`         | `"balanced" \| "strict" \| "contextual" \| "recall-heavy" \| "precision-heavy" \| "preference-only"` | Controls how eager or strict the blocking memory sub-agent is when deciding whether to return memory                                                                             |
-| `config.toolsAllow`          | `string[]`                                                                                           | Memory tool names the blocking memory sub-agent may call; defaults to `["memory_search", "memory_get"]`                                                                          |
+| `config.toolsAllow`          | `string[]`                                                                                           | Concrete memory tool names the blocking memory sub-agent may call; defaults to `["memory_search", "memory_get"]`; wildcards, `group:*` entries, and core agent tools are ignored |
 | `config.thinking`            | `"off" \| "minimal" \| "low" \| "medium" \| "high" \| "xhigh" \| "adaptive" \| "max"`                | Advanced thinking override for the blocking memory sub-agent; default `off` for speed                                                                                            |
 | `config.promptOverride`      | `string`                                                                                             | Advanced full prompt replacement; not recommended for normal use                                                                                                                 |
 | `config.promptAppend`        | `string`                                                                                             | Advanced extra instructions appended to the default or overridden prompt                                                                                                         |

@@ -1158,6 +1158,65 @@ describe("active-memory plugin", () => {
     expect(runParams?.prompt).not.toContain("If memory_recall is unavailable");
   });
 
+  it("drops wildcard group and core tools from custom memory tools", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: [
+        "*",
+        "group:plugins",
+        "read",
+        "exec",
+        "message",
+        "lcm_grep",
+        "web_search",
+        "lcm_describe",
+      ],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["lcm_grep", "lcm_describe"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: lcm_grep, lcm_describe.");
+  });
+
+  it("falls back to default memory tools when custom memory tools only contain reserved entries", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      toolsAllow: ["*", "group:plugins", "read", "exec", "message", "web_search"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    await hooks.before_prompt_build(
+      {
+        prompt: "What did we decide about active memory?",
+        messages: [],
+      },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const runParams = runEmbeddedPiAgent.mock.calls.at(-1)?.[0];
+    expect(runParams?.toolsAllow).toEqual(["memory_search", "memory_get"]);
+    expect(runParams?.prompt).toContain("Configured memory tools: memory_search, memory_get.");
+  });
+
   it("defaults prompt style by query mode when no promptStyle is configured", async () => {
     api.pluginConfig = {
       agents: ["main"],
