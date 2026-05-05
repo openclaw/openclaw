@@ -43,6 +43,10 @@ type UsageSummaryOptions = {
   skipPluginAuthWithoutCredentialSource?: boolean;
 };
 
+type ProviderAuthResolutionResult =
+  | { auths: ProviderAuth[]; timedOut: false }
+  | { auths: []; timedOut: true };
+
 async function fetchProviderUsageSnapshot(params: {
   auth: ProviderAuth;
   config: OpenClawConfig;
@@ -99,8 +103,8 @@ export async function loadProviderUsageSummary(
     env,
     skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
-  const authResult = await withTimeout(
-    authPromise.then((auths) => ({ auths, timedOut: false as const })),
+  const authResult = await withTimeout<ProviderAuthResolutionResult>(
+    authPromise.then((auths) => ({ auths, timedOut: false })),
     timeoutMs,
     { auths: [], timedOut: true as const },
   );
