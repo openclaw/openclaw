@@ -174,10 +174,19 @@ messages.
         cancelLabel: "No",
         cancelData: "no",
       },
+      sticker: { packageId: "446", stickerId: "1988" },
     },
   },
 }
 ```
+
+`sticker` sends a native LINE sticker via the Messaging API. Both `packageId` and
+`stickerId` must be numeric strings drawn from LINE's allowlisted stickers
+(see [LINE sticker list](https://developers.line.biz/en/docs/messaging-api/sticker-list/)).
+Non-numeric IDs are dropped with a verbose log; the rest of the payload still
+ships. Authors can also embed a `STICKER:packageId:stickerId` directive on its
+own line in agent text to populate `channelData.line.sticker` automatically;
+directives inside fenced code blocks are preserved as plain text.
 
 The LINE plugin also ships a `/card` command for Flex message presets:
 

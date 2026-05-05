@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
 import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
@@ -70,10 +71,28 @@ function buildLineMediaMessageObject(
   }
 }
 
+function isNumericIdString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && /^[0-9]+$/.test(value);
+}
+
+function validateStickerIds(sticker: { packageId: string; stickerId: string }): boolean {
+  const { packageId, stickerId } = sticker;
+  if (isNumericIdString(packageId) && isNumericIdString(stickerId)) {
+    return true;
+  }
+  logVerbose(
+    `line: dropping sticker payload with non-numeric ids (packageId length=${
+      typeof packageId === "string" ? packageId.length : "n/a"
+    }, stickerId length=${typeof stickerId === "string" ? stickerId.length : "n/a"})`,
+  );
+  return false;
+}
+
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",
   chunker: (text, limit) => getLineRuntime().channel.text.chunkMarkdownText(text, limit),
   textChunkLimit: 5000,
+  supportsLineNativePayload: true,
   sendPayload: async ({ to, payload, accountId, cfg }) => {
     const runtime = getLineRuntime();
     const outboundRuntime = await loadLineOutboundRuntime();
@@ -84,6 +103,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const sendFlex = lineRuntime?.pushFlexMessage ?? outboundRuntime.pushFlexMessage;
     const sendTemplate = lineRuntime?.pushTemplateMessage ?? outboundRuntime.pushTemplateMessage;
     const sendLocation = lineRuntime?.pushLocationMessage ?? outboundRuntime.pushLocationMessage;
+    const sendSticker = lineRuntime?.pushStickerMessage ?? outboundRuntime.pushStickerMessage;
     const sendQuickReplies =
       lineRuntime?.pushTextMessageWithQuickReplies ??
       outboundRuntime.pushTextMessageWithQuickReplies;
@@ -200,6 +220,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         });
       }
 
+      if (lineData.sticker && validateStickerIds(lineData.sticker)) {
+        lastResult = await sendSticker(to, lineData.sticker.packageId, lineData.sticker.stickerId, {
+          verbose: false,
+          cfg,
+          accountId: accountId ?? undefined,
+        });
+      }
+
       for (const flexMsg of processed.flexMessages) {
         const flexContents = flexMsg.contents;
         lastResult = await sendFlex(to, flexMsg.altText, flexContents, {
@@ -254,6 +282,13 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
           address: lineData.location.address.slice(0, 100),
           latitude: lineData.location.latitude,
           longitude: lineData.location.longitude,
+        });
+      }
+      if (lineData.sticker && validateStickerIds(lineData.sticker)) {
+        quickReplyMessages.push({
+          type: "sticker",
+          packageId: lineData.sticker.packageId,
+          stickerId: lineData.sticker.stickerId,
         });
       }
       for (const flexMsg of processed.flexMessages) {

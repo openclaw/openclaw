@@ -22,7 +22,44 @@ import type { LineChannelData } from "./types.js";
  * - [[agenda: title | event1_title:event1_time, event2_title:event2_time, ...]]
  * - [[device: name | type | status | ctrl1:data1, ctrl2:data2]]
  * - [[appletv_remote: name | status]]
+ * - STICKER:packageId:stickerId (line-anchored, mirrors core MEDIA: convention)
  */
+function extractStickerDirective(
+  text: string,
+): { stickerPackageId: string; stickerStickerId: string; remaining: string } | undefined {
+  const lines = text.split("\n");
+  let inFence = false;
+  let matchedIndex = -1;
+  let packageId: string | undefined;
+  let stickerId: string | undefined;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) {
+      continue;
+    }
+    const m = line.match(/^STICKER:([0-9]+):([0-9]+)\s*$/);
+    if (m) {
+      matchedIndex = i;
+      packageId = m[1];
+      stickerId = m[2];
+      break;
+    }
+  }
+  if (matchedIndex < 0 || !packageId || !stickerId) {
+    return undefined;
+  }
+  lines.splice(matchedIndex, 1);
+  return {
+    stickerPackageId: packageId,
+    stickerStickerId: stickerId,
+    remaining: lines.join("\n"),
+  };
+}
+
 export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
   let text = payload.text;
   if (!text) {
@@ -301,6 +338,17 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     text = text.replace(deviceMatch[0], "").trim();
   }
 
+  if (!lineData.sticker) {
+    const stickerHit = extractStickerDirective(text);
+    if (stickerHit) {
+      lineData.sticker = {
+        packageId: stickerHit.stickerPackageId,
+        stickerId: stickerHit.stickerStickerId,
+      };
+      text = stickerHit.remaining;
+    }
+  }
+
   text = text.replace(/\n{3,}/g, "\n\n").trim();
 
   result.text = text || undefined;
@@ -311,7 +359,25 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 }
 
 export function hasLineDirectives(text: string): boolean {
-  return /\[\[(quick_replies|location|confirm|buttons|media_player|event|agenda|device|appletv_remote):/i.test(
-    text,
-  );
+  if (
+    /\[\[(quick_replies|location|confirm|buttons|media_player|event|agenda|device|appletv_remote):/i.test(
+      text,
+    )
+  ) {
+    return true;
+  }
+  // STICKER directive: fence-aware line scan, mirroring extractStickerDirective
+  // so directives inside fenced code blocks do not trigger parseLineDirectives
+  // and its trailing text-normalization step.
+  let inFence = false;
+  for (const line of text.split("\n")) {
+    if (line.trim().startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (!inFence && /^STICKER:[0-9]+:[0-9]+\s*$/.test(line)) {
+      return true;
+    }
+  }
+  return false;
 }

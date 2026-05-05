@@ -9,6 +9,7 @@ type LineChannelRuntime = {
   pushLocationMessage?: typeof import("./send.js").pushLocationMessage;
   pushMessageLine?: typeof import("./send.js").pushMessageLine;
   pushMessagesLine?: typeof import("./send.js").pushMessagesLine;
+  pushStickerMessage?: typeof import("./send.js").pushStickerMessage;
   pushTemplateMessage?: typeof import("./send.js").pushTemplateMessage;
   pushTextMessageWithQuickReplies?: typeof import("./send.js").pushTextMessageWithQuickReplies;
   resolveLineAccount?: typeof import("./accounts.js").resolveLineAccount;

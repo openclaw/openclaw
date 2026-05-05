@@ -86,7 +86,10 @@ export function createBlockReplyCoalescer(params: {
     const hasMedia = reply.hasMedia;
     const text = reply.text;
     const hasText = reply.hasText;
-    if (hasMedia) {
+    const hasChannelData = Boolean(
+      payload.channelData && Object.keys(payload.channelData).length > 0,
+    );
+    if (hasMedia || hasChannelData) {
       void flush({ force: true });
       void onFlush(payload);
       return;

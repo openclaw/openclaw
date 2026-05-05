@@ -17,6 +17,7 @@ type LocationMessage = messagingApi.LocationMessage;
 type FlexMessage = messagingApi.FlexMessage;
 type FlexContainer = messagingApi.FlexContainer;
 type TemplateMessage = messagingApi.TemplateMessage;
+type StickerMessage = messagingApi.StickerMessage;
 type QuickReply = messagingApi.QuickReply;
 type QuickReplyItem = messagingApi.QuickReplyItem;
 
@@ -151,6 +152,14 @@ export function createLocationMessage(location: {
     address: location.address.slice(0, 100),
     latitude: location.latitude,
     longitude: location.longitude,
+  };
+}
+
+export function createStickerMessage(packageId: string, stickerId: string): StickerMessage {
+  return {
+    type: "sticker",
+    packageId,
+    stickerId,
   };
 }
 
@@ -393,6 +402,18 @@ export async function pushTemplateMessage(
 ): Promise<LineSendResult> {
   return pushLineMessages(to, [template], opts, {
     verboseMessage: (chatId) => `line: pushed template message to ${chatId}`,
+  });
+}
+
+export async function pushStickerMessage(
+  to: string,
+  packageId: string,
+  stickerId: string,
+  opts: LinePushOpts,
+): Promise<LineSendResult> {
+  return pushLineMessages(to, [createStickerMessage(packageId, stickerId)], opts, {
+    errorContext: "push sticker message",
+    verboseMessage: (chatId) => `line: pushed sticker to ${chatId}`,
   });
 }
 
