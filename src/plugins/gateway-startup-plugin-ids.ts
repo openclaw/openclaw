@@ -290,7 +290,10 @@ function hasExplicitHookPolicyConfig(
   entry: NormalizedPluginsConfig["entries"][string] | undefined,
 ): boolean {
   return (
-    entry?.hooks?.allowConversationAccess === true || entry?.hooks?.allowPromptInjection === true
+    entry?.hooks?.allowConversationAccess === true ||
+    entry?.hooks?.allowPromptInjection === true ||
+    entry?.hooks?.timeoutMs !== undefined ||
+    (entry?.hooks?.timeouts !== undefined && Object.keys(entry.hooks.timeouts).length > 0)
   );
 }
 

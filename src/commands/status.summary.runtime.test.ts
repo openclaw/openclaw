@@ -41,6 +41,15 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
   });
 });
 
+describe("statusSummaryRuntime.classifySessionKey", () => {
+  it("classifies cron history sessions distinctly", () => {
+    expect(statusSummaryRuntime.classifySessionKey("agent:main:cron:daily-digest")).toBe("cron");
+    expect(
+      statusSummaryRuntime.classifySessionKey("agent:avery:cron:daily-digest:run:abc123"),
+    ).toBe("cron");
+  });
+});
+
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   const cfg = {
     agents: {

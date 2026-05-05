@@ -151,6 +151,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(packageUpdateCore.lanes.map((lane) => lane.name)).toEqual([
       "npm-onboard-channel-agent",
       "npm-onboard-discord-channel-agent",
+      "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
       "upgrade-survivor",
@@ -164,6 +165,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         }),
         expect.objectContaining({
           name: "npm-onboard-discord-channel-agent",
+          stateScenario: "empty",
+        }),
+        expect.objectContaining({
+          name: "npm-onboard-slack-channel-agent",
           stateScenario: "empty",
         }),
         expect.objectContaining({
@@ -382,6 +387,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
     ]);
@@ -400,12 +406,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
       "published-upgrade-survivor-2026.3.13-configured-plugin-installs",
+      "published-upgrade-survivor-2026.3.13-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.3.13-tilde-log-path",
       "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
     ]);
@@ -472,7 +480,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
-  it("plans Open WebUI as a functional-image lane with OpenAI credentials", () => {
+  it("plans Open WebUI as a live-auth functional image lane", () => {
     const plan = planFor({
       includeOpenWebUI: true,
       selectedLaneNames: ["openwebui"],
@@ -482,14 +490,25 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes).toEqual([
       expect.objectContaining({
         imageKind: "functional",
-        live: false,
+        live: true,
         name: "openwebui",
+        resources: expect.arrayContaining(["docker", "live", "live:openai", "service"]),
       }),
     ]);
     expect(plan.needs).toMatchObject({
+      e2eImage: true,
       functionalImage: true,
+      liveImage: false,
       package: true,
     });
+  });
+
+  it("excludes Open WebUI from skip-live Docker all plans", () => {
+    const plan = planFor({
+      liveMode: "skip",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).not.toContain("openwebui");
   });
 
   it("surfaces Docker lane test-state scenarios in plan JSON", () => {

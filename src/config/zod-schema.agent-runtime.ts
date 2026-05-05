@@ -351,6 +351,7 @@ const ToolsWebFetchSchema = z
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
     readability: z.boolean().optional(),
+    useTrustedEnvProxy: z.boolean().optional(),
     ssrfPolicy: z
       .object({
         allowRfc2544BenchmarkRange: z.boolean().optional(),
@@ -501,6 +502,13 @@ const ToolLoopDetectionDetectorSchema = z
   .strict()
   .optional();
 
+const ToolLoopPostCompactionGuardSchema = z
+  .object({
+    windowSize: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -510,6 +518,7 @@ const ToolLoopDetectionSchema = z
     criticalThreshold: z.number().int().positive().optional(),
     globalCircuitBreakerThreshold: z.number().int().positive().optional(),
     detectors: ToolLoopDetectionDetectorSchema,
+    postCompactionGuard: ToolLoopPostCompactionGuardSchema,
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -838,6 +847,8 @@ export const AgentEntrySchema = z
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
+    verboseDefault: z.enum(["off", "on", "full"]).optional(),
+    toolProgressDetail: z.enum(["explain", "raw"]).optional(),
     reasoningDefault: z.enum(["on", "off", "stream"]).optional(),
     fastModeDefault: z.boolean().optional(),
     skills: z.array(z.string()).optional(),
