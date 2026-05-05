@@ -9,6 +9,7 @@ import {
   collectKnownLongFlags,
   renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,
+  resolveSafeBinProfiles,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
@@ -168,6 +169,113 @@ describe("exec safe bin policy long-option metadata", () => {
     const prefixMap = buildLongFlagPrefixMap(flags);
     expect(prefixMap.get("--compress-pr")).toBe("--compress-program");
     expect(prefixMap.get("--f")).toBe(null);
+  });
+});
+
+describe("exec safe bin policy knownLongFlags from config", () => {
+  it("accepts known boolean long flags provided via fixture knownLongFlags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        knownLongFlags: ["--version", "--verbose", "--help"],
+      },
+    });
+    const profile = profiles.mycli;
+    // Boolean flags (no value) should be accepted when declared as known
+    expect(validateSafeBinArgv(["--version"], profile)).toBe(true);
+    expect(validateSafeBinArgv(["--verbose"], profile)).toBe(true);
+  });
+
+  it("rejects inline values on known flags not in allowedValueFlags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        knownLongFlags: ["--mode"],
+      },
+    });
+    const profile = profiles.mycli;
+    // --mode is known but not in allowedValueFlags, so inline value is rejected
+    expect(validateSafeBinArgv(["--mode=production"], profile)).toBe(false);
+  });
+
+  it("rejects unknown long flags even when knownLongFlags is provided", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        knownLongFlags: ["--mode"],
+      },
+    });
+    const profile = profiles.mycli;
+    expect(validateSafeBinArgv(["--unknown-flag"], profile)).toBe(false);
+  });
+
+  it("merges knownLongFlags with flags derived from allowedValueFlags and deniedFlags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        allowedValueFlags: ["--output"],
+        deniedFlags: ["--exec"],
+        knownLongFlags: ["--verbose"],
+      },
+    });
+    const profile = profiles.mycli;
+    expect(profile.knownLongFlagsSet?.has("--output")).toBe(true);
+    expect(profile.knownLongFlagsSet?.has("--exec")).toBe(true);
+    expect(profile.knownLongFlagsSet?.has("--verbose")).toBe(true);
+  });
+
+  it("supports GNU abbreviation for user-provided knownLongFlags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        knownLongFlags: ["--verbose"],
+      },
+    });
+    const profile = profiles.mycli;
+    // GNU abbreviation: --verb should resolve to --verbose
+    expect(validateSafeBinArgv(["--verb"], profile)).toBe(true);
+  });
+
+  it("filters user knownLongFlags that are strict prefixes of denied flags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        deniedFlags: ["--recursive"],
+        knownLongFlags: ["--rec", "--recu"],
+      },
+    });
+    const profile = profiles.mycli;
+    // Prefix forms must not bypass --recursive denial
+    expect(validateSafeBinArgv(["--rec"], profile)).toBe(false);
+    expect(validateSafeBinArgv(["--recu"], profile)).toBe(false);
+    // Full form still denied via deniedFlags
+    expect(validateSafeBinArgv(["--recursive"], profile)).toBe(false);
+    // Filtered prefixes must not appear in knownLongFlagsSet
+    expect(profile.knownLongFlagsSet?.has("--rec")).toBe(false);
+    expect(profile.knownLongFlagsSet?.has("--recu")).toBe(false);
+  });
+
+  it("keeps user knownLongFlags that are not prefixes of denied flags", () => {
+    const profiles = resolveSafeBinProfiles({
+      mycli: {
+        deniedFlags: ["--recursive"],
+        knownLongFlags: ["--verbose", "--version"],
+      },
+    });
+    const profile = profiles.mycli;
+    expect(validateSafeBinArgv(["--verbose"], profile)).toBe(true);
+    expect(validateSafeBinArgv(["--version"], profile)).toBe(true);
+  });
+
+  it("works identically to auto-derivation when knownLongFlags duplicates allow/deny", () => {
+    const withExplicit = resolveSafeBinProfiles({
+      mycli: {
+        allowedValueFlags: ["--output"],
+        deniedFlags: ["--exec"],
+        knownLongFlags: ["--output", "--exec"],
+      },
+    });
+    const withoutExplicit = resolveSafeBinProfiles({
+      mycli: {
+        allowedValueFlags: ["--output"],
+        deniedFlags: ["--exec"],
+      },
+    });
+    expect(withExplicit.mycli.knownLongFlagsSet).toEqual(withoutExplicit.mycli.knownLongFlagsSet);
   });
 });
 
