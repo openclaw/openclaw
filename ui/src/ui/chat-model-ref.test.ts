@@ -55,33 +55,33 @@ describe("chat-model-ref helpers", () => {
 
   it("prefers alias over name for picker labels", () => {
     const aliasedModel = {
-      id: "moonshotai/kimi-k2.5",
-      alias: "Kimi K2.5 (NVIDIA)",
-      name: "Kimi K2.5",
+      id: "moonshotai/kimi-k2.6",
+      alias: "Kimi K2.6 (NVIDIA)",
+      name: "Kimi K2.6",
       provider: "nvidia",
     };
 
     expect(buildChatModelOption(aliasedModel, [aliasedModel])).toEqual({
-      value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
+      value: "nvidia/moonshotai/kimi-k2.6",
+      label: "Kimi K2.6 (NVIDIA)",
     });
-    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [aliasedModel])).toBe(
-      "Kimi K2.5 (NVIDIA)",
+    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.6", [aliasedModel])).toBe(
+      "Kimi K2.6 (NVIDIA)",
     );
   });
 
   it("uses friendly catalog names for qualified nested model ids", () => {
     const nestedModel = {
-      id: "moonshotai/kimi-k2.5",
-      name: "Kimi K2.5 (NVIDIA)",
+      id: "moonshotai/kimi-k2.6",
+      name: "Kimi K2.6 (NVIDIA)",
       provider: "nvidia",
     };
     expect(buildChatModelOption(nestedModel, [nestedModel])).toEqual({
-      value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
+      value: "nvidia/moonshotai/kimi-k2.6",
+      label: "Kimi K2.6 (NVIDIA)",
     });
-    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.5", [nestedModel])).toBe(
-      "Kimi K2.5 (NVIDIA)",
+    expect(formatCatalogChatModelDisplay("nvidia/moonshotai/kimi-k2.6", [nestedModel])).toBe(
+      "Kimi K2.6 (NVIDIA)",
     );
   });
 
@@ -188,31 +188,31 @@ describe("chat-model-ref helpers", () => {
 
   it("qualifies slash-containing server model ids with the recorded provider", () => {
     expect(
-      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [
+      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.6", "nvidia", [
         {
-          id: "moonshotai/kimi-k2.5",
-          name: "Kimi K2.5 (NVIDIA)",
+          id: "moonshotai/kimi-k2.6",
+          name: "Kimi K2.6 (NVIDIA)",
           provider: "nvidia",
         },
       ]),
-    ).toBe("nvidia/moonshotai/kimi-k2.5");
+    ).toBe("nvidia/moonshotai/kimi-k2.6");
   });
 
   it("uses the catalog-backed provider for slash-containing nested ids before stale provider fallback", () => {
     expect(
-      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "zai", [
+      resolvePreferredServerChatModelValue("moonshotai/kimi-k2.6", "zai", [
         {
-          id: "moonshotai/kimi-k2.5",
-          name: "Kimi K2.5 (NVIDIA)",
+          id: "moonshotai/kimi-k2.6",
+          name: "Kimi K2.6 (NVIDIA)",
           provider: "nvidia",
         },
       ]),
-    ).toBe("nvidia/moonshotai/kimi-k2.5");
+    ).toBe("nvidia/moonshotai/kimi-k2.6");
   });
 
   it("falls back to the server-qualified value for slash-containing ids when the catalog is empty", () => {
-    expect(resolvePreferredServerChatModelValue("moonshotai/kimi-k2.5", "nvidia", [])).toBe(
-      "moonshotai/kimi-k2.5",
+    expect(resolvePreferredServerChatModelValue("moonshotai/kimi-k2.6", "nvidia", [])).toBe(
+      "moonshotai/kimi-k2.6",
     );
   });
 

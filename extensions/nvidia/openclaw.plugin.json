@@ -35,8 +35,8 @@
             }
           },
           {
-            "id": "moonshotai/kimi-k2.5",
-            "name": "Kimi K2.5",
+            "id": "moonshotai/kimi-k2.6",
+            "name": "Kimi K2.6",
             "input": ["text"],
             "contextWindow": 262144,
             "maxTokens": 8192,
@@ -67,8 +67,8 @@
             }
           },
           {
-            "id": "z-ai/glm5",
-            "name": "GLM-5",
+            "id": "z-ai/glm-5.1",
+            "name": "GLM 5.1",
             "input": ["text"],
             "contextWindow": 202752,
             "maxTokens": 8192,

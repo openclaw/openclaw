@@ -418,7 +418,7 @@ describe("executeSlashCommand directives", () => {
   it("keeps provider-qualified nested ids when the patched catalog lookup fails", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
-        return createResolvedModelPatch("moonshotai/kimi-k2.5", "nvidia");
+        return createResolvedModelPatch("moonshotai/kimi-k2.6", "nvidia");
       }
       if (method === "models.list") {
         throw new Error("models unavailable");
@@ -430,12 +430,12 @@ describe("executeSlashCommand directives", () => {
       { request } as unknown as GatewayBrowserClient,
       "main",
       "model",
-      "nvidia/moonshotai/kimi-k2.5",
+      "nvidia/moonshotai/kimi-k2.6",
     );
 
     expect(result.sessionPatch?.modelOverride).toEqual({
       kind: "qualified",
-      value: "nvidia/moonshotai/kimi-k2.5",
+      value: "nvidia/moonshotai/kimi-k2.6",
     });
   });
 

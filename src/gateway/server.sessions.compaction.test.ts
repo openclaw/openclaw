@@ -299,7 +299,7 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       try {
         piSdkMock.enabled = true;
         piSdkMock.models = [
-          { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+          { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6 (NVIDIA)", provider: "nvidia" },
         ];
 
         const patched = await rpcReq<{
@@ -313,15 +313,15 @@ test("sessions.patch preserves nested model ids under provider overrides", async
           resolved?: { model?: string; modelProvider?: string };
         }>(ws, "sessions.patch", {
           key: "agent:main:main",
-          model: "nvidia/moonshotai/kimi-k2.5",
+          model: "nvidia/moonshotai/kimi-k2.6",
         });
         expect(patched.ok).toBe(true);
-        expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+        expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.6");
         expect(patched.payload?.entry.providerOverride).toBe("nvidia");
         expect(patched.payload?.entry.model).toBeUndefined();
         expect(patched.payload?.entry.modelProvider).toBeUndefined();
         expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
-        expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+        expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.6");
 
         const listed = await rpcReq<{
           sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
@@ -331,7 +331,7 @@ test("sessions.patch preserves nested model ids under provider overrides", async
           (session) => session.key === "agent:main:main",
         );
         expect(mainSession?.modelProvider).toBe("nvidia");
-        expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+        expect(mainSession?.model).toBe("moonshotai/kimi-k2.6");
       } finally {
         ws.close();
         await server.close();

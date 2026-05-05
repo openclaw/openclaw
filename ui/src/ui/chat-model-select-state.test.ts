@@ -118,25 +118,25 @@ describe("chat-model-select-state", () => {
   it("uses catalog names for the default label and matching picker options", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog({
-        id: "moonshotai/kimi-k2.5",
-        alias: "Kimi K2.5 (NVIDIA)",
-        name: "Kimi K2.5 (NVIDIA)",
+        id: "moonshotai/kimi-k2.6",
+        alias: "Kimi K2.6 (NVIDIA)",
+        name: "Kimi K2.6 (NVIDIA)",
         provider: "nvidia",
       }),
       sessionsResult: createSessionsListResult({
-        model: "moonshotai/kimi-k2.5",
+        model: "moonshotai/kimi-k2.6",
         modelProvider: "nvidia",
-        defaultsModel: "moonshotai/kimi-k2.5",
+        defaultsModel: "moonshotai/kimi-k2.6",
         defaultsProvider: "nvidia",
       }),
     });
 
     const resolved = resolveChatModelSelectState(state);
-    expect(resolved.currentOverride).toBe("nvidia/moonshotai/kimi-k2.5");
-    expect(resolved.defaultLabel).toBe("Default (Kimi K2.5 (NVIDIA))");
+    expect(resolved.currentOverride).toBe("nvidia/moonshotai/kimi-k2.6");
+    expect(resolved.defaultLabel).toBe("Default (Kimi K2.6 (NVIDIA))");
     expect(resolved.options).toContainEqual({
-      value: "nvidia/moonshotai/kimi-k2.5",
-      label: "Kimi K2.5 (NVIDIA)",
+      value: "nvidia/moonshotai/kimi-k2.6",
+      label: "Kimi K2.6 (NVIDIA)",
     });
   });
 

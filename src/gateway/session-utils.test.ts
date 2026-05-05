@@ -1161,10 +1161,10 @@ describe("resolveSessionModelRef", () => {
       sessionId: "s-nested",
       updatedAt: Date.now(),
       providerOverride: "nvidia",
-      modelOverride: "moonshotai/kimi-k2.5",
+      modelOverride: "moonshotai/kimi-k2.6",
     });
 
-    expect(resolved).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.5" });
+    expect(resolved).toEqual({ provider: "nvidia", model: "moonshotai/kimi-k2.6" });
   });
 
   test("preserves explicit wrapper providers for vendor-prefixed override models", () => {

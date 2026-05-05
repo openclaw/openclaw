@@ -221,9 +221,9 @@ describe("model-selection", () => {
       },
       {
         name: "preserves nested model ids after the provider prefix",
-        variants: ["nvidia/moonshotai/kimi-k2.5"],
+        variants: ["nvidia/moonshotai/kimi-k2.6"],
         defaultProvider: "anthropic",
-        expected: { provider: "nvidia", model: "moonshotai/kimi-k2.5" },
+        expected: { provider: "nvidia", model: "moonshotai/kimi-k2.6" },
       },
       {
         name: "preserves nested MLX model ids after the provider prefix",
@@ -797,9 +797,9 @@ describe("model-selection", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: {
-            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+            model: { primary: "nvidia/moonshotai/kimi-k2.6" },
             models: {
-              "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+              "nvidia/moonshotai/kimi-k2.6": { alias: "Kimi K2.6 (NVIDIA)" },
             },
           },
         },
@@ -809,8 +809,8 @@ describe("model-selection", () => {
               baseUrl: "https://nvidia.example.com",
               models: [
                 {
-                  id: "moonshotai/kimi-k2.5",
-                  name: "Kimi K2.5 (Configured)",
+                  id: "moonshotai/kimi-k2.6",
+                  name: "Kimi K2.6 (Configured)",
                   contextWindow: 32_000,
                   reasoning: true,
                   compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
@@ -831,9 +831,9 @@ describe("model-selection", () => {
       expect(result.allowedCatalog).toEqual([
         {
           provider: "nvidia",
-          id: "moonshotai/kimi-k2.5",
-          name: "Kimi K2.5 (Configured)",
-          alias: "Kimi K2.5 (NVIDIA)",
+          id: "moonshotai/kimi-k2.6",
+          name: "Kimi K2.6 (Configured)",
+          alias: "Kimi K2.6 (NVIDIA)",
           contextWindow: 32_000,
           reasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
@@ -1147,7 +1147,7 @@ describe("model-selection", () => {
     it("strips profile suffix before alias resolution", () => {
       const index = {
         byAlias: new Map([
-          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.5" } }],
+          ["kimi", { alias: "kimi", ref: { provider: "nvidia", model: "moonshotai/kimi-k2.6" } }],
         ]),
         byKey: new Map(),
       };
@@ -1159,7 +1159,7 @@ describe("model-selection", () => {
       });
       expect(resolved?.ref).toEqual({
         provider: "nvidia",
-        model: "moonshotai/kimi-k2.5",
+        model: "moonshotai/kimi-k2.6",
       });
       expect(resolved?.alias).toBe("kimi");
     });
