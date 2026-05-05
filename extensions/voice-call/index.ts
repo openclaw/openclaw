@@ -25,6 +25,13 @@ import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-op
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };
 
+// Mirrors core/src/routing/session-key.ts VALID_ID_RE so per-call agent ids
+// arriving on the voicecall.start trust boundary cannot embed `:`, `/`, `..`,
+// whitespace, or other delimiter chars that would distort downstream
+// agent-session-key parsing or workspace path joins. Extension-local rather
+// than shared via plugin-sdk to keep the boundary import cycle clean.
+const VALID_PER_CALL_AGENT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
+
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
     const normalized = normalizeVoiceCallLegacyConfigInput(value);
@@ -612,11 +619,37 @@ export default definePluginEntry({
           // (pluginRuntimeOwnerId set on client.internal). Raw RPC params from
           // external operator-write callers are silently dropped — the call
           // still proceeds against the plugin-default routing.
+          //
+          // Defense-in-depth: even when the caller is trusted, the agent id is
+          // shape-validated against VALID_PER_CALL_AGENT_ID before reaching
+          // CallRecord / sessionKey templates so that `:`, `/`, `..`, or
+          // whitespace cannot distort agent-session-key parsing or downstream
+          // workspace path joins. Trust model is at the plugin-loader
+          // boundary: any in-process plugin caller can choose any *valid*
+          // agentId; cross-plugin-spoofing scope policy lives at that layer.
           const pluginOwnerId = normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId);
-          const agentId = pluginOwnerId ? normalizeOptionalString(params?.agentId) : undefined;
-          const sessionKey = pluginOwnerId
-            ? normalizeOptionalString(params?.sessionKey)
-            : undefined;
+          const rawAgentId = normalizeOptionalString(params?.agentId);
+          const rawSessionKey = normalizeOptionalString(params?.sessionKey);
+          if (!pluginOwnerId && (rawAgentId || rawSessionKey)) {
+            // Operator-visible signal during mixed-version rolling upgrades:
+            // an old plugin-side caller (or untrusted RPC) shipped per-call
+            // routing fields that we are about to silently drop. Log once per
+            // request so the drift shows up before the call is observably
+            // routed to the plugin-default agent.
+            console.warn(
+              `[voice-call] voicecall.start dropped per-call agentId/sessionKey from untrusted caller (no pluginRuntimeOwnerId stamped): rawAgentId=${rawAgentId ?? "<unset>"}`,
+            );
+          }
+          const agentId =
+            pluginOwnerId && rawAgentId && VALID_PER_CALL_AGENT_ID.test(rawAgentId)
+              ? rawAgentId
+              : undefined;
+          if (pluginOwnerId && rawAgentId && !agentId) {
+            console.warn(
+              `[voice-call] voicecall.start rejected malformed per-call agentId from trusted caller "${pluginOwnerId}": ${JSON.stringify(rawAgentId)}`,
+            );
+          }
+          const sessionKey = pluginOwnerId ? rawSessionKey : undefined;
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
