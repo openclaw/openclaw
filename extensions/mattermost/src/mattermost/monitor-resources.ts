@@ -61,7 +61,7 @@ export function createMattermostMonitorResources(params: {
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
-    const ids = (fileIds ?? []).map((id) => id?.trim()).filter(Boolean);
+    const ids = [...new Set((fileIds ?? []).map((id) => id?.trim()).filter(Boolean))];
     if (ids.length === 0) {
       return [];
     }
@@ -96,6 +96,49 @@ export function createMattermostMonitorResources(params: {
       }
     }
     return out;
+  };
+
+  const resolveMattermostThreadFileIds = async (
+    threadRootId?: string | null,
+    currentPostId?: string | null,
+    currentFileIds?: string[] | null,
+  ): Promise<string[]> => {
+    const rootId = threadRootId?.trim();
+    if (!rootId) {
+      return [];
+    }
+    try {
+      const thread = await client.request<{
+        order?: string[];
+        posts?: Record<string, { id?: string | null; file_ids?: string[] | null }>;
+      }>(`/posts/${rootId}/thread`);
+      const postsById = thread.posts ?? {};
+      const orderedPosts = Array.isArray(thread.order)
+        ? thread.order.map((id) => postsById[id]).filter(Boolean)
+        : Object.values(postsById);
+      const seen = new Set((currentFileIds ?? []).map((id) => id?.trim()).filter(Boolean));
+      const out: string[] = [];
+      for (const item of orderedPosts) {
+        if (!item) {
+          continue;
+        }
+        if (currentPostId && item.id === currentPostId) {
+          continue;
+        }
+        for (const fileId of item.file_ids ?? []) {
+          const id = fileId?.trim();
+          if (!id || seen.has(id)) {
+            continue;
+          }
+          seen.add(id);
+          out.push(id);
+        }
+      }
+      return out;
+    } catch (err) {
+      logger.debug?.(`mattermost: failed to fetch thread files ${rootId}: ${String(err)}`);
+      return [];
+    }
   };
 
   const sendTypingIndicator = async (channelId: string, parentId?: string) => {
@@ -175,6 +218,7 @@ export function createMattermostMonitorResources(params: {
 
   return {
     resolveMattermostMedia,
+    resolveMattermostThreadFileIds,
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,

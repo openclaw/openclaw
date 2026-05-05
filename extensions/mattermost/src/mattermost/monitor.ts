@@ -822,6 +822,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
   const {
     resolveMattermostMedia,
+    resolveMattermostThreadFileIds,
     sendTypingIndicator,
     resolveChannelInfo,
     resolveUserInfo,
@@ -1495,7 +1496,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           recordPendingHistory();
           return;
         }
-        const mediaList = await resolveMattermostMedia(post.file_ids);
+        const threadFileIds = await resolveMattermostThreadFileIds(
+          threadRootId,
+          post.id,
+          post.file_ids,
+        );
+        const mediaList = await resolveMattermostMedia([
+          ...(post.file_ids ?? []),
+          ...threadFileIds,
+        ]);
         const mediaPlaceholder = buildMattermostAttachmentPlaceholder(mediaList);
         const bodySource = oncharTriggered ? oncharResult.stripped : rawText;
         const baseText = [bodySource, mediaPlaceholder].filter(Boolean).join("\n").trim();

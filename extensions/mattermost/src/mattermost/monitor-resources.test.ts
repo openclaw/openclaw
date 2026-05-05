@@ -130,6 +130,58 @@ describe("mattermost monitor resources", () => {
     );
   });
 
+  it("collects earlier thread file ids and skips current/duplicate files", async () => {
+    const request = vi.fn(async (path: string) => {
+      expect(path).toBe("/posts/root-1/thread");
+      return {
+        order: ["root-1", "reply-1", "current"],
+        posts: {
+          "root-1": { id: "root-1", file_ids: [" file-root ", "file-dup"] },
+          "reply-1": { id: "reply-1", file_ids: ["file-reply", "file-dup"] },
+          current: { id: "current", file_ids: ["file-current", "file-ignored"] },
+        },
+      };
+    });
+
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: { request } as never,
+      logger: {},
+      mediaMaxBytes: 1024,
+      fetchRemoteMedia: vi.fn(),
+      saveMediaBuffer: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+
+    await expect(
+      resources.resolveMattermostThreadFileIds(" root-1 ", "current", ["file-current"]),
+    ).resolves.toEqual(["file-root", "file-dup", "file-reply"]);
+  });
+
+  it("fails open when thread file lookup fails", async () => {
+    const logger = { debug: vi.fn() };
+    const resources = createMattermostMonitorResources({
+      accountId: "default",
+      callbackUrl: "https://openclaw.test/callback",
+      client: {
+        request: vi.fn(async () => {
+          throw new Error("boom");
+        }),
+      } as never,
+      logger,
+      mediaMaxBytes: 1024,
+      fetchRemoteMedia: vi.fn(),
+      saveMediaBuffer: vi.fn(),
+      mediaKindFromMime: () => "document",
+    });
+
+    await expect(resources.resolveMattermostThreadFileIds("root-1")).resolves.toEqual([]);
+    expect(logger.debug).toHaveBeenCalledWith(
+      expect.stringContaining("failed to fetch thread files"),
+    );
+  });
+
   it("proxies typing indicators to the mattermost client helper", async () => {
     const client = {} as never;
 
