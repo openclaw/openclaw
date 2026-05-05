@@ -1149,15 +1149,12 @@ describe("updateNpmInstalledPlugins", () => {
               source: "npm",
               spec: "@openclaw/codex@2026.5.3",
               installPath,
-              resolvedName: "@openclaw/codex",
-              resolvedVersion: "2026.5.3",
-              resolvedSpec: "@openclaw/codex@2026.5.3",
             },
           },
         },
       },
       skipDisabledPlugins: true,
-      syncOfficialNpmPluginInstalls: true,
+      syncOfficialPluginInstalls: true,
     });
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
@@ -1209,7 +1206,7 @@ describe("updateNpmInstalledPlugins", () => {
       }),
       pluginIds: ["demo"],
       dryRun: true,
-      syncOfficialNpmPluginInstalls: true,
+      syncOfficialPluginInstalls: true,
     });
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
@@ -1218,6 +1215,101 @@ describe("updateNpmInstalledPlugins", () => {
         expectedPluginId: "demo",
       }),
     );
+  });
+
+  it("updates disabled trusted official ClawHub installs through the catalog spec", async () => {
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "diagnostics-otel",
+        targetDir: "/tmp/diagnostics-otel",
+        version: "2026.5.4",
+        clawhubPackage: "@openclaw/diagnostics-otel",
+      }),
+    );
+
+    const config = createClawHubInstallConfig({
+      pluginId: "diagnostics-otel",
+      installPath: "/tmp/diagnostics-otel",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "@openclaw/diagnostics-otel",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+      spec: "clawhub:@openclaw/diagnostics-otel@2026.5.3",
+    });
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        ...config,
+        plugins: {
+          ...config.plugins,
+          entries: {
+            "diagnostics-otel": {
+              enabled: false,
+              config: { preserved: true },
+            },
+          },
+        },
+      },
+      skipDisabledPlugins: true,
+      syncOfficialPluginInstalls: true,
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/diagnostics-otel",
+        expectedPluginId: "diagnostics-otel",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["diagnostics-otel"]).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:@openclaw/diagnostics-otel",
+      version: "2026.5.4",
+      clawhubPackage: "@openclaw/diagnostics-otel",
+      clawhubChannel: "official",
+    });
+    expect(result.config.plugins?.entries?.["diagnostics-otel"]).toEqual({
+      enabled: false,
+      config: { preserved: true },
+    });
+  });
+
+  it("updates bare trusted official ClawHub installs through the catalog spec", async () => {
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "diagnostics-prometheus",
+        targetDir: "/tmp/diagnostics-prometheus",
+        version: "2026.5.4",
+        clawhubPackage: "@openclaw/diagnostics-prometheus",
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: {
+        plugins: {
+          installs: {
+            "diagnostics-prometheus": {
+              source: "clawhub",
+              spec: "clawhub:@openclaw/diagnostics-prometheus@2026.5.3",
+              installPath: "/tmp/diagnostics-prometheus",
+            },
+          },
+        },
+      },
+      syncOfficialPluginInstalls: true,
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/diagnostics-prometheus",
+        expectedPluginId: "diagnostics-prometheus",
+      }),
+    );
+    expect(result.config.plugins?.installs?.["diagnostics-prometheus"]).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:@openclaw/diagnostics-prometheus",
+      version: "2026.5.4",
+      clawhubPackage: "@openclaw/diagnostics-prometheus",
+      clawhubChannel: "official",
+    });
   });
 
   it("keeps enabled tracked plugin update failures fatal when disabled skipping is enabled", async () => {
