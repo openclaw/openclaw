@@ -11,7 +11,16 @@ const NON_DELIVERABLE_REPLY_TOKENS = [
 ] as const;
 
 export function isAnnounceSkip(text?: string) {
-  return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
+  const t = (text ?? "").trim();
+  if (t === ANNOUNCE_SKIP_TOKEN) {
+    return true;
+  }
+  // Accept multi-line output where the final line is the token (#74071).
+  // Sub-agents may emit a DM summary block followed by ANNOUNCE_SKIP on its
+  // own line; strict equality misses that and leaks the summary as an
+  // announcement.
+  const lastNewline = t.lastIndexOf("\n");
+  return lastNewline >= 0 && t.slice(lastNewline + 1).trim() === ANNOUNCE_SKIP_TOKEN;
 }
 
 export function isReplySkip(text?: string) {
