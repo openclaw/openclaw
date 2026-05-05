@@ -297,6 +297,27 @@ describe("resolveFailureDestination", () => {
     });
   });
 
+  it("dedupes session-derived failure destinations for threaded primary delivery", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          threadId: "99",
+          accountId: "bot-a",
+          failureDestination: {
+            mode: "announce",
+            channel: "telegram",
+            accountId: "bot-a",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toBeNull();
+  });
+
   it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
     const plan = resolveFailureDestination(
       makeCronJob({

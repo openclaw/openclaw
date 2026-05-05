@@ -220,11 +220,16 @@ function isSameDeliveryTarget(
     to: primaryTo,
   });
   const failureChannelNormalized = failurePlan.channel ?? "last";
+  const failureUsesSessionRecipient =
+    failurePlan.to === undefined && failureChannelNormalized !== "last";
 
-  return (
-    failureChannelNormalized === primaryChannelNormalized &&
-    failurePlan.to === primaryTo &&
-    failurePlan.accountId === primaryAccountId &&
-    primaryThreadId === undefined
-  );
+  if (
+    failureChannelNormalized !== primaryChannelNormalized ||
+    (failurePlan.to !== primaryTo && !failureUsesSessionRecipient) ||
+    failurePlan.accountId !== primaryAccountId
+  ) {
+    return false;
+  }
+
+  return primaryThreadId === undefined || failureUsesSessionRecipient;
 }

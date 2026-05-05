@@ -217,7 +217,11 @@ export async function resolveDeliveryTarget(
   if (channel === "telegram" && typeof toCandidate === "string") {
     const topicMatch = toCandidate.match(/:topic:(\d+)$/i);
     if (topicMatch) {
-      if (jobPayload.threadId == null || jobPayload.threadId === "") {
+      const topicCameFromExplicitTarget = explicitTo !== undefined;
+      if (
+        (jobPayload.threadId == null || jobPayload.threadId === "") &&
+        (!options?.suppressSessionThreadId || topicCameFromExplicitTarget)
+      ) {
         threadId = Number(topicMatch[1]);
       }
       toCandidate = toCandidate.replace(/:topic:\d+$/i, "");
