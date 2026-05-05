@@ -1,12 +1,19 @@
 import Foundation
 
-struct AssistantTextSegment: Identifiable {
-    enum Kind {
+struct AssistantTextSegment: Identifiable, Equatable {
+    enum Kind: Equatable {
         case thinking
         case response
+
+        var stableIDPrefix: String {
+            switch self {
+            case .thinking: "t"
+            case .response: "r"
+            }
+        }
     }
 
-    let id = UUID()
+    let id: String
     let kind: Kind
     let text: String
 }
@@ -16,7 +23,7 @@ enum AssistantTextParser {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
         guard raw.contains("<") else {
-            return [AssistantTextSegment(kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: "r0", kind: .response, text: trimmed)]
         }
 
         var segments: [AssistantTextSegment] = []
@@ -51,7 +58,7 @@ enum AssistantTextParser {
         }
 
         guard matchedTag else {
-            return [AssistantTextSegment(kind: .response, text: trimmed)]
+            return [AssistantTextSegment(id: "r0", kind: .response, text: trimmed)]
         }
 
         if includeThinking {
@@ -146,6 +153,11 @@ enum AssistantTextParser {
     {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        segments.append(AssistantTextSegment(kind: kind, text: trimmed))
+        let nextIndex = segments.count
+        segments.append(
+            AssistantTextSegment(
+                id: "\(kind.stableIDPrefix)\(nextIndex)",
+                kind: kind,
+                text: trimmed))
     }
 }
