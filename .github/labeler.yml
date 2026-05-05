@@ -217,6 +217,7 @@
           - "Dockerfile"
           - "Dockerfile.*"
           - "docker-compose.yml"
+          - ".devcontainer/**"
           - ".dockerignore"
           - "deploy/fly.private.toml"
           - "scripts/docker/setup.sh"
@@ -233,6 +234,7 @@
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
+          - "docs/install/devcontainer.md"
           - "docs/multi-agent-sandbox-tools.md"
 
 "agents":

@@ -1,0 +1,31 @@
+{
+  "name": "OpenClawDev",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "workspaceFolder": "/workspaces/openclaw",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/openclaw,type=bind",
+
+  "postCreateCommand": "bash .devcontainer/on-create.sh",
+
+  "containerEnv": {
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
+    "GH_TOKEN": "${localEnv:GH_TOKEN}"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "github.copilot",
+        "github.copilot-chat",
+        "github.vscode-pull-request-github",
+        "oxc.oxc-vscode"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+
+  "remoteUser": "node"
+}
