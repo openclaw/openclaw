@@ -4,12 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-### Highlights
-
-- Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
-
 ### Changes
 
+- Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, same-session agent consult routing, duplicate-consult coalescing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
+- Voice Call/realtime: add opt-in OpenClaw agent voice context capsules and consult-cadence guidance so Gemini/OpenAI realtime calls can sound like the configured agent without consulting the full agent on every ordinary turn. Thanks @scoootscooob.
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
@@ -74,6 +72,7 @@ Docs: https://docs.openclaw.ai
 - QA/Mantis: add `pnpm openclaw qa mantis slack-desktop-smoke` to run Slack live QA inside a Crabbox VNC desktop, open Slack Web, and capture desktop screenshots beside the Slack QA artifacts.
 - QA/Mantis: add visual desktop tasks with Crabbox MP4 recording, screenshot capture, and optional image-understanding assertions, and preserve video artifacts in Mantis before/after reports.
 - QA/Mantis: reuse Crabbox desktop/browser capture tooling and pnpm store caches during Slack desktop smoke runs, reducing per-scenario setup work before screenshots and videos are captured.
+- QA/Mantis: add Slack desktop hydrate modes and per-phase timing reports so warm prehydrated VNC leases can skip source install/build while cold runs still prove the full source checkout.
 - QA/Mantis: pass the runtime env through desktop-browser Crabbox and artifact-copy child commands, so embedded Mantis callers can provide Crabbox credentials without mutating the parent process. Thanks @vincentkoc.
 - QA/Mantis: return the copied Slack desktop screenshot path even when remote Slack QA fails, so the CLI still prints the failure screenshot artifact. Thanks @vincentkoc.
 - QA/Mantis: accept Blacksmith Testbox `tbx_...` lease ids from desktop smoke warmup, so provider overrides do not fail before inspect/run. Thanks @vincentkoc.
@@ -87,6 +86,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/streaming: show live reasoning text in progress drafts instead of a bare `Reasoning` status line.
 - Doctor/status: warn when `OPENCLAW_GATEWAY_TOKEN` would shadow a different active `gateway.auth.token` source for local CLI commands, while avoiding false positives when config points at the same env token. Fixes #74271. Thanks @yelog.
 - Gateway/OpenAI-compatible: send the assistant role SSE chunk as soon as streaming chat-completion headers are accepted, so cold agent setup cannot leave `/v1/chat/completions` clients with a bodyless 200 response until their idle timeout fires.
 - Agents/media: avoid direct generated-media completion fallback while the announce-agent run is still pending, so async video and music completions do not duplicate raw media messages. (#77754)

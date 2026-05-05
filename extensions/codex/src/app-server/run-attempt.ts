@@ -16,7 +16,6 @@ import {
   isSubagentSessionKey,
   normalizeAgentRuntimeTools,
   resolveAttemptSpawnWorkspaceDir,
-  resolveAgentDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveModelAuthMode,
   resolveSandboxContext,
@@ -38,6 +37,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import {
@@ -1466,7 +1466,7 @@ type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
-  sessionAgentId: string | undefined;
+  sessionAgentId: string;
   pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
