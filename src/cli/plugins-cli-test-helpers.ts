@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { createEmptyUninstallActions } from "../plugins/uninstall.js";
-import { createCliRuntimeCapture } from "./test-runtime-capture.js";
+import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -66,6 +66,7 @@ export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
+export const clearPluginRegistryLoadCache: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
@@ -77,12 +78,45 @@ export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
+export const findBundledPluginSourceMock: UnknownMock = vi.fn();
 export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
 export const recordHookInstall: UnknownMock = vi.fn();
 
-const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
-  createCliRuntimeCapture();
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } = vi.hoisted(() => {
+  const runtimeLogs: string[] = [];
+  const runtimeErrors: string[] = [];
+  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
+  const normalizeStdout = (value: string) => (value.endsWith("\n") ? value.slice(0, -1) : value);
+  const stringifyJson = (value: unknown, space = 2) =>
+    JSON.stringify(value, null, space > 0 ? space : undefined);
+  const defaultRuntime = {
+    log: vi.fn((...args: unknown[]) => {
+      runtimeLogs.push(stringifyArgs(args));
+    }),
+    error: vi.fn((...args: unknown[]) => {
+      runtimeErrors.push(stringifyArgs(args));
+    }),
+    writeStdout: vi.fn((value: string) => {
+      defaultRuntime.log(normalizeStdout(value));
+    }),
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      defaultRuntime.log(stringifyJson(value, space));
+    }),
+    exit: vi.fn((code: number) => {
+      throw new Error(`__exit__:${code}`);
+    }),
+  } as CliMockOutputRuntime;
+  return {
+    defaultRuntime,
+    runtimeLogs,
+    runtimeErrors,
+    resetRuntimeCapture: () => {
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+    },
+  };
+});
 
 export { runtimeErrors, runtimeLogs };
 
@@ -119,6 +153,8 @@ function restoreRuntimeCaptureMocks() {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+  writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
+    runtime.writeJson(value, space),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -162,11 +198,15 @@ vi.mock("../plugins/marketplace.js", () => ({
 }));
 
 vi.mock("../plugins/enable.js", () => ({
-  enablePluginInConfig: ((cfg: OpenClawConfig, pluginId: string) =>
-    invokeMock<[OpenClawConfig, string], unknown>(
+  enablePluginInConfig: ((
+    ...args: Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>,
+      unknown
+    >(
       enablePluginInConfig,
-      cfg,
-      pluginId,
+      ...args,
     )) as (typeof import("../plugins/enable.js"))["enablePluginInConfig"],
 }));
 
@@ -292,6 +332,11 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
     ...args: unknown[]
   ) => unknown,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   inspectPluginRegistry: ((
     ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
   ) =>
@@ -312,6 +357,13 @@ vi.mock("../plugins/plugin-registry.js", () => ({
       refreshPluginRegistry,
       ...args,
     )) as (typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"],
+}));
+
+vi.mock("../plugins/loader.js", () => ({
+  clearPluginRegistryLoadCache: ((...args: unknown[]) =>
+    invokeMock<unknown[], unknown>(clearPluginRegistryLoadCache, ...args)) as (
+    ...args: unknown[]
+  ) => unknown,
 }));
 
 vi.mock("../plugins/slots.js", async (importOriginal) => {
@@ -438,6 +490,26 @@ vi.mock("../plugins/install.js", () => ({
     )) as (typeof import("../plugins/install.js"))["installPluginFromPath"],
 }));
 
+vi.mock("../plugins/bundled-sources.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-sources.js")>();
+  return {
+    ...actual,
+    findBundledPluginSource: ((
+      ...args: Parameters<
+        (typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"]
+      >
+    ) => {
+      if (findBundledPluginSourceMock.getMockImplementation()) {
+        return invokeMock<
+          Parameters<(typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"]>,
+          ReturnType<(typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"]>
+        >(findBundledPluginSourceMock, ...args);
+      }
+      return actual.findBundledPluginSource(...args);
+    }) as (typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"],
+  };
+});
+
 vi.mock("../plugins/git-install.js", () => ({
   installPluginFromGitSpec: ((
     ...args: Parameters<(typeof import("../plugins/git-install.js"))["installPluginFromGitSpec"]>
@@ -560,6 +632,7 @@ export function resetPluginsCliTestState() {
   buildPluginCompatibilityNotices.mockReset();
   inspectPluginRegistry.mockReset();
   refreshPluginRegistry.mockReset();
+  clearPluginRegistryLoadCache.mockReset();
   applyExclusiveSlotSelection.mockReset();
   planPluginUninstall.mockReset();
   applyPluginUninstallDirectoryRemoval.mockReset();
@@ -573,6 +646,7 @@ export function resetPluginsCliTestState() {
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
+  findBundledPluginSourceMock.mockReset();
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();
   recordHookInstall.mockReset();
@@ -607,9 +681,11 @@ export function resetPluginsCliTestState() {
     ok: false,
     error: "marketplace install failed",
   });
-  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig) => ({ config: cfg })) as (
-    ...args: unknown[]
-  ) => unknown);
+  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig, pluginId: string) => ({
+    config: cfg,
+    enabled: true,
+    pluginId,
+  })) as (...args: unknown[]) => unknown);
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );

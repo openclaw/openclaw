@@ -1464,6 +1464,36 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsCleanupParams: Codable, Sendable {
+    public let agent: String?
+    public let allagents: Bool?
+    public let enforce: Bool?
+    public let activekey: String?
+    public let fixmissing: Bool?
+
+    public init(
+        agent: String?,
+        allagents: Bool?,
+        enforce: Bool?,
+        activekey: String?,
+        fixmissing: Bool?)
+    {
+        self.agent = agent
+        self.allagents = allagents
+        self.enforce = enforce
+        self.activekey = activekey
+        self.fixmissing = fixmissing
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agent
+        case allagents = "allAgents"
+        case enforce
+        case activekey = "activeKey"
+        case fixmissing = "fixMissing"
+    }
+}
+
 public struct SessionsPreviewParams: Codable, Sendable {
     public let keys: [String]
     public let limit: Int?
@@ -1483,6 +1513,28 @@ public struct SessionsPreviewParams: Codable, Sendable {
         case keys
         case limit
         case maxchars = "maxChars"
+    }
+}
+
+public struct SessionsDescribeParams: Codable, Sendable {
+    public let key: String
+    public let includederivedtitles: Bool?
+    public let includelastmessage: Bool?
+
+    public init(
+        key: String,
+        includederivedtitles: Bool?,
+        includelastmessage: Bool?)
+    {
+        self.key = key
+        self.includederivedtitles = includederivedtitles
+        self.includelastmessage = includelastmessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case includederivedtitles = "includeDerivedTitles"
+        case includelastmessage = "includeLastMessage"
     }
 }
 
@@ -2557,6 +2609,7 @@ public struct WizardStep: Codable, Sendable {
     public let type: AnyCodable
     public let title: String?
     public let message: String?
+    public let format: AnyCodable?
     public let options: [[String: AnyCodable]]?
     public let initialvalue: AnyCodable?
     public let placeholder: String?
@@ -2568,6 +2621,7 @@ public struct WizardStep: Codable, Sendable {
         type: AnyCodable,
         title: String?,
         message: String?,
+        format: AnyCodable?,
         options: [[String: AnyCodable]]?,
         initialvalue: AnyCodable?,
         placeholder: String?,
@@ -2578,6 +2632,7 @@ public struct WizardStep: Codable, Sendable {
         self.type = type
         self.title = title
         self.message = message
+        self.format = format
         self.options = options
         self.initialvalue = initialvalue
         self.placeholder = placeholder
@@ -2590,6 +2645,7 @@ public struct WizardStep: Codable, Sendable {
         case type
         case title
         case message
+        case format
         case options
         case initialvalue = "initialValue"
         case placeholder
@@ -2962,6 +3018,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
     public let channels: [String: AnyCodable]
     public let channelaccounts: [String: AnyCodable]
     public let channeldefaultaccountid: [String: AnyCodable]
+    public let eventloop: [String: AnyCodable]?
 
     public init(
         ts: Int,
@@ -2972,7 +3029,8 @@ public struct ChannelsStatusResult: Codable, Sendable {
         channelmeta: [[String: AnyCodable]]?,
         channels: [String: AnyCodable],
         channelaccounts: [String: AnyCodable],
-        channeldefaultaccountid: [String: AnyCodable])
+        channeldefaultaccountid: [String: AnyCodable],
+        eventloop: [String: AnyCodable]?)
     {
         self.ts = ts
         self.channelorder = channelorder
@@ -2983,6 +3041,7 @@ public struct ChannelsStatusResult: Codable, Sendable {
         self.channels = channels
         self.channelaccounts = channelaccounts
         self.channeldefaultaccountid = channeldefaultaccountid
+        self.eventloop = eventloop
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -2995,10 +3054,29 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case channels
         case channelaccounts = "channelAccounts"
         case channeldefaultaccountid = "channelDefaultAccountId"
+        case eventloop = "eventLoop"
     }
 }
 
 public struct ChannelsStartParams: Codable, Sendable {
+    public let channel: String
+    public let accountid: String?
+
+    public init(
+        channel: String,
+        accountid: String?)
+    {
+        self.channel = channel
+        self.accountid = accountid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case accountid = "accountId"
+    }
+}
+
+public struct ChannelsStopParams: Codable, Sendable {
     public let channel: String
     public let accountid: String?
 
@@ -4308,6 +4386,7 @@ public struct CronListParams: Codable, Sendable {
     public let enabled: AnyCodable?
     public let sortby: AnyCodable?
     public let sortdir: AnyCodable?
+    public let agentid: String?
 
     public init(
         includedisabled: Bool?,
@@ -4316,7 +4395,8 @@ public struct CronListParams: Codable, Sendable {
         query: String?,
         enabled: AnyCodable?,
         sortby: AnyCodable?,
-        sortdir: AnyCodable?)
+        sortdir: AnyCodable?,
+        agentid: String?)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -4325,6 +4405,7 @@ public struct CronListParams: Codable, Sendable {
         self.enabled = enabled
         self.sortby = sortby
         self.sortdir = sortdir
+        self.agentid = agentid
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4335,6 +4416,7 @@ public struct CronListParams: Codable, Sendable {
         case enabled
         case sortby = "sortBy"
         case sortdir = "sortDir"
+        case agentid = "agentId"
     }
 }
 
@@ -4459,11 +4541,13 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let status: AnyCodable?
     public let error: String?
     public let summary: String?
+    public let diagnostics: [String: AnyCodable]?
     public let delivered: Bool?
     public let deliverystatus: AnyCodable?
     public let deliveryerror: String?
     public let sessionid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
@@ -4479,11 +4563,13 @@ public struct CronRunLogEntry: Codable, Sendable {
         status: AnyCodable?,
         error: String?,
         summary: String?,
+        diagnostics: [String: AnyCodable]?,
         delivered: Bool?,
         deliverystatus: AnyCodable?,
         deliveryerror: String?,
         sessionid: String?,
         sessionkey: String?,
+        runid: String?,
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?,
@@ -4498,11 +4584,13 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.status = status
         self.error = error
         self.summary = summary
+        self.diagnostics = diagnostics
         self.delivered = delivered
         self.deliverystatus = deliverystatus
         self.deliveryerror = deliveryerror
         self.sessionid = sessionid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
@@ -4519,11 +4607,13 @@ public struct CronRunLogEntry: Codable, Sendable {
         case status
         case error
         case summary
+        case diagnostics
         case delivered
         case deliverystatus = "deliveryStatus"
         case deliveryerror = "deliveryError"
         case sessionid = "sessionId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"
@@ -5148,6 +5238,7 @@ public struct ChatHistoryParams: Codable, Sendable {
 
 public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
+    public let sessionid: String?
     public let message: String
     public let thinking: String?
     public let deliver: Bool?
@@ -5163,6 +5254,7 @@ public struct ChatSendParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        sessionid: String?,
         message: String,
         thinking: String?,
         deliver: Bool?,
@@ -5177,6 +5269,7 @@ public struct ChatSendParams: Codable, Sendable {
         idempotencykey: String)
     {
         self.sessionkey = sessionkey
+        self.sessionid = sessionid
         self.message = message
         self.thinking = thinking
         self.deliver = deliver
@@ -5193,6 +5286,7 @@ public struct ChatSendParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
         case message
         case thinking
         case deliver
@@ -5304,6 +5398,7 @@ public struct UpdateRunParams: Codable, Sendable {
     public let sessionkey: String?
     public let deliverycontext: [String: AnyCodable]?
     public let note: String?
+    public let continuationmessage: String?
     public let restartdelayms: Int?
     public let timeoutms: Int?
 
@@ -5311,12 +5406,14 @@ public struct UpdateRunParams: Codable, Sendable {
         sessionkey: String?,
         deliverycontext: [String: AnyCodable]?,
         note: String?,
+        continuationmessage: String?,
         restartdelayms: Int?,
         timeoutms: Int?)
     {
         self.sessionkey = sessionkey
         self.deliverycontext = deliverycontext
         self.note = note
+        self.continuationmessage = continuationmessage
         self.restartdelayms = restartdelayms
         self.timeoutms = timeoutms
     }
@@ -5325,6 +5422,7 @@ public struct UpdateRunParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case deliverycontext = "deliveryContext"
         case note
+        case continuationmessage = "continuationMessage"
         case restartdelayms = "restartDelayMs"
         case timeoutms = "timeoutMs"
     }

@@ -50,6 +50,29 @@ function stableVersionFromTag(tagName) {
   return version;
 }
 
+function parseStableVersion(version) {
+  const match = /^([0-9]{4})\.([0-9]+)\.([0-9]+)(?:-([0-9]+))?$/u.exec(String(version ?? ""));
+  if (!match) {
+    return undefined;
+  }
+  return match.slice(1).map((part) => Number.parseInt(part ?? "0", 10));
+}
+
+function compareStableVersions(left, right) {
+  const leftParts = parseStableVersion(left);
+  const rightParts = parseStableVersion(right);
+  if (!leftParts || !rightParts) {
+    throw new Error(`cannot compare release versions: ${left} ${right}`);
+  }
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const delta = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
 function npmPublishedVersion(version, publishedVersions) {
   if (!version || !publishedVersions) {
     return version;
@@ -105,6 +128,33 @@ export function resolveReleaseHistory(args) {
   return dedupeSpecs(versions);
 }
 
+export function resolveLastStable(args, count) {
+  const releasesJson = args.get("releases-json");
+  if (!releasesJson) {
+    throw new Error("--releases-json is required when requested baselines include last-stable-*");
+  }
+  if (!Number.isInteger(count) || count < 1) {
+    throw new Error(`invalid last-stable baseline count: ${count}`);
+  }
+  const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
+  const releases = readStableReleases(releasesJson, publishedVersions);
+  return dedupeSpecs(releases.slice(0, count).map((release) => release.version));
+}
+
+export function resolveAllSince(args, minimumVersion) {
+  const releasesJson = args.get("releases-json");
+  if (!releasesJson) {
+    throw new Error("--releases-json is required when requested baselines include all-since-*");
+  }
+  const publishedVersions = readPublishedVersions(args.get("npm-versions-json"));
+  const releases = readStableReleases(releasesJson, publishedVersions);
+  return dedupeSpecs(
+    releases
+      .map((release) => release.version)
+      .filter((version) => compareStableVersions(version, minimumVersion) >= 0),
+  );
+}
+
 export function resolveBaselines(args) {
   const requested = args.get("requested") ?? "";
   const fallback = args.get("fallback") ?? "openclaw@latest";
@@ -112,16 +162,24 @@ export function resolveBaselines(args) {
   if (requestedTokens.length === 0) {
     return dedupeSpecs([fallback]);
   }
-  const exactTokens = [];
   const resolved = [];
   for (const token of requestedTokens) {
     if (token === "release-history") {
       resolved.push(...resolveReleaseHistory(args));
+    } else if (token.startsWith("last-stable-")) {
+      const count = Number.parseInt(token.slice("last-stable-".length), 10);
+      resolved.push(...resolveLastStable(args, count));
+    } else if (token.startsWith("all-since-")) {
+      const minimumVersion = token.slice("all-since-".length);
+      if (!parseStableVersion(minimumVersion)) {
+        throw new Error(`invalid all-since baseline token: ${token}`);
+      }
+      resolved.push(...resolveAllSince(args, minimumVersion));
     } else {
-      exactTokens.push(token);
+      resolved.push(token);
     }
   }
-  return dedupeSpecs([...exactTokens, ...resolved]);
+  return dedupeSpecs(resolved);
 }
 
 const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;

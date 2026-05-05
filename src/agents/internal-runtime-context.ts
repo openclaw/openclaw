@@ -221,7 +221,7 @@ export function hasInternalRuntimeContext(text: string): boolean {
   );
 }
 
-export function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
+function isOpenClawRuntimeContextCustomMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
@@ -236,4 +236,24 @@ export function stripRuntimeContextCustomMessages<T>(messages: T[]): T[] {
     return messages;
   }
   return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+}
+
+function isUserMessage(message: unknown): boolean {
+  return Boolean(
+    message && typeof message === "object" && (message as { role?: unknown }).role === "user",
+  );
+}
+
+/** Removes stale runtime-context custom messages while preserving current-turn context. */
+export function stripHistoricalRuntimeContextCustomMessages<T>(messages: T[]): T[] {
+  if (!messages.some(isOpenClawRuntimeContextCustomMessage)) {
+    return messages;
+  }
+  const lastUserIndex = messages.findLastIndex(isUserMessage);
+  if (lastUserIndex === -1) {
+    return messages.filter((message) => !isOpenClawRuntimeContextCustomMessage(message));
+  }
+  return messages.filter(
+    (message, index) => !isOpenClawRuntimeContextCustomMessage(message) || index > lastUserIndex,
+  );
 }

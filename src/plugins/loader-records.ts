@@ -11,6 +11,7 @@ export function createPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  packageName?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
   bundleCapabilities?: string[];
@@ -18,10 +19,13 @@ export function createPluginRecord(params: {
   rootDir?: string;
   origin: PluginRecord["origin"];
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
   syntheticAuthRefs?: string[];
+  channelIds?: readonly string[];
+  providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
 }): PluginRecord {
@@ -30,6 +34,7 @@ export function createPluginRecord(params: {
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    packageName: params.packageName,
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
     bundleCapabilities: params.bundleCapabilities,
@@ -37,6 +42,7 @@ export function createPluginRecord(params: {
     rootDir: params.rootDir,
     origin: params.origin,
     workspaceDir: params.workspaceDir,
+    trustedOfficialInstall: params.trustedOfficialInstall,
     enabled: params.enabled,
     compat: params.compat,
     explicitlyEnabled: params.activationState?.explicitlyEnabled,
@@ -47,21 +53,21 @@ export function createPluginRecord(params: {
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
-    channelIds: [],
+    channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
-    providerIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
+    providerIds: [...(params.providerIds ?? [])],
+    speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
+    realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
+    realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
+    mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
+    imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
+    videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
+    musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],
+    webFetchProviderIds: [...(params.contracts?.webFetchProviders ?? [])],
+    webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
+    migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
     contextEngineIds: [],
-    memoryEmbeddingProviderIds: [],
+    memoryEmbeddingProviderIds: [...(params.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],

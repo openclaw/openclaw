@@ -1,12 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import type { PluginKind } from "../plugins/plugin-kind.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
@@ -59,13 +57,12 @@ function buildSlotSelectionRegistry(
   config: OpenClawConfig,
   pluginId: string,
 ): SlotSelectionRegistry {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const plugins = loadPluginMetadataSnapshot({
     config,
-    includeDisabled: true,
-    pluginIds: [pluginId],
-  });
+    env: process.env,
+  }).plugins.filter((plugin) => plugin.id === pluginId);
   return {
-    plugins: registry.plugins.map((plugin) => ({
+    plugins: plugins.map((plugin) => ({
       id: plugin.id,
       kind: plugin.kind,
     })),
@@ -129,23 +126,23 @@ export function applySlotSelectionForPlugin(
   return { config: result.config, warnings: result.warnings };
 }
 
-export function createPluginInstallLogger(): {
+export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
   return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+    info: (msg) => runtime.log(msg),
+    warn: (msg) => runtime.log(theme.warn(msg)),
   };
 }
 
-export function createHookPackInstallLogger(): {
+export function createHookPackInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
   return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+    info: (msg) => runtime.log(msg),
+    warn: (msg) => runtime.log(theme.warn(msg)),
   };
 }
 
@@ -179,37 +176,49 @@ export function formatPluginInstallWithHookFallbackError(
   pluginError: string,
   hookError: string,
 ): string {
+  const formattedPluginError = formatPluginInstallAttemptError(pluginError);
+  const formattedHookError = formatPluginInstallAttemptError(hookError);
   if (/plugin already exists: .+ \(delete it first\)/.test(pluginError)) {
-    return `${pluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
+    return `${formattedPluginError}\nUse \`openclaw plugins update <id-or-npm-spec>\` to upgrade the tracked plugin, or rerun install with \`--force\` to replace it.`;
   }
   if (
     pluginError.startsWith("Invalid extensions directory:") ||
     pluginError === "Invalid path: must stay within extensions directory"
   ) {
-    return pluginError;
+    return formattedPluginError;
   }
-  return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
+  return `${formattedPluginError}\nAlso not a valid hook pack: ${formattedHookError}`;
 }
 
-export function logHookPackRestartHint() {
-  defaultRuntime.log("Restart the gateway to load hooks.");
+const MISSING_GIT_FOR_NPM_DEPENDENCY_HINT =
+  "Git is required because one of this plugin's npm dependencies is fetched from a git URL, but `git` was not found on PATH. Install Git and rerun the install. On Windows, use `winget install --id Git.Git -e` or add a portable Git `bin` directory to PATH.";
+
+function formatPluginInstallAttemptError(error: string): string {
+  if (!isMissingGitForNpmDependencyError(error)) {
+    return error;
+  }
+  if (error.includes(MISSING_GIT_FOR_NPM_DEPENDENCY_HINT)) {
+    return error;
+  }
+  return `${error}\n\n${MISSING_GIT_FOR_NPM_DEPENDENCY_HINT}`;
 }
 
-export function logSlotWarnings(warnings: string[]) {
+function isMissingGitForNpmDependencyError(error: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(error);
+  return /\bspawn\s+git\b/u.test(normalized) && /\benoent\b/u.test(normalized);
+}
+
+export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {
+  runtime.log("Restart the gateway to load hooks.");
+}
+
+export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
   if (warnings.length === 0) {
     return;
   }
   for (const warning of warnings) {
-    defaultRuntime.log(theme.warn(warning));
+    runtime.log(theme.warn(warning));
   }
-}
-
-export function buildPreferredClawHubSpec(raw: string): string | null {
-  const parsed = parseRegistryNpmSpec(raw);
-  if (!parsed) {
-    return null;
-  }
-  return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
 }
 
 export function parseNpmPrefixSpec(raw: string): string | null {
@@ -218,24 +227,4 @@ export function parseNpmPrefixSpec(raw: string): string | null {
     return null;
   }
   return trimmed.slice("npm:".length).trim();
-}
-
-export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
-  FALLBACK_TO_NPM: "fallback_to_npm",
-  STOP: "stop",
-} as const;
-
-export type PreferredClawHubFallbackDecision =
-  (typeof PREFERRED_CLAWHUB_FALLBACK_DECISION)[keyof typeof PREFERRED_CLAWHUB_FALLBACK_DECISION];
-
-export function decidePreferredClawHubFallback(params: {
-  code?: string;
-}): PreferredClawHubFallbackDecision {
-  if (
-    params.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
-    params.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
-  ) {
-    return PREFERRED_CLAWHUB_FALLBACK_DECISION.FALLBACK_TO_NPM;
-  }
-  return PREFERRED_CLAWHUB_FALLBACK_DECISION.STOP;
 }
