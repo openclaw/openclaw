@@ -7,11 +7,12 @@ import {
   resolvePreferredServerChatModelValue,
 } from "./chat-model-ref.ts";
 import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
+import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { ModelCatalogEntry } from "./types.ts";
 
 type ChatModelSelectStateInput = Pick<
   AppViewState,
-  "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "sessionsResult"
+  "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "sessionsResult" | "agentsList"
 >;
 
 export type ChatModelSelectOption = {
@@ -31,6 +32,15 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
 }
 
+function resolveActiveAgentDefaultModelValue(
+  state: ChatModelSelectStateInput,
+  catalog: ModelCatalogEntry[],
+): string {
+  const agentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  const agent = state.agentsList?.agents.find((entry) => entry.id.trim().toLowerCase() === agentId);
+  return resolvePreferredServerChatModelValue(agent?.model?.primary, undefined, catalog);
+}
+
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
 
@@ -47,11 +57,32 @@ export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput):
   return resolvePreferredServerChatModelValue(activeRow?.model, activeRow?.modelProvider, catalog);
 }
 
-function resolveDefaultModelValue(state: ChatModelSelectStateInput): string {
+function resolveDefaultModelValue(
+  state: ChatModelSelectStateInput,
+  currentOverride: string,
+): string {
+  const catalog = state.chatModelCatalog ?? [];
+  const agentDefault = resolveActiveAgentDefaultModelValue(state, catalog);
+  if (agentDefault) {
+    return agentDefault;
+  }
+
+  const activeRow = resolveActiveSessionRow(state);
+  if (!currentOverride) {
+    const activeSessionDefault = resolvePreferredServerChatModelValue(
+      activeRow?.model,
+      activeRow?.modelProvider,
+      catalog,
+    );
+    if (activeSessionDefault) {
+      return activeSessionDefault;
+    }
+  }
+
   return resolvePreferredServerChatModelValue(
     state.sessionsResult?.defaults?.model,
     state.sessionsResult?.defaults?.modelProvider,
-    state.chatModelCatalog ?? [],
+    catalog,
   );
 }
 
@@ -91,7 +122,7 @@ export function resolveChatModelSelectState(
   const catalog = state.chatModelCatalog ?? [];
   const displayLookup = buildCatalogDisplayLookup(catalog);
   const currentOverride = resolveChatModelOverrideValue(state);
-  const defaultModel = resolveDefaultModelValue(state);
+  const defaultModel = resolveDefaultModelValue(state, currentOverride);
   const defaultDisplay = formatCatalogChatModelDisplayFromLookup(defaultModel, displayLookup);
 
   return {
