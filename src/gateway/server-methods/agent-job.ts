@@ -26,6 +26,7 @@ let agentRunListenerStarted = false;
 type AgentRunSnapshot = {
   runId: string;
   status: "ok" | "error" | "timeout";
+  phase?: "end" | "error" | "startup-failed";
   startedAt?: number;
   endedAt?: number;
   error?: string;
@@ -149,6 +150,7 @@ function createSnapshotFromLifecycleEvent(params: {
     runId,
     status:
       phase === "error" || phase === "startup-failed" ? "error" : data?.aborted ? "timeout" : "ok",
+    phase,
     startedAt,
     endedAt,
     error,
@@ -194,6 +196,10 @@ function ensureAgentRunListener() {
       phase,
       data: evt.data,
     });
+    const existing = getCachedAgentRun(evt.runId);
+    if (phase === "end" && existing?.phase === "startup-failed") {
+      return;
+    }
     agentRunStarts.delete(evt.runId);
     if (phase === "error") {
       schedulePendingAgentRunError(snapshot);
@@ -348,7 +354,7 @@ export async function waitForAgentJob(params: {
         clearPendingTimeoutTimer();
         return;
       }
-      if (phase !== "end" && phase !== "error") {
+      if (phase !== "end" && phase !== "error" && phase !== "startup-failed") {
         return;
       }
       const latest = ignoreCachedSnapshot ? undefined : getCachedAgentRun(runId);
@@ -363,6 +369,11 @@ export async function waitForAgentJob(params: {
       });
       if (phase === "error") {
         scheduleErrorFinish(snapshot);
+        return;
+      }
+      if (phase === "startup-failed") {
+        recordAgentRunSnapshot(snapshot);
+        finish(snapshot);
         return;
       }
       if (snapshot.status === "timeout") {
