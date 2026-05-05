@@ -8334,9 +8334,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         postCompactionGuard: {
                           type: "object",
                           properties: {
-                            enabled: {
-                              type: "boolean",
-                            },
                             windowSize: {
                               type: "integer",
                               exclusiveMinimum: 0,
@@ -18272,12 +18269,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               postCompactionGuard: {
                 type: "object",
                 properties: {
-                  enabled: {
-                    type: "boolean",
-                    title: "Post-compaction Loop Guard",
-                    description:
-                      "Enable the post-compaction loop guard that aborts the run when the agent repeats the same (tool, args, result) triple windowSize times immediately after auto-compaction-retry (default: true).",
-                  },
                   windowSize: {
                     type: "integer",
                     exclusiveMinimum: 0,
@@ -25648,11 +25639,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Tool-loop Global Circuit Breaker Threshold",
       help: "Global no-progress breaker threshold (default: 30).",
       tags: ["reliability", "tools"],
-    },
-    "tools.loopDetection.postCompactionGuard.enabled": {
-      label: "Post-compaction Loop Guard",
-      help: "Enable the post-compaction loop guard that aborts the run when the agent repeats the same (tool, args, result) triple windowSize times immediately after auto-compaction-retry (default: true).",
-      tags: ["tools"],
     },
     "tools.loopDetection.postCompactionGuard.windowSize": {
       label: "Post-compaction Loop Guard Window Size",

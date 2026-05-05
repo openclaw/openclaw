@@ -45,9 +45,10 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
 
 export function createPostCompactionLoopGuard(
   config?: ToolLoopPostCompactionGuardConfig,
+  options?: { enabled?: boolean },
 ): PostCompactionLoopGuard {
   const state: GuardState = {
-    enabled: config?.enabled ?? true,
+    enabled: options?.enabled ?? true,
     windowSize: asPositiveInt(config?.windowSize, DEFAULT_WINDOW_SIZE),
     remainingAttempts: 0,
     history: [],

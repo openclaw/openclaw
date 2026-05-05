@@ -167,8 +167,6 @@ export type ToolLoopDetectionDetectorConfig = {
 };
 
 export type ToolLoopPostCompactionGuardConfig = {
-  /** Enable a strict guard that aborts when the agent re-enters the same tool-call loop immediately after a successful auto-compaction-retry (default: true). */
-  enabled?: boolean;
   /** How many attempts post-compaction the guard remains armed (default: 3). */
   windowSize?: number;
 };

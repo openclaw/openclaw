@@ -92,8 +92,8 @@ describe("createPostCompactionLoopGuard", () => {
     expect(guard.snapshot().remainingAttempts).toBe(2);
   });
 
-  it("respects enabled: false (always returns shouldAbort: false even when armed)", () => {
-    const guard = createPostCompactionLoopGuard({ enabled: false, windowSize: 3 });
+  it("respects the parent loop detection disabled state", () => {
+    const guard = createPostCompactionLoopGuard({ windowSize: 3 }, { enabled: false });
     guard.armPostCompaction();
     guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
     guard.observe(callOutcome("gateway", { x: 1 }, "r1"));

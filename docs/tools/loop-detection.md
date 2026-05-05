@@ -96,8 +96,8 @@ This is a separate code path from the global `tools.loopDetection` detectors. It
 {
   tools: {
     loopDetection: {
+      enabled: true, // existing master switch; set false to disable loop guards
       postCompactionGuard: {
-        enabled: true, // default: true
         windowSize: 3, // default: 3
       },
     },
@@ -105,7 +105,6 @@ This is a separate code path from the global `tools.loopDetection` detectors. It
 }
 ```
 
-- `enabled`: master switch for the guard.
 - `windowSize`: number of post-compaction tool calls during which the guard stays armed _and_ the count of identical (tool, args, result) triples that triggers an abort.
 
 The guard never aborts when results are changing, only when results are byte-identical across the window. It is intentionally narrow: it fires only in the immediate aftermath of a compaction-retry.

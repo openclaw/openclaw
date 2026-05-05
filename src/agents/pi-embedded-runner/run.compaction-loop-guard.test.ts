@@ -274,7 +274,7 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
       config: {
         tools: {
           loopDetection: {
-            postCompactionGuard: { enabled: true, windowSize: 2 },
+            postCompactionGuard: { windowSize: 2 },
           },
         },
       } as never,
@@ -322,7 +322,7 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
       config: {
         tools: {
           loopDetection: {
-            postCompactionGuard: { enabled: true, windowSize: 2 },
+            postCompactionGuard: { windowSize: 2 },
           },
         },
         agents: {
@@ -336,6 +336,54 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
               },
             },
           ],
+        },
+      } as never,
+    });
+
+    expect(result.meta.error).toBeUndefined();
+    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not arm the post-compaction guard when loop detection is disabled", async () => {
+    const overflowError = makeOverflowError();
+
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
+      makeAttemptResult({ promptError: overflowError }),
+    );
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
+      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
+        .onToolOutcome;
+      for (let i = 0; i < 3; i += 1) {
+        await executeWrappedToolOutcome(
+          "gateway",
+          { action: "lookup", path: "x" },
+          "identical-result",
+          onToolOutcome,
+        );
+      }
+      return makeAttemptResult({
+        promptError: null,
+        toolMetas: [{ toolName: "gateway" }, { toolName: "gateway" }, { toolName: "gateway" }],
+      });
+    });
+
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        firstKeptEntryId: "entry-5",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      config: {
+        tools: {
+          loopDetection: {
+            enabled: false,
+            postCompactionGuard: { windowSize: 2 },
+          },
         },
       } as never,
     });

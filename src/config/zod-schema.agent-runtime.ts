@@ -504,7 +504,6 @@ const ToolLoopDetectionDetectorSchema = z
 
 const ToolLoopPostCompactionGuardSchema = z
   .object({
-    enabled: z.boolean().optional(),
     windowSize: z.number().int().positive().optional(),
   })
   .strict()

@@ -797,6 +797,7 @@ export async function runEmbeddedPiAgent(
       });
       const postCompactionGuard = createPostCompactionLoopGuard(
         resolvedLoopDetectionConfig?.postCompactionGuard,
+        { enabled: resolvedLoopDetectionConfig?.enabled !== false },
       );
       const observePostCompactionToolOutcome = (
         observation: PostCompactionGuardObservation,

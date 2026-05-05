@@ -9,7 +9,6 @@ describe("OpenClawSchema tools.loopDetection.postCompactionGuard validation", ()
         loopDetection: {
           enabled: true,
           postCompactionGuard: {
-            enabled: false,
             windowSize: 5,
           },
         },
@@ -34,7 +33,6 @@ describe("OpenClawSchema tools.loopDetection.postCompactionGuard validation", ()
       tools: {
         loopDetection: {
           postCompactionGuard: {
-            enabled: true,
             windowSize: 3,
             bogus: "key",
           },
@@ -73,7 +71,7 @@ describe("OpenClawSchema tools.loopDetection.postCompactionGuard validation", ()
   it("validates via ToolsSchema directly", () => {
     const result = ToolsSchema.safeParse({
       loopDetection: {
-        postCompactionGuard: { enabled: true, windowSize: 4 },
+        postCompactionGuard: { windowSize: 4 },
       },
     });
     expect(result.success).toBe(true);
