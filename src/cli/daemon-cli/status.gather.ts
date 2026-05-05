@@ -34,7 +34,13 @@ import {
   type GatewayRestartHandoff,
 } from "../../infra/restart-handoff.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
+import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
+import {
+  detectPluginVersionDrift,
+  type PluginVersionDriftReport,
+} from "../../plugins/plugin-version-drift.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { VERSION } from "../../version.js";
 import { normalizeListenerAddress, parsePortFromArgs, pickProbeHostForBind } from "./shared.js";
 import type { GatewayRpcOpts } from "./types.js";
 
@@ -290,6 +296,14 @@ export type DaemonStatus = {
     staleGatewayPids: number[];
   };
   extraServices: Array<{ label: string; detail: string; scope: string }>;
+  /**
+   * Plugin version drift report. Only populated when `gatherDaemonStatus` is
+   * called with `deep: true`. Surfaces externalized (npm/ClawHub) plugins
+   * whose installed version does not match the running gateway version,
+   * which can happen after `npm install -g openclaw@<v>` updates the gateway
+   * binary without a corresponding `openclaw plugins update`.
+   */
+  pluginVersionDrift?: PluginVersionDriftReport;
 };
 
 function shouldReportPortUsage(status: PortUsageStatus | undefined, rpcOk?: boolean) {
@@ -481,6 +495,27 @@ export async function gatherDaemonStatus(
         .catch(() => [])
     : [];
 
+  // Plugin version drift detection (deep-only).
+  // Compares each externalized (npm/ClawHub) plugin's installed version
+  // against the running gateway VERSION. Bundled plugins ship inside the
+  // gateway package and never drift. Best-effort: a failure to read the
+  // install records is logged via lastError and the report is omitted.
+  let pluginVersionDrift: PluginVersionDriftReport | undefined;
+  if (opts.deep) {
+    try {
+      const installRecords = await loadInstalledPluginIndexInstallRecords();
+      pluginVersionDrift = detectPluginVersionDrift({
+        gatewayVersion: VERSION,
+        installRecords,
+        config: daemonCfg,
+      });
+    } catch {
+      // Non-fatal: status output should still render even if the install
+      // index is unreadable. Drift detection is purely advisory.
+      pluginVersionDrift = undefined;
+    }
+  }
+
   const timeoutMs =
     parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
     Math.max(10_000, daemonCfg.gateway?.handshakeTimeoutMs ?? 0);
@@ -591,6 +626,7 @@ export async function gatherDaemonStatus(
         }
       : {}),
     extraServices,
+    ...(pluginVersionDrift ? { pluginVersionDrift } : {}),
   };
 }
 
