@@ -1196,7 +1196,8 @@ async function agentCommandInternal(
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
 
-    if (result.meta.executionTrace?.runner === "cli") {
+    const runner = result.meta.executionTrace?.runner;
+    if (runner === "cli" || runner === "embedded") {
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
@@ -1212,30 +1213,32 @@ async function agentCommandInternal(
           sessionCwd: workspaceDir,
           config: cfg,
         });
-        sessionEntry = await (
-          await loadCliCompactionRuntime()
-        ).runCliTurnCompactionLifecycle({
-          cfg,
-          sessionId,
-          sessionKey: sessionKey ?? sessionId,
-          sessionEntry,
-          sessionStore,
-          storePath,
-          sessionAgentId,
-          workspaceDir,
-          agentDir,
-          provider: result.meta.agentMeta?.provider ?? provider,
-          model: result.meta.agentMeta?.model ?? model,
-          skillsSnapshot,
-          messageChannel,
-          agentAccountId: runContext.accountId,
-          senderIsOwner: opts.senderIsOwner,
-          thinkLevel: resolvedThinkLevel,
-          extraSystemPrompt: opts.extraSystemPrompt,
-        });
+        if (runner === "cli") {
+          sessionEntry = await (
+            await loadCliCompactionRuntime()
+          ).runCliTurnCompactionLifecycle({
+            cfg,
+            sessionId,
+            sessionKey: sessionKey ?? sessionId,
+            sessionEntry,
+            sessionStore,
+            storePath,
+            sessionAgentId,
+            workspaceDir,
+            agentDir,
+            provider: result.meta.agentMeta?.provider ?? provider,
+            model: result.meta.agentMeta?.model ?? model,
+            skillsSnapshot,
+            messageChannel,
+            agentAccountId: runContext.accountId,
+            senderIsOwner: opts.senderIsOwner,
+            thinkLevel: resolvedThinkLevel,
+            extraSystemPrompt: opts.extraSystemPrompt,
+          });
+        }
       } catch (error) {
         log.warn(
-          `CLI transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          `Transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
