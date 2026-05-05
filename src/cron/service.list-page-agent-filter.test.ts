@@ -35,7 +35,7 @@ describe("cron listPage agentId filter (#77118)", () => {
     const state = createMockCronStateForJobs({ jobs });
 
     const mainPage = await listPage(state, { agentId: "main" });
-    expect(mainPage.jobs.map((j) => j.id).sort()).toEqual(["main-1", "main-2"]);
+    expect(mainPage.jobs.map((j) => j.id).toSorted()).toEqual(["main-1", "main-2"]);
     expect(mainPage.total).toBe(2);
 
     const alphaPage = await listPage(state, { agentId: "alpha" });
@@ -98,7 +98,10 @@ describe("cron listPage agentId filter (#77118)", () => {
     const state = createMockCronStateForJobs({ jobs, defaultAgentId: "main" });
 
     const mainPage = await listPage(state, { agentId: "main" });
-    expect(mainPage.jobs.map((j) => j.id).sort()).toEqual(["default-explicit", "default-implicit"]);
+    expect(mainPage.jobs.map((j) => j.id).toSorted()).toEqual([
+      "default-explicit",
+      "default-implicit",
+    ]);
     expect(mainPage.total).toBe(2);
   });
 });
