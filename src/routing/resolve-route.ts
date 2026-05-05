@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
@@ -203,6 +204,93 @@ type EvaluatedBindingsCache = {
 
 const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
 const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
+
+// Secondary cache keyed by the `bindings` array identity (and its content fingerprint).
+// The primary WeakMap<OpenClawConfig, EvaluatedBindingsCache> misses whenever callers
+// rebuild a fresh cfg object on every resolve call — even if the underlying bindings
+// array is identical. We catch two increasingly expensive cases here:
+//   1. Same bindings array reference reused across cfg objects (O(1) lookup).
+//   2. Same bindings content but a new array instance (O(N) SHA-256 fingerprint once,
+//      then O(1) lookups for subsequent identical payloads).
+// Both layers are bounded so long-running processes cannot grow them unboundedly.
+const evaluatedBindingsCacheByBindingsRef = new WeakMap<object, EvaluatedBindingsCache>();
+const evaluatedBindingsCacheByFingerprint = new Map<string, EvaluatedBindingsCache>();
+const MAX_EVALUATED_BINDINGS_FINGERPRINT_KEYS = 64;
+
+function computeBindingsFingerprint(bindings: OpenClawConfig["bindings"]): string | null {
+  if (!Array.isArray(bindings) || bindings.length === 0) {
+    // For empty/undefined bindings the cheap WeakMap path is sufficient; skip hashing.
+    return null;
+  }
+  try {
+    return createHash("sha256").update(JSON.stringify(bindings)).digest("hex");
+  } catch {
+    // JSON.stringify can throw on circular structures. Fall back to no fingerprint;
+    // the primary WeakMap path still works, we just lose the cross-cfg fast path.
+    return null;
+  }
+}
+
+function rememberEvaluatedBindingsCache(
+  cfg: OpenClawConfig,
+  cache: EvaluatedBindingsCache,
+  fingerprint: string | null,
+): void {
+  evaluatedBindingsCacheByCfg.set(cfg, cache);
+  if (cache.bindingsRef && typeof cache.bindingsRef === "object") {
+    evaluatedBindingsCacheByBindingsRef.set(cache.bindingsRef as object, cache);
+  }
+  if (fingerprint) {
+    if (
+      !evaluatedBindingsCacheByFingerprint.has(fingerprint) &&
+      evaluatedBindingsCacheByFingerprint.size >= MAX_EVALUATED_BINDINGS_FINGERPRINT_KEYS
+    ) {
+      // Simple LRU-ish eviction: drop the oldest insertion.
+      const oldest = evaluatedBindingsCacheByFingerprint.keys().next().value;
+      if (oldest !== undefined) {
+        evaluatedBindingsCacheByFingerprint.delete(oldest);
+      }
+    }
+    evaluatedBindingsCacheByFingerprint.set(fingerprint, cache);
+  }
+}
+
+function lookupEvaluatedBindingsCache(cfg: OpenClawConfig): {
+  cache: EvaluatedBindingsCache | undefined;
+  fingerprint: string | null;
+} {
+  const bindingsRef = cfg.bindings;
+  const byCfg = evaluatedBindingsCacheByCfg.get(cfg);
+  if (byCfg && byCfg.bindingsRef === bindingsRef) {
+    return { cache: byCfg, fingerprint: null };
+  }
+
+  // Same bindings array referenced via a freshly built cfg object.
+  if (bindingsRef && typeof bindingsRef === "object") {
+    const byRef = evaluatedBindingsCacheByBindingsRef.get(bindingsRef as object);
+    if (byRef) {
+      evaluatedBindingsCacheByCfg.set(cfg, byRef);
+      return { cache: byRef, fingerprint: null };
+    }
+  }
+
+  // Different bindings array but potentially identical content — only hash on miss.
+  const fingerprint = computeBindingsFingerprint(bindingsRef);
+  if (fingerprint) {
+    const byFingerprint = evaluatedBindingsCacheByFingerprint.get(fingerprint);
+    if (byFingerprint) {
+      // Re-bind to the new cfg/bindingsRef for cheap hits next time.
+      evaluatedBindingsCacheByCfg.set(cfg, byFingerprint);
+      if (bindingsRef && typeof bindingsRef === "object") {
+        evaluatedBindingsCacheByBindingsRef.set(bindingsRef as object, byFingerprint);
+      }
+      return { cache: byFingerprint, fingerprint };
+    }
+  }
+
+  return { cache: undefined, fingerprint };
+}
+
 const resolvedRouteCacheByCfg = new WeakMap<
   OpenClawConfig,
   {
@@ -425,19 +513,18 @@ function getEvaluatedBindingsForChannelAccount(
   channel: string,
   accountId: string,
 ): EvaluatedBinding[] {
-  const bindingsRef = cfg.bindings;
-  const existing = evaluatedBindingsCacheByCfg.get(cfg);
-  const cache =
-    existing && existing.bindingsRef === bindingsRef
-      ? existing
-      : {
-          bindingsRef,
-          byChannel: buildEvaluatedBindingsByChannel(cfg),
-          byChannelAccount: new Map<string, EvaluatedBinding[]>(),
-          byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
-        };
-  if (cache !== existing) {
-    evaluatedBindingsCacheByCfg.set(cfg, cache);
+  const { cache: existingCache, fingerprint } = lookupEvaluatedBindingsCache(cfg);
+  let cache: EvaluatedBindingsCache;
+  if (existingCache) {
+    cache = existingCache;
+  } else {
+    cache = {
+      bindingsRef: cfg.bindings,
+      byChannel: buildEvaluatedBindingsByChannel(cfg),
+      byChannelAccount: new Map<string, EvaluatedBinding[]>(),
+      byChannelAccountIndex: new Map<string, EvaluatedBindingsIndex>(),
+    };
+    rememberEvaluatedBindingsCache(cfg, cache, fingerprint);
   }
 
   const cacheKey = `${channel}\t${accountId}`;
