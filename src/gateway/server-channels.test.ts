@@ -395,6 +395,7 @@ describe("server-channels auto restart", () => {
       setStatus({ accountId: DEFAULT_ACCOUNT_ID, lastError: `task-${runId}` });
       if (runId === 1) {
         await firstTask.promise;
+        setStatus({ accountId: DEFAULT_ACCOUNT_ID, lastError: "stale-task" });
         return;
       }
       await new Promise<void>(() => {});

@@ -511,6 +511,15 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             lastError: null,
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
+          let trackedPromise: Promise<unknown>;
+          const isActiveTask = () =>
+            store.tasks.get(id) === trackedPromise && store.aborts.get(id) === abort;
+          const setActiveTaskStatus = (next: ChannelAccountSnapshot) => {
+            if (!isActiveTask()) {
+              return;
+            }
+            setRuntime(channelId, id, next);
+          };
           const task = Promise.resolve().then(() =>
             measureStartup(`channels.${channelId}.start-account`, () =>
               startAccount({
@@ -521,14 +530,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 abortSignal: abort.signal,
                 log,
                 getStatus: () => getRuntime(channelId, id),
-                setStatus: (next) => setRuntime(channelId, id, next),
+                setStatus: setActiveTaskStatus,
                 ...(channelRuntimeForTask ? { channelRuntime: channelRuntimeForTask } : {}),
               }),
             ),
           );
-          let trackedPromise: Promise<unknown>;
-          const isActiveTask = () =>
-            store.tasks.get(id) === trackedPromise && store.aborts.get(id) === abort;
           trackedPromise = task
             .then(() => {
               if (!isActiveTask()) {
