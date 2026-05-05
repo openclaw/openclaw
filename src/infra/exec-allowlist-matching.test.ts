@@ -97,4 +97,55 @@ describe("exec allowlist matching", () => {
       expect(matchAllowlist([{ pattern }], resolution)?.pattern).toBe(pattern);
     }
   });
+
+  describe("symlink/realpath dual matching (#45595)", () => {
+    const symlinkResolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
+    it("matches when the allowlist entry pins the real-binary canonical path", () => {
+      // Operator allowlists the real binary (the path execution actually pins
+      // to via fs.realpath). The PATH-resolved symlink does not literally match
+      // the pattern, but the realpath should still satisfy the entry — otherwise
+      // every Homebrew/nix/asdf-style binary on the host is unnecessarily blocked.
+      const match = matchAllowlist(
+        [{ pattern: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg" }],
+        symlinkResolution,
+      );
+      expect(match?.pattern).toBe("/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg");
+    });
+
+    it("still matches when the allowlist entry pins the symlink path", () => {
+      // Backward compatibility: existing allowlists that pin the symlink keep
+      // working (the resolvedPath branch fires first, so resolvedRealPath is
+      // not even consulted).
+      const match = matchAllowlist([{ pattern: "/opt/homebrew/bin/rg" }], symlinkResolution);
+      expect(match?.pattern).toBe("/opt/homebrew/bin/rg");
+    });
+
+    it("does not match when neither path is in the allowlist", () => {
+      const match = matchAllowlist(
+        [{ pattern: "/usr/local/bin/something-else" }],
+        symlinkResolution,
+      );
+      expect(match).toBeNull();
+    });
+
+    it("does not double-consult realpath when the symlink and realpath are identical", () => {
+      // Resolution where realpath === resolvedPath (no symlink indirection).
+      // Match should succeed via the resolvedPath branch and not loop on the
+      // realpath branch (which is short-circuited via the strict-equality guard).
+      const direct = {
+        rawExecutable: "ls",
+        resolvedPath: "/usr/bin/ls",
+        resolvedRealPath: "/usr/bin/ls",
+        executableName: "ls",
+      };
+      const match = matchAllowlist([{ pattern: "/usr/bin/ls" }], direct);
+      expect(match?.pattern).toBe("/usr/bin/ls");
+    });
+  });
 });
