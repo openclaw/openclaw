@@ -300,7 +300,7 @@ class ChatController(
         session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
       }
 
-      val historyJson = requestChatHistoryJson(key)
+      val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
       val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
       _messages.value = history.messages
       _sessionId.value = history.sessionId
@@ -331,15 +331,6 @@ class ChatController(
     } catch (_: Throwable) {
       // best-effort
     }
-  }
-
-  private suspend fun requestChatHistoryJson(sessionKey: String): String {
-    return session.request(
-      "chat.history",
-      buildJsonObject {
-        put("sessionKey", JsonPrimitive(sessionKey))
-      }.toString(),
-    )
   }
 
   private suspend fun pollHealthIfNeeded(force: Boolean) {
@@ -384,7 +375,8 @@ class ChatController(
         _streamingAssistantText.value = null
         scope.launch {
           try {
-            val historyJson = requestChatHistoryJson(_sessionKey.value)
+            val historyJson =
+              session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
             val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
             _messages.value = history.messages
             _sessionId.value = history.sessionId
@@ -649,6 +641,7 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
           .orEmpty(),
       ).joinToString(separator = "\u001F")
     }
+
   if (timestamp.isEmpty() && contentFingerprint.isEmpty()) return null
   return listOf(role, timestamp, contentFingerprint).joinToString(separator = "|")
 }

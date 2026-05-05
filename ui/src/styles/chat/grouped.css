@@ -388,16 +388,6 @@ img.chat-avatar {
   border-color: color-mix(in srgb, var(--accent) 32%, transparent);
 }
 
-.chat-blocked-user-note {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--chat-text) 18%, transparent);
-  color: color-mix(in srgb, var(--chat-text) 68%, transparent);
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 1.35;
-}
-
 /* Streaming animation */
 .chat-bubble.streaming {
   animation: pulsing-border 1.5s ease-out infinite;

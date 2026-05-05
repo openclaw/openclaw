@@ -230,13 +230,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/grouped-render.ts",
-      "text": "The agent cannot read this message."
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Voice note"
     },
     {

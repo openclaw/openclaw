@@ -248,7 +248,7 @@ private struct ChatMessageBody: View {
     }
 
     private var primaryText: String {
-        let parts = self.displayContent.compactMap { content -> String? in
+        let parts = self.message.content.compactMap { content -> String? in
             let kind = (content.type ?? "text").lowercased()
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
@@ -257,7 +257,7 @@ private struct ChatMessageBody: View {
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
-        self.displayContent.filter { content in
+        self.message.content.filter { content in
             switch content.type ?? "text" {
             case "file", "attachment":
                 true
@@ -265,10 +265,6 @@ private struct ChatMessageBody: View {
                 false
             }
         }
-    }
-
-    private var displayContent: [OpenClawChatMessageContent] {
-        self.message.content
     }
 
     private var toolCalls: [OpenClawChatMessageContent] {

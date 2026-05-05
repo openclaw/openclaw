@@ -189,6 +189,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
             container.decodeIfPresent(String.self, forKey: .tool_name)
         self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+
         if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
             self.content = decoded
             return
@@ -224,7 +225,6 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(self.usage, forKey: .usage)
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
         try container.encode(self.content, forKey: .content)
-
     }
 }
 

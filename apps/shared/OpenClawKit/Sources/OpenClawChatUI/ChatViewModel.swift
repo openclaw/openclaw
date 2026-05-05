@@ -282,7 +282,6 @@ public final class OpenClawChatViewModel {
                 arguments: content.arguments)
         }
 
-
         return OpenClawChatMessage(
             id: message.id,
             role: message.role,
@@ -295,20 +294,7 @@ public final class OpenClawChatViewModel {
     }
 
     private static func messageContentFingerprint(for message: OpenClawChatMessage) -> String {
-        let contentFingerprint = message.content.map { item in
-            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
-        }.joined(separator: "\\u{001E}")
-        return contentFingerprint
-    }
-
-    private static func userVisibleContentFingerprint(for message: OpenClawChatMessage) -> String {
-        let content = message.content
-        return content.map { item in
+        message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -340,7 +326,7 @@ public final class OpenClawChatViewModel {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard role == "user" else { return nil }
 
-        let contentFingerprint = Self.userVisibleContentFingerprint(for: message)
+        let contentFingerprint = Self.messageContentFingerprint(for: message)
         let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
