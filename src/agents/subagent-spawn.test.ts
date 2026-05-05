@@ -248,10 +248,19 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "agent",
+        mode: "backend",
+        clientName: "gateway-client",
         params: expect.objectContaining({
           sessionKey: childSessionKey,
           cleanupBundleMcpOnRunEnd: true,
         }),
+      }),
+    );
+    expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.patch",
+        mode: "backend",
+        clientName: "gateway-client",
       }),
     );
   });

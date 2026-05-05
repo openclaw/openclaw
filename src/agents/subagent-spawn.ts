@@ -41,6 +41,10 @@ import {
   splitModelRef,
 } from "./subagent-spawn-plan.js";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../gateway/protocol/client-info.js";
+import {
   ADMIN_SCOPE,
   AGENT_LANE_SUBAGENT,
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
@@ -192,9 +196,14 @@ async function callSubagentGateway(
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
   // "agent" → write) keep their least-privilege scope so that the gateway does
   // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  //
+  // Backend RPC calls must identify as "gateway-client" in BACKEND mode to avoid
+  // requiring device identity when authenticating with shared credentials on loopback.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
   return await subagentSpawnDeps.callGateway({
     ...params,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     ...(scopes != null ? { scopes } : {}),
   });
 }
