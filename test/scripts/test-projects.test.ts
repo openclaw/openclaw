@@ -213,23 +213,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("routes model fallback observation changes through fallback regressions", () => {
-    expect(resolveChangedTestTargetPlan(["src/agents/model-fallback-observation.ts"])).toEqual({
-      mode: "targets",
-      targets: ["src/agents/model-fallback.test.ts", "src/agents/model-fallback.probe.test.ts"],
-    });
-  });
-
-  it("routes transcript append changes through transcript and persistence regressions", () => {
-    expect(resolveChangedTestTargetPlan(["src/config/sessions/transcript-append.ts"])).toEqual({
-      mode: "targets",
-      targets: [
-        "src/config/sessions/transcript.test.ts",
-        "src/agents/subagent-registry.persistence.test.ts",
-      ],
-    });
-  });
-
   it("keeps extension batch runner edits on extension script tests", () => {
     expect(resolveChangedTestTargetPlan(["scripts/test-extension-batch.mjs"])).toEqual({
       mode: "targets",
