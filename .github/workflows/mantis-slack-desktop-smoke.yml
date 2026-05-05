@@ -164,7 +164,8 @@ jobs:
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/crabbox" --version
-          "$HOME/.local/bin/crabbox" warmup --help 2>&1 | grep -q -- "-desktop"
+          "$HOME/.local/bin/crabbox" warmup --help > "$install_dir/warmup-help.txt" 2>&1
+          grep -q -- "-desktop" "$install_dir/warmup-help.txt"
           "$HOME/.local/bin/crabbox" media preview --help >/dev/null
 
       - name: Prepare candidate worktree
@@ -228,6 +229,7 @@ jobs:
             keep_args=(--no-keep-lease)
           fi
 
+          set +e
           pnpm openclaw qa mantis slack-desktop-smoke \
             --repo-root "$candidate_repo" \
             --output-dir "$output_rel" \
@@ -244,6 +246,13 @@ jobs:
             --fast \
             --scenario "$SCENARIO_ID" \
             "${keep_args[@]}"
+          mantis_exit=$?
+          set -e
+
+          if [[ ! -f "$root/mantis-slack-desktop-smoke-summary.json" ]]; then
+            echo "Mantis Slack desktop smoke did not produce a summary." >&2
+            exit "$mantis_exit"
+          fi
 
           if [[ -f "$root/slack-desktop-smoke.mp4" ]]; then
             if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1; then
@@ -294,6 +303,10 @@ jobs:
           if [[ "$status" != "pass" ]]; then
             echo "Slack desktop smoke failed." >&2
             exit 1
+          fi
+          if [[ "$mantis_exit" -ne 0 ]]; then
+            echo "Slack desktop smoke exited with $mantis_exit after reporting status $status." >&2
+            exit "$mantis_exit"
           fi
 
       - name: Upload Mantis Slack desktop artifacts
