@@ -224,6 +224,30 @@ describe("findLatestIMessageEntryForChat", () => {
   });
 });
 
+describe("reply cache disk permissions", () => {
+  it("writes the cache file 0600 and parent dir 0700", () => {
+    // Map gateway-allocated short-ids to message guids; a hostile same-UID
+    // process reading or writing this file could (a) enumerate active
+    // conversation guids or (b) inject lines so a future shortId resolves
+    // to an attacker-chosen guid. Owner-only mode is the mitigation.
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "perm-test-guid",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+
+    const cacheFile = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
+    const cacheDir = path.dirname(cacheFile);
+    expect(fs.existsSync(cacheFile)).toBe(true);
+
+    const fileMode = fs.statSync(cacheFile).mode & 0o777;
+    const dirMode = fs.statSync(cacheDir).mode & 0o777;
+    expect(fileMode).toBe(0o600);
+    expect(dirMode).toBe(0o700);
+  });
+});
+
 describe("hydrate counter advancement (rowid-collision protection)", () => {
   it("advances the short-id counter past a corrupt persisted line so new allocations don't collide", () => {
     // Direct hydrate isn't easy to invoke without disk fixtures; instead
