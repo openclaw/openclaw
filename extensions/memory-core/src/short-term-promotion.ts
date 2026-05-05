@@ -834,10 +834,27 @@ async function readPhaseSignalStore(
     return normalizePhaseSignalStore(JSON.parse(raw) as unknown, nowIso);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
+    // ENOENT: no prior store on disk. Returning an empty store is safe — it
+    // mirrors the first-run case and preserves no destructible history.
+    if (code === "ENOENT") {
       return emptyPhaseSignalStore(nowIso);
     }
-    return emptyPhaseSignalStore(nowIso);
+    // SyntaxError: file exists but is corrupt JSON. The on-disk damage is
+    // already permanent; recover by rebuilding from empty so dreaming can make
+    // progress, but warn so operators can investigate.
+    if (err instanceof SyntaxError) {
+      console.warn(
+        `memory-core: phase-signal store at ${phaseSignalPath} is corrupt JSON; rebuilding from empty (${err.message}).`,
+      );
+      return emptyPhaseSignalStore(nowIso);
+    }
+    // EACCES, EIO, EBUSY, EMFILE, ENOSPC, etc.: transient or environmental I/O
+    // failure. Swallowing these and returning an empty store is destructive —
+    // the caller would then write the empty store back, permanently losing
+    // accumulated lightHits/remHits history. Re-throw so the caller's catch in
+    // dreaming.ts can increment failedWorkspaces and skip the destructive
+    // write-back.
+    throw err;
   }
 }
 

@@ -1816,4 +1816,163 @@ describe("short-term promotion", () => {
       }),
     ).toEqual(expect.arrayContaining(["障害対応", "ルーター", "バックアップ", "路由器", "备份"]));
   });
+
+  describe("readPhaseSignalStore error classification (issue #77881)", () => {
+    it("rebuilds phase signals from empty when the store file does not exist (ENOENT)", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+        await fs.mkdir(path.dirname(phaseStorePath), { recursive: true });
+        await fs.rm(phaseStorePath, { force: true });
+
+        await writeDailyMemoryNote(workspaceDir, "2026-04-01", ["seed"]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "seed query",
+          results: [
+            {
+              path: "memory/2026-04-01.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: "seed",
+              source: "memory",
+            },
+          ],
+        });
+
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+        const key = ranked[0]?.key;
+        expect(key).toBeTruthy();
+
+        await expect(
+          recordDreamingPhaseSignals({
+            workspaceDir,
+            phase: "light",
+            keys: [key!],
+          }),
+        ).resolves.toBeUndefined();
+
+        const written = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
+          entries: Record<string, { lightHits: number }>;
+        };
+        expect(written.entries[key!]?.lightHits).toBe(1);
+      });
+    });
+
+    it("rebuilds phase signals from empty + warns on corrupt JSON, without throwing", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+        await fs.mkdir(path.dirname(phaseStorePath), { recursive: true });
+        await fs.writeFile(phaseStorePath, "{ this is not json", "utf-8");
+
+        await writeDailyMemoryNote(workspaceDir, "2026-04-02", ["corrupt"]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "corrupt query",
+          results: [
+            {
+              path: "memory/2026-04-02.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: "corrupt",
+              source: "memory",
+            },
+          ],
+        });
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+        const key = ranked[0]?.key;
+        expect(key).toBeTruthy();
+
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          await expect(
+            recordDreamingPhaseSignals({
+              workspaceDir,
+              phase: "rem",
+              keys: [key!],
+            }),
+          ).resolves.toBeUndefined();
+
+          const messages = warnSpy.mock.calls.map((c) => String(c[0] ?? ""));
+          expect(
+            messages.some((m) => m.includes("phase-signal store") && m.includes("corrupt JSON")),
+          ).toBe(true);
+        } finally {
+          warnSpy.mockRestore();
+        }
+
+        const written = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
+          entries: Record<string, { remHits: number }>;
+        };
+        expect(written.entries[key!]?.remHits).toBe(1);
+      });
+    });
+
+    it("propagates non-ENOENT/non-Syntax I/O errors and preserves the on-disk store (no destructive empty-write)", async () => {
+      await withTempWorkspace(async (workspaceDir) => {
+        const phaseStorePath = resolveShortTermPhaseSignalStorePath(workspaceDir);
+        await fs.mkdir(path.dirname(phaseStorePath), { recursive: true });
+
+        await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["protected"]);
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: "protected query",
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: 1,
+              endLine: 1,
+              score: 0.9,
+              snippet: "protected",
+              source: "memory",
+            },
+          ],
+        });
+        const ranked = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          minScore: 0,
+          minRecallCount: 0,
+          minUniqueQueries: 0,
+        });
+        const key = ranked[0]?.key;
+        expect(key).toBeTruthy();
+
+        // Seed real phase-signal data so we can detect destructive empty-write.
+        await recordDreamingPhaseSignals({ workspaceDir, phase: "light", keys: [key!] });
+        await recordDreamingPhaseSignals({ workspaceDir, phase: "rem", keys: [key!] });
+        const beforeDisk = await fs.readFile(phaseStorePath, "utf-8");
+        const beforeStore = JSON.parse(beforeDisk) as {
+          entries: Record<string, { lightHits: number; remHits: number }>;
+        };
+        expect(beforeStore.entries[key!]?.lightHits).toBe(1);
+        expect(beforeStore.entries[key!]?.remHits).toBe(1);
+
+        // Force a non-ENOENT, non-Syntax read error: replace the file with a
+        // directory of the same name so fs.readFile rejects with EISDIR. This
+        // is reliably reproducible cross-platform without relying on chmod.
+        await fs.unlink(phaseStorePath);
+        await fs.mkdir(phaseStorePath);
+
+        await expect(
+          recordDreamingPhaseSignals({ workspaceDir, phase: "light", keys: [key!] }),
+        ).rejects.toMatchObject({ code: "EISDIR" });
+
+        // The on-disk path must still be a directory — no destructive
+        // overwrite snuck through (would have left a JSON file behind).
+        const stat = await fs.stat(phaseStorePath);
+        expect(stat.isDirectory()).toBe(true);
+      });
+    });
+  });
 });
