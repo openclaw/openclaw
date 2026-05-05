@@ -86,6 +86,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/registry: coalesce repeated `loadPluginRegistrySnapshotWithMetadata` calls within a 2 second window so `channels.status` polls and channel-restart paths do not re-walk plugin discovery on every invocation; cuts gateway-side `channels.status` from 5–8s to 3–4s and inbound-dispatch latency by ~50% on slow filesystems (WSL2, NFS, container layers).
 - Discord/streaming: show live reasoning text in progress drafts instead of a bare `Reasoning` status line.
 - Doctor/status: warn when `OPENCLAW_GATEWAY_TOKEN` would shadow a different active `gateway.auth.token` source for local CLI commands, while avoiding false positives when config points at the same env token. Fixes #74271. Thanks @yelog.
 - Gateway/HTTP: avoid loading managed outgoing-image media handlers for unrelated requests, so disabled OpenAI-compatible routes return 404 without waiting on lazy media sidecars. Thanks @vincentkoc.
