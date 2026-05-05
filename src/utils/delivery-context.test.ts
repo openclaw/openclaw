@@ -242,6 +242,29 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("prefers explicit delivery context over stale webchat origin", () => {
+    expect(
+      deliveryContextFromSession({
+        channel: "webchat",
+        origin: {
+          provider: "webchat",
+          accountId: "default",
+        },
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003711962889",
+          accountId: "default",
+          threadId: "1",
+        },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "telegram:-1003711962889",
+      accountId: "default",
+      threadId: "1",
+    });
+  });
+
   it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {

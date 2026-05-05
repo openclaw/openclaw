@@ -3418,6 +3418,65 @@ describe("initSessionState internal channel routing preservation", () => {
     expect(result.sessionEntry.deliveryContext?.to).toBe("group:12345");
   });
 
+  it("refreshes stale webchat origin when telegram group topic traffic arrives", async () => {
+    const storePath = await createStorePath("telegram-topic-refreshes-webchat-origin-");
+    const sessionKey = "agent:main:telegram:group:-1003711962889:topic:1";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "sess-telegram-topic-stale-origin",
+        updatedAt: Date.now(),
+        lastChannel: "telegram",
+        lastTo: "telegram:-1003711962889",
+        lastAccountId: "default",
+        lastThreadId: "1",
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003711962889",
+          accountId: "default",
+          threadId: "1",
+        },
+        origin: {
+          provider: "webchat",
+          surface: "webchat",
+          accountId: "default",
+        },
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "telegram group turn",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1003711962889",
+        AccountId: "default",
+        MessageThreadId: "1",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastChannel).toBe("telegram");
+    expect(result.sessionEntry.lastTo).toBe("telegram:-1003711962889");
+    expect(result.sessionEntry.lastThreadId).toBe("1");
+    expect(result.sessionEntry.deliveryContext).toEqual({
+      channel: "telegram",
+      to: "telegram:-1003711962889",
+      accountId: "default",
+      threadId: "1",
+    });
+    expect(result.sessionEntry.origin).toEqual({
+      provider: "telegram",
+      surface: "telegram",
+      to: "telegram:-1003711962889",
+      accountId: "default",
+      threadId: "1",
+    });
+  });
+
   it("preserves persisted external route when webchat views a channel-peer session (fixes #47745)", async () => {
     // Regression: dashboard/webchat access must not overwrite an established
     // external delivery route (e.g. Telegram/iMessage) on a channel-scoped session.

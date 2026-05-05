@@ -1712,6 +1712,52 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("chat.send does not inherit external routes for webchat clients on group/topic sessions", async () => {
+    createTranscriptFixture("openclaw-chat-send-webchat-group-topic-no-inherit-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:-1003711962889",
+        accountId: "default",
+        threadId: 1,
+      },
+      lastChannel: "telegram",
+      lastTo: "telegram:-1003711962889",
+      lastAccountId: "default",
+      lastThreadId: 1,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-webchat-group-topic-no-inherit",
+      client: {
+        connect: {
+          client: {
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            id: "openclaw-webchat",
+          },
+        },
+      } as unknown,
+      sessionKey: "agent:main:telegram:group:-1003711962889:topic:1",
+      deliver: true,
+      expectBroadcast: false,
+    });
+
+    expect(mockState.lastDispatchCtx).toEqual(
+      expect.objectContaining({
+        OriginatingChannel: "webchat",
+        OriginatingTo: undefined,
+        ExplicitDeliverRoute: false,
+        AccountId: undefined,
+      }),
+    );
+    expect(mockState.lastDispatchCtx?.MessageThreadId).toBeUndefined();
+  });
+
   it("chat.send still inherits external routes for UI clients on channel-scoped sessions", async () => {
     createTranscriptFixture("openclaw-chat-send-ui-channel-scoped-inherit-");
     mockState.finalText = "ok";

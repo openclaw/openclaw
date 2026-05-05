@@ -89,16 +89,27 @@ export function deliveryContextFromSession(
   if (!entry) {
     return undefined;
   }
-  const source: DeliveryContextSessionSource = {
-    channel: entry.channel ?? entry.origin?.provider,
+
+  const explicitRoute = normalizeSessionDeliveryFields({
     lastChannel: entry.lastChannel,
+    lastTo: entry.lastTo,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    deliveryContext: entry.deliveryContext,
+  }).deliveryContext;
+  if (explicitRoute?.channel) {
+    return explicitRoute;
+  }
+
+  const fallbackSource: DeliveryContextSessionSource = {
+    channel: entry.channel ?? entry.origin?.provider,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
     lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
     origin: entry.origin,
     deliveryContext: entry.deliveryContext,
   };
-  return normalizeSessionDeliveryFields(source).deliveryContext;
+  return normalizeSessionDeliveryFields(fallbackSource).deliveryContext;
 }
 
 export function mergeDeliveryContext(
