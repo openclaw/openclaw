@@ -112,7 +112,7 @@ describe("status.scan.config-shared", () => {
   it("does not add a status diagnostic when config uses OPENCLAW_GATEWAY_TOKEN", async () => {
     const sourceConfig = {
       gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
-      secrets: { providers: { default: { source: "env" } } },
+      secrets: { providers: { default: { source: "env" as const } } },
     };
     const readBestEffortConfig = vi.fn(async () => sourceConfig);
     const resolveConfig = vi.fn(async () => ({
