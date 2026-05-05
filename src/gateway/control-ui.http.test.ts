@@ -130,7 +130,7 @@ describe("handleControlUiHttpRequest", () => {
     url: string;
     method: "GET" | "HEAD";
     basePath?: string;
-    config?: Parameters<typeof handleControlUiAssistantMediaRequest>[2]["config"];
+    config?: NonNullable<Parameters<typeof handleControlUiAssistantMediaRequest>[2]>["config"];
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
     trustedProxies?: string[];
