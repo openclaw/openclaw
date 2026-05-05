@@ -383,6 +383,26 @@ describe("gateway broadcaster", () => {
     ]);
   });
 
+  it("allows realtime relay broadcasts only for operator.write and operator.admin", () => {
+    const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
+      makeScopedBroadcastClients();
+
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+
+    broadcastToConnIds(
+      "talk.realtime.relay",
+      { relaySessionId: "relay-1", type: "audio", audioBase64: "AA==" },
+      new Set(["c-pairing", "c-node", "c-read", "c-write", "c-admin"]),
+      { dropIfSlow: true },
+    );
+
+    expect(pairingSocket.send).not.toHaveBeenCalled();
+    expect(nodeSocket.send).not.toHaveBeenCalled();
+    expect(readSocket.send).not.toHaveBeenCalled();
+    expect(writeSocket.sent.map((frame) => frame.event)).toEqual(["talk.realtime.relay"]);
+    expect(adminSocket.sent.map((frame) => frame.event)).toEqual(["talk.realtime.relay"]);
+  });
+
   it("defaults unknown events to deny and classifies remaining gateway broadcast events", () => {
     const { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients } =
       makeScopedBroadcastClients();

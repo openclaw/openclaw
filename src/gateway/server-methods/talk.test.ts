@@ -297,6 +297,7 @@ describe("talk.realtime.session handler", () => {
         connId: "conn-1",
         provider,
         providerConfig: { apiKey: "gemini-key" },
+        instructions: expect.stringContaining("identify yourself as Jarvis"),
       }),
     );
     expect(respond).toHaveBeenCalledWith(

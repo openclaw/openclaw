@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
@@ -17,6 +18,7 @@ const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.realtime.relay";
+const log = createSubsystemLogger("gateway").child("talk-realtime-relay");
 
 type TalkRealtimeRelayEvent =
   | { relaySessionId: string; type: "ready" }
@@ -38,8 +40,22 @@ type TalkRealtimeRelayEvent =
       name: string;
       args: unknown;
     }
-  | { relaySessionId: string; type: "error"; message: string }
+  | {
+      relaySessionId: string;
+      type: "error";
+      category: RealtimeRelayErrorCategory;
+      hard: boolean;
+      message: string;
+    }
+  | {
+      relaySessionId: string;
+      type: "paused";
+      category: RealtimeRelayErrorCategory;
+      reason: "provider_hard_error";
+    }
   | { relaySessionId: string; type: "close"; reason: "completed" | "error" };
+
+export type RealtimeRelayErrorCategory = "quota" | "auth" | "provider_unavailable" | "unknown";
 
 type RelaySession = {
   id: string;
@@ -75,6 +91,61 @@ const relaySessions = new Map<string, RelaySession>();
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function classifyRealtimeRelayError(error: unknown): RealtimeRelayErrorCategory {
+  const message = formatError(error).toLowerCase();
+  if (
+    /\b(insufficient[_ -]?quota|quota|billing|credits?|payment|required plan|usage limit)\b/.test(
+      message,
+    )
+  ) {
+    return "quota";
+  }
+  if (
+    /\b(auth|authentication|unauthorized|forbidden|permission|api key|apikey|invalid key|401|403)\b/.test(
+      message,
+    )
+  ) {
+    return "auth";
+  }
+  if (
+    /\b(unavailable|overloaded|temporarily unavailable|service unavailable|timeout|timed out|econnreset|econnrefused|503|502|504)\b/.test(
+      message,
+    )
+  ) {
+    return "provider_unavailable";
+  }
+  return "unknown";
+}
+
+function sanitizedRelayErrorMessage(category: RealtimeRelayErrorCategory): string {
+  switch (category) {
+    case "quota":
+      return "realtime provider quota or billing error";
+    case "auth":
+      return "realtime provider authentication error";
+    case "provider_unavailable":
+      return "realtime provider unavailable";
+    case "unknown":
+      return "realtime provider error";
+  }
+}
+
+function emitHardRelayError(
+  emit: (event: TalkRealtimeRelayEvent) => void,
+  relaySessionId: string,
+  error: unknown,
+): void {
+  const category = classifyRealtimeRelayError(error);
+  emit({
+    relaySessionId,
+    type: "error",
+    category,
+    hard: true,
+    message: sanitizedRelayErrorMessage(category),
+  });
+  emit({ relaySessionId, type: "paused", category, reason: "provider_hard_error" });
 }
 
 function broadcastToOwner(
@@ -142,16 +213,24 @@ export function createTalkRealtimeRelaySession(
     markStrategy: "transport",
     audioSink: {
       isOpen: () => Boolean(relay && relaySessions.has(relay.id)),
-      sendAudio: (audio) =>
+      sendAudio: (audio) => {
+        log.info(`relay output audio session=${relaySessionId.slice(0, 8)} bytes=${audio.length}`);
         emit({
           relaySessionId,
           type: "audio",
           audioBase64: audio.toString("base64"),
-        }),
-      clearAudio: () => emit({ relaySessionId, type: "clear" }),
+        });
+      },
+      clearAudio: () => {
+        log.info(`relay output clear session=${relaySessionId.slice(0, 8)}`);
+        emit({ relaySessionId, type: "clear" });
+      },
       sendMark: (markName) => emit({ relaySessionId, type: "mark", markName }),
     },
     onTranscript: (role, text, final) => {
+      log.info(
+        `relay transcript session=${relaySessionId.slice(0, 8)} role=${role} final=${final} chars=${text.length}`,
+      );
       emit({ relaySessionId, type: "transcript", role, text, final });
     },
     onToolCall: (toolCall) => {
@@ -164,8 +243,19 @@ export function createTalkRealtimeRelaySession(
         args: toolCall.args,
       });
     },
-    onReady: () => emit({ relaySessionId, type: "ready" }),
-    onError: (error) => emit({ relaySessionId, type: "error", message: error.message }),
+    onReady: () => {
+      log.info(`relay ready session=${relaySessionId.slice(0, 8)} provider=${params.provider.id}`);
+      emit({ relaySessionId, type: "ready" });
+    },
+    onError: (error) => {
+      const category = classifyRealtimeRelayError(error);
+      log.warn(`relay error session=${relaySessionId.slice(0, 8)} category=${category}`);
+      emitHardRelayError(emit, relaySessionId, error);
+      const active = relaySessions.get(relaySessionId);
+      if (active) {
+        closeRelaySession(active, "error");
+      }
+    },
     onClose: (reason) => {
       const active = relaySessions.get(relaySessionId);
       if (!active) {
@@ -192,7 +282,9 @@ export function createTalkRealtimeRelaySession(
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {
-    emit({ relaySessionId, type: "error", message: formatError(error) });
+    const category = classifyRealtimeRelayError(error);
+    log.warn(`relay connect error session=${relaySessionId.slice(0, 8)} category=${category}`);
+    emitHardRelayError(emit, relaySessionId, error);
     const active = relaySessions.get(relaySessionId);
     if (active) {
       closeRelaySession(active, "error");
@@ -218,6 +310,11 @@ export function createTalkRealtimeRelaySession(
 function getRelaySession(relaySessionId: string, connId: string): RelaySession {
   const session = relaySessions.get(relaySessionId);
   if (!session || session.connId !== connId || Date.now() > session.expiresAtMs) {
+    log.warn(
+      `relay session lookup failed session=${relaySessionId.slice(0, 8)} reason=${
+        !session ? "missing" : session.connId !== connId ? "conn_mismatch" : "expired"
+      }`,
+    );
     if (session) {
       closeRelaySession(session, "completed");
     }
@@ -237,6 +334,11 @@ export function sendTalkRealtimeRelayAudio(params: {
   }
   const session = getRelaySession(params.relaySessionId, params.connId);
   const audio = Buffer.from(params.audioBase64, "base64");
+  if (Math.random() < 0.02) {
+    log.info(
+      `relay input audio accepted session=${params.relaySessionId.slice(0, 8)} bytes=${audio.length}`,
+    );
+  }
   session.bridge.sendAudio(audio);
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);

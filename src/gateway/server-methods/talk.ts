@@ -210,7 +210,7 @@ function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: str
 }
 
 function buildRealtimeInstructions(): string {
-  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+  return `You are Jarvis, OpenClaw's realtime voice interface. If asked who you are, identify yourself as Jarvis and do not deny that identity. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
 }
 
 function withRealtimeBrowserOverrides(

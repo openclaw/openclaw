@@ -3,6 +3,7 @@ import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../realtime-voice/provider-types.js";
 import {
   acknowledgeTalkRealtimeRelayMark,
+  classifyRealtimeRelayError,
   clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
   sendTalkRealtimeRelayAudio,
@@ -211,5 +212,81 @@ describe("talk realtime gateway relay", () => {
       "Too many active realtime relay sessions for this connection",
     );
     expect(() => createSession("conn-2")).not.toThrow();
+  });
+
+  it("sanitizes hard provider errors before broadcasting relay pause events", async () => {
+    let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
+    const provider: RealtimeVoiceProviderPlugin = {
+      id: "relay-test",
+      label: "Relay Test",
+      isConfigured: () => true,
+      createBridge: (req) => {
+        bridgeRequest = req;
+        return {
+          connect: vi.fn(async () => undefined),
+          sendAudio: vi.fn(),
+          setMediaTimestamp: vi.fn(),
+          submitToolResult: vi.fn(),
+          acknowledgeMark: vi.fn(),
+          close: vi.fn(),
+          isConnected: vi.fn(() => true),
+        };
+      },
+    };
+    const events: Array<{ event: string; payload: unknown; connIds: string[] }> = [];
+    const context = {
+      broadcastToConnIds: (event: string, payload: unknown, connIds: ReadonlySet<string>) => {
+        events.push({ event, payload, connIds: [...connIds] });
+      },
+    } as never;
+
+    const session = createTalkRealtimeRelaySession({
+      context,
+      connId: "conn-1",
+      provider,
+      providerConfig: {},
+      instructions: "brief",
+      tools: [],
+    });
+    bridgeRequest?.onError?.(
+      new Error("You exceeded your current quota for sk-live-secret. Check billing."),
+    );
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        {
+          event: "talk.realtime.relay",
+          connIds: ["conn-1"],
+          payload: {
+            relaySessionId: session.relaySessionId,
+            type: "error",
+            category: "quota",
+            hard: true,
+            message: "realtime provider quota or billing error",
+          },
+        },
+        {
+          event: "talk.realtime.relay",
+          connIds: ["conn-1"],
+          payload: {
+            relaySessionId: session.relaySessionId,
+            type: "paused",
+            category: "quota",
+            reason: "provider_hard_error",
+          },
+        },
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("sk-live-secret");
+    expect(JSON.stringify(events)).not.toContain("exceeded your current quota");
+  });
+
+  it("classifies realtime relay hard error categories", () => {
+    expect(classifyRealtimeRelayError(new Error("insufficient_quota"))).toBe("quota");
+    expect(classifyRealtimeRelayError(new Error("401 invalid API key"))).toBe("auth");
+    expect(classifyRealtimeRelayError(new Error("503 service unavailable"))).toBe(
+      "provider_unavailable",
+    );
+    expect(classifyRealtimeRelayError(new Error("unexpected"))).toBe("unknown");
   });
 });
