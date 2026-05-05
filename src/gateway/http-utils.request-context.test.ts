@@ -51,6 +51,56 @@ describe("resolveGatewayRequestContext", () => {
 
     expect(result.sessionKey).toContain("openresponses-user:alice");
   });
+
+  it("derives a stable session key from x-chat-id header", () => {
+    const chatId = "550e8400-e29b-41d4-a716-446655440000";
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-chat-id": chatId }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toContain(`openai-chat:${chatId}`);
+  });
+
+  it("derives a stable session key from x-thread-id header when x-chat-id is absent", () => {
+    const threadId = "thread-abc-123";
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-thread-id": threadId }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toContain(`openai-chat:${threadId}`);
+  });
+
+  it("x-chat-id takes precedence over x-thread-id", () => {
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-chat-id": "chat-winner", "x-thread-id": "thread-loser" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toContain("openai-chat:chat-winner");
+    expect(result.sessionKey).not.toContain("thread-loser");
+  });
+
+  it("x-openclaw-session-key still takes highest precedence", () => {
+    const result = resolveGatewayRequestContext({
+      req: createReq({
+        "x-openclaw-session-key": "explicit-key",
+        "x-chat-id": "chat-id-ignored",
+      }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toBe("explicit-key");
+  });
 });
 
 describe("resolveTrustedHttpOperatorScopes", () => {
