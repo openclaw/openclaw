@@ -588,6 +588,48 @@ Related global options:
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`).
 - `messages.responsePrefix`.
 
+## Disabling BlueBubbles
+
+OpenClaw has two independent disablement layers. Setting one does **not** automatically set the other, and operators who want BlueBubbles fully off should configure both.
+
+| Layer               | Key                                          | Effect                                                                                                                                                                                                                                                                           |
+| ------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Channel disablement | `channels.bluebubbles.enabled: false`        | Hard opt-out from inbound webhook routing, outbound delivery, channel auto-enable, and bundled-channel setup discovery. The plugin row may still appear in `openclaw plugins list` (it is bundled), but the channel does not register handlers and is treated as explicitly off. |
+| Plugin disablement  | `plugins.entries.bluebubbles.enabled: false` | Keeps the bundled plugin from registering at all. No webhook handler, no auto-enable on startup, no setup probes.                                                                                                                                                                |
+
+Either layer alone is sufficient to keep BlueBubbles routing and setup discovery off. Setting both is the belt-and-suspenders configuration when an operator wants the bundled plugin module itself to stay un-registered as well — useful in tight-control deployments that audit plugin registration counts at startup.
+
+A safe local loopback-only configuration that keeps BlueBubbles fully off looks like this:
+
+```json5
+{
+  gateway: {
+    mode: "local",
+    bind: "loopback",
+    auth: {
+      mode: "token",
+      // OpenClaw generates and persists a token on first start when token
+      // auth has no token. To pin a known value (recommended for scripted
+      // setups, CI, and operators who want config to be the source of
+      // truth), set it explicitly:
+      token: "<paste-or-generate-with-openclaw-auth-token-rotate>",
+    },
+  },
+  channels: {
+    bluebubbles: { enabled: false },
+  },
+  plugins: {
+    entries: {
+      bluebubbles: { enabled: false },
+    },
+  },
+}
+```
+
+<Note>
+  Startup may add a `meta` block to your `openclaw.json` (`lastTouchedVersion`, `lastTouchedAt`) when other config-mutating operations run. If `gateway.auth.mode: "token"` has no `gateway.auth.token`, OpenClaw also generates a token on first start and persists it back to the same file — that one extra write is the trade-off for omitting the token. Auto-enable for BlueBubbles itself never fires when `channels.bluebubbles.enabled` is explicitly `false`; auto-enable only fires for channels that look configured (e.g. a `serverUrl` and `password` present without an explicit `enabled: false`).
+</Note>
+
 ## Addressing / delivery targets
 
 Prefer `chat_guid` for stable routing:
