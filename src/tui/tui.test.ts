@@ -5,6 +5,7 @@ import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  createDeferredTuiFinish,
   drainAndStopTuiSafely,
   installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
@@ -366,6 +367,17 @@ describe("TUI shutdown safety", () => {
     stdin.emit("close");
 
     expect(requestExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves terminal-loss exits requested before the TUI finish handler is installed", () => {
+    const deferredFinish = createDeferredTuiFinish();
+    const finish = vi.fn();
+
+    deferredFinish.requestFinish();
+    expect(finish).not.toHaveBeenCalled();
+
+    deferredFinish.setFinish(finish);
+    expect(finish).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -12,7 +12,6 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
@@ -50,40 +49,11 @@ function existsFile(filePath: string): boolean {
   }
 }
 
-function normalizeHeartbeatMarker(value: unknown): string | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return null;
-  }
-  return normalized.replace(/^@+/, "");
-}
-
-function isHeartbeatMarker(value: unknown): boolean {
-  const normalized = normalizeHeartbeatMarker(value);
-  if (!normalized) {
-    return false;
-  }
-  return normalized === "heartbeat" || normalized.endsWith(":heartbeat");
-}
-
-function sessionEntryHasHeartbeatMetadata(entry: SessionEntry): boolean {
-  const rawEntry = entry as Record<string, unknown>;
-  const origin = asNullableObjectRecord(rawEntry.origin);
-  const deliveryContext = asNullableObjectRecord(rawEntry.deliveryContext);
-  const markers = [
-    rawEntry.provider,
-    rawEntry.lastProvider,
-    rawEntry.lastChannel,
-    rawEntry.lastTo,
-    rawEntry.source,
-    entry.heartbeatIsolatedBaseSessionKey,
-    origin?.provider,
-    origin?.surface,
-    origin?.label,
-    deliveryContext?.provider,
-    deliveryContext?.channel,
-  ];
-  return markers.some(isHeartbeatMarker);
+function sessionEntryHasSyntheticHeartbeatOwnership(entry: SessionEntry): boolean {
+  return (
+    typeof entry.heartbeatIsolatedBaseSessionKey === "string" &&
+    entry.heartbeatIsolatedBaseSessionKey.trim().length > 0
+  );
 }
 
 function parseTranscriptMessageLine(line: string): { role: string; content?: unknown } | null {
@@ -108,7 +78,6 @@ function parseTranscriptMessageLine(line: string): { role: string; content?: unk
 
 function summarizeTranscriptHeartbeatMessages(
   transcriptPath: string,
-  maxMessages = 400,
 ): TranscriptHeartbeatSummary | null {
   let raw: string;
   try {
@@ -147,9 +116,6 @@ function summarizeTranscriptHeartbeatMessages(
         summary.heartbeatOkAssistantMessages += 1;
       }
     }
-    if (summary.inspectedMessages >= maxMessages) {
-      break;
-    }
   }
   return summary.inspectedMessages > 0 ? summary : null;
 }
@@ -162,7 +128,12 @@ export function resolveHeartbeatMainSessionRepairCandidate(params: {
   if (!entry) {
     return null;
   }
-  if (sessionEntryHasHeartbeatMetadata(entry)) {
+  const hasNoRecordedHumanInteraction = entry.lastInteractionAt === undefined;
+  if (!hasNoRecordedHumanInteraction) {
+    return null;
+  }
+  const hasSyntheticHeartbeatOwnership = sessionEntryHasSyntheticHeartbeatOwnership(entry);
+  if (hasSyntheticHeartbeatOwnership && !transcriptPath) {
     return { reason: "metadata" };
   }
   if (!transcriptPath) {
@@ -172,14 +143,12 @@ export function resolveHeartbeatMainSessionRepairCandidate(params: {
   if (!summary) {
     return null;
   }
-  const hasNoRecordedHumanInteraction = entry.lastInteractionAt === undefined;
   if (
-    hasNoRecordedHumanInteraction &&
     summary.heartbeatUserMessages > 0 &&
     summary.userMessages === summary.heartbeatUserMessages &&
     summary.nonHeartbeatUserMessages === 0
   ) {
-    return { reason: "transcript", summary };
+    return { reason: hasSyntheticHeartbeatOwnership ? "metadata" : "transcript", summary };
   }
   return null;
 }

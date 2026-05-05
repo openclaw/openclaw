@@ -308,6 +308,34 @@ export function installTuiTerminalLossExitHandler(
   };
 }
 
+export function createDeferredTuiFinish(): {
+  requestFinish: () => void;
+  setFinish: (finish: () => void) => void;
+  clearFinish: () => void;
+} {
+  let finishTui: (() => void) | null = null;
+  let finishRequested = false;
+  return {
+    requestFinish: () => {
+      const finish = finishTui;
+      if (finish) {
+        finish();
+        return;
+      }
+      finishRequested = true;
+    },
+    setFinish: (finish) => {
+      finishTui = finish;
+      if (finishRequested) {
+        finish();
+      }
+    },
+    clearFinish: () => {
+      finishTui = null;
+    },
+  };
+}
+
 type DrainableTui = {
   stop: () => void;
   terminal?: {
@@ -1057,7 +1085,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     clearLocalBtwRunIds,
   });
 
-  let finishTui: (() => void) | null = null;
+  const deferredFinish = createDeferredTuiFinish();
   const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
       return;
@@ -1079,7 +1107,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         }
       })
       .finally(() => {
-        finishTui?.();
+        deferredFinish.requestFinish();
       });
   };
   const exitAwareClient = client as TuiBackend & {
@@ -1298,11 +1326,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       process.removeListener("SIGINT", sigintHandler);
       process.removeListener("SIGTERM", sigtermHandler);
       process.removeListener("exit", finish);
-      finishTui = null;
+      deferredFinish.clearFinish();
       resolve();
     };
-    finishTui = finish;
     process.once("exit", finish);
+    deferredFinish.setFinish(finish);
   });
   return exitResult;
 }

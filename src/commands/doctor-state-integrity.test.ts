@@ -579,6 +579,107 @@ describe("doctor state integrity oauth dir checks", () => {
     );
   });
 
+  it("does not treat heartbeat-labeled routing metadata as heartbeat ownership", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      lastTo: "heartbeat",
+      origin: { label: "heartbeat" },
+    };
+    expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
+  });
+
+  it("keeps synthetic heartbeat ownership metadata as direct repair proof", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      heartbeatIsolatedBaseSessionKey: "agent:main:main",
+    };
+    expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toMatchObject({
+      reason: "metadata",
+    });
+  });
+
+  it("does not move synthetic heartbeat-owned sessions after recorded human interaction", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      lastInteractionAt: 2,
+    };
+    expect(resolveHeartbeatMainSessionRepairCandidate({ entry })).toBeNull();
+  });
+
+  it("does not let synthetic heartbeat metadata override mixed transcript history", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-mixed-"));
+    try {
+      const transcriptPath = path.join(tempDir, "session.jsonl");
+      fs.writeFileSync(
+        transcriptPath,
+        [
+          JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+          JSON.stringify({ message: { role: "user", content: "real follow-up" } }),
+          "",
+        ].join("\n"),
+      );
+      const entry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        heartbeatIsolatedBaseSessionKey: "agent:main:main",
+      };
+      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let heartbeat-looking routing metadata skip mixed transcript checks", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-route-"));
+    try {
+      const transcriptPath = path.join(tempDir, "session.jsonl");
+      fs.writeFileSync(
+        transcriptPath,
+        [
+          JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+          JSON.stringify({ message: { role: "user", content: "real follow-up" } }),
+          "",
+        ].join("\n"),
+      );
+      const entry = {
+        sessionId: "session",
+        updatedAt: 1,
+        lastProvider: "heartbeat",
+        source: "heartbeat",
+        origin: { provider: "heartbeat" },
+      } as SessionEntry & Record<string, unknown>;
+      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not classify transcripts with real user activity after 400 heartbeat messages", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-cap-"));
+    try {
+      const transcriptPath = path.join(tempDir, "session.jsonl");
+      const heartbeatMessages = Array.from({ length: 400 }, () =>
+        JSON.stringify({ message: { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT } }),
+      );
+      fs.writeFileSync(
+        transcriptPath,
+        [
+          ...heartbeatMessages,
+          JSON.stringify({ message: { role: "user", content: "real follow-up" } }),
+          "",
+        ].join("\n"),
+      );
+      const entry: SessionEntry = { sessionId: "session", updatedAt: 1 };
+      expect(resolveHeartbeatMainSessionRepairCandidate({ entry, transcriptPath })).toBeNull();
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the heartbeat main-session helper conservative", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-heartbeat-main-helper-"));
     try {
