@@ -114,6 +114,8 @@ Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
 
+On Linux systemd installs, `OPENCLAW_GATEWAY_TOKEN` is written to the owner-only service env file instead of being embedded inline in the user unit.
+
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd can restart it with

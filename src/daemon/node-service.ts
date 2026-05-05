@@ -38,6 +38,9 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
       OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
       OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
     },
+    environmentValueSources: {
+      ...args.environmentValueSources,
+    },
   };
 }
 

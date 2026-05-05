@@ -20,6 +20,7 @@ import { parseKeyValueOutput } from "./runtime-parse.js";
 import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
+  isEnvironmentFileOnlySource,
   readManagedServiceEnvKeysFromEnvironment,
 } from "./service-managed-env.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -195,6 +196,39 @@ function collectSystemdInlineManagedKeys(params: {
     }
   }
   return keys;
+}
+
+function collectSystemdFileManagedKeys(params: {
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+}): Set<string> {
+  const keys = new Set<string>();
+  for (const [rawKey, source] of Object.entries(params.environmentValueSources ?? {})) {
+    const key = normalizeSystemdEnvironmentKey(rawKey);
+    if (key && isEnvironmentFileOnlySource(source)) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function collectSystemdFileBackedEnvironment(params: {
+  environment?: GatewayServiceEnv;
+  fileManagedKeys: ReadonlySet<string>;
+}): Record<string, string> {
+  if (params.fileManagedKeys.size === 0) {
+    return {};
+  }
+  const environment: Record<string, string> = {};
+  for (const [rawKey, rawValue] of Object.entries(params.environment ?? {})) {
+    if (typeof rawValue !== "string" || !rawValue.trim()) {
+      continue;
+    }
+    const key = normalizeSystemdEnvironmentKey(rawKey);
+    if (key && params.fileManagedKeys.has(key)) {
+      environment[rawKey] = rawValue;
+    }
+  }
+  return environment;
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -586,10 +620,18 @@ async function writeSystemdUnit({
     environment,
     environmentValueSources,
   });
+  const fileManagedKeys = collectSystemdFileManagedKeys({
+    environmentValueSources,
+  });
   const environmentFileResult = await writeSystemdGatewayEnvironmentFile({
     stateDir,
     dotenvVars: stateDirDotEnvVars,
     inlineManagedKeys,
+    fileManagedKeys,
+    fileBackedEnvironment: collectSystemdFileBackedEnvironment({
+      environment,
+      fileManagedKeys,
+    }),
   });
   const environmentSansDotEnvEntries = Object.fromEntries(
     Object.entries(environment ?? {}).filter(([key, value]) => {
@@ -628,8 +670,10 @@ async function writeSystemdGatewayEnvironmentFile(params: {
   /** OpenClaw-managed keys that must not be preserved from an old env file; stale file values
    *  would override fresh inline Environment= entries because EnvironmentFile takes precedence. */
   inlineManagedKeys?: ReadonlySet<string>;
+  fileManagedKeys?: ReadonlySet<string>;
+  fileBackedEnvironment?: Record<string, string>;
 }): Promise<{ environmentFiles: string[]; environmentKeys: Set<string> }> {
-  const incoming = params.dotenvVars;
+  const incoming = { ...params.dotenvVars, ...(params.fileBackedEnvironment ?? {}) };
   for (const [key, value] of Object.entries(incoming)) {
     if (/[\r\n]/.test(value)) {
       throw new Error(
@@ -654,7 +698,10 @@ async function writeSystemdGatewayEnvironmentFile(params: {
     ? Object.fromEntries(
         Object.entries(existing).filter(([key]) => {
           const normalized = normalizeSystemdEnvironmentKey(key);
-          return !normalized || !params.inlineManagedKeys!.has(normalized);
+          return (
+            !normalized ||
+            (!params.inlineManagedKeys!.has(normalized) && !params.fileManagedKeys?.has(normalized))
+          );
         }),
       )
     : existing;
@@ -668,6 +715,7 @@ async function writeSystemdGatewayEnvironmentFile(params: {
 
   // If the merged result is empty there is nothing to write and no file needed.
   if (Object.keys(merged).length === 0) {
+    await fs.rm(envFilePath, { force: true }).catch(() => undefined);
     return { environmentFiles: [], environmentKeys };
   }
 
