@@ -373,7 +373,7 @@ fallbacks. Fully isolated auth per agent is not supported yet.
 Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
-- If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
+- If the sub-agent replies exactly `ANNOUNCE_SKIP`, or puts `ANNOUNCE_SKIP` on its own final line after a summary block, nothing is posted.
 - If the latest assistant text is the exact silent token `NO_REPLY` / `no_reply`, announce output is suppressed even if earlier visible progress existed.
 
 Delivery depends on requester depth:
