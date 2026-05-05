@@ -191,3 +191,28 @@ export function resolveInteractiveMigrationSkillSelection(
     selectedItemIds: new Set(selectedValues.filter((value) => selectableIds.has(value))),
   };
 }
+
+export function reconcileInteractiveMigrationSkillToggleValues(
+  selectedValues: readonly string[],
+  activatedValue: string | undefined,
+  selectableValues: readonly string[],
+): string[] {
+  if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (activatedValue === MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  }
+  if (activatedValue !== undefined && selectableValues.includes(activatedValue)) {
+    return selectedValues.filter(
+      (value) =>
+        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON &&
+        value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+    );
+  }
+  return selectedValues.filter(
+    (value) =>
+      value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON ||
+      !selectedValues.includes(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF),
+  );
+}

@@ -1,4 +1,4 @@
-import { cancel, isCancel, multiselect } from "@clack/prompts";
+import { cancel, isCancel } from "@clack/prompts";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
@@ -26,6 +26,7 @@ import {
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
   resolveInteractiveMigrationSkillSelection,
 } from "./migrate/selection.js";
+import { promptMigrationSkillSelectionValues } from "./migrate/skill-selection-prompt.js";
 import type {
   MigrateApplyOptions,
   MigrateCommonOptions,
@@ -56,7 +57,7 @@ async function promptCodexMigrationSkillSelection(
   if (skillItems.length === 0) {
     return plan;
   }
-  const selected = await multiselect<string>({
+  const selected = await promptMigrationSkillSelectionValues({
     message: stylePromptMessage("Select Codex skills to migrate into this agent"),
     options: [
       {
@@ -82,13 +83,14 @@ async function promptCodexMigrationSkillSelection(
     ],
     initialValues: getDefaultMigrationSkillSelectionValues(skillItems),
     required: false,
+    selectableValues: skillItems.map(getMigrationSkillSelectionValue),
   });
   if (isCancel(selected)) {
     cancel(stylePromptTitle("Migration cancelled.") ?? "Migration cancelled.");
     runtime.log("Migration cancelled.");
     return null;
   }
-  const selection = resolveInteractiveMigrationSkillSelection(skillItems, selected);
+  const selection = resolveInteractiveMigrationSkillSelection(skillItems, selected ?? []);
   if (selection.action === "skip") {
     runtime.log("Codex skill migration skipped for now.");
     return null;

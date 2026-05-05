@@ -34,7 +34,10 @@ vi.mock("../cli/prompt.js", () => ({
 vi.mock("@clack/prompts", () => ({
   cancel: mocks.clackCancel,
   isCancel: mocks.clackIsCancel,
-  multiselect: mocks.multiselect,
+}));
+
+vi.mock("./migrate/skill-selection-prompt.js", () => ({
+  promptMigrationSkillSelectionValues: mocks.multiselect,
 }));
 
 vi.mock("../plugins/migration-provider-runtime.js", () => ({
