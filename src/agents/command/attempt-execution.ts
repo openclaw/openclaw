@@ -1,4 +1,4 @@
-import { open } from "node:fs/promises";
+import { open, type FileHandle } from "node:fs/promises";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -325,7 +325,7 @@ export async function persistCliTurnTranscript(params: {
 }
 
 async function readLastTranscriptLine(transcriptPath: string): Promise<string | undefined> {
-  let handle: Awaited<typeof open> | undefined;
+  let handle: FileHandle | undefined;
   try {
     handle = await open(transcriptPath, "r");
     const stat = await handle.stat();
