@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 export {
   ROOT_PATH_ALIAS_POLICIES,
   resolvePathViaExistingAncestorSync,

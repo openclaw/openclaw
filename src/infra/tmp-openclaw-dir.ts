@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 import { resolveSecureTempRoot, type ResolveSecureTempRootOptions } from "@openclaw/fs-safe/temp";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";

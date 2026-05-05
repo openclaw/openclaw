@@ -1,3 +1,4 @@
+import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";

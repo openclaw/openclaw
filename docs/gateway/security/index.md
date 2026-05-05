@@ -65,6 +65,12 @@ OpenClaw assumes the host and config boundary are trusted:
 - Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
 - If several people can message one tool-enabled agent, each of them can steer that same permission set. Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
 
+### Secure file operations
+
+OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. OpenClaw defaults fs-safe's optional POSIX Python helper to **off**; set `OPENCLAW_FS_SAFE_PYTHON_MODE=auto` or `require` only when you want the extra fd-relative mutation hardening and can support a Python runtime.
+
+Details: [Secure file operations](/gateway/security/secure-file-operations).
+
 ### Shared Slack workspace: real risk
 
 If "everyone in Slack can message the bot," the core risk is delegated tool authority:

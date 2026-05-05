@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 export {
   ensureDirectoryWithinRoot,
   resolveExistingPathsWithinRoot,

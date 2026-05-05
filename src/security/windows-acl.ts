@@ -1,3 +1,4 @@
+import "../infra/fs-safe-defaults.js";
 export {
   createIcaclsResetCommand,
   formatIcaclsResetCommand,

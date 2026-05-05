@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 import { privateStateStore, type PrivateStateStore } from "@openclaw/fs-safe/advanced";
 
 export {

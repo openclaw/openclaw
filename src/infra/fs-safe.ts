@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,

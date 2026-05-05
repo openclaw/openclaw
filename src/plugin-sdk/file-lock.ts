@@ -1,3 +1,4 @@
+import "../infra/fs-safe-defaults.js";
 import { createSidecarLockManager } from "@openclaw/fs-safe/advanced";
 import { isPidAlive } from "../shared/pid-alive.js";
 

@@ -1,3 +1,4 @@
+import "../../../../src/infra/fs-safe-defaults.js";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export {
   readRegularFile,

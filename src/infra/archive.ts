@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 export {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,

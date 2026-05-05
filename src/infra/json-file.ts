@@ -1,3 +1,4 @@
+import "./fs-safe-defaults.js";
 import fs from "node:fs";
 import path from "node:path";
 import { tryReadJsonSync, tryReadJson, writeJsonSync } from "@openclaw/fs-safe/json";

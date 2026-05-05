@@ -1,3 +1,4 @@
+import "../infra/fs-safe-defaults.js";
 import { pathExists } from "@openclaw/fs-safe/advanced";
 import { tryReadJson, tryReadJsonSync, writeJson, writeJsonSync } from "@openclaw/fs-safe/json";
 
