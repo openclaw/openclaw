@@ -742,6 +742,7 @@ export default definePluginEntry({
             dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
             message: normalizeOptionalString(params?.message),
             requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+            agentId: normalizeOptionalString(params?.agentId),
           });
           respond(true, result);
         } catch (err) {
@@ -994,6 +995,7 @@ export default definePluginEntry({
             dtmfSequence: normalizeOptionalString(params?.dtmfSequence),
             message: normalizeOptionalString(params?.message),
             requesterSessionKey: normalizeOptionalString(params?.requesterSessionKey),
+            agentId: normalizeOptionalString(params?.agentId),
           });
           respond(true, result);
         } catch (err) {
@@ -1030,7 +1032,12 @@ export default definePluginEntry({
         async execute(_toolCallId, params) {
           const raw = asParamRecord(params);
           const requesterSessionKey = normalizeOptionalString(toolContext.sessionKey);
-          const rawWithRequester = requesterSessionKey ? { ...raw, requesterSessionKey } : raw;
+          const ctxAgentId = normalizeOptionalString(toolContext.agentId);
+          const rawWithRequester: Record<string, unknown> = {
+            ...raw,
+            ...(requesterSessionKey ? { requesterSessionKey } : {}),
+            ...(ctxAgentId ? { agentId: ctxAgentId } : {}),
+          };
           try {
             assertGoogleMeetAgentToolActionSupported({ config, raw });
             switch (raw.action) {

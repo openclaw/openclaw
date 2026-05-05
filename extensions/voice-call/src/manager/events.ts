@@ -84,6 +84,9 @@ function createWebhookCall(params: {
       callId,
       phone: params.direction === "outbound" ? params.to : params.from,
     }),
+    // Freeze the resolved agent id on the inbound CallRecord at creation so
+    // later turns do not silently drift if config is hot-reloaded mid-call.
+    ...(effectiveConfig.agentId ? { agentId: effectiveConfig.agentId } : {}),
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],

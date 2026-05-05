@@ -499,12 +499,18 @@ export class GoogleMeetRuntime {
               ...(request.requesterSessionKey
                 ? { requesterSessionKey: request.requesterSessionKey }
                 : {}),
-              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
                   this.params.config.realtime.introMessage)
                 : undefined,
+              agentId: request.agentId,
+              // Per-meeting/per-agent session key isolates Voice Call sessions
+              // when multiple agents share a Twilio dial-in number. Falls back
+              // to the phone-leg namespace when no agentId is set.
+              sessionKey: request.agentId
+                ? `agent:${request.agentId}:google-meet:${session.id}`
+                : buildTwilioVoiceCallSessionKey(session.id),
             })
           : undefined;
         delegatedTwilioSpoken = Boolean(voiceCallResult?.introSent);

@@ -163,7 +163,7 @@ const voiceCallConfigSchema = {
     store: { label: "Call Log Store Path", advanced: true },
     agentId: {
       label: "Response Agent ID",
-      help: 'Agent workspace used for voice response generation. Defaults to "main".',
+      help: 'Default agent workspace for voice responses. Per-call override via voicecall.start agentId param (frozen on CallRecord at creation; consumed via resolveCallAgentId helper). Defaults to "main".',
       advanced: true,
     },
     responseModel: {
@@ -382,12 +382,14 @@ export default definePluginEntry({
       dtmfSequence?: string;
       sessionKey?: string;
       requesterSessionKey?: string;
+      agentId?: string;
     }) => {
       const result = await params.rt.manager.initiateCall(params.to, params.sessionKey, {
         message: params.message,
         mode: params.mode,
         dtmfSequence: params.dtmfSequence,
         ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       });
       if (!result.success) {
         respondError(params.respond, result.error || "initiate failed");
@@ -648,6 +650,7 @@ export default definePluginEntry({
           const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
           const sessionKey = normalizeOptionalString(params?.sessionKey);
           const requesterSessionKey = normalizeOptionalString(params?.requesterSessionKey);
+          const agentId = normalizeOptionalString(params?.agentId);
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
@@ -664,6 +667,7 @@ export default definePluginEntry({
             dtmfSequence,
             sessionKey,
             ...(requesterSessionKey ? { requesterSessionKey } : {}),
+            ...(agentId ? { agentId } : {}),
           });
         } catch (err) {
           sendError(respond, err);
@@ -672,141 +676,144 @@ export default definePluginEntry({
       VOICE_CALL_WRITE_METHOD_SCOPE,
     );
 
-    api.registerTool({
-      name: "voice_call",
-      label: "Voice Call",
-      description: "Make phone calls and have voice conversations via the voice-call plugin.",
-      parameters: VoiceCallToolSchema,
-      async execute(_toolCallId, params) {
-        const rawParams = asParamRecord(params);
-        const json = (payload: unknown) => ({
-          content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
-          details: payload,
-        });
-
-        try {
-          const rt = await ensureRuntime();
-
-          if (typeof rawParams.action === "string") {
-            switch (rawParams.action) {
-              case "initiate_call": {
-                const message = normalizeOptionalString(rawParams.message) ?? "";
-                if (!message) {
-                  throw new Error("message required");
-                }
-                const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
-                if (!to) {
-                  throw new Error("to required");
-                }
-                const result = await rt.manager.initiateCall(to, undefined, {
-                  message,
-                  dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-                  mode:
-                    rawParams.mode === "notify" || rawParams.mode === "conversation"
-                      ? rawParams.mode
-                      : undefined,
-                });
-                if (!result.success) {
-                  throw new Error(result.error || "initiate failed");
-                }
-                return json({ callId: result.callId, initiated: true });
-              }
-              case "continue_call": {
-                const callId = normalizeOptionalString(rawParams.callId) ?? "";
-                const message = normalizeOptionalString(rawParams.message) ?? "";
-                if (!callId || !message) {
-                  throw new Error("callId and message required");
-                }
-                const result = await rt.manager.continueCall(callId, message);
-                if (!result.success) {
-                  throw new Error(result.error || "continue failed");
-                }
-                return json({ success: true, transcript: result.transcript });
-              }
-              case "speak_to_user": {
-                const callId = normalizeOptionalString(rawParams.callId) ?? "";
-                const message = normalizeOptionalString(rawParams.message) ?? "";
-                if (!callId || !message) {
-                  throw new Error("callId and message required");
-                }
-                const result = await rt.manager.speak(callId, message);
-                if (!result.success) {
-                  throw new Error(result.error || "speak failed");
-                }
-                return json({ success: true });
-              }
-              case "send_dtmf": {
-                const callId = normalizeOptionalString(rawParams.callId) ?? "";
-                const digits = normalizeOptionalString(rawParams.digits) ?? "";
-                if (!callId || !digits) {
-                  throw new Error("callId and digits required");
-                }
-                const result = await rt.manager.sendDtmf(callId, digits);
-                if (!result.success) {
-                  throw new Error(result.error || "dtmf failed");
-                }
-                return json({ success: true });
-              }
-              case "end_call": {
-                const callId = normalizeOptionalString(rawParams.callId) ?? "";
-                if (!callId) {
-                  throw new Error("callId required");
-                }
-                const result = await rt.manager.endCall(callId);
-                if (!result.success) {
-                  throw new Error(result.error || "end failed");
-                }
-                return json({ success: true });
-              }
-              case "get_status": {
-                const callId = normalizeOptionalString(rawParams.callId) ?? "";
-                if (!callId) {
-                  throw new Error("callId required");
-                }
-                const call =
-                  rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
-                return json(call ? { found: true, call } : { found: false });
-              }
-            }
-          }
-
-          const mode = rawParams.mode ?? "call";
-          if (mode === "status") {
-            const sid = normalizeOptionalString(rawParams.sid) ?? "";
-            if (!sid) {
-              throw new Error("sid required for status");
-            }
-            const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
-            return json(call ? { found: true, call } : { found: false });
-          }
-
-          const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
-          if (!to) {
-            throw new Error("to required for call");
-          }
-          const result = await rt.manager.initiateCall(
-            to,
-            normalizeOptionalString(rawParams.sessionKey),
-            {
-              dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
-              message: normalizeOptionalString(rawParams.message),
-              ...(normalizeOptionalString(rawParams.requesterSessionKey)
-                ? { requesterSessionKey: normalizeOptionalString(rawParams.requesterSessionKey) }
-                : {}),
-            },
-          );
-          if (!result.success) {
-            throw new Error(result.error || "initiate failed");
-          }
-          return json({ callId: result.callId, initiated: true });
-        } catch (err) {
-          return json({
-            error: formatErrorMessage(err),
+    api.registerTool(
+      (toolContext) => ({
+        name: "voice_call",
+        label: "Voice Call",
+        description: "Make phone calls and have voice conversations via the voice-call plugin.",
+        parameters: VoiceCallToolSchema,
+        async execute(_toolCallId, params) {
+          const rawParams = asParamRecord(params);
+          const ctxAgentId = normalizeOptionalString(toolContext.agentId);
+          const json = (payload: unknown) => ({
+            content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
+            details: payload,
           });
-        }
-      },
-    });
 
+          try {
+            const rt = await ensureRuntime();
+
+            if (typeof rawParams.action === "string") {
+              switch (rawParams.action) {
+                case "initiate_call": {
+                  const message = normalizeOptionalString(rawParams.message) ?? "";
+                  if (!message) {
+                    throw new Error("message required");
+                  }
+                  const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
+                  if (!to) {
+                    throw new Error("to required");
+                  }
+                  const result = await rt.manager.initiateCall(to, undefined, {
+                    message,
+                    dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                    mode:
+                      rawParams.mode === "notify" || rawParams.mode === "conversation"
+                        ? rawParams.mode
+                        : undefined,
+                    agentId: ctxAgentId,
+                  });
+                  if (!result.success) {
+                    throw new Error(result.error || "initiate failed");
+                  }
+                  return json({ callId: result.callId, initiated: true });
+                }
+                case "continue_call": {
+                  const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                  const message = normalizeOptionalString(rawParams.message) ?? "";
+                  if (!callId || !message) {
+                    throw new Error("callId and message required");
+                  }
+                  const result = await rt.manager.continueCall(callId, message);
+                  if (!result.success) {
+                    throw new Error(result.error || "continue failed");
+                  }
+                  return json({ success: true, transcript: result.transcript });
+                }
+                case "speak_to_user": {
+                  const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                  const message = normalizeOptionalString(rawParams.message) ?? "";
+                  if (!callId || !message) {
+                    throw new Error("callId and message required");
+                  }
+                  const result = await rt.manager.speak(callId, message);
+                  if (!result.success) {
+                    throw new Error(result.error || "speak failed");
+                  }
+                  return json({ success: true });
+                }
+                case "send_dtmf": {
+                  const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                  const digits = normalizeOptionalString(rawParams.digits) ?? "";
+                  if (!callId || !digits) {
+                    throw new Error("callId and digits required");
+                  }
+                  const result = await rt.manager.sendDtmf(callId, digits);
+                  if (!result.success) {
+                    throw new Error(result.error || "dtmf failed");
+                  }
+                  return json({ success: true });
+                }
+                case "end_call": {
+                  const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                  if (!callId) {
+                    throw new Error("callId required");
+                  }
+                  const result = await rt.manager.endCall(callId);
+                  if (!result.success) {
+                    throw new Error(result.error || "end failed");
+                  }
+                  return json({ success: true });
+                }
+                case "get_status": {
+                  const callId = normalizeOptionalString(rawParams.callId) ?? "";
+                  if (!callId) {
+                    throw new Error("callId required");
+                  }
+                  const call =
+                    rt.manager.getCall(callId) || rt.manager.getCallByProviderCallId(callId);
+                  return json(call ? { found: true, call } : { found: false });
+                }
+              }
+            }
+
+            const mode = rawParams.mode ?? "call";
+            if (mode === "status") {
+              const sid = normalizeOptionalString(rawParams.sid) ?? "";
+              if (!sid) {
+                throw new Error("sid required for status");
+              }
+              const call = rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+              return json(call ? { found: true, call } : { found: false });
+            }
+
+            const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
+            if (!to) {
+              throw new Error("to required for call");
+            }
+            const requesterSessionKey = normalizeOptionalString(rawParams.requesterSessionKey);
+            const result = await rt.manager.initiateCall(
+              to,
+              normalizeOptionalString(rawParams.sessionKey),
+              {
+                dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
+                message: normalizeOptionalString(rawParams.message),
+                ...(ctxAgentId ? { agentId: ctxAgentId } : {}),
+                ...(requesterSessionKey ? { requesterSessionKey } : {}),
+              },
+            );
+            if (!result.success) {
+              throw new Error(result.error || "initiate failed");
+            }
+            return json({ callId: result.callId, initiated: true });
+          } catch (err) {
+            return json({
+              error: formatErrorMessage(err),
+            });
+          }
+        },
+      }),
+    );
     api.registerCli(
       ({ program }) =>
         registerVoiceCallCli({

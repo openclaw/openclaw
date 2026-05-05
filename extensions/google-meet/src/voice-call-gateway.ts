@@ -88,6 +88,9 @@ export async function joinMeetViaVoiceCallGateway(params: {
   logger?: RuntimeLogger;
   message?: string;
   requesterSessionKey?: string;
+  /** Per-call originating agent id; frozen on the voice-call CallRecord. */
+  agentId?: string;
+  /** Optional explicit Voice Call session key for per-agent/per-meeting isolation. */
   sessionKey?: string;
 }): Promise<VoiceCallMeetJoinResult> {
   let client: VoiceCallGatewayClient | undefined;
@@ -95,7 +98,7 @@ export async function joinMeetViaVoiceCallGateway(params: {
   try {
     client = await createConnectedGatewayClient(params.config);
     params.logger?.info(
-      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "pre-connect" : "none"}, intro=${params.message ? "delayed" : "none"})`,
+      `[google-meet] Delegating Twilio join to Voice Call (dtmf=${params.dtmfSequence ? "pre-connect" : "none"}, intro=${params.message ? "delayed" : "none"}, agentId=${params.agentId ?? "<unset>"}, sessionKey=${params.sessionKey ?? "<unset>"})`,
     );
     const start = (await client.request(
       "voicecall.start",
@@ -104,6 +107,7 @@ export async function joinMeetViaVoiceCallGateway(params: {
         mode: "conversation",
         ...(params.dtmfSequence ? { dtmfSequence: params.dtmfSequence } : {}),
         ...(params.requesterSessionKey ? { requesterSessionKey: params.requesterSessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
