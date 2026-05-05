@@ -1,4 +1,4 @@
-import type { ReplyPayload } from "../../../../src/auto-reply/types.js";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveSignalQuoteMetadata } from "../reply-quote.js";
 
 export type SignalReplyDeliveryState = {
