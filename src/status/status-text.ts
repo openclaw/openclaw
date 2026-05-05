@@ -54,7 +54,6 @@ let agentHarnessSelectionRuntimePromise: Promise<
 let statusQueueRuntimePromise: Promise<typeof import("./status-queue.runtime.js")> | null = null;
 let statusSubagentsRuntimePromise: Promise<typeof import("./status-subagents.runtime.js")> | null =
   null;
-let modelCatalogRuntimePromise: Promise<typeof import("../agents/model-catalog.js")> | null = null;
 
 function loadStatusMessageRuntime(): Promise<typeof import("../auto-reply/status.runtime.js")> {
   const runtimePromise = (statusMessageRuntimePromise ??=
@@ -83,46 +82,17 @@ function loadStatusQueueRuntime(): Promise<typeof import("./status-queue.runtime
   return runtimePromise;
 }
 
-function loadModelCatalogRuntime(): Promise<typeof import("../agents/model-catalog.js")> {
-  const runtimePromise = (modelCatalogRuntimePromise ??= import("../agents/model-catalog.js"));
-  return runtimePromise;
-}
-
-function normalizePositiveContextTokens(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
-
-async function resolveStatusRuntimeContextTokens(params: {
+function resolveStatusRuntimeContextTokens(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
-}): Promise<number | undefined> {
-  const cached = resolveContextTokensForModel({
+}): number | undefined {
+  return resolveContextTokensForModel({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
     allowAsyncLoad: false,
   });
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  try {
-    const { loadModelCatalog } = await loadModelCatalogRuntime();
-    const catalog = await loadModelCatalog({ config: params.cfg });
-    const entry = catalog.find(
-      (candidate) => candidate.provider === params.provider && candidate.id === params.model,
-    );
-    return (
-      normalizePositiveContextTokens(entry?.contextTokens) ??
-      normalizePositiveContextTokens(entry?.contextWindow)
-    );
-  } catch {
-    return undefined;
-  }
 }
 
 function shouldLoadUsageSummary(params: {
@@ -390,7 +360,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: modelRefs.active.provider || provider,
     effectiveHarness,
   });
-  const runtimeContextTokens = await resolveStatusRuntimeContextTokens({
+  const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: runtimeContextProvider,
     model: modelRefs.active.model || model,
