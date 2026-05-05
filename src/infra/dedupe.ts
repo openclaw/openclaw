@@ -1,6 +1,5 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pruneMapToMaxSize } from "./map-size.js";
-
 export type DedupeCache = {
   check: (key: string | undefined | null, now?: number) => boolean;
   peek: (key: string | undefined | null, now?: number) => boolean;
@@ -8,22 +7,18 @@ export type DedupeCache = {
   clear: () => void;
   size: () => number;
 };
-
 export type DedupeCacheOptions = {
   ttlMs: number;
   maxSize: number;
 };
-
 export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
   const ttlMs = Math.max(0, options.ttlMs);
   const maxSize = Math.max(0, Math.floor(options.maxSize));
   const cache = new Map<string, number>();
-
   const touch = (key: string, now: number) => {
     cache.delete(key);
     cache.set(key, now);
   };
-
   const prune = (now: number) => {
     const cutoff = ttlMs > 0 ? now - ttlMs : undefined;
     if (cutoff !== undefined) {
@@ -39,7 +34,6 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     }
     pruneMapToMaxSize(cache, maxSize);
   };
-
   const hasUnexpired = (key: string, now: number, touchOnRead: boolean): boolean => {
     const existing = cache.get(key);
     if (existing === undefined) {
@@ -54,7 +48,6 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     }
     return true;
   };
-
   return {
     check: (key, now = Date.now()) => {
       if (!key) {
@@ -64,7 +57,9 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
         return true;
       }
       touch(key, now);
-      prune(now);
+      if (cache.size > maxSize) {
+        prune(now);
+      }
       return false;
     },
     peek: (key, now = Date.now()) => {
@@ -85,7 +80,6 @@ export function createDedupeCache(options: DedupeCacheOptions): DedupeCache {
     size: () => cache.size,
   };
 }
-
 export function resolveGlobalDedupeCache(key: symbol, options: DedupeCacheOptions): DedupeCache {
   return resolveGlobalSingleton(key, () => createDedupeCache(options));
 }
