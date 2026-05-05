@@ -1541,12 +1541,22 @@ public final class OpenClawChatViewModel {
             return
         }
         if !isOurRun {
-            // Keep multiple clients in sync: if another client finishes a run for our session, refresh history.
+            // Keep multiple clients in sync without clearing this client's own active stream.
+            let shouldResetExternalLiveState = self.pendingRuns.isEmpty
             switch chat.state {
-            case "final", "aborted", "error":
-                self.streamingAssistantText = nil
-                self.pendingToolCallsById = [:]
+            case "final", "aborted":
+                if shouldResetExternalLiveState {
+                    self.streamingAssistantText = nil
+                    self.pendingToolCallsById = [:]
+                }
                 self.appendFinalChatMessageIfPresent(chat)
+                let context = self.beginHistoryRequest()
+                Task { await self.refreshHistoryAfterRun(historyRequest: context) }
+            case "error":
+                if shouldResetExternalLiveState {
+                    self.streamingAssistantText = nil
+                    self.pendingToolCallsById = [:]
+                }
                 let context = self.beginHistoryRequest()
                 Task { await self.refreshHistoryAfterRun(historyRequest: context) }
             default:
