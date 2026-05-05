@@ -73,6 +73,29 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   });
 });
 
+test("sessions.reset writes sessionKey into the fresh transcript header", async () => {
+  await seedActiveMainSession();
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { sessionId: string; sessionFile?: string };
+  }>("sessions.reset", {
+    key: "main",
+  });
+
+  expect(reset.ok).toBe(true);
+  expect(reset.payload?.key).toBe("agent:main:main");
+  expect(reset.payload?.entry.sessionFile).toBeTruthy();
+
+  const transcript = await fs.readFile(reset.payload!.entry.sessionFile!, "utf-8");
+  const headerLine = transcript.split(/\r?\n/, 1)[0];
+  expect(JSON.parse(headerLine ?? "{}")).toMatchObject({
+    id: reset.payload?.entry.sessionId,
+    sessionKey: "agent:main:main",
+  });
+});
+
 test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");

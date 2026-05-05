@@ -127,6 +127,7 @@ Current source-of-truth:
     - `/new [model]` starts a new session; `/reset` is the reset alias.
     - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session; typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
+    - `/restore [number]` lists recent archived sessions or restores one into the current session slot.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
     - `/stop` aborts the current run.
     - `/session idle <duration|off>` and `/session max-age <duration|off>` manage thread-binding expiry.

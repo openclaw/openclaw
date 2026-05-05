@@ -101,6 +101,18 @@ function restoreSessionArchiveTimestamp(raw: string): string {
   return `${datePart}T${timePart.replace(/-/g, ":")}`;
 }
 
+/**
+ * Extracts the original session ID from an archive filename.
+ * Given `abc123.jsonl.reset.2026-03-19T04-30-00.000Z`, returns `abc123`.
+ */
+export function extractSessionIdFromArchiveName(fileName: string): string | null {
+  const jsonlIndex = fileName.indexOf(".jsonl.");
+  if (jsonlIndex <= 0) {
+    return null;
+  }
+  return fileName.slice(0, jsonlIndex);
+}
+
 export function parseSessionArchiveTimestamp(
   fileName: string,
   reason: SessionArchiveReason,

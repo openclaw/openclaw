@@ -497,22 +497,18 @@ export async function performGatewaySessionReset(params: {
     const target = resolveGatewaySessionStoreTarget({ cfg, key: params.key });
     return { cfg, target, storePath: target.storePath };
   })();
+  const resolvedSessionKey = target.canonicalKey ?? params.key;
   const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key);
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const hookEvent = createInternalHookEvent(
-    "command",
-    params.reason,
-    target.canonicalKey ?? params.key,
-    {
-      sessionEntry: entry,
-      previousSessionEntry: entry,
-      commandSource: params.commandSource,
-      cfg,
-      workspaceDir,
-    },
-  );
+  const hookEvent = createInternalHookEvent("command", params.reason, resolvedSessionKey, {
+    sessionEntry: entry,
+    previousSessionEntry: entry,
+    commandSource: params.commandSource,
+    cfg,
+    workspaceDir,
+  });
   await triggerInternalHook(hookEvent);
   const mutationCleanupError = await cleanupSessionBeforeMutation({
     cfg,
@@ -657,6 +653,7 @@ export async function performGatewaySessionReset(params: {
       id: next.sessionId,
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
+      sessionKey: resolvedSessionKey,
     };
     fs.writeFileSync(next.sessionFile as string, `${JSON.stringify(header)}\n`, {
       encoding: "utf-8",
@@ -665,7 +662,7 @@ export async function performGatewaySessionReset(params: {
   }
   emitGatewaySessionEndPluginHook({
     cfg,
-    sessionKey: target.canonicalKey ?? params.key,
+    sessionKey: resolvedSessionKey,
     sessionId: oldSessionId,
     storePath,
     sessionFile: oldSessionFile,
@@ -676,15 +673,15 @@ export async function performGatewaySessionReset(params: {
   });
   emitGatewaySessionStartPluginHook({
     cfg,
-    sessionKey: target.canonicalKey ?? params.key,
+    sessionKey: resolvedSessionKey,
     sessionId: next.sessionId,
     resumedFrom: oldSessionId,
   });
   if (hadExistingEntry) {
     await emitSessionUnboundLifecycleEvent({
-      targetSessionKey: target.canonicalKey ?? params.key,
+      targetSessionKey: resolvedSessionKey,
       reason: "session-reset",
     });
   }
-  return { ok: true, key: target.canonicalKey, entry: next };
+  return { ok: true, key: resolvedSessionKey, entry: next };
 }
