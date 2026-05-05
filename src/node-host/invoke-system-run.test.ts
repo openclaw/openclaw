@@ -532,6 +532,39 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   });
 
+  it("denies configured path patterns before allowlist or execution", async () => {
+    const tmp = createFixtureDir("openclaw-deny-path-policy-");
+    const runCommand = vi.fn(async () => createLocalRunResult("should-not-run"));
+    setRuntimeConfigSnapshot({
+      tools: {
+        exec: {
+          denyPathPatterns: ["~/.openclaw/secrets/**"],
+        },
+      },
+    });
+
+    const invoke = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      command: ["/bin/sh", "-lc", "cat ~/.openclaw/secrets/foo.env; echo ok"],
+      cwd: tmp,
+      security: "allowlist",
+      ask: "off",
+      runCommand,
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(invoke.sendNodeEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      "exec.denied",
+      expect.objectContaining({ reason: "deny-path-pattern" }),
+    );
+    expectInvokeErrorMessage(invoke.sendInvokeResult, {
+      message:
+        'SYSTEM_RUN_DENIED: argument matches tools.exec.denyPathPatterns (pattern="~/.openclaw/secrets/**", arg="~/.openclaw/secrets/foo.env")',
+      exact: true,
+    });
+  });
+
   const approvedEnvShellWrapperCases = [
     {
       name: "preserves wrapper argv for approved env shell commands in local execution",

@@ -18,6 +18,11 @@ import {
   type ExecCommandSegment,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import {
+  evaluateExecDenyPathMatch,
+  formatExecDenyPathMessage,
+  resolveExecDenyPathPatterns,
+} from "../infra/exec-deny-path.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
@@ -69,6 +74,7 @@ type SystemRunDeniedReason =
   | "allowlist-miss"
   | "execution-plan-miss"
   | "companion-unavailable"
+  | "deny-path-pattern"
   | "permission:screenRecording";
 
 type SystemRunExecutionContext = {
@@ -141,6 +147,7 @@ function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeni
     case "allowlist-miss":
     case "execution-plan-miss":
     case "companion-unavailable":
+    case "deny-path-pattern":
     case "permission:screenRecording":
       return reason;
     default:
@@ -383,6 +390,31 @@ async function evaluateSystemRunPolicyPhase(
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
+
+  // Deny-path gate runs before the allowlist/approval checks so a hard deny
+  // for known-secret paths cannot be relaxed by allow-always or
+  // security="full". Defense-in-depth against the "lazy `cat ~/.openclaw/
+  // secrets/...`" exfiltration path described in #74379.
+  const denyPathPatterns = resolveExecDenyPathPatterns({
+    global: cfg.tools?.exec?.denyPathPatterns,
+    agent: agentExec?.denyPathPatterns,
+  });
+  if (denyPathPatterns.length > 0) {
+    const denyMatch = evaluateExecDenyPathMatch({
+      patterns: denyPathPatterns,
+      argv: parsed.argv,
+      shellPayload: parsed.shellPayload,
+      cwd: parsed.cwd,
+    });
+    if (denyMatch) {
+      await sendSystemRunDenied(opts, parsed.execution, {
+        reason: "deny-path-pattern",
+        message: formatExecDenyPathMessage(denyMatch),
+      });
+      return null;
+    }
+  }
+
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,

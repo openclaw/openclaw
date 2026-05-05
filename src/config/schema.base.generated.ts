@@ -8194,6 +8194,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             type: "string",
                           },
                         },
+                        denyPathPatterns: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
                         strictInlineEval: {
                           type: "boolean",
                         },
@@ -18462,6 +18468,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Allow stdin-only safe binaries to run without explicit allowlist entries.",
               },
+              denyPathPatterns: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+                title: "Exec Deny Path Patterns",
+                description:
+                  "Glob patterns matched against argv (and best-effort shell-payload tokens) before allowlist or approval checks. A match aborts the run regardless of `security`/`ask`/`safeBins`. Use it for hard-deny paths like secrets directories or SSH private keys. v1 matches literal path-like arguments after simple shell-quote stripping; it does not defeat heredocs, eval-style indirection, base64-decoded paths, command substitution, or symlink redirection.",
+              },
               strictInlineEval: {
                 type: "boolean",
                 title: "Require Inline-Eval Approval",
@@ -25787,6 +25802,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Exec Safe Bins",
       help: "Allow stdin-only safe binaries to run without explicit allowlist entries.",
       tags: ["tools"],
+    },
+    "tools.exec.denyPathPatterns": {
+      label: "Exec Deny Path Patterns",
+      help: "Glob patterns matched against argv (and best-effort shell-payload tokens) before allowlist or approval checks. A match aborts the run regardless of `security`/`ask`/`safeBins`. Use it for hard-deny paths like secrets directories or SSH private keys. v1 matches literal path-like arguments after simple shell-quote stripping; it does not defeat heredocs, eval-style indirection, base64-decoded paths, command substitution, or symlink redirection.",
+      tags: ["access", "storage", "tools"],
     },
     "tools.exec.strictInlineEval": {
       label: "Require Inline-Eval Approval",
