@@ -119,6 +119,7 @@ describe("mantis Slack desktop smoke runtime", () => {
     )?.args;
     expect(runArgs).not.toContain("--no-sync");
     const remoteScript = runArgs?.at(-1);
+    expect(remoteScript).toContain("hydrate_mode='source'");
     expect(remoteScript).toContain("${BROWSER:-}");
     expect(remoteScript).toContain("${CHROME_BIN:-}");
     expect(remoteScript).toContain("PNPM_STORE_DIR");
@@ -146,15 +147,83 @@ describe("mantis Slack desktop smoke runtime", () => {
     await expect(fs.readFile(result.videoPath ?? "", "utf8")).resolves.toBe("mp4");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       crabbox: { id: string; vncCommand: string };
+      hydrateMode: string;
       status: string;
+      timings: { phases: { name: string; status: string }[]; totalMs: number };
     };
     expect(summary).toMatchObject({
       crabbox: {
         id: "cbx_abc123",
         vncCommand: "/tmp/crabbox vnc --provider hetzner --id cbx_abc123 --open",
       },
+      hydrateMode: "source",
       status: "pass",
     });
+    expect(summary.timings.totalMs).toBeGreaterThanOrEqual(0);
+    expect(summary.timings.phases.map((phase) => phase.name)).toEqual(
+      expect.arrayContaining([
+        "crabbox.warmup",
+        "crabbox.inspect",
+        "credentials.prepare",
+        "crabbox.remote_run",
+        "artifacts.copy",
+      ]),
+    );
+  });
+
+  it("supports prehydrated remote workspaces without installing or building inside the VM", async () => {
+    const commands: { args: readonly string[]; command: string }[] = [];
+    const runner = vi.fn(async (command: string, args: readonly string[]) => {
+      commands.push({ command, args });
+      if (command === "/tmp/crabbox" && args[0] === "inspect") {
+        return {
+          stdout: `${JSON.stringify({
+            host: "203.0.113.10",
+            id: "cbx_warm",
+            provider: "hetzner",
+            sshKey: "/tmp/key",
+            sshPort: "2222",
+            sshUser: "crabbox",
+          })}\n`,
+          stderr: "",
+        };
+      }
+      if (command === "rsync") {
+        const outputDir = args.at(-1);
+        await fs.mkdir(outputDir as string, { recursive: true });
+        if (!String(outputDir).endsWith("slack-qa/")) {
+          await fs.writeFile(path.join(outputDir as string, "slack-desktop-smoke.png"), "png");
+          await fs.writeFile(
+            path.join(outputDir as string, "remote-metadata.json"),
+            `${JSON.stringify({ hydrateMode: "prehydrated", qaExitCode: 0 })}\n`,
+          );
+        }
+      }
+      return { stdout: "", stderr: "" };
+    });
+
+    const result = await runMantisSlackDesktopSmoke({
+      commandRunner: runner,
+      crabboxBin: "/tmp/crabbox",
+      hydrateMode: "prehydrated",
+      leaseId: "cbx_warm",
+      outputDir: ".artifacts/qa-e2e/mantis/slack-desktop-prehydrated",
+      repoRoot,
+    });
+
+    expect(result.status).toBe("pass");
+    const remoteScript = commands
+      .find((entry) => entry.command === "/tmp/crabbox" && entry.args[0] === "run")
+      ?.args.at(-1);
+    expect(remoteScript).toContain("hydrate_mode='prehydrated'");
+    expect(remoteScript).toContain("hydrate-mode=prehydrated requires node_modules");
+    expect(remoteScript).toContain("hydrate-mode=prehydrated requires a built dist/ directory");
+    const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
+      hydrateMode: string;
+      timings: { phases: { name: string; status: string }[] };
+    };
+    expect(summary.hydrateMode).toBe("prehydrated");
+    expect(summary.timings.phases.map((phase) => phase.name)).not.toContain("crabbox.warmup");
   });
 
   it("leases Convex Slack credentials for gateway setup and maps them into the VM env", async () => {
