@@ -23,6 +23,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -110,6 +111,21 @@ function mergeFactoryPolicyList(...lists: Array<string[] | undefined>): string[]
   return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
 }
 
+function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
+  const allowlist = mergeFactoryPolicyList(...lists);
+  if (
+    !allowlist?.some(
+      (entry) => typeof entry === "string" && entry.trim() === DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+    )
+  ) {
+    return allowlist;
+  }
+  const withoutDefaultPluginMarker = allowlist.filter(
+    (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  );
+  return Array.from(new Set(["*", ...withoutDefaultPluginMarker]));
+}
+
 function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -181,7 +197,10 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
-  const toolAllowlist = mergeFactoryPolicyList(params.config?.tools?.allow, params.toolAllowlist);
+  const toolAllowlist = mergeBuiltInFactoryAllowlist(
+    params.config?.tools?.allow,
+    params.toolAllowlist,
+  );
   const toolDenylist = mergeFactoryPolicyList(params.config?.tools?.deny, params.toolDenylist);
   const allowImageGenerate = isToolAllowedByFactoryPolicy({
     toolName: "image_generate",
