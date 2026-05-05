@@ -190,6 +190,8 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
+  modelRegistryState.models = [];
+  modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   modelRegistryState.findError = undefined;
@@ -510,7 +512,9 @@ describe("models list/status", () => {
     loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
-    await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
+    await withEnvAsync({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: undefined }, () =>
+      modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime),
+    );
 
     const payload = parseJsonLog(runtime);
     expect(loadModelCatalog).not.toHaveBeenCalled();

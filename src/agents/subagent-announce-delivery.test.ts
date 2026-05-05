@@ -1271,6 +1271,48 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("does not fallback while generated media announce-agent run is still pending", async () => {
+    const callGateway = createGatewayMock({
+      runId: "video_generate:task-123:ok",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-pending",
+      sourceTool: "video_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          taskLabel: "lobster trailer",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 video.\nMEDIA:/tmp/lobster-trailer.mp4",
+          mediaUrls: ["/tmp/lobster-trailer.mp4"],
+          replyInstruction: "Deliver the generated video through the message tool.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses a direct channel fallback when announce-agent returns no visible output", async () => {
     const callGateway = createGatewayMock({
       result: {
