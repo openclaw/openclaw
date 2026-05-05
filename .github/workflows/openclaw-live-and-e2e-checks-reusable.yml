@@ -489,7 +489,18 @@ jobs:
           fi
 
       - name: Verify live prompt cache floors
-        run: pnpm test:live:cache
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            echo "live-cache attempt ${attempt}/3"
+            if pnpm test:live:cache; then
+              exit 0
+            fi
+            if [[ "$attempt" == "3" ]]; then
+              exit 1
+            fi
+            sleep $((attempt * 15))
+          done
 
   validate_repo_e2e:
     needs: validate_selected_ref
