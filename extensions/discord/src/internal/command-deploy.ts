@@ -181,17 +181,49 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      await privateFileStore(path.dirname(storePath)).writeJson(
-        path.basename(storePath),
+      // Re-read the on-disk hashes immediately before writing and merge them
+      // with our in-memory entries. Multiple Discord accounts on the same
+      // gateway share `command-deploy-cache.json`, and `server-channels.ts`
+      // can start their deployers concurrently. Without this re-read step,
+      // two deployers that both load the old file and then both write would
+      // each persist only their own scoped keys (`app:<id>:...`) and drop the
+      // other deployer's keys, defeating the rate-limit protection the cache
+      // was added for. Our in-memory entries always win on key collisions
+      // (we just produced them); on-disk entries that we don't have in memory
+      // are preserved as-is.
+      const storeDir = path.dirname(storePath);
+      const storeFile = path.basename(storePath);
+      const fileStore = privateFileStore(storeDir);
+      const merged = new Map<string, string>();
+      const onDisk = await fileStore.readJsonIfExists<{
+        hashes?: unknown;
+      }>(storeFile);
+      if (onDisk?.hashes && typeof onDisk.hashes === "object") {
+        for (const [key, value] of Object.entries(onDisk.hashes)) {
+          if (typeof value === "string" && key.trim() && value.trim()) {
+            merged.set(key, value);
+          }
+        }
+      }
+      for (const [key, value] of this.hashes.entries()) {
+        merged.set(key, value);
+      }
+      await fileStore.writeJson(
+        storeFile,
         {
           version: 1,
           updatedAt: new Date().toISOString(),
           hashes: Object.fromEntries(
-            [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+            [...merged.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
           ),
         },
         { trailingNewline: true },
       );
+      // Refresh in-memory state so future writes from the same deployer also
+      // see entries that other deployers added concurrently.
+      for (const [key, value] of merged.entries()) {
+        this.hashes.set(key, value);
+      }
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.
     }
