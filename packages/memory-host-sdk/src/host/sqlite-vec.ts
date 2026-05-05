@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
+import { resolveSqliteVecPlatformVariant } from "./sqlite-vec-platform-variant.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
 type SqliteVecModule = {
@@ -38,18 +39,30 @@ export async function loadSqliteVecExtension(params: {
       return { ok: true, extensionPath: resolvedPath };
     }
 
-    const sqliteVec = await loadSqliteVecModule();
-    const extensionPath = sqliteVec.getLoadablePath();
-    sqliteVec.load(params.db);
-    return { ok: true, extensionPath };
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    if (isMissingSqliteVecPackageError(err)) {
-      return {
-        ok: false,
-        error: `sqlite-vec package is not installed. ${SQLITE_VEC_CONFIG_HINT} Original error: ${message}`,
-      };
+    try {
+      const sqliteVec = await loadSqliteVecModule();
+      const extensionPath = sqliteVec.getLoadablePath();
+      sqliteVec.load(params.db);
+      return { ok: true, extensionPath };
+    } catch (err) {
+      if (!isMissingSqliteVecPackageError(err)) {
+        throw err;
+      }
+      // Optional-dep installs sometimes land only the platform-specific variant
+      // (e.g. sqlite-vec-linux-x64) without the meta sqlite-vec package. Load
+      // the loadable extension straight from the variant when we can find it.
+      const variant = resolveSqliteVecPlatformVariant();
+      if (!variant) {
+        const message = formatErrorMessage(err);
+        return {
+          ok: false,
+          error: `sqlite-vec package is not installed. ${SQLITE_VEC_CONFIG_HINT} Original error: ${message}`,
+        };
+      }
+      params.db.loadExtension(variant.extensionPath);
+      return { ok: true, extensionPath: variant.extensionPath };
     }
-    return { ok: false, error: message };
+  } catch (err) {
+    return { ok: false, error: formatErrorMessage(err) };
   }
 }
