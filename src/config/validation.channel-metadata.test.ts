@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
+  validateConfigObjectRaw,
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
@@ -298,5 +299,54 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
     expect(result.ok).toBe(true);
     expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+});
+
+describe("validateConfigObjectRaw bundled channel plugin extension fields (#77887)", () => {
+  it("accepts top-level plugin extension fields in channel config without additionalProperties error", () => {
+    // The feishu bundled schema has additionalProperties:false, but plugins like
+    // openclaw-lark legitimately extend the root channel config with their own
+    // fields (replyMode, footer). The bundled schema validator must not reject them.
+    const result = validateConfigObjectRaw(
+      {
+        channels: {
+          feishu: {
+            // Required feishu fields (using schema defaults as explicit values)
+            domain: "feishu",
+            connectionMode: "websocket",
+            webhookPath: "/feishu/events",
+            dmPolicy: "pairing",
+            groupPolicy: "allowlist",
+            reactionNotifications: "own",
+            typingIndicator: true,
+            resolveSenderNames: true,
+            // Plugin extension fields (openclaw-lark) — must not be rejected
+            replyMode: "text",
+            footer: "powered by openclaw",
+          },
+        },
+      },
+      { validateBundledChannels: true },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("still rejects genuinely invalid bundled channel config field types", () => {
+    const result = validateConfigObjectRaw(
+      {
+        channels: {
+          feishu: {
+            enabled: "not-a-boolean",
+          },
+        },
+      },
+      { validateBundledChannels: true },
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues.some((i) => i.path.startsWith("channels.feishu"))).toBe(true);
+    }
   });
 });

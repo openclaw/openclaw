@@ -223,6 +223,14 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       continue;
     }
     for (const error of result.errors) {
+      // Skip top-level additionalProperty errors: plugins legitimately extend the
+      // root channel config object with their own fields (e.g. replyMode, footer in
+      // openclaw-lark). The bundled schema uses additionalProperties:false for
+      // type-safety on known fields, but cannot enumerate plugin-registered fields.
+      // Nested additionalProperties errors (non-root path) are still surfaced.
+      if (error.additionalProperty && error.path === "<root>") {
+        continue;
+      }
       const message = error.additionalProperty
         ? `${error.message}: "${error.additionalProperty}"`
         : error.message;
