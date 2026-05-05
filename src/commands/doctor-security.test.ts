@@ -174,6 +174,17 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
   });
 
+  it("does not warn when config token uses OPENCLAW_GATEWAY_TOKEN SecretRef", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+      secrets: { providers: { default: { source: "env" } } },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
   it("treats whitespace token as missing", async () => {
     const cfg = {
       gateway: { bind: "lan", auth: { mode: "token", token: "   " } },
