@@ -585,6 +585,7 @@ describe("xai provider models", () => {
       api: "openai-responses",
       baseUrl: "https://api.x.ai/v1",
       reasoning: true,
+      thinkingLevelMap: { off: null },
       input: ["text", "image"],
       contextWindow: 1_000_000,
       maxTokens: 64_000,

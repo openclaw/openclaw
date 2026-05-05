@@ -326,6 +326,28 @@ describe("runGatewayUpdate", () => {
     expect(calls.some((call) => call.includes("rebase"))).toBe(false);
   });
 
+  it.each([
+    { name: "upstream", options: {} },
+    { name: "target ref", options: { devTargetRef: "main" } },
+  ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
+    await setupGitCheckout();
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --tags`;
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [fetchCommand]: {
+        code: 1,
+        stderr: "! [rejected] v2026.5.3 -> v2026.5.3 (would clobber existing tag)",
+      },
+    });
+
+    const result = await runWithRunner(runner, options);
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("fetch-failed");
+    expect(calls).toContain(fetchCommand);
+    expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toEqual([]);
+  });
+
   it("aborts rebase on failure", async () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({

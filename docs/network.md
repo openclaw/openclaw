@@ -70,5 +70,5 @@ Local trust:
 
 ## Related
 
-- [Gateway network model](/gateway/network-model)
+- [Gateway network model](/network#core-model)
 - [Remote access](/gateway/remote)
