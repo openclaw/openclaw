@@ -612,6 +612,7 @@ function buildPluginDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  factoryDelegatedAuth?: boolean;
 }): string {
   return buildPluginToolDescriptorCacheKey({
     pluginId: params.plugin.id,
@@ -621,6 +622,7 @@ function buildPluginDescriptorCacheKey(params: {
     ctx: params.ctx,
     currentRuntimeConfig: params.currentRuntimeConfig,
     configCacheKeyMemo: params.configCacheKeyMemo,
+    factoryDelegatedAuth: params.factoryDelegatedAuth,
   });
 }
 
@@ -796,6 +798,19 @@ function resolveCachedPluginTools(params: {
     if (availableToolNames.length === 0) {
       continue;
     }
+    const factoryOptional = isPluginToolFactoryEffectivelyOptional({
+      entryOptional: false,
+      manifestPlugin: plugin,
+      toolNames: availableToolNames,
+    });
+    const delegatedAuth = resolvePluginToolFactoryDelegatedAuth({
+      context: params.ctx,
+      pluginId: plugin.id,
+      optional: factoryOptional,
+      names: availableToolNames,
+      allowlist: params.allowlist,
+      plugins: params.plugins,
+    });
     if (params.existingNormalized.has(normalizeToolName(plugin.id))) {
       continue;
     }
@@ -805,6 +820,7 @@ function resolveCachedPluginTools(params: {
         ctx: params.ctx,
         currentRuntimeConfig: params.currentRuntimeConfig,
         configCacheKeyMemo: params.configCacheKeyMemo,
+        factoryDelegatedAuth: Boolean(delegatedAuth.factoryAuth),
       }),
     );
     if (
@@ -1134,6 +1150,7 @@ export function resolvePluginTools(params: {
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
   const capturedDescriptorsByPluginId = new Map<string, CachedPluginToolDescriptor[]>();
+  const capturedDescriptorFactoryAuthByPluginId = new Map<string, boolean>();
   const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
   for (const entry of registry.tools) {
@@ -1366,6 +1383,11 @@ export function resolvePluginTools(params: {
           }),
         );
         capturedDescriptorsByPluginId.set(entry.pluginId, capturedDescriptors);
+        capturedDescriptorFactoryAuthByPluginId.set(
+          entry.pluginId,
+          (capturedDescriptorFactoryAuthByPluginId.get(entry.pluginId) ?? false) ||
+            Boolean(delegatedAuth.factoryAuth),
+        );
       }
       tools.push(resolvedTool);
     }
@@ -1401,6 +1423,7 @@ export function resolvePluginTools(params: {
           ctx: params.context,
           currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
           configCacheKeyMemo,
+          factoryDelegatedAuth: capturedDescriptorFactoryAuthByPluginId.get(pluginId) ?? false,
         }),
         descriptors,
       });
