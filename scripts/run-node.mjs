@@ -416,10 +416,19 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
   ].toSorted((left, right) => left.localeCompare(right));
 };
 
+const listRequiredStaticExtensionAssetOutputs = (deps) => {
+  const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  return runtimePostBuildStaticAssets
+    .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
+    .map((asset) => path.join(distRoot, normalizePath(asset.dest).replace(/^dist\//u, "")))
+    .toSorted((left, right) => left.localeCompare(right));
+};
+
 const listRequiredRuntimePostBuildOutputs = (deps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
   return [
     ...listRequiredOpenClawExtensionAliasOutputs(deps),
+    ...listRequiredStaticExtensionAssetOutputs(deps),
     ...listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),
     ...listRequiredBundledPluginRuntimeOverlayOutputs(builtPluginEntries, deps),
   ];

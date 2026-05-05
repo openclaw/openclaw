@@ -50,6 +50,10 @@ const DIST_RUNTIME_EXTENSION_SKILL = "dist-runtime/extensions/demo/skills/SKILL.
 const DIST_OPENCLAW_ALIAS_PACKAGE = "dist/extensions/node_modules/openclaw/package.json";
 const DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX =
   "dist/extensions/node_modules/openclaw/plugin-sdk/index.js";
+const ACPX_MCP_PROXY_SOURCE = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
+const DIST_ACPX_MCP_PROXY = "dist/extensions/acpx/mcp-proxy.mjs";
+const DIFFS_VIEWER_RUNTIME_SOURCE = "extensions/diffs/assets/viewer-runtime.js";
+const DIST_DIFFS_VIEWER_RUNTIME = "dist/extensions/diffs/assets/viewer-runtime.js";
 const DIST_EXTENSION_MANIFEST = bundledDistPluginFile("demo", "openclaw.plugin.json");
 const DIST_EXTENSION_PACKAGE = bundledDistPluginFile("demo", "package.json");
 
@@ -1710,6 +1714,44 @@ describe("run-node script", () => {
         ],
       });
       await fs.rm(resolvePath(tmp, DIST_OPENCLAW_ALIAS_PLUGIN_SDK_INDEX));
+
+      const requirement = resolveRuntimePostBuildRequirement(
+        createBuildRequirementDeps(tmp, {
+          gitHead: "abc123\n",
+          gitStatus: "",
+        }),
+      );
+
+      expect(requirement).toEqual({
+        shouldSync: true,
+        reason: "missing_runtime_postbuild_output",
+      });
+    });
+  });
+
+  it("reports missing static runtime postbuild asset outputs when runtime stamps match HEAD", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+          [ACPX_MCP_PROXY_SOURCE]: "export {};\n",
+          [DIST_ACPX_MCP_PROXY]: "export {};\n",
+          [DIFFS_VIEWER_RUNTIME_SOURCE]: "export {};\n",
+          [DIST_DIFFS_VIEWER_RUNTIME]: "export {};\n",
+          [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+        },
+        buildPaths: [
+          ROOT_SRC,
+          ACPX_MCP_PROXY_SOURCE,
+          DIST_ACPX_MCP_PROXY,
+          DIFFS_VIEWER_RUNTIME_SOURCE,
+          DIST_DIFFS_VIEWER_RUNTIME,
+          DIST_ENTRY,
+          BUILD_STAMP,
+          RUNTIME_POSTBUILD_STAMP,
+        ],
+      });
+      await fs.rm(resolvePath(tmp, DIST_ACPX_MCP_PROXY));
 
       const requirement = resolveRuntimePostBuildRequirement(
         createBuildRequirementDeps(tmp, {
