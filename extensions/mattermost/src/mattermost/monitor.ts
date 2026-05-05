@@ -1394,14 +1394,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           return;
         }
 
-        if (
-          kind !== "direct" &&
-          resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
-        ) {
-          logVerboseMessage("mattermost: group message stored for context (neverReply: true)");
-          return;
-        }
-
         const teamId = payload.data?.team_id ?? channelInfo?.team_id ?? undefined;
         const channelName = payload.data?.channel_name ?? channelInfo?.name ?? "";
         const channelDisplay =
@@ -1464,6 +1456,15 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 : null,
           });
         };
+
+        if (
+          kind !== "direct" &&
+          resolveNeverReply({ cfg, channel: "mattermost", accountId: account.accountId })
+        ) {
+          logVerboseMessage("mattermost: group message stored for context (neverReply: true)");
+          recordPendingHistory();
+          return;
+        }
 
         const oncharEnabled = account.chatmode === "onchar" && kind !== "direct";
         const oncharPrefixes = oncharEnabled ? resolveOncharPrefixes(account.oncharPrefixes) : [];

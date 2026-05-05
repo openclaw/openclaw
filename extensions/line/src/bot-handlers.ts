@@ -322,6 +322,21 @@ async function shouldProcessLineEvent(
     }
     if (resolveNeverReply({ cfg, channel: "line", accountId: account.accountId })) {
       logVerbose("line: group message stored for context (neverReply: true)");
+      const historyKey = groupId ?? roomId;
+      if (event.type === "message" && historyKey && context.groupHistories) {
+        const message = event.message;
+        const rawText = message.type === "text" ? message.text : "";
+        recordPendingHistoryEntryIfEnabled({
+          historyMap: context.groupHistories,
+          historyKey,
+          limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+          entry: {
+            sender: `user:${senderId || "unknown"}`,
+            body: rawText || `<${message.type}>`,
+            timestamp: event.timestamp,
+          },
+        });
+      }
       return denied;
     }
     return {

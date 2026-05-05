@@ -405,20 +405,26 @@ export async function preflightDiscordMessage(
   }
   const { channelAllowlistConfigured, channelAllowed } = channelAccess;
 
-  if (
-    (isGuildMessage || isGroupDm) &&
-    resolveNeverReply({ cfg: params.cfg, channel: "discord", accountId: params.accountId })
-  ) {
-    logVerbose(`discord: group message stored for context (neverReply: true)`);
-    return null;
-  }
-
   const historyEntry = buildDiscordPreflightHistoryEntry({
     isGuildMessage,
     historyLimit: params.historyLimit,
     message,
     senderLabel: sender.label,
   });
+
+  if (
+    (isGuildMessage || isGroupDm) &&
+    resolveNeverReply({ cfg: params.cfg, channel: "discord", accountId: params.accountId })
+  ) {
+    logVerbose(`discord: group message stored for context (neverReply: true)`);
+    recordPendingHistoryEntryIfEnabled({
+      historyMap: params.guildHistories,
+      historyKey: messageChannelId,
+      limit: params.historyLimit,
+      entry: historyEntry ?? null,
+    });
+    return null;
+  }
 
   const threadOwnerId = threadChannel
     ? (resolveDiscordChannelInfoSafe(threadChannel).ownerId ?? channelInfo?.ownerId)
