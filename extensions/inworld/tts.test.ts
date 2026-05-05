@@ -236,7 +236,7 @@ describe("inworldTTS", () => {
     expect(JSON.parse(readRequestBody(request))).toEqual({
       text: "Hello",
       voiceId: "Sarah",
-      modelId: "inworld-tts-1.5-max",
+      modelId: "inworld-tts-2",
       audioConfig: { audioEncoding: "MP3" },
     });
   });
