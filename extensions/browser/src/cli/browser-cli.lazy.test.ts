@@ -62,11 +62,11 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     vi.unstubAllEnvs();
   });
 
-  it("registers browser placeholders without loading handlers for help", () => {
+  it("registers browser placeholders without loading handlers for help", async () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
     const browser = program.commands.find((command) => command.name() === "browser");
     expect(browser?.commands.map((command) => command.name())).toContain("status");
@@ -83,7 +83,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "status"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "status"]);
 
     const browser = program.commands.find((command) => command.name() === "browser");
     expect(browser?.commands.map((command) => command.name())).toEqual(["status"]);
@@ -99,7 +99,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "doctor", "--deep"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "doctor", "--deep"]);
 
     await program.parseAsync(["browser", "doctor", "--deep"], { from: "user" });
 
@@ -113,7 +113,14 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "--json", "open", "about:blank"]);
+    await registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "--json",
+      "open",
+      "about:blank",
+    ]);
 
     await program.parseAsync(["browser", "--json", "open", "about:blank"], { from: "user" });
 
@@ -123,7 +130,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
     const tabsProgram = new Command();
     tabsProgram.name("openclaw");
-    registerBrowserCli(tabsProgram, ["node", "openclaw", "browser", "--json", "tabs"]);
+    await registerBrowserCli(tabsProgram, ["node", "openclaw", "browser", "--json", "tabs"]);
 
     await tabsProgram.parseAsync(["browser", "--json", "tabs"], { from: "user" });
 
@@ -132,20 +139,50 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand?.parent?.opts()).toMatchObject({ json: true });
   });
 
+  it("propagates browser parent options to lazy-loaded subcommand handlers", async () => {
+    const program = new Command();
+    program.name("openclaw");
+
+    const argv = ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"];
+    await registerBrowserCli(program, argv);
+
+    await program.parseAsync(argv);
+
+    expect(manageMocks.statusAction).toHaveBeenCalledTimes(1);
+    const statusCallCmd = manageMocks.statusAction.mock.calls[0]?.at(-1) as Command | undefined;
+    expect(statusCallCmd?.parent?.opts()).toMatchObject({ browserProfile: "nuan" });
+  });
+
   it("can eagerly register all browser groups for compatibility", async () => {
     vi.stubEnv("OPENCLAW_DISABLE_LAZY_SUBCOMMANDS", "1");
     const program = new Command();
     program.name("openclaw");
 
-    registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
+    await registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
-    await vi.waitFor(() =>
-      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1),
-    );
+    // No vi.waitFor: eager registration must complete before registerBrowserCli
+    // resolves. Without an explicit await on the dynamic imports, the promises
+    // are fire-and-forget and the mocks have not yet been invoked when control
+    // returns to the test.
+    expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
     expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
     expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
     expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("eager mode dispatches subcommand handlers without racing parseAsync", async () => {
+    vi.stubEnv("OPENCLAW_DISABLE_LAZY_SUBCOMMANDS", "1");
+    const program = new Command();
+    program.name("openclaw");
+
+    const argv = ["node", "openclaw", "browser", "--browser-profile", "nuan", "status"];
+    await registerBrowserCli(program, argv);
+    await program.parseAsync(argv);
+
+    expect(manageMocks.statusAction).toHaveBeenCalledTimes(1);
+    const cmd = manageMocks.statusAction.mock.calls[0]?.[1] as Command | undefined;
+    expect(cmd?.parent?.opts()).toMatchObject({ browserProfile: "nuan" });
   });
 });

@@ -14,25 +14,25 @@ describe("buildProgram version alias handling", () => {
     vi.restoreAllMocks();
   });
 
-  it("exits with version output for root -v", () => {
+  it("exits with version output for root -v", async () => {
     process.argv = ["node", "openclaw", "-v"];
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`process.exit:${String(code)}`);
     }) as typeof process.exit);
 
-    expect(() => buildProgram()).toThrow("process.exit:0");
+    await expect(buildProgram()).rejects.toThrow("process.exit:0");
     expect(logSpy).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(0);
   });
 
-  it("does not treat subcommand -v as root version alias", () => {
+  it("does not treat subcommand -v as root version alias", async () => {
     process.argv = ["node", "openclaw", "acp", "-v"];
     const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
       throw new Error(`unexpected process.exit:${String(code)}`);
     }) as typeof process.exit);
 
-    expect(() => buildProgram()).not.toThrow();
+    await buildProgram();
     expect(exitSpy).not.toHaveBeenCalled();
   });
 });

@@ -1496,6 +1496,11 @@ Docs: https://docs.openclaw.ai
 - macOS app: detect stale Gateway TLS certificate pins, automatically repair trusted Tailscale Serve rotations, and surface paired-but-disconnected Mac companion nodes so partial Gateway connections no longer look healthy. Thanks @guti.
 - Feishu: recreate WebSocket clients with monitor-owned backoff only after SDK reconnect exhaustion, preserving heartbeat defaults and shutdown cleanup without treating recoverable SDK callback errors as terminal, so persistent connections recover without manual gateway restart. Fixes #52618; duplicate evidence #59753; related #55532, #68766, #72411, and #73739. Thanks @vincentkoc, @schumilin, @alex-xuweilong, @120106835, @sirfengyu, and @tianhaocui.
 
+### Fixes
+
+- CLI/lazy-runtime: walk up to the root program when reparsing after a lazy sub-command load, so parent options like `openclaw browser --browser-profile <name>` are preserved. Without this, commander's `_dispatchSubcommand` leaves `rawArgs` empty on the immediate parent, the reparsed argv reduces to `[<subcommand>]`, and `cmd.parent.opts()` loses parent option values — under v2026.4.25 this silently rerouted browser calls to the default profile. Thanks @hanamizuki.
+- CLI/lazy-runtime: await dynamic-import-driven eager registration in `registerCommandGroups` so `OPENCLAW_DISABLE_LAZY_SUBCOMMANDS=1` actually works. The previous fire-and-forget `void entry.register(program)` returned before any sub-command handler was attached, so commander's subsequent `parseAsync` raced the imports and rejected legitimate calls with `error: too many arguments for '<group>'`. The fix propagates async through `registerBrowserCli`, `registerCoreCliCommands`, `registerSubCliCommands`, `registerProgramCommands`, and `buildProgram`; all CLI bootstrap callsites are already in await contexts (`startupTrace.measure(...)`), so there is no behavior change in lazy mode. Thanks @hanamizuki.
+
 ## 2026.4.27
 
 ### Highlights

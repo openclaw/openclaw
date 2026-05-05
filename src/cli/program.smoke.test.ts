@@ -26,18 +26,18 @@ vi.mock("./config-cli.js", () => ({
 }));
 
 describe("cli program (smoke)", () => {
-  let program = createProgram();
+  let program: Awaited<ReturnType<typeof buildProgram>>;
 
-  function createProgram() {
-    return buildProgram();
+  async function createProgram() {
+    return await buildProgram();
   }
 
   async function runProgram(argv: string[]) {
     await program.parseAsync(argv, { from: "user" });
   }
 
-  beforeEach(() => {
-    program = createProgram();
+  beforeEach(async () => {
+    program = await createProgram();
     vi.clearAllMocks();
     runTui.mockResolvedValue(undefined);
     runCrestodian.mockResolvedValue(undefined);

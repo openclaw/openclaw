@@ -112,23 +112,28 @@ describe("command-registry", () => {
     expect(found).toBe(false);
   });
 
-  it("registers doctor placeholder for doctor primary command", () => {
+  it("registers doctor placeholder for doctor primary command", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
+    await registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
 
     expect(namesOf(program)).toEqual(["doctor"]);
   });
 
-  it("narrows to the primary command when command help is requested", () => {
+  it("narrows to the primary command when command help is requested", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor", "--help"]);
+    await registerCoreCliCommands(program, testProgramContext, [
+      "node",
+      "openclaw",
+      "doctor",
+      "--help",
+    ]);
 
     expect(namesOf(program)).toEqual(["doctor"]);
   });
 
-  it("keeps all placeholders for root help", () => {
+  it("keeps all placeholders for root help", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "--help"]);
+    await registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "--help"]);
 
     const names = namesOf(program);
     expect(names).toContain("doctor");
@@ -151,7 +156,7 @@ describe("command-registry", () => {
 
   it("registers grouped core entry placeholders without duplicate command errors", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "vitest"]);
+    await registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "vitest"]);
     program.exitOverride();
     await withProcessArgv(["node", "openclaw", "status"], async () => {
       await program.parseAsync(["node", "openclaw", "status"]);
@@ -179,7 +184,7 @@ describe("command-registry", () => {
 
   it("replaces placeholders when loading a grouped entry by secondary command name", async () => {
     const program = createProgram();
-    registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
+    await registerCoreCliCommands(program, testProgramContext, ["node", "openclaw", "doctor"]);
     expect(namesOf(program)).toEqual(["doctor"]);
 
     const found = await registerCoreCliByName(program, testProgramContext, "dashboard");
