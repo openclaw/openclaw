@@ -91,8 +91,9 @@ reply model.
 For async tools, OpenClaw submits the request to the provider, returns a task
 id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
-OpenClaw wakes the agent so it can post the finished media back into the
-original channel.
+OpenClaw wakes the agent with the generated media paths so it can tell the
+user and, when required by source-delivery policy, relay the result through
+the message tool.
 
 ## Speech-to-text and Voice Call
 

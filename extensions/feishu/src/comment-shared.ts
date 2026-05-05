@@ -41,6 +41,7 @@ export function formatFeishuApiError(
     (options.includeNestedErrorLogId
       ? readString(isRecord(responseData?.error) ? responseData.error.log_id : undefined)
       : undefined);
+  const nestedError = isRecord(responseData?.error) ? responseData.error : undefined;
 
   return JSON.stringify({
     message:
@@ -58,7 +59,47 @@ export function formatFeishuApiError(
       typeof responseData?.code === "number" ? responseData.code : readString(responseData?.code),
     feishu_msg: readString(responseData?.msg),
     feishu_log_id: feishuLogId,
+    feishu_troubleshooter:
+      readString(responseData?.troubleshooter) || readString(nestedError?.troubleshooter),
   });
+}
+
+function formatFeishuApiFailure(
+  error: unknown,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): string {
+  const details = formatFeishuApiError(error, options);
+  return `${errorPrefix}: ${details || "unknown error"}`;
+}
+
+export function createFeishuApiError(
+  error: unknown,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): Error {
+  return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
+}
+
+export async function requestFeishuApi<T>(
+  request: () => Promise<T>,
+  errorPrefix: string,
+  options: {
+    includeConfigParams?: boolean;
+    includeNestedErrorLogId?: boolean;
+  } = {},
+): Promise<T> {
+  try {
+    return await request();
+  } catch (error) {
+    throw createFeishuApiError(error, errorPrefix, options);
+  }
 }
 
 type ParsedCommentDocumentRef = {

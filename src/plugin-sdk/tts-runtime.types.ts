@@ -88,6 +88,7 @@ export type TtsTelephonyRequestParams = {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  overrides?: TtsDirectiveOverrides;
 };
 
 export type ListSpeechVoicesParams = {
@@ -153,6 +154,8 @@ export type TtsSynthesisResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -169,6 +172,8 @@ export type TtsTelephonyResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];

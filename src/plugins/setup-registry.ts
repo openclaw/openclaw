@@ -5,8 +5,12 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginApi } from "./api-builder.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { listSetupCliBackendIds, listSetupProviderIds } from "./setup-descriptors.js";
@@ -82,29 +86,15 @@ const NOOP_LOGGER: PluginLogger = {
   error() {},
 };
 
-const jitiLoaders: PluginJitiLoaderCache = new Map();
-
-export const __testing = {
-  get maxSetupLookupCacheEntries() {
-    return 0;
-  },
-  setMaxSetupLookupCacheEntriesForTest(_value?: number) {},
-  getCacheSizes() {
-    return {
-      setupRegistry: 0,
-      setupProvider: 0,
-      setupCliBackend: 0,
-    };
-  },
-} as const;
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 export function clearPluginSetupRegistryCache(): void {
-  jitiLoaders.clear();
+  moduleLoaders.clear();
 }
 
-function getJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+function getModuleLoader(modulePath: string) {
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
   });
@@ -238,7 +228,7 @@ function resolveSetupRegistration(record: PluginManifestRecord): {
 
   let mod: OpenClawPluginModule;
   try {
-    mod = getJiti(setupSource)(setupSource) as OpenClawPluginModule;
+    mod = getModuleLoader(setupSource)(setupSource) as OpenClawPluginModule;
   } catch {
     return null;
   }

@@ -1,6 +1,9 @@
 import type { PluginHealthErrorSummary } from "../../commands/health.types.js";
+import { createConfigIO } from "../../config/io.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   classifyPortListener,
@@ -59,6 +62,11 @@ type GatewayReachability = {
   gatewayVersion: string | null;
   activatedPluginErrors: PluginHealthErrorSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+};
+
+type GatewayRestartProbeAuth = {
+  token?: string;
+  password?: string;
 };
 
 function hasListenerAttributionGap(portUsage: PortUsage): boolean {
@@ -228,9 +236,12 @@ function applyChannelProbeErrors(snapshot: GatewayRestartSnapshot): GatewayResta
 async function confirmGatewayReachable(params: {
   port: number;
   includeHealthDetails?: boolean;
+  auth?: GatewayRestartProbeAuth;
 }): Promise<GatewayReachability> {
-  const token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN);
-  const password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD);
+  const token = normalizeOptionalString(params.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN);
+  const password = normalizeOptionalString(
+    params.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+  );
   const probe = await probeGateway({
     url: `ws://127.0.0.1:${params.port}`,
     auth: token || password ? { token, password } : undefined,
@@ -251,13 +262,37 @@ async function confirmGatewayReachable(params: {
   };
 }
 
-async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealthSnapshot> {
+async function resolveGatewayRestartProbeAuth(
+  env: NodeJS.ProcessEnv | undefined,
+): Promise<GatewayRestartProbeAuth | undefined> {
+  const mergedEnv = {
+    ...(process.env as Record<string, string | undefined>),
+    ...(env ?? undefined),
+  } as NodeJS.ProcessEnv;
+  const cfg = await createConfigIO({
+    env: mergedEnv,
+    pluginValidation: "skip",
+  })
+    .readBestEffortConfig()
+    .catch((): OpenClawConfig => ({}));
+  const resolved = await resolveGatewayProbeAuthSafeWithSecretInputs({
+    cfg,
+    mode: "local",
+    env: mergedEnv,
+  });
+  return resolved.auth;
+}
+
+async function inspectGatewayPortHealth(params: {
+  port: number;
+  auth?: GatewayRestartProbeAuth;
+}): Promise<GatewayPortHealthSnapshot> {
   let portUsage: PortUsage;
   try {
-    portUsage = await inspectPortUsage(port);
+    portUsage = await inspectPortUsage(params.port);
   } catch (err) {
     portUsage = {
-      port,
+      port: params.port,
       status: "unknown",
       listeners: [],
       hints: [],
@@ -268,7 +303,12 @@ async function inspectGatewayPortHealth(port: number): Promise<GatewayPortHealth
   let healthy = false;
   if (portUsage.status === "busy") {
     try {
-      healthy = (await confirmGatewayReachable({ port })).reachable;
+      healthy = (
+        await confirmGatewayReachable({
+          port: params.port,
+          auth: params.auth,
+        })
+      ).reachable;
     } catch {
       // best-effort probe
     }
@@ -283,6 +323,7 @@ export async function inspectGatewayRestart(params: {
   env?: NodeJS.ProcessEnv;
   expectedVersion?: string | null;
   includeUnknownListenersAsStale?: boolean;
+  probeAuth?: GatewayRestartProbeAuth;
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
@@ -294,6 +335,7 @@ export async function inspectGatewayRestart(params: {
       reachability = await confirmGatewayReachable({
         port: params.port,
         includeHealthDetails: Boolean(expectedVersion),
+        auth: params.probeAuth,
       });
       activatedPluginErrors = reachability.activatedPluginErrors;
       channelProbeErrors = reachability.channelProbeErrors;
@@ -477,12 +519,14 @@ export async function waitForGatewayHealthyRestart(params: {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
 
+  const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
   let snapshot = await inspectGatewayRestart({
     service: params.service,
     port: params.port,
     env: params.env,
     expectedVersion: params.expectedVersion,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+    probeAuth,
   });
 
   let consecutiveStoppedFreeCount = 0;
@@ -523,6 +567,7 @@ export async function waitForGatewayHealthyRestart(params: {
       env: params.env,
       expectedVersion: params.expectedVersion,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
+      probeAuth,
     });
   }
 
@@ -537,14 +582,21 @@ export async function waitForGatewayHealthyListener(params: {
   const attempts = params.attempts ?? DEFAULT_RESTART_HEALTH_ATTEMPTS;
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
 
-  let snapshot = await inspectGatewayPortHealth(params.port);
+  const probeAuth = await resolveGatewayRestartProbeAuth(undefined).catch(() => undefined);
+  let snapshot = await inspectGatewayPortHealth({
+    port: params.port,
+    auth: probeAuth,
+  });
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (snapshot.healthy) {
       return snapshot;
     }
     await sleep(delayMs);
-    snapshot = await inspectGatewayPortHealth(params.port);
+    snapshot = await inspectGatewayPortHealth({
+      port: params.port,
+      auth: probeAuth,
+    });
   }
 
   return snapshot;
