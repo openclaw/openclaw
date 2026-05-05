@@ -67,17 +67,26 @@ describe("handleHandoffCommand", () => {
     expect(result).toBeNull();
   });
 
+  it("leaves /new as a fresh-session command without implicit handoff", async () => {
+    const result = await handleHandoffCommand(buildTelegramParams("/new"), true);
+
+    expect(result).toBeNull();
+    await expect(fs.readdir(path.join(stateDir, "handoffs"))).rejects.toThrow();
+  });
+
   it("saves a scoped handoff and preserves the raw operator note", async () => {
     const params = buildTelegramParams("/handoff Current MAINLINE\nKeep exact case and line");
     const result = await handleHandoffCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Handoff saved.");
+    expect(result?.reply?.text).toContain("/new alone for a fresh topic");
 
     const content = await readLatestHandoff();
     expect(content).toContain("Current MAINLINE\nKeep exact case and line");
     expect(content).toContain("Source session: agent:telegram:telegram:direct:7215741815");
     expect(content).toContain("Token risk: 158k: handoff recommended");
+    expect(content).toContain("/new alone starts fresh");
   });
 
   it("reports handoff status without creating a model turn", async () => {
@@ -86,6 +95,7 @@ describe("handleHandoffCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("Handoff status");
     expect(result?.reply?.text).toContain("latest: none");
+    expect(result?.reply?.text).toContain("/new alone starts fresh");
   });
 
   it("does not write handoff records for unauthorized senders", async () => {
@@ -122,5 +132,6 @@ describe("handleHandoffCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toContain("No handoff found for this chat");
+    expect(result?.reply?.text).toContain("/new alone for a fresh start");
   });
 });
