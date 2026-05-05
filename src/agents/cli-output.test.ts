@@ -383,6 +383,43 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("parses llama.cpp OpenAI-compatible prompt_tokens/completion_tokens usage fields (#77992)", () => {
+    // llama.cpp and other OpenAI-compatible local providers return prompt_tokens
+    // and completion_tokens instead of input_tokens and output_tokens. Without
+    // the fallback, context display shows "?/131k" for all llama.cpp users.
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "init", session_id: "session-llamacpp" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-llamacpp",
+          result: "Hello from llama.cpp",
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 7,
+            total_tokens: 18,
+          },
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result).toMatchObject({
+      text: "Hello from llama.cpp",
+      sessionId: "session-llamacpp",
+      usage: {
+        input: 11,
+        output: 7,
+        total: 18,
+      },
+    });
+  });
+
   it("parses multiple JSON objects embedded on the same line", () => {
     const result = parseCliJsonl(
       '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
