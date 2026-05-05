@@ -167,4 +167,84 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
+
+  it("initializes built-in context engines before resolving compaction context engine", async () => {
+    // Regression test for the cli-compaction equivalent of #73095.
+    // ensureContextEnginesInitialized must be called before resolveContextEngine
+    // or the resolver throws: 'Context engine "legacy" is not registered. Available engines: (none)'.
+    const sessionId = "init-order-session";
+    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
+    await writeSessionFile({ sessionFile, sessionId });
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      sessionFile,
+      contextTokens: 1_000,
+      currentTokenCount: 950,
+    };
+    const sessionKey = "agent:main";
+    const storePath = path.join(tmpDir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({ [sessionKey]: sessionEntry }, null, 2),
+      "utf-8",
+    );
+
+    let initialized = false;
+    const ensureContextEnginesInitializedMock = vi.fn(() => {
+      initialized = true;
+    });
+    const resolveContextEngineMock = vi.fn(async () => {
+      if (!initialized) {
+        throw new Error(
+          'Context engine "legacy" is not registered. Available engines: (none)',
+        );
+      }
+      return buildContextEngine({ compactCalls: [] });
+    });
+
+    setCliCompactionTestDeps({
+      ensureContextEnginesInitialized: ensureContextEnginesInitializedMock,
+      resolveContextEngine: resolveContextEngineMock,
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: vi.fn(async () => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      })),
+    });
+
+    await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngineMock).toHaveBeenCalledTimes(1);
+    expect(
+      ensureContextEnginesInitializedMock.mock.invocationCallOrder[0],
+    ).toBeLessThan(resolveContextEngineMock.mock.invocationCallOrder[0]);
+  });
 });
