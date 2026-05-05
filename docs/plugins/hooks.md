@@ -131,6 +131,8 @@ observation-only.
 - **`before_dispatch`** — inspect or rewrite an outbound dispatch before channel handoff
 - **`reply_dispatch`** — participate in the final reply-dispatch pipeline
 
+For chat-path hooks such as `before_dispatch`, being installable or inspectable is not enough on its own. The Gateway only imports plugins into the messaging runtime when startup planning selects them. Hook-only or non-capability plugins should declare startup intent explicitly with manifest activation metadata, typically `activation.onCapabilities: ["hook"]`, or by matching another startup trigger such as `onStartup`, `onChannels`, or hook-policy config that causes the plugin to load for the active Gateway surface.
+
 **Sessions and compaction**
 
 - `session_start` / `session_end` — track session lifecycle boundaries
