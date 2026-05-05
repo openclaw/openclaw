@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   makeRuntime,
   mockSessionsConfig,
+  resetMockSessionsConfig,
   runSessionsJson,
+  setMockSessionsConfig,
   writeStore,
 } from "./sessions.test-helpers.js";
 
@@ -21,6 +23,7 @@ describe("sessionsCommand", () => {
   });
 
   afterEach(() => {
+    resetMockSessionsConfig();
     vi.useRealTimers();
   });
 
@@ -49,6 +52,42 @@ describe("sessionsCommand", () => {
     expect(row).toContain("2.0k/32k (6%)");
     expect(row).toContain("45m ago");
     expect(row).toContain("pi:opus");
+  });
+
+  it("renders the agent runtime in the tabular view", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: { "anthropic/claude-opus-4-7": {} },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    fs.rmSync(store);
+
+    const tableHeader = logs.find((line) => line.includes("Runtime"));
+    expect(tableHeader).toBeTruthy();
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("claude-opus-4-7");
+    expect(row).toContain("Claude CLI");
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
