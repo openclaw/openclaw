@@ -225,4 +225,45 @@ describe("resolveAgentConfig", () => {
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
   });
+
+  it("maps configured host-backed workspace paths onto the active state dir", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/node/.openclaw");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "mailroom", workspace: "/Users/chrisreyes/.openclaw/workspace" }],
+      },
+    };
+
+    expect(resolveAgentWorkspaceDir(cfg, "mailroom")).toBe("/home/node/.openclaw/workspace");
+  });
+
+  it("maps configured host-backed agent dirs onto the active state dir", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/node/.openclaw");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "mailroom",
+            agentDir: "/Users/chrisreyes/.openclaw/agents/mailroom/agent",
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentDir(cfg, "mailroom")).toBe("/home/node/.openclaw/agents/mailroom/agent");
+  });
+
+  it("leaves custom external workspaces alone", () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", "/home/node/.openclaw");
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "ops", workspace: "/srv/shared/ops-workspace" }],
+      },
+    };
+
+    expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe("/srv/shared/ops-workspace");
+  });
 });

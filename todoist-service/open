@@ -7,47 +7,6 @@ var PORT = process.env.PORT || 3002;
 var TODOIST_API_KEY = process.env.TODOIST_API_KEY;
 var OUTPUT_DIR = process.env.TODOIST_OUTPUT_DIR || '/todoist-output';
 var BASE_URL = 'https://api.todoist.com/api/v1';
-var SYNC_URL = 'https://api.todoist.com/api/v1/sync';
-var COMPLETED_ARCHIVE_FILE = 'completed-archive.json';
-var SYNC_STATUS_FILE = 'sync-status.json';
-
-function writeJsonAtomic(filePath, data) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  var tempPath = filePath + '.tmp-' + process.pid + '-' + Date.now();
-  fs.writeFileSync(tempPath, JSON.stringify(data, null, 2) + '\n');
-  fs.renameSync(tempPath, filePath);
-}
-
-function readLastGoodTasksSummary() {
-  var tasksPath = path.join(OUTPUT_DIR, 'tasks.json');
-  if (!fs.existsSync(tasksPath)) {
-    return null;
-  }
-
-  try {
-    var payload = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
-    if (payload && !payload.error && Array.isArray(payload.allTasks)) {
-      return {
-        syncedAt: payload.syncedAt || null,
-        totalTasks: payload.totalTasks || payload.allTasks.length
-      };
-    }
-  } catch (err) {
-    return null;
-  }
-
-  return null;
-}
-
-function writeSyncStatus(status, details) {
-  writeJsonAtomic(
-    path.join(OUTPUT_DIR, SYNC_STATUS_FILE),
-    Object.assign({
-      status: status,
-      updatedAt: new Date().toISOString()
-    }, details || {})
-  );
-}
 
 // --- API helpers ---
 
@@ -59,105 +18,6 @@ async function todoistGet(endpoint) {
     throw new Error('Todoist GET ' + endpoint + ': ' + response.status + ' ' + (await response.text()));
   }
   return response.json();
-}
-
-// Get all results from a paginated endpoint
-async function todoistGetAll(endpoint) {
-  var allResults = [];
-  var cursor = null;
-  var sep = endpoint.indexOf('?') === -1 ? '?' : '&';
-
-  do {
-    var url = endpoint + (cursor ? sep + 'cursor=' + cursor : '');
-    var data = await todoistGet(url);
-
-    // New API returns { results: [...], next_cursor: "..." }
-    if (data.results && Array.isArray(data.results)) {
-      allResults = allResults.concat(data.results);
-      cursor = data.next_cursor || null;
-    } else if (Array.isArray(data)) {
-      // Fallback for endpoints that still return arrays
-      allResults = data;
-      cursor = null;
-    } else {
-      // Single object response
-      allResults = [data];
-      cursor = null;
-    }
-  } while (cursor);
-
-  return allResults;
-}
-
-async function todoistGetCompletedByCompletionDate(params) {
-  var since = params && params.since;
-  var until = params && params.until;
-  if (!since || !until) {
-    throw new Error('since and until are required for completed archive fetch');
-  }
-
-  var limit = Math.max(1, Math.min(Number(params.limit || 200), 200));
-  var allItems = [];
-  var cursor = null;
-
-  do {
-    var query = new URLSearchParams({
-      since: since,
-      until: until,
-      limit: String(limit)
-    });
-    if (cursor) query.set('cursor', cursor);
-    if (params.project_id) query.set('project_id', params.project_id);
-    if (params.section_id) query.set('section_id', params.section_id);
-    if (params.parent_id) query.set('parent_id', params.parent_id);
-    if (params.filter_query) query.set('filter_query', params.filter_query);
-    if (params.filter_lang) query.set('filter_lang', params.filter_lang);
-
-    var data = await todoistGet('/tasks/completed/by_completion_date?' + query.toString());
-    allItems = allItems.concat(Array.isArray(data.items) ? data.items : []);
-    cursor = data.next_cursor || null;
-  } while (cursor);
-
-  return allItems;
-}
-
-function formatCompletedArchiveItem(t) {
-  return {
-    id: t.id,
-    content: t.content,
-    description: t.description || '',
-    project_id: t.project_id || null,
-    section_id: t.section_id || null,
-    parent_id: t.parent_id || null,
-    due: t.due || null,
-    priority: t.priority,
-    labels: t.labels || [],
-    created_at: t.created_at || t.added_at || null,
-    completed_at: t.completed_at || t.completed_date || t.date_completed || null,
-    url: t.url || null
-  };
-}
-
-async function writeCompletedArchiveSnapshot(params) {
-  var items = await todoistGetCompletedByCompletionDate(params || {});
-  var formattedItems = items.map(formatCompletedArchiveItem);
-  var output = {
-    syncedAt: new Date().toISOString(),
-    source: 'Todoist /api/v1/tasks/completed/by_completion_date',
-    readOnly: true,
-    since: params.since,
-    until: params.until,
-    totalTasks: formattedItems.length,
-    allTasks: formattedItems
-  };
-
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-  fs.writeFileSync(
-    path.join(OUTPUT_DIR, COMPLETED_ARCHIVE_FILE),
-    JSON.stringify(output, null, 2)
-  );
-
-  return output;
 }
 
 async function todoistPost(endpoint, body) {
@@ -172,6 +32,7 @@ async function todoistPost(endpoint, body) {
   if (!response.ok) {
     throw new Error('Todoist POST ' + endpoint + ': ' + response.status + ' ' + (await response.text()));
   }
+  // Some endpoints return 204 No Content
   if (response.status === 204) return { success: true };
   return response.json();
 }
@@ -187,45 +48,13 @@ async function todoistDelete(endpoint) {
   return { success: true };
 }
 
-// Move requires Todoist Sync API — REST API does not support project_id updates
-async function todoistSyncMove(taskId, projectId) {
-  var uuid = 'move-' + taskId + '-' + Date.now();
-  var response = await fetch(SYNC_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + TODOIST_API_KEY,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      commands: [
-        {
-          type: 'item_move',
-          uuid: uuid,
-          args: {
-            id: taskId,
-            project_id: projectId
-          }
-        }
-      ]
-    })
-  });
-  if (!response.ok) {
-    throw new Error('Todoist Sync move: ' + response.status + ' ' + (await response.text()));
-  }
-  var data = await response.json();
-  if (data.sync_status && data.sync_status[uuid] && data.sync_status[uuid] !== 'ok') {
-    throw new Error('Todoist Sync move failed: ' + JSON.stringify(data.sync_status[uuid]));
-  }
-  return { success: true };
-}
-
 // --- Sync tasks and projects to files ---
 
 async function syncTasks() {
   try {
-    var tasks = await todoistGetAll('/tasks');
-    var projects = await todoistGetAll('/projects');
-    var labels = await todoistGetAll('/labels');
+    var tasks = await todoistGet('/tasks');
+    var projects = await todoistGet('/projects');
+    var labels = await todoistGet('/labels');
 
     var formattedTasks = tasks.map(function(t) {
       return {
@@ -286,40 +115,23 @@ async function syncTasks() {
     };
 
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-    writeJsonAtomic(
+    fs.writeFileSync(
       path.join(OUTPUT_DIR, 'tasks.json'),
-      output
+      JSON.stringify(output, null, 2)
     );
-    writeJsonAtomic(
+    fs.writeFileSync(
       path.join(OUTPUT_DIR, 'projects.json'),
-      projectOutput
+      JSON.stringify(projectOutput, null, 2)
     );
-    writeSyncStatus('synced', {
-      syncedAt: output.syncedAt,
-      totalTasks: output.totalTasks,
-      projectCount: projects.length,
-      labelCount: labels.length
-    });
 
     console.log('[todoist] synced ' + formattedTasks.length + ' tasks across ' + projects.length + ' projects');
-    return {
-      success: true,
-      syncedAt: output.syncedAt,
-      totalTasks: output.totalTasks,
-      projectCount: projects.length
-    };
   } catch (err) {
     console.error('[todoist] sync error:', err.message);
-    var lastGood = readLastGoodTasksSummary();
-    writeSyncStatus('error_using_last_good_cache', {
-      error: err.message,
-      lastGoodTasks: lastGood
-    });
-    return {
-      success: false,
-      error: err.message,
-      lastGoodTasks: lastGood
-    };
+    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+    fs.writeFileSync(
+      path.join(OUTPUT_DIR, 'tasks.json'),
+      JSON.stringify({ error: err.message, syncedAt: new Date().toISOString() }, null, 2)
+    );
   }
 }
 
@@ -384,23 +196,13 @@ async function processCommand(cmd) {
 
       case 'move':
         if (!cmd.task_id || !cmd.project_id) throw new Error('task_id and project_id required');
-        await todoistSyncMove(cmd.task_id, cmd.project_id);
+        await todoistPost('/tasks/' + cmd.task_id, { project_id: cmd.project_id });
         result.success = true;
         result.message = 'Task moved to project ' + cmd.project_id;
         break;
 
-      case 'fetch_completed_archive':
-        var archive = await writeCompletedArchiveSnapshot(cmd);
-        result.success = true;
-        result.message = 'Fetched read-only completed task archive snapshot';
-        result.path = path.join(OUTPUT_DIR, COMPLETED_ARCHIVE_FILE);
-        result.totalTasks = archive.totalTasks;
-        result.since = archive.since;
-        result.until = archive.until;
-        break;
-
       default:
-        result.message = 'Unknown action: ' + cmd.action + '. Valid actions: complete, reopen, create, update, delete, move, fetch_completed_archive';
+        result.message = 'Unknown action: ' + cmd.action + '. Valid actions: complete, reopen, create, update, delete, move';
     }
   } catch (err) {
     result.message = err.message;
@@ -439,7 +241,7 @@ function watchForCommands() {
           JSON.stringify(result, null, 2)
         );
 
-        // Re-sync after any write command. Completed archive fetches are read-only snapshots.
+        // Re-sync after any write command
         if (['complete', 'reopen', 'create', 'update', 'delete', 'move'].indexOf(cmd.action) !== -1 && result.success) {
           await syncTasks();
         }
@@ -463,30 +265,8 @@ app.get('/health', function(req, res) {
 });
 
 app.get('/sync', async function(req, res) {
-  var result = await syncTasks();
-  if (result.success) {
-    res.json({
-      status: 'synced',
-      totalTasks: result.totalTasks,
-      syncedAt: result.syncedAt
-    });
-    return;
-  }
-
-  res.status(503).json({
-    status: 'error_using_last_good_cache',
-    message: result.error,
-    lastGoodTasks: result.lastGoodTasks
-  });
-});
-
-app.get('/completed-archive', async function(req, res) {
-  try {
-    var archive = await writeCompletedArchiveSnapshot(req.query || {});
-    res.json({ status: 'synced', totalTasks: archive.totalTasks, path: path.join(OUTPUT_DIR, COMPLETED_ARCHIVE_FILE) });
-  } catch (err) {
-    res.status(400).json({ status: 'error', message: err.message });
-  }
+  await syncTasks();
+  res.json({ status: 'synced' });
 });
 
 // --- Start ---

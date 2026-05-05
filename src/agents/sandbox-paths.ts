@@ -30,12 +30,46 @@ function resolveToCwd(filePath: string, cwd: string): string {
   return path.resolve(cwd, expanded);
 }
 
+function resolveLegacyOpenClawAlias(resolved: string, rootResolved: string): string {
+  if (!path.isAbsolute(resolved)) {
+    return resolved;
+  }
+  const rootParts = rootResolved.split(path.sep).filter(Boolean);
+  const openclawIndex = rootParts.indexOf(".openclaw");
+  if (openclawIndex === -1) {
+    return resolved;
+  }
+  const suffixParts = rootParts.slice(openclawIndex);
+  if (suffixParts.length === 0) {
+    return resolved;
+  }
+  const legacyPrefix = path.posix.join("/home/node", ...suffixParts);
+  const normalizedResolved = resolved.split(path.sep).join(path.posix.sep);
+  if (normalizedResolved === legacyPrefix) {
+    return rootResolved;
+  }
+  const legacyDirPrefix = `${legacyPrefix}/`;
+  if (!normalizedResolved.startsWith(legacyDirPrefix)) {
+    return resolved;
+  }
+  const relative = normalizedResolved.slice(legacyDirPrefix.length);
+  if (!relative) {
+    return rootResolved;
+  }
+  // Keep legacy Docker-era ~/.openclaw paths working when the sandbox root is
+  // the same host-backed .openclaw tree mounted from macOS.
+  return path.join(rootResolved, ...relative.split("/"));
+}
+
 export function resolveSandboxPath(params: { filePath: string; cwd: string; root: string }): {
   resolved: string;
   relative: string;
 } {
-  const resolved = resolveToCwd(params.filePath, params.cwd);
   const rootResolved = path.resolve(params.root);
+  const resolved = resolveLegacyOpenClawAlias(
+    resolveToCwd(params.filePath, params.cwd),
+    rootResolved,
+  );
   const relative = path.relative(rootResolved, resolved);
   if (!relative || relative === "") {
     return { resolved, relative: "" };

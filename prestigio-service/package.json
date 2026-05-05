@@ -1,0 +1,12 @@
+{
+  "name": "prestigio-service",
+  "version": "1.0.0",
+  "description": "Read-only Supabase query service for Prestigio app — file-based interface for OpenClaw/Stitch",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

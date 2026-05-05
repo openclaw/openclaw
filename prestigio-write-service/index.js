@@ -26,6 +26,19 @@ const MAX_QUOTE_IMAGE_BYTES = 10 * 1024 * 1024;
 const QUOTE_IMAGE_BUCKET = 'quote-images';
 const PASSTHROUGH_MULT = Number(process.env.PRESTIGIO_PASSTHROUGH_MULT || 1.337);
 const MATERIALS_MULT = Number(process.env.PRESTIGIO_MATERIALS_MULT || 1.667);
+const DEFAULT_PILLOW_FILL_RATE_BY_KEY = {
+  'down-50': 20,
+  'down-25': 10.5,
+  'angel-hair': 7,
+  'elite-fiber': 7
+};
+const DEFAULT_PILLOW_LABOR_RATE_BY_KEY = {
+  throw: 130,
+  boxed: 130,
+  bolster: 130,
+  medallion: 130,
+  flange: 130
+};
 const PRESTIGIO_APP_BASE_URL = (process.env.PRESTIGIO_APP_BASE_URL || 'https://app.prestigio.la').replace(/\/+$/, '');
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
@@ -184,7 +197,7 @@ function buildConfirmSummary(action, params) {
     const siteVisitTotal = getDraftQuoteSiteVisitTotal(quote);
     const total = Math.round((itemTotal + siteVisitTotal) * 100) / 100;
     const siteVisitText = siteVisitTotal > 0 ? ` including ${formatMoney(siteVisitTotal)} site visit` : '';
-    return `Create draft quote "${sidemark}" with ${items.length} item(s), total ${formatMoney(total)}${siteVisitText}${summarizeDraftQuotePricingModes(items)}`;
+    return `Create draft quote "${sidemark}" with ${items.length} item(s), total ${formatMoney(total)}${siteVisitText}${summarizeDraftQuotePricingModes(items)}${summarizeDraftQuoteCostLines(items)}`;
   }
   if (action === 'create-client-project') {
     const client = params.client || {};
@@ -246,17 +259,52 @@ function summarizeDraftQuotePricingModes(items) {
   if (!Array.isArray(items) || !items.length) return '';
   let manual = 0;
   let calculated = 0;
-  for (const item of items) {
-    if (item && typeof item === 'object' && item.sell_price !== undefined) {
+  items.forEach((item, index) => {
+    let normalized = null;
+    try {
+      normalized = normalizeDraftItem(item, index);
+    } catch (_) {
+      normalized = item;
+    }
+    if (item && typeof item === 'object' && item.sell_price !== undefined && normalized?.sell_price === toNullableNumber(item.sell_price)) {
       manual += 1;
-    } else if (item && typeof item === 'object' && (item.cost_breakdown || item.lineItems)) {
+    } else if (item && typeof item === 'object' && (item.cost_breakdown || item.lineItems || normalized?.cost_breakdown)) {
       calculated += 1;
     }
-  }
+  });
   const parts = [];
   if (calculated > 0) parts.push(`${calculated} calculated from cost breakdown`);
   if (manual > 0) parts.push(`${manual} manual/client-facing sell price`);
   return parts.length ? `; pricing: ${parts.join(', ')}` : '';
+}
+
+function summarizeDraftQuoteCostLines(items) {
+  if (!Array.isArray(items) || !items.length) return '';
+  const fillParts = [];
+
+  for (let index = 0; index < items.length; index += 1) {
+    let item = items[index];
+    try {
+      item = normalizeDraftItem(item, index);
+    } catch (_) {
+      // Confirmation summaries should not fail just because a detail line cannot be normalized.
+    }
+
+    const breakdown = cleanObject(item?.cost_breakdown);
+    const fill = cleanObject(breakdown?.fill);
+    if (!fill) continue;
+
+    const qty = toNullableNumber(fill.qty ?? fill.quantity);
+    const rate = toNullableNumber(fill.rate);
+    if (!qty || !rate) continue;
+
+    const itemQty = toNullableNumber(item.quantity) || 1;
+    const fillKey = cleanText(fill.item_key, 80);
+    const label = fillKey ? `${fillKey} ` : '';
+    fillParts.push(`${label}${qty} lb @ ${formatMoney(rate)}/lb each${itemQty > 1 ? ` x ${itemQty}` : ''}`);
+  }
+
+  return fillParts.length ? `; fill: ${fillParts.join(', ')}` : '';
 }
 
 function formatMoney(value) {
@@ -740,6 +788,97 @@ function normalizePillowType(value) {
   return normalized;
 }
 
+function resolvePillowFillKey(value) {
+  const normalized = normalizeKey(value);
+  if (!normalized || normalized === '50/50' || normalized === '50-50' || normalized === '50-50-down') return 'down-50';
+  if (normalized === '25/75' || normalized === '25-75' || normalized === '25-75-down') return 'down-25';
+  if (DEFAULT_PILLOW_FILL_RATE_BY_KEY[normalized] !== undefined || normalized === 'other') return normalized;
+  return normalized.includes('25') ? 'down-25' : 'down-50';
+}
+
+function estimatePillowFillLbs(formData) {
+  if (
+    quoteDescriptionGenerators &&
+    typeof quoteDescriptionGenerators.calculatePillowFillLbs === 'function'
+  ) {
+    return quoteDescriptionGenerators.calculatePillowFillLbs(formData);
+  }
+
+  const width = toNullableNumber(formData.width);
+  const height = toNullableNumber(formData.height);
+  if (!width || !height) return null;
+  return Math.ceil(Math.max(0.9, width * height * 0.0052) * 10) / 10;
+}
+
+function buildPillowDefaultCostBreakdown(item, formData, existingCostBreakdown) {
+  const breakdown = cleanObject(existingCostBreakdown) ? { ...existingCostBreakdown } : {};
+  const fillKey = resolvePillowFillKey(formData.pillowFill || formData.fill || item.pillowFill || item.fill || 'down-50');
+  const fillRate = toNullableNumber(item.fill_rate || formData.fillRate || formData.fill_rate)
+    ?? DEFAULT_PILLOW_FILL_RATE_BY_KEY[fillKey]
+    ?? 20;
+  const fillQty = toNullableNumber(item.fill_lbs || item.fill_qty || formData.fillLbs || formData.fill_lbs)
+    ?? estimatePillowFillLbs(formData);
+
+  if (!breakdown.fill && fillKey !== 'other' && fillQty && fillRate) {
+    const raw = Math.round(fillQty * fillRate * 100) / 100;
+    breakdown.fill = {
+      qty: fillQty,
+      rate: fillRate,
+      raw,
+      multiplier: MATERIALS_MULT,
+      final: Math.round(raw * MATERIALS_MULT * 100) / 100,
+      item_key: fillKey,
+      source: 'dimension_estimate'
+    };
+  }
+
+  const laborKey = formData.construction === 'flange'
+    ? 'flange'
+    : formData.pillowType === 'boxed'
+      ? 'boxed'
+      : 'throw';
+  const laborHours = toNullableNumber(item.labor_hours || formData.laborHours || formData.labor_hours) || 1;
+  const laborRate = toNullableNumber(item.labor_rate || formData.laborRate || formData.labor_rate)
+    || DEFAULT_PILLOW_LABOR_RATE_BY_KEY[laborKey]
+    || 130;
+  if (!breakdown.labor_upholstery && !breakdown.labor && laborHours && laborRate) {
+    const raw = Math.round(laborHours * laborRate * 100) / 100;
+    breakdown.labor_upholstery = {
+      hours: laborHours,
+      rate: laborRate,
+      raw,
+      multiplier: 1,
+      final: raw,
+      source: 'default_pillow_labor'
+    };
+  }
+
+  return Object.keys(breakdown).length ? breakdown : null;
+}
+
+function hasManualPillowPriceOverride(item, formData) {
+  return Boolean(
+    item.manual_price_override ||
+    item.manualPriceOverride ||
+    formData.manual_price_override ||
+    formData.manualPriceOverride ||
+    formData.pricingMode === 'manual' ||
+    formData.priceMode === 'manual'
+  );
+}
+
+function choosePillowSellPrice(item, formData, costBreakdown, quantity) {
+  const manualPrice = item.sell_price !== undefined ? toNullableNumber(item.sell_price) : null;
+  const calculatedPrice = costBreakdown
+    ? calculatePillowUnitPriceFromBreakdown(costBreakdown, quantity)
+    : null;
+
+  if (manualPrice === null) return calculatedPrice;
+  if (calculatedPrice === null) return manualPrice;
+  if (hasManualPillowPriceOverride(item, formData)) return manualPrice;
+  return Math.max(manualPrice, calculatedPrice);
+}
+
 function normalizeCushionType(value) {
   const normalized = normalizeKey(value);
   if (!normalized) return 'bench';
@@ -839,10 +978,10 @@ function normalizePillowDraftItem(item, index) {
   };
 
   const description = buildPillowDescription(normalizedFormData, item);
-  const costBreakdown = normalizeQuoteRevisionCostBreakdownLines(item.cost_breakdown || item.lineItems);
-  const calculatedUnitPrice = item.sell_price === undefined && costBreakdown
-    ? calculatePillowUnitPriceFromBreakdown(costBreakdown, quantity)
-    : null;
+  const costBreakdown = normalizeQuoteRevisionCostBreakdownLines(
+    buildPillowDefaultCostBreakdown(item, normalizedFormData, item.cost_breakdown || item.lineItems)
+  );
+  const sellPrice = choosePillowSellPrice(item, normalizedFormData, costBreakdown, quantity);
   const itemName = cleanText(item.item_name || item.name || normalizedFormData.custom_name, 500) || 'NEW CUSTOM PILLOWS';
 
   return {
@@ -857,7 +996,7 @@ function normalizePillowDraftItem(item, index) {
     height: normalizedFormData.height,
     quantity,
     sidemark: cleanText(item.sidemark || normalizedFormData.sidemark || item.room || '', 500) || null,
-    sell_price: item.sell_price !== undefined ? toNullableNumber(item.sell_price) : calculatedUnitPrice,
+    sell_price: sellPrice,
     cost_breakdown: costBreakdown || cleanObject(item.cost_breakdown),
     form_data: {
       ...normalizedFormData,
@@ -1435,14 +1574,18 @@ function hostWorkspaceDir() {
 
 function attachmentRoots() {
   const workspace = hostWorkspaceDir();
-  return [
+  const roots = [
     path.resolve(workspace, 'mail-chris', 'attachments'),
     path.resolve(workspace, 'mail', 'attachments'),
     path.resolve(workspace, 'mail-gmail', 'attachments'),
+    path.resolve('/Users/chrisreyes/.openclaw/workspace/mail-chris/attachments'),
+    path.resolve('/Users/chrisreyes/.openclaw/workspace/mail/attachments'),
+    path.resolve('/Users/chrisreyes/.openclaw/workspace/mail-gmail/attachments'),
     path.resolve('/home/node/.openclaw/workspace/mail-chris/attachments'),
     path.resolve('/home/node/.openclaw/workspace/mail/attachments'),
     path.resolve('/home/node/.openclaw/workspace/mail-gmail/attachments')
   ];
+  return Array.from(new Set(roots));
 }
 
 function normalizeAttachmentPath(filePath) {
@@ -1450,6 +1593,10 @@ function normalizeAttachmentPath(filePath) {
   const containerPrefix = '/home/node/.openclaw/workspace';
   if (raw === containerPrefix || raw.startsWith(containerPrefix + path.sep)) {
     return path.join(hostWorkspaceDir(), raw.slice(containerPrefix.length));
+  }
+  const hostPrefix = '/Users/chrisreyes/.openclaw/workspace';
+  if (hostWorkspaceDir().startsWith('/home/node/') && raw.startsWith(hostPrefix + path.sep)) {
+    return path.join('/home/node/.openclaw/workspace', raw.slice(hostPrefix.length));
   }
   return raw;
 }
@@ -1619,6 +1766,46 @@ async function supabaseRequest(table, method, body, query = '') {
   } catch (_) {
     return text;
   }
+}
+
+async function fetchProjectForDraftQuote(projectId) {
+  const cleanProjectId = cleanText(projectId, 100);
+  if (!cleanProjectId) return null;
+
+  const rows = await supabaseRequest(
+    'projects',
+    'GET',
+    undefined,
+    `?select=id,name,client_id,clients(id,name,company)&id=eq.${encodeURIComponent(cleanProjectId)}&limit=1`
+  );
+  const project = Array.isArray(rows) ? rows[0] : rows;
+  return project || null;
+}
+
+async function resolveDraftQuoteClientFromProject(fields) {
+  if (!fields || fields.action !== undefined) return fields;
+  const quote = cleanObject(fields.quote);
+  if (!quote || !quote.project_id) return fields;
+
+  const project = await fetchProjectForDraftQuote(quote.project_id);
+  if (!project?.id) {
+    throw new Error(`create-draft-quote could not find project_id ${quote.project_id}`);
+  }
+  if (!project.client_id) {
+    throw new Error(`create-draft-quote project ${quote.project_id} has no client_id`);
+  }
+
+  if (quote.client_id && quote.client_id !== project.client_id) {
+    throw new Error(`create-draft-quote quote.client_id does not match the selected project's client_id`);
+  }
+
+  fields.quote = {
+    ...quote,
+    client_id: quote.client_id || project.client_id,
+    project_name: quote.project_name || project.name || undefined,
+    client_name: quote.client_name || project.clients?.company || project.clients?.name || undefined
+  };
+  return fields;
 }
 
 async function findExistingClient(client) {
@@ -2505,6 +2692,20 @@ async function processWriteRequest(request, { requestId, legacy = false } = {}) 
     }
   }
 
+  if (action === 'create-draft-quote') {
+    try {
+      await resolveDraftQuoteClientFromProject(fields);
+    } catch (err) {
+      writeResponse({
+        success: false,
+        action: action,
+        error: err.message,
+        completed_at: new Date().toISOString()
+      }, { requestId, legacy });
+      return;
+    }
+  }
+
   if (action === 'revise-existing-quote') {
     try {
       const quote = await resolveExistingQuote(fields.quote);
@@ -2702,6 +2903,8 @@ if (require.main === module) {
 module.exports = {
   buildConfirmSummary,
   getDraftQuoteSiteVisitTotal,
+  isAllowedAttachmentPath,
+  normalizeAttachmentPath,
   summarizeDraftQuotePricingModes,
   sumDraftQuoteItems
 };

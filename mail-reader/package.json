@@ -1,0 +1,12 @@
+{
+  "name": "stitch-mail-reader",
+  "version": "1.0.0",
+  "description": "Read-only mail proxy for OpenClaw - reads stitch@prestigiocustom.com via Microsoft Graph",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}

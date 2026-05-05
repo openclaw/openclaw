@@ -1,0 +1,11 @@
+{
+  "name": "openclaw-todoist-cluster-service",
+  "version": "1.0.0",
+  "description": "Read-only Todoist cluster overlay for Stitch",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "once": "node index.js --once",
+    "verify": "node verify-overlay.js"
+  }
+}

@@ -4,7 +4,10 @@ const path = require('path');
 const TIME_ZONE = 'America/Los_Angeles';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const READ_SERVICE_URL = process.env.PRESTIGIO_READ_SERVICE_URL || 'http://localhost:3005';
-const OUTPUT_PATH = path.join(process.env.HOME || '', '.openclaw', 'workspace', 'prestigio', 'prep-proposals.json');
+const DEFAULT_DATA_DIR = fs.existsSync('/data')
+  ? '/data'
+  : path.join(process.env.HOME || '', '.openclaw', 'workspace', 'prestigio');
+const OUTPUT_PATH = process.env.PREP_PROPOSALS_OUTPUT_PATH || path.join(DEFAULT_DATA_DIR, 'prep-proposals.json');
 const ROOT_ENV_PATH = path.resolve(__dirname, '..', '.env');
 const PREFILL_KEYS = new Set(['fill_material', 'insert_type']);
 const ALLOWED_FILL_MATERIALS = new Set([

@@ -1,0 +1,12 @@
+{
+  "name": "marketing-overlay-service",
+  "version": "1.0.0",
+  "description": "Shadow-mode marketing candidate builder for Prestigio",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

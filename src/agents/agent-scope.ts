@@ -30,6 +30,25 @@ type ResolvedAgentConfig = {
 };
 
 let defaultAgentWarned = false;
+const STATE_DIR_ALIAS_SEGMENTS = new Set([".openclaw", ".clawdbot", ".moldbot", ".moltbot"]);
+
+function remapConfiguredStateTreePath(resolvedPath: string): string {
+  if (!path.isAbsolute(resolvedPath)) {
+    return resolvedPath;
+  }
+  const activeStateDir = path.resolve(resolveStateDir(process.env));
+  const activeStateName = path.basename(activeStateDir);
+  if (!STATE_DIR_ALIAS_SEGMENTS.has(activeStateName)) {
+    return resolvedPath;
+  }
+  const parts = resolvedPath.split(path.sep).filter(Boolean);
+  const stateIndex = parts.findIndex((part) => STATE_DIR_ALIAS_SEGMENTS.has(part));
+  if (stateIndex === -1) {
+    return resolvedPath;
+  }
+  const suffix = parts.slice(stateIndex + 1);
+  return path.join(activeStateDir, ...suffix);
+}
 
 function listAgents(cfg: OpenClawConfig): AgentEntry[] {
   const list = cfg.agents?.list;
@@ -167,13 +186,13 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    return remapConfiguredStateTreePath(resolveUserPath(configured));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
     const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
-      return resolveUserPath(fallback);
+      return remapConfiguredStateTreePath(resolveUserPath(fallback));
     }
     return resolveDefaultAgentWorkspaceDir(process.env);
   }
@@ -185,7 +204,7 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    return remapConfiguredStateTreePath(resolveUserPath(configured));
   }
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");

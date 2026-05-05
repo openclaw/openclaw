@@ -1,0 +1,16 @@
+services:
+  openclaw-gateway:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.3.31}
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/chrisreyes/.openclaw:/Users/chrisreyes/.openclaw
+      - /Users/chrisreyes/Documents/Codex/2026-04-19-are-you-able-to-access-my:/home/node/.openclaw/workspace/life-os-vault:ro
+
+  openclaw-cli:
+    image: ${OPENCLAW_IMAGE:-ghcr.io/openclaw/openclaw:2026.3.31}
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/chrisreyes/.openclaw:/Users/chrisreyes/.openclaw
+      - /Users/chrisreyes/Documents/Codex/2026-04-19-are-you-able-to-access-my:/home/node/.openclaw/workspace/life-os-vault:ro

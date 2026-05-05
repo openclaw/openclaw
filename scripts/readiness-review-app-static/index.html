@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Readiness Gold Set Review</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="page-header">
+        <div class="title-block">
+          <p class="eyebrow">Prestigio Readiness Review</p>
+          <h1>Gold Set Labeler</h1>
+          <p class="subtle" id="statusLine">Loading review rows...</p>
+        </div>
+        <div class="status-block">
+          <div class="save-pill" id="savePill">Not saved</div>
+          <div class="backup-pill hidden" id="backupPill"></div>
+        </div>
+      </header>
+
+      <section class="toolbar card">
+        <div class="toolbar-row">
+          <label class="field compact">
+            <span>Filter</span>
+            <select id="filterMode">
+              <option value="unlabeled">Unlabeled only</option>
+              <option value="all">All rows</option>
+            </select>
+          </label>
+
+          <label class="field compact">
+            <span>Guessed Type</span>
+            <select id="typeFilter">
+              <option value="all">All guessed types</option>
+            </select>
+          </label>
+
+          <label class="field compact">
+            <span>Jump to Priority</span>
+            <input id="jumpToRow" type="text" inputmode="numeric" placeholder="001" />
+          </label>
+
+          <button class="secondary" id="jumpButton" type="button">Jump</button>
+        </div>
+
+        <div class="toolbar-row progress-row">
+          <div class="progress-copy">
+            <strong id="currentPosition">0 / 0</strong>
+            <span id="progressSummary">0 labeled, 0 unlabeled</span>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="reminder card">
+        <h2>Labeling Reminder</h2>
+        <ul>
+          <li><strong>`proposal_yes`</strong> means this thread should create a readiness proposal.</li>
+          <li><strong>`proposal_no`</strong> means it should not.</li>
+          <li><strong>`safe_to_auto_write_later = yes`</strong> should be rare and mostly limited to explicit drawing approvals or explicit spec answers.</li>
+          <li>Fabric shipping or delivery alone is not safe auto-write.</li>
+          <li>When possible, paste the exact sentence that triggered your decision into <strong>notes</strong>.</li>
+        </ul>
+      </section>
+
+      <main class="layout">
+        <section class="main-column">
+          <article class="card thread-card">
+            <div class="thread-header">
+              <div>
+                <p class="eyebrow" id="currentFilterLabel">Unlabeled only</p>
+                <h2 id="subject">Subject</h2>
+              </div>
+              <div class="header-meta">
+                <span id="mailbox"></span>
+                <span id="latestTimestamp"></span>
+              </div>
+            </div>
+
+            <div class="meta-grid">
+              <div class="meta-item">
+                <span class="meta-label">Guessed Event Type</span>
+                <span class="meta-value" id="guessedType"></span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Confidence</span>
+                <span class="meta-value" id="confidence"></span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Keywords</span>
+                <span class="meta-value" id="keywords"></span>
+              </div>
+              <div class="meta-item">
+                <span class="meta-label">Participants</span>
+                <span class="meta-value" id="participants"></span>
+              </div>
+            </div>
+
+            <div class="excerpt-block">
+              <span class="meta-label">Short Excerpt</span>
+              <div class="excerpt" id="shortExcerpt"></div>
+            </div>
+
+            <div class="thread-view">
+              <div class="evidence-block">
+                <div class="section-header">
+                  <h3>Latest Meaningful Text</h3>
+                  <button class="secondary small" id="copyEvidenceButton" type="button">Copy Evidence</button>
+                </div>
+                <pre id="cleanLatestText"></pre>
+              </div>
+
+              <div class="evidence-block secondary-evidence">
+                <h3>Thread Excerpt</h3>
+                <pre id="cleanThreadExcerpt"></pre>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <aside class="side-column">
+          <section class="card label-card">
+            <div class="section-header">
+              <h2>Labels</h2>
+              <button class="secondary small" id="clearLabelsButton" type="button">Clear Current Labels</button>
+            </div>
+
+            <div class="field-group">
+              <label class="field">
+                <span>Proposal Yes / No</span>
+                <select id="proposalYesNo">
+                  <option value="">Blank</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              </label>
+
+              <label class="field">
+                <span>Proposal Type</span>
+                <select id="proposalType">
+                  <option value="">Blank</option>
+                  <option value="drawing_approval">drawing_approval</option>
+                  <option value="drawing_revision">drawing_revision</option>
+                  <option value="client_spec_answer">client_spec_answer</option>
+                  <option value="fabric_problem">fabric_problem</option>
+                  <option value="fabric_status">fabric_status</option>
+                  <option value="frame_status">frame_status</option>
+                  <option value="client_item_status">client_item_status</option>
+                  <option value="none">none</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="field-group">
+              <label class="field">
+                <span>Matched Project</span>
+                <input id="matchedProject" type="text" />
+              </label>
+
+              <label class="field">
+                <span>Matched Item</span>
+                <input id="matchedItem" type="text" />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Suggested Update</span>
+              <input id="suggestedUpdate" type="text" />
+            </label>
+
+            <label class="field">
+              <span>Safe To Auto Write Later</span>
+              <select id="safeToAutoWriteLater">
+                <option value="">Blank</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>Notes</span>
+              <textarea id="notes" rows="8"></textarea>
+            </label>
+
+            <div class="actions">
+              <button class="secondary" id="previousButton" type="button">Previous</button>
+              <button class="secondary" id="nextButton" type="button">Next</button>
+              <button class="secondary" id="nextUnlabeledButton" type="button">Next Unlabeled</button>
+              <button class="secondary" id="skipButton" type="button">Skip</button>
+              <button class="primary" id="saveButton" type="button">Save</button>
+            </div>
+
+            <div class="shortcut-grid">
+              <div><strong>y / n / 0</strong> proposal yes / no / clear</div>
+              <div><strong>1-8</strong> proposal type</div>
+              <div><strong>[ / ] / -</strong> safe write yes / no / clear</div>
+              <div><strong>j / k / u</strong> next / previous / next unlabeled</div>
+              <div><strong>s</strong> save</div>
+              <div><strong>c</strong> clear current labels</div>
+            </div>
+          </section>
+
+          <details class="card rubric-card">
+            <summary>Compact Rubric</summary>
+            <pre id="rubricText"></pre>
+          </details>
+        </aside>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

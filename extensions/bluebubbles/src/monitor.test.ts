@@ -1,4 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk";
 import { EventEmitter } from "node:events";
 import { removeAckReactionAfterReply, shouldAckReaction } from "openclaw/plugin-sdk";
@@ -68,6 +71,11 @@ const mockResolveEnvelopeFormatOptions = vi.fn(() => ({
 }));
 const mockFormatAgentEnvelope = vi.fn((opts: { body: string }) => opts.body);
 const mockChunkMarkdownText = vi.fn((text: string) => [text]);
+const mockSendMessageTelegram = vi.fn().mockResolvedValue({
+  messageId: "telegram-msg-1",
+  chatId: "telegram:578430248",
+});
+let mockStateDir = "/tmp/openclaw";
 
 function createMockRuntime(): PluginRuntime {
   return {
@@ -205,7 +213,10 @@ function createMockRuntime(): PluginRuntime {
       },
       discord: {} as PluginRuntime["channel"]["discord"],
       slack: {} as PluginRuntime["channel"]["slack"],
-      telegram: {} as PluginRuntime["channel"]["telegram"],
+      telegram: {
+        sendMessageTelegram:
+          mockSendMessageTelegram as unknown as PluginRuntime["channel"]["telegram"]["sendMessageTelegram"],
+      } as PluginRuntime["channel"]["telegram"],
       signal: {} as PluginRuntime["channel"]["signal"],
       imessage: {} as PluginRuntime["channel"]["imessage"],
       whatsapp: {} as PluginRuntime["channel"]["whatsapp"],
@@ -223,7 +234,7 @@ function createMockRuntime(): PluginRuntime {
     },
     state: {
       resolveStateDir: vi.fn(
-        () => "/tmp/openclaw",
+        () => mockStateDir,
       ) as unknown as PluginRuntime["state"]["resolveStateDir"],
     },
   };
@@ -303,7 +314,7 @@ const flushAsync = async () => {
 describe("BlueBubbles webhook monitor", () => {
   let unregister: () => void;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     // Reset short ID state between tests for predictable behavior
     _resetBlueBubblesShortIdState();
@@ -313,12 +324,14 @@ describe("BlueBubbles webhook monitor", () => {
     mockHasControlCommand.mockReturnValue(false);
     mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(false);
     mockBuildMentionRegexes.mockReturnValue([/\bbert\b/i]);
+    mockStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "bluebubbles-monitor-"));
 
     setBlueBubblesRuntime(createMockRuntime());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     unregister?.();
+    await fs.rm(mockStateDir, { recursive: true, force: true });
   });
 
   describe("webhook parsing + auth handling", () => {
@@ -843,6 +856,9 @@ describe("BlueBubbles webhook monitor", () => {
       await flushAsync();
 
       expect(res.statusCode).toBe(200);
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
     });
 
@@ -1006,7 +1022,86 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+    });
+
+    it("routes supervised DMs to Telegram instead of auto-replying", async () => {
+      const account = createMockAccount({
+        dmPolicy: "open",
+        supervisedReplies: {
+          enabled: true,
+          notifyAccountId: "default",
+          notifyTo: "telegram:578430248",
+        },
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "Can you do tomorrow at 2?",
+          handle: { address: "+15559999999" },
+          handleName: "Brenda",
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-supervised-1",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      await vi.waitFor(() => {
+        expect(mockSendMessageTelegram).toHaveBeenCalled();
+      });
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+      expect(mockSendMessageTelegram).toHaveBeenCalledWith(
+        "telegram:578430248",
+        expect.stringContaining("SMS pending from +15559999999"),
+        expect.objectContaining({ accountId: "default" }),
+      );
+
+      const latestPath = path.join(mockStateDir, "workspace", "sms-supervisor", "latest.json");
+      const latestRaw = await fs.readFile(latestPath, "utf8");
+      const latest = JSON.parse(latestRaw) as {
+        items: Array<{ thread_id: string; preview: string; sender_label: string }>;
+      };
+      expect(latest.items[0]?.preview).toBe("Can you do tomorrow at 2?");
+      expect(latest.items[0]?.sender_label).toBe("+15559999999");
+
+      const threadPath = path.join(
+        mockStateDir,
+        "workspace",
+        "sms-supervisor",
+        "threads",
+        `${latest.items[0]?.thread_id}.json`,
+      );
+      const threadRaw = await fs.readFile(threadPath, "utf8");
+      const thread = JSON.parse(threadRaw) as {
+        reply_target: string;
+        last_inbound_text: string;
+        status: string;
+      };
+      expect(thread.reply_target).toBe("+15559999999");
+      expect(thread.last_inbound_text).toBe("Can you do tomorrow at 2?");
+      expect(thread.status).toBe("pending");
     });
 
     it("blocks all DMs when dmPolicy=disabled", async () => {
@@ -1240,6 +1335,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.WasMentioned).toBe(true);
@@ -1498,6 +1596,9 @@ describe("BlueBubbles webhook monitor", () => {
         // After the debounce window, the combined message should be processed exactly once.
         await vi.advanceTimersByTimeAsync(600);
 
+        await vi.waitFor(() => {
+          expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+        });
         expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
         const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
         expect(callArgs.ctx.MediaPaths).toEqual(["/tmp/test-media.jpg"]);
@@ -1547,6 +1648,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       // ReplyToId is the full UUID since it wasn't previously cached
@@ -1595,6 +1699,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.ReplyToId).toBe("p:1/msg-0");
@@ -1706,6 +1813,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.ReplyToId).toBe("msg-0");
@@ -1786,6 +1896,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       expect(callArgs.ctx.RawBody).toBe("reacted with 😅");
@@ -1836,6 +1949,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(sendBlueBubblesReaction).toHaveBeenCalled();
+      });
       expect(sendBlueBubblesReaction).toHaveBeenCalledWith(
         expect.objectContaining({
           chatGuid: "iMessage;-;+15551234567",
@@ -1975,6 +2091,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(markBlueBubblesChatRead).toHaveBeenCalled();
+      });
       expect(markBlueBubblesChatRead).toHaveBeenCalled();
     });
 
@@ -2059,6 +2178,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(sendBlueBubblesTyping).toHaveBeenCalled();
+      });
       // Should call typing start when reply flow triggers it.
       expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
         expect.any(String),
@@ -2109,6 +2231,13 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
+          expect.any(String),
+          false,
+          expect.any(Object),
+        );
+      });
       expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
         expect.any(String),
         false,
@@ -2154,6 +2283,13 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
+          expect.any(String),
+          false,
+          expect.any(Object),
+        );
+      });
       expect(sendBlueBubblesTyping).toHaveBeenCalledWith(
         expect.any(String),
         false,
@@ -2406,6 +2542,9 @@ describe("BlueBubbles webhook monitor", () => {
       await handleBlueBubblesWebhookRequest(req, res);
       await flushAsync();
 
+      await vi.waitFor(() => {
+        expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      });
       expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
       const callArgs = mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[0][0];
       // MessageSid should be short ID "1" instead of full UUID

@@ -1,0 +1,9 @@
+{
+  "name": "stitch-gmail-reader",
+  "version": "1.0.0",
+  "description": "Gmail inbox reader for Stitch",
+  "main": "index.js",
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}

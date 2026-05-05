@@ -9,6 +9,15 @@ export type BlueBubblesGroupConfig = {
   tools?: { allow?: string[]; deny?: string[] };
 };
 
+export type BlueBubblesSupervisedRepliesConfig = {
+  /** If true, direct-message replies are held for human approval instead of auto-replied. */
+  enabled?: boolean;
+  /** Telegram account to notify when a supervised SMS arrives. Defaults to "default". */
+  notifyAccountId?: string;
+  /** Telegram target that receives supervised SMS alerts, for example telegram:123456789. */
+  notifyTo?: string;
+};
+
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -26,6 +35,8 @@ export type BlueBubblesAccountConfig = {
   webhookPath?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** If enabled, direct replies are surfaced to Telegram for approval instead of auto-replied. */
+  supervisedReplies?: BlueBubblesSupervisedRepliesConfig;
   allowFrom?: Array<string | number>;
   /** Optional allowlist for group senders. */
   groupAllowFrom?: Array<string | number>;

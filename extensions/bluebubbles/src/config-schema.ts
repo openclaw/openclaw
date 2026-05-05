@@ -24,6 +24,14 @@ const bluebubblesGroupConfigSchema = z.object({
   tools: ToolPolicySchema,
 });
 
+const bluebubblesSupervisedRepliesSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    notifyAccountId: z.string().optional(),
+    notifyTo: z.string().optional(),
+  })
+  .optional();
+
 const bluebubblesAccountSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -32,6 +40,7 @@ const bluebubblesAccountSchema = z.object({
   password: z.string().optional(),
   webhookPath: z.string().optional(),
   dmPolicy: z.enum(["pairing", "allowlist", "open", "disabled"]).optional(),
+  supervisedReplies: bluebubblesSupervisedRepliesSchema,
   allowFrom: z.array(allowFromEntry).optional(),
   groupAllowFrom: z.array(allowFromEntry).optional(),
   groupPolicy: z.enum(["open", "disabled", "allowlist"]).optional(),

@@ -8,6 +8,12 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      # Preserve host-style ~/.openclaw absolute paths stored in local config.
+      - ${OPENCLAW_CONFIG_DIR}:${OPENCLAW_CONFIG_DIR}
+      - ${OPENCLAW_WORKSPACE_DIR}:${OPENCLAW_WORKSPACE_DIR}
+      - ./mail-action-client:/app/mail-action-client:ro
+      - ./quote-intake:/app/quote-intake:ro
+      - ./quote-attachment-review:/app/quote-attachment-review:ro
     ports:
       - "127.0.0.1:${OPENCLAW_GATEWAY_PORT:-18789}:18789"
       - "127.0.0.1:${OPENCLAW_BRIDGE_PORT:-18790}:18790"
@@ -39,6 +45,11 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${OPENCLAW_CONFIG_DIR}:${OPENCLAW_CONFIG_DIR}
+      - ${OPENCLAW_WORKSPACE_DIR}:${OPENCLAW_WORKSPACE_DIR}
+      - ./mail-action-client:/app/mail-action-client:ro
+      - ./quote-intake:/app/quote-intake:ro
+      - ./quote-attachment-review:/app/quote-attachment-review:ro
     stdin_open: true
     tty: true
     init: true
@@ -54,6 +65,8 @@ services:
     volumes:
       - ${OPENCLAW_WORKSPACE_DIR}/mail:/mail-output
       - ./mail-reader/index.js:/app/index.js:ro
+      - ./readiness-shadow.cjs:/app/readiness-shadow.cjs:ro
+      - ${OPENCLAW_WORKSPACE_DIR}/readiness-candidates:/readiness-candidates
     ports:
       - "127.0.0.1:3001:3001"
     init: true
@@ -75,6 +88,8 @@ services:
     volumes:
       - ${OPENCLAW_WORKSPACE_DIR}/mail-chris:/mail-output
       - ./mail-reader/index.js:/app/index.js:ro
+      - ./readiness-shadow.cjs:/app/readiness-shadow.cjs:ro
+      - ${OPENCLAW_WORKSPACE_DIR}/readiness-candidates:/readiness-candidates
     ports:
       - "127.0.0.1:3002:3001"
     init: true
@@ -102,6 +117,29 @@ services:
       timeout: 10s
       retries: 3
 
+  stitch-todoist-clusters:
+    build: ./todoist-cluster-service
+    environment:
+      HOME: /home/node
+      BIND_HOST: 0.0.0.0
+      PORT: 3009
+      TODOIST_DIR: /home/node/.openclaw/workspace/todoist
+      TASKBOT_DIR: /home/node/.openclaw/workspace/taskbot
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/todoist:/home/node/.openclaw/workspace/todoist
+      - ${OPENCLAW_WORKSPACE_DIR}/taskbot:/home/node/.openclaw/workspace/taskbot
+    ports:
+      - "127.0.0.1:3009:3009"
+    init: true
+    restart: unless-stopped
+    depends_on:
+      - stitch-todoist
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3009/health',res=>process.exit(res.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
 
   stitch-gmail-reader:
     build: ./gmail-reader
@@ -112,6 +150,9 @@ services:
       GOOGLE_REDIRECT_URI: http://localhost:3003/oauth/callback
     volumes:
       - ${OPENCLAW_WORKSPACE_DIR}/mail-gmail:/mail-output
+      - ./gmail-reader/index.js:/app/index.js:ro
+      - ./readiness-shadow.cjs:/app/readiness-shadow.cjs:ro
+      - ${OPENCLAW_WORKSPACE_DIR}/readiness-candidates:/readiness-candidates
     ports:
       - "127.0.0.1:3003:3001"
     init: true
@@ -132,9 +173,12 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - MOUNT_PATH=/data
+      - OPENCLAW_WORKSPACE_DIR=/home/node/.openclaw/workspace
     volumes:
       - ${OPENCLAW_WORKSPACE_DIR}/prestigio:/data
+      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace:ro
       - ./prestigio-write-service/index.js:/app/index.js:ro
+      - ${PRESTIGIO_APP_DIR:-/Users/chrisreyes/prestigio-app}/js/quote-description-generators.js:/app/quote-description-generators.js:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3006/health"]
       interval: 30s
@@ -153,8 +197,30 @@ services:
     volumes:
       - ${OPENCLAW_WORKSPACE_DIR}/prestigio:/data
       - ./prestigio-service/index.js:/app/index.js:ro
+      - ./prestigio-service/prep-proposals.js:/app/prep-proposals.js:ro
+      - ./prestigio-service/resolve-communication-target.js:/app/resolve-communication-target.js:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  marketing-overlay-service:
+    build: ./marketing-overlay-service
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3010:3010"
+    environment:
+      - PORT=3010
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - MARKETING_DATA_DIR=/data
+      - MARKETING_STARTUP_MODE=backfill
+    volumes:
+      - ${OPENCLAW_WORKSPACE_DIR}/marketing:/data
+      - ./marketing-overlay-service:/app:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3010/health"]
       interval: 30s
       timeout: 10s
       retries: 3

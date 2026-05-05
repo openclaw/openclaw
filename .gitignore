@@ -84,3 +84,20 @@ USER.md
 !.agent/workflows/
 /local/
 package-lock.json
+
+# Local service runtime artifacts
+*.log
+*.pid
+*.backup
+*.bak
+.envy
+docker-compose.yml.backup
+/tmp/
+/archives/
+todoist-active-tasks-raw.json
+todoist-task-recon-report.json
+todoist-task-recon-summary.md
+*/service.log
+*/error.log
+*/service.err.log
+mail-reader/files.zip

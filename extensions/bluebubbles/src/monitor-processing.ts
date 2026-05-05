@@ -35,6 +35,10 @@ import {
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { normalizeBlueBubblesReactionInput, sendBlueBubblesReaction } from "./reactions.js";
 import { resolveChatGuidForTarget, sendMessageBlueBubbles } from "./send.js";
+import {
+  queueSupervisedBlueBubblesMessage,
+  resolveSupervisedBlueBubblesConfig,
+} from "./supervised.js";
 import { formatBlueBubblesChatTarget, isAllowedBlueBubblesSender } from "./targets.js";
 
 const DEFAULT_TEXT_LIMIT = 4000;
@@ -402,6 +406,29 @@ export async function processMessage(
   // Cache allowed inbound messages so later replies can resolve sender/body without
   // surfacing dropped content (allowlist/mention/command gating).
   cacheInboundMessage();
+
+  const supervisedRepliesConfig = !isGroup
+    ? await resolveSupervisedBlueBubblesConfig({ core, account })
+    : null;
+  if (supervisedRepliesConfig) {
+    try {
+      const { rank } = await queueSupervisedBlueBubblesMessage({
+        core,
+        account,
+        message,
+        messageShortId,
+        supervisorConfig: supervisedRepliesConfig,
+      });
+      logVerbose(
+        core,
+        runtime,
+        `supervised inbox intercepted sender=${message.senderId} rank=${rank}`,
+      );
+    } catch (err) {
+      runtime.error?.(`[bluebubbles] supervised inbox failed sender=${message.senderId}: ${String(err)}`);
+    }
+    return;
+  }
 
   const baseUrl = account.config.serverUrl?.trim();
   const password = account.config.password?.trim();

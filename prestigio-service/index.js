@@ -1,15 +1,61 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { generatePrepProposals } = require('./prep-proposals');
+const { resolveCommunicationTarget } = require('./resolve-communication-target');
 
 // --- Config ---
 const PORT = process.env.PORT || 3005;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_KEY;
+const PRESTIGIO_APP_BASE_URL = (process.env.PRESTIGIO_APP_BASE_URL || 'https://app.prestigio.la').replace(/\/+$/, '');
 const DATA_DIR = '/data';
-const REQUEST_FILE = path.join(DATA_DIR, 'query-request.json');
-const RESPONSE_FILE = path.join(DATA_DIR, 'query-response.json');
+const LEGACY_REQUEST_FILE = path.join(DATA_DIR, 'query-request.json');
+const LEGACY_RESPONSE_FILE = path.join(DATA_DIR, 'query-response.json');
+const REQUEST_DIR = path.join(DATA_DIR, 'query-requests');
+const RESPONSE_DIR = path.join(DATA_DIR, 'query-responses');
 const POLL_INTERVAL_MS = 1000;
+const REQUEST_STABILITY_MS = 250;
+const FILE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAILBOX_SEARCH_TIMEOUT_MS = 2500;
+const MAILBOX_HISTORY_TARGETS = [
+  {
+    label: 'stitch@prestigiocustom.com',
+    provider: 'microsoft',
+    kind: 'thread-by-subject',
+    urls: readEndpointList(
+      process.env.PRESTIGIO_STITCH_MAILBOX_SEARCH_URLS,
+      [
+        'http://stitch-mail-reader:3001/thread-by-subject',
+        'http://127.0.0.1:3001/thread-by-subject'
+      ]
+    )
+  },
+  {
+    label: 'chris@prestigiocustom.com',
+    provider: 'microsoft',
+    kind: 'thread-by-subject',
+    urls: readEndpointList(
+      process.env.PRESTIGIO_CHRIS_MAILBOX_SEARCH_URLS,
+      [
+        'http://stitch-mail-reader-chris:3001/thread-by-subject',
+        'http://127.0.0.1:3002/thread-by-subject'
+      ]
+    )
+  },
+  {
+    label: 'chris91744@gmail.com',
+    provider: 'gmail',
+    kind: 'mailbox-history',
+    urls: readEndpointList(
+      process.env.PRESTIGIO_GMAIL_MAILBOX_HISTORY_URLS,
+      [
+        'http://stitch-gmail-reader:3001/mailbox-history',
+        'http://127.0.0.1:3003/mailbox-history'
+      ]
+    )
+  }
+];
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('Missing SUPABASE_URL or SUPABASE_SERVICE_KEY');
@@ -21,6 +67,77 @@ const HEADERS = {
   'Authorization': `Bearer ${SUPABASE_KEY}`,
   'Content-Type': 'application/json'
 };
+
+function ensureBusDirs() {
+  fs.mkdirSync(REQUEST_DIR, { recursive: true });
+  fs.mkdirSync(RESPONSE_DIR, { recursive: true });
+}
+
+function writeJsonAtomic(filePath, data) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
+  fs.renameSync(tmp, filePath);
+}
+
+function sanitizeRequestId(value, fallback = 'query') {
+  const raw = String(value || '').trim();
+  const cleaned = raw.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120);
+  return cleaned || `${fallback}-${Date.now()}`;
+}
+
+function responsePathForRequest(requestId) {
+  return path.join(RESPONSE_DIR, `${sanitizeRequestId(requestId)}.json`);
+}
+
+function writeResponse(data, { requestId, legacy = false } = {}) {
+  const payload = requestId ? { ...data, requestId } : data;
+  if (requestId) {
+    writeJsonAtomic(responsePathForRequest(requestId), payload);
+  }
+  if (legacy || !requestId) {
+    writeJsonAtomic(LEGACY_RESPONSE_FILE, payload);
+  }
+}
+
+function isStableFile(filePath) {
+  const stat = fs.statSync(filePath);
+  return Date.now() - stat.mtimeMs >= REQUEST_STABILITY_MS;
+}
+
+function listPendingRequestFiles(dir) {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(name => name.endsWith('.json'))
+    .map(name => path.join(dir, name))
+    .filter(filePath => {
+      try {
+        return isStableFile(filePath);
+      } catch (_) {
+        return false;
+      }
+    })
+    .sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs);
+}
+
+function cleanupOldBusFiles() {
+  const cutoff = Date.now() - FILE_TTL_MS;
+  for (const dir of [REQUEST_DIR, RESPONSE_DIR]) {
+    if (!fs.existsSync(dir)) continue;
+    for (const name of fs.readdirSync(dir)) {
+      const filePath = path.join(dir, name);
+      try {
+        const stat = fs.statSync(filePath);
+        if (!stat.isFile()) continue;
+        if (stat.mtimeMs < cutoff) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (_) {
+        // best effort cleanup
+      }
+    }
+  }
+}
 
 const CATEGORY_ALIASES = {
   'soft goods': 'softgoods',
@@ -91,6 +208,82 @@ function extractSupabaseMessage(body) {
   }
   return String(body || 'Unknown Supabase error');
 }
+
+function readEndpointList(value, fallback) {
+  const configured = String(value || '')
+    .split(',')
+    .map(entry => entry.trim())
+    .filter(Boolean);
+  return configured.length > 0 ? configured : fallback;
+}
+
+async function postMailboxSearch(url, payload) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(MAILBOX_SEARCH_TIMEOUT_MS)
+  });
+
+  if (!res.ok) {
+    throw new Error('mailbox search failed: ' + res.status);
+  }
+
+  return res.json();
+}
+
+function createMailboxHistorySearcher(target) {
+  const searcher = async (input) => {
+    if (target.kind === 'mailbox-history') {
+      const context = input || {};
+      const payload = {
+        search: context.search || '',
+        aliases: Array.isArray(context.aliases) ? context.aliases : [],
+        participants: Array.isArray(context.participants) ? context.participants : []
+      };
+
+      for (const url of target.urls) {
+        try {
+          const data = await postMailboxSearch(url, payload);
+          if (Array.isArray(data?.recipients) && data.recipients.length > 0) {
+            return data;
+          }
+        } catch (_) {
+          // best effort mailbox fallback
+        }
+      }
+
+      return null;
+    }
+
+    const normalizedSubject = String(input || '').trim();
+    if (!normalizedSubject) return null;
+
+    for (const url of target.urls) {
+      try {
+        const data = await postMailboxSearch(url, { subject: normalizedSubject });
+        if (Array.isArray(data?.messages) && data.messages.length > 0) {
+          return data;
+        }
+      } catch (_) {
+        // best effort mailbox fallback
+      }
+    }
+
+    return null;
+  };
+
+  searcher.label = target.label;
+  searcher.provider = target.provider;
+  if (target.kind === 'mailbox-history') {
+    searcher.searchKind = 'contextual';
+  }
+  return searcher;
+}
+
+const MAILBOX_HISTORY_SEARCHERS = MAILBOX_HISTORY_TARGETS.map(target =>
+  createMailboxHistorySearcher(target)
+);
 
 // --- Supabase REST helper ---
 async function supabaseGet(tableOrView, params = '') {
@@ -276,7 +469,7 @@ async function quoteLookup(search, fields) {
   const [byQuoteNumber, bySidemark, byReference, byClient] = await Promise.all([
     supabaseGet('quotes', [
       quoteSelect,
-      `&quote_number=ilike.${exactQuoteNumber}`,
+      `&or=(quote_number.ilike.${exactQuoteNumber},xero_quote_number.ilike.${exactQuoteNumber})`,
       '&order=updated_at.desc',
       '&limit=100'
     ].join('')).catch(() => []),
@@ -346,7 +539,7 @@ async function quoteLookup(search, fields) {
       '&order=created_at.asc'
     ].join(''));
 
-    lineItemsByQuoteId[quote.id] = rows.map(item => formatQuoteLineItem(item, mode));
+    lineItemsByQuoteId[quote.id] = rows.map(item => formatQuoteLineItem(item, mode, quote.id));
   }));
 
   const results = merged.map(quote => formatQuoteRecord(
@@ -499,12 +692,9 @@ async function invoicedItems(search, fields) {
 async function readyForProduction(fields) {
   const mode = normalizeFields(fields);
 
-  // Step 1: Get fully ready items from readiness view
-  const ready = await supabaseGet('order_item_readiness', [
-    'select=id,sidemark,item_name,status,category,project_name,target_completion_date',
-    '&fully_ready=eq.true',
-    '&on_hold=eq.false',
-    '&status=eq.active',
+  const ready = await supabaseGet('order_item_operational_state', [
+    'select=id,sidemark,item_name,status,category,project_name,client_name,target_completion_date',
+    '&ready_for_production=eq.true',
     '&order=target_completion_date.asc.nullslast',
     '&limit=100'
   ].join(''));
@@ -513,39 +703,15 @@ async function readyForProduction(fields) {
     return makeQueryResult([], { count: 0, total: 0, truncated: false });
   }
 
-  // Step 2: Check which ones are NOT yet in production
   const ids = ready.map(r => r.id);
-  const productionCheck = await supabaseGet('order_items', [
-    `select=id,production_started_at,production_department`,
-    `&id=in.(${ids.join(',')})`,
-  ].join(''));
-
-  const startedIds = new Set(
-    productionCheck.filter(r => r.production_started_at).map(r => r.id)
-  );
-
-  // Step 3: Get client names and descriptions (not on readiness view)
-  const [clientLookup, descMap] = await Promise.all([
-    supabaseGet('order_items', [
-      `select=id,pos(projects(clients(name,company)))`,
-      `&id=in.(${ids.join(',')})`,
-    ].join('')),
-    mode === 'full' ? getDescriptionMap(ids) : Promise.resolve({})
-  ]);
-  const clientMap = {};
-  for (const row of clientLookup) {
-    const c = row.pos?.projects?.clients;
-    clientMap[row.id] = c?.name || c?.company || null;
-  }
+  const descMap = mode === 'full' ? await getDescriptionMap(ids) : {};
 
   const formatter = getFormatter(mode);
-  const results = ready
-    .filter(r => !startedIds.has(r.id))
-    .map(r => {
+  const results = ready.map(r => {
       const row = {
         ...r,
         _project: r.project_name,
-        _client: clientMap[r.id] || r.project_name
+        _client: r.client_name || r.project_name
       };
 
       if (mode === 'full') {
@@ -555,7 +721,7 @@ async function readyForProduction(fields) {
           sidemark: r.sidemark || r.item_name,
           category: r.category,
           project: r.project_name,
-          client: clientMap[r.id] || r.project_name,
+          client: r.client_name || r.project_name,
           target_completion: r.target_completion_date
         };
       }
@@ -639,9 +805,9 @@ async function prepInProgress(fields) {
 
 async function waitingOnFabric(fields) {
   const mode = normalizeFields(fields);
-  const rows = await supabaseGet('order_item_readiness', [
+  const rows = await supabaseGet('order_item_operational_state', [
     'select=id,sidemark,item_name,status,category,project_name,target_completion_date,',
-    'has_fabric_entries,fabric_inspected',
+    'client_name,has_fabric_entries,fabric_inspected',
     '&all_fabric_received=eq.false',
     '&status=eq.active',
     '&on_hold=eq.false',
@@ -650,17 +816,14 @@ async function waitingOnFabric(fields) {
   ].join(''));
 
   const ids = rows.map(r => r.id);
-  const [clientMap, descMap] = await Promise.all([
-    getClientMap(ids),
-    mode === 'full' ? getDescriptionMap(ids) : Promise.resolve({})
-  ]);
+  const descMap = mode === 'full' ? await getDescriptionMap(ids) : {};
 
   const formatter = getFormatter(mode);
   const results = rows.map(r => {
     const row = {
       ...r,
       _project: r.project_name,
-      _client: clientMap[r.id] || r.project_name
+      _client: r.client_name || r.project_name
     };
 
     if (mode === 'full') {
@@ -670,7 +833,7 @@ async function waitingOnFabric(fields) {
         sidemark: r.sidemark || r.item_name,
         category: r.category,
         project: r.project_name,
-        client: clientMap[r.id] || r.project_name,
+        client: r.client_name || r.project_name,
         target_completion: r.target_completion_date,
         has_any_fabric: r.has_fabric_entries,
         fabric_inspected: r.fabric_inspected
@@ -716,15 +879,26 @@ async function drawingsNeedingReview(fields) {
   const mode = normalizeFields(fields);
   const rows = await supabaseGet('drawings', [
     'select=id,drawing_type,status,version_number,created_at,',
-    'order_items(id,description,sidemark,item_name,category,',
-    'pos(projects(name,clients(name,company))))',
+    'order_items(id,description,sidemark,item_name,category,status,on_hold,',
+    'pos(projects(name,status,clients(name,company))))',
     '&status=eq.submitted',
     '&status=neq.superseded',
     '&order=created_at.asc',
     '&limit=50'
   ].join(''));
 
-  const results = rows.map(r => {
+  const actionableRows = rows.filter(r => {
+    const item = r.order_items || {};
+    const project = item.pos?.projects || {};
+    const itemStatus = String(item.status || '').trim().toLowerCase();
+    const projectStatus = String(project.status || '').trim().toLowerCase();
+
+    return itemStatus === 'active'
+      && item.on_hold !== true
+      && (!projectStatus || projectStatus === 'active');
+  });
+
+  const results = actionableRows.map(r => {
     const lean = {
       drawing_type: r.drawing_type,
       version: r.version_number,
@@ -790,9 +964,12 @@ async function readyForPickup(fields) {
 async function overdueItems(fields) {
   const mode = normalizeFields(fields);
   const today = new Date().toISOString().split('T')[0];
-  const rows = await supabaseGet('order_item_readiness', [
+  const rows = await supabaseGet('order_item_operational_state', [
     'select=id,sidemark,item_name,status,category,project_name,target_completion_date,',
-    'on_hold,fully_ready,all_fabric_received,drawing_approved,frame_ready',
+    'client_name,on_hold,fully_ready,all_fabric_received,drawing_approved,frame_ready,',
+    'canonical_state_available,prep_bucket,operational_blocker_keys,external_blocker_keys,missing_spec_keys,',
+    'fabric_inspected,knit_backing_done,direction_confirmed,seaming_cleared,seaming_status,frame_status,',
+    'client_item_received,client_item_needed,finishing_needed,finishing_received',
     `&target_completion_date=lt.${today}`,
     '&status=eq.active',
     '&on_hold=eq.false',
@@ -801,10 +978,7 @@ async function overdueItems(fields) {
   ].join(''));
 
   const ids = rows.map(r => r.id);
-  const [clientMap, descMap] = await Promise.all([
-    getClientMap(ids),
-    mode === 'full' ? getDescriptionMap(ids) : Promise.resolve({})
-  ]);
+  const descMap = mode === 'full' ? await getDescriptionMap(ids) : {};
 
   const formatter = getFormatter(mode);
   const results = rows.map(r => {
@@ -813,7 +987,7 @@ async function overdueItems(fields) {
     const row = {
       ...r,
       _project: r.project_name,
-      _client: clientMap[r.id] || r.project_name
+      _client: r.client_name || r.project_name
     };
 
     if (mode === 'full') {
@@ -823,7 +997,7 @@ async function overdueItems(fields) {
         sidemark: r.sidemark || r.item_name,
         category: r.category,
         project: r.project_name,
-        client: clientMap[r.id] || r.project_name,
+        client: r.client_name || r.project_name,
         target_completion: r.target_completion_date,
         days_overdue: daysOverdue,
         blockers
@@ -861,6 +1035,18 @@ async function projectOverview(search, fields) {
   const projectId = summaries[0].project_id;
   const summary = summaries[0];
   const summaryClient = summary.client_name || summary.client_company || null;
+  let projectIdentity = null;
+  try {
+    const projectRows = await supabaseGet('projects', [
+      'select=id,name,client_id,clients(id,name,company)',
+      `&id=eq.${projectId}`,
+      '&limit=1'
+    ].join(''));
+    projectIdentity = Array.isArray(projectRows) ? projectRows[0] : projectRows;
+    if (projectIdentity?.client_id) {
+      summary.client_id = projectIdentity.client_id;
+    }
+  } catch (_) { /* best effort identity enrichment */ }
 
   // Get items via PO path
   const items = await supabaseGet('order_items', [
@@ -927,6 +1113,12 @@ async function projectOverview(search, fields) {
 
   return makeQueryResult({
     summary,
+    project_identity: projectIdentity ? {
+      project_id: projectIdentity.id,
+      project_name: projectIdentity.name,
+      client_id: projectIdentity.client_id,
+      client_name: projectIdentity.clients?.company || projectIdentity.clients?.name || null
+    } : null,
     items: formattedItems
   }, {
     count: formattedItems.length,
@@ -1160,6 +1352,33 @@ async function departmentLoad() {
   return counts;
 }
 
+async function refreshPrepProposals() {
+  const payload = await generatePrepProposals();
+  return makeQueryResult(payload, {
+    count: Array.isArray(payload.proposals) ? payload.proposals.length : 0,
+    total: Array.isArray(payload.proposals) ? payload.proposals.length : 0,
+    truncated: false
+  });
+}
+
+async function resolveCommunicationTargetQuery(search) {
+  if (!search) throw new Error('search param required');
+
+  const payload = await resolveCommunicationTarget(search, {
+    itemLookup,
+    projectOverview,
+    clientItems,
+    projectContacts,
+    mailboxSearchers: MAILBOX_HISTORY_SEARCHERS
+  });
+
+  return makeQueryResult(payload, {
+    count: Array.isArray(payload.recipients) ? payload.recipients.length : 0,
+    total: Array.isArray(payload.recipients) ? payload.recipients.length : 0,
+    truncated: false
+  });
+}
+
 // --- Helpers ---
 
 function makeQueryResult(data, meta = {}) {
@@ -1296,7 +1515,7 @@ function buildSuccessResponse(type, params, result) {
   return payload;
 }
 
-function formatQuoteLineItem(item, fields) {
+function formatQuoteLineItem(item, fields, quoteId = null) {
   const mode = normalizeFields(fields);
   const leanItem = {
     item_name: item.item_name || item.sidemark || null,
@@ -1307,7 +1526,9 @@ function formatQuoteLineItem(item, fields) {
     skirt_style: item.skirt_style,
     contrast_welt: item.contrast_welt,
     welting_type: item.welting_type,
-    estimated_fabric_yardage: item.estimated_fabric_yardage
+    estimated_fabric_yardage: item.estimated_fabric_yardage,
+    app_url: quoteItemEditUrl(quoteId, item.id),
+    quote_item_url: quoteItemEditUrl(quoteId, item.id)
   };
 
   if (mode === 'write') {
@@ -1335,10 +1556,20 @@ function formatQuoteLineItem(item, fields) {
   };
 }
 
+function quoteEditUrl(quoteId) {
+  return quoteId ? `${PRESTIGIO_APP_BASE_URL}/quote-v2.html?edit=${encodeURIComponent(quoteId)}` : null;
+}
+
+function quoteItemEditUrl(quoteId, itemId) {
+  if (!quoteId || !itemId) return null;
+  return `${quoteEditUrl(quoteId)}&editItem=${encodeURIComponent(itemId)}`;
+}
+
 function formatQuoteRecord(quote, lineItems, fields) {
   const mode = normalizeFields(fields);
   const leanRecord = {
     quote_number: quote.quote_number,
+    display_quote_number: quote.xero_quote_number || quote.quote_number || null,
     sidemark: quote.sidemark || null,
     reference: quote.reference || null,
     status: quote.status || null,
@@ -1346,6 +1577,8 @@ function formatQuoteRecord(quote, lineItems, fields) {
     deposit_amount: quote.deposit_amount,
     client_name: quote.clients?.name || quote.clients?.company || null,
     project_name: quote.projects?.name || null,
+    app_url: quoteEditUrl(quote.id),
+    quote_url: quoteEditUrl(quote.id),
     line_items: lineItems
   };
 
@@ -1365,6 +1598,7 @@ function formatQuoteRecord(quote, lineItems, fields) {
   return {
     id: quote.id,
     quote_number: quote.quote_number,
+    display_quote_number: quote.xero_quote_number || quote.quote_number || null,
     sidemark: quote.sidemark,
     reference: quote.reference,
     status: quote.status,
@@ -1372,6 +1606,8 @@ function formatQuoteRecord(quote, lineItems, fields) {
     deposit_amount: quote.deposit_amount,
     xero_quote_id: quote.xero_quote_id || null,
     xero_quote_number: quote.xero_quote_number || null,
+    app_url: quoteEditUrl(quote.id),
+    quote_url: quoteEditUrl(quote.id),
     client_name: quote.clients?.name || quote.clients?.company || null,
     project_name: quote.projects?.name || null,
     created_at: quote.created_at,
@@ -1425,11 +1661,12 @@ async function sumAmountMap(tableName, ids) {
 
 async function getReadinessMap(ids) {
   if (ids.length === 0) return {};
-  const rows = await supabaseGet('order_item_readiness', [
+  const rows = await supabaseGet('order_item_operational_state', [
     'select=id,drawing_approved,all_fabric_received,fabric_inspected,',
     'knit_backing_done,direction_confirmed,seaming_cleared,',
     'frame_ready,frame_status,client_item_received,client_item_needed,',
-    'finishing_needed,finishing_received,fully_ready,on_hold',
+    'finishing_needed,finishing_received,fully_ready,on_hold,',
+    'canonical_state_available,prep_bucket,operational_blocker_keys,external_blocker_keys,missing_spec_keys',
     `&id=in.(${ids.join(',')})`,
   ].join(''));
   const map = {};
@@ -1456,6 +1693,34 @@ function getCategoryCapabilities(category) {
 
 function deriveBlockers(r, category) {
   if (!r) return [];
+  if (Array.isArray(r.operational_blocker_keys) && r.operational_blocker_keys.length > 0) {
+    const labelMap = {
+      drawing_not_approved: 'Drawing not approved',
+      frame_drawing_pending: 'Frame drawing pending',
+      frame_po_needed: 'Frame PO not sent',
+      frame_not_received: 'Frame not received',
+      fabric_missing: 'Fabric missing',
+      fabric_unlinked: 'Fabric not linked',
+      fabric_not_received: 'Fabric not received',
+      fabric_not_inspected: 'Fabric not inspected',
+      knit_backing_pending: 'Knit backing not done',
+      direction_pending: 'Fabric direction not confirmed',
+      seaming_confirmation: 'Seaming not cleared',
+      seaming_sample: 'Seaming sample needed',
+      client_item_overdue: 'Client item overdue',
+      client_item_pending: 'Client item not received',
+      finishing_sample: 'Finish sample needed',
+      finishing_send: 'Send to finisher',
+      finishing_waiting: 'Awaiting finishing',
+      fabric_review: 'Fabric review missing',
+      fabric_review_revision: 'Fabric review needs revision'
+    };
+    return r.operational_blocker_keys.map((key) => {
+      if (labelMap[key]) return labelMap[key];
+      return String(key || '').replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+    });
+  }
+
   const capabilities = getCategoryCapabilities(category);
   const blockers = [];
 
@@ -1523,6 +1788,8 @@ async function handleQuery(type, params = {}, fields = 'lean') {
     case 'client_items': return clientItems(params.search, mode);
     case 'department_load': return departmentLoad();
     case 'project_contacts': return projectContacts(params.search, mode);
+    case 'resolve_communication_target': return resolveCommunicationTargetQuery(params.search);
+    case 'refresh_prep_proposals': return refreshPrepProposals();
     default: throw new Error(`Unknown query type: ${type}`);
   }
 }
@@ -1594,71 +1861,116 @@ function normalizeQueryResponse(type, result) {
   return { results: data };
 }
 
-// --- Write response atomically ---
-
-function writeResponse(data) {
-  const tmp = RESPONSE_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(data, null, 2));
-  fs.renameSync(tmp, RESPONSE_FILE);
-}
-
 // --- File watcher ---
 
-let lastMtime = 0;
+let lastLegacyMtime = 0;
+let watcherBusy = false;
+let lastCleanupAt = 0;
 
-function checkForRequest() {
+async function processQueryRequest(req, { requestId, legacy = false } = {}) {
+  if (req.action !== 'query' || !req.type) {
+    writeResponse({
+      success: false,
+      error: 'Invalid request: action must be "query" and type is required',
+      timestamp: new Date().toISOString()
+    }, { requestId, legacy });
+    return;
+  }
+
+  const params = { ...(req.params || {}) };
+  const fields = normalizeFields(params.fields || req.fields || 'lean');
+  params.fields = fields;
+
+  console.log(`[query] ${req.type} ${params.search || params.department || ''} (${fields})`);
+
   try {
-    if (!fs.existsSync(REQUEST_FILE)) return;
-    const stat = fs.statSync(REQUEST_FILE);
-    const mtime = stat.mtimeMs;
-    if (mtime <= lastMtime) return;
-    lastMtime = mtime;
-
-    const raw = fs.readFileSync(REQUEST_FILE, 'utf8');
-    const req = JSON.parse(raw);
-
-    if (req.action !== 'query' || !req.type) {
-      writeResponse({
-        success: false,
-        error: 'Invalid request: action must be "query" and type is required',
-        timestamp: new Date().toISOString()
-      });
-      return;
-    }
-
-    const params = { ...(req.params || {}) };
-    const fields = normalizeFields(params.fields || req.fields || 'lean');
-    params.fields = fields;
-
-    console.log(`[query] ${req.type} ${params.search || params.department || ''} (${fields})`);
-
-    handleQuery(req.type, params, fields)
-      .then(result => {
-        const payload = buildSuccessResponse(req.type, params, result);
-        const isArray = Array.isArray(payload.results);
-        writeResponse(payload);
-        const resultLabel = typeof payload.count === 'number'
-          ? payload.count
-          : isArray
-            ? payload.results.length
-            : 'object';
-        console.log(`[done] ${req.type}: ${resultLabel} results`);
-      })
-      .catch(err => {
-        console.error(`[error] ${req.type}: ${err.message}`);
-        writeResponse({
-          success: false,
-          query_type: req.type,
-          error: parseError(err),
-          timestamp: new Date().toISOString()
-        });
-      });
+    const result = await handleQuery(req.type, params, fields);
+    const payload = buildSuccessResponse(req.type, params, result);
+    const isArray = Array.isArray(payload.results);
+    writeResponse(payload, { requestId, legacy });
+    const resultLabel = typeof payload.count === 'number'
+      ? payload.count
+      : isArray
+        ? payload.results.length
+        : 'object';
+    console.log(`[done] ${req.type}: ${resultLabel} results`);
   } catch (err) {
-    console.error(`[watcher error] ${err.message}`);
+    console.error(`[error] ${req.type}: ${err.message}`);
+    writeResponse({
+      success: false,
+      query_type: req.type,
+      error: parseError(err),
+      timestamp: new Date().toISOString()
+    }, { requestId, legacy });
   }
 }
 
-setInterval(checkForRequest, POLL_INTERVAL_MS);
+function maybeCleanupBusFiles() {
+  if (Date.now() - lastCleanupAt < 60_000) return;
+  cleanupOldBusFiles();
+  lastCleanupAt = Date.now();
+}
+
+async function processLegacyRequest() {
+  if (!fs.existsSync(LEGACY_REQUEST_FILE)) return;
+  const stat = fs.statSync(LEGACY_REQUEST_FILE);
+  const mtime = stat.mtimeMs;
+  if (mtime <= lastLegacyMtime) return;
+  if (!isStableFile(LEGACY_REQUEST_FILE)) return;
+  lastLegacyMtime = mtime;
+
+  const raw = fs.readFileSync(LEGACY_REQUEST_FILE, 'utf8');
+  const req = JSON.parse(raw);
+  const requestId = req.requestId ? sanitizeRequestId(req.requestId) : undefined;
+  await processQueryRequest(req, { requestId, legacy: true });
+}
+
+async function processRequestFile(filePath) {
+  const requestId = sanitizeRequestId(path.basename(filePath, '.json'));
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    const req = JSON.parse(raw);
+    await processQueryRequest(req, { requestId, legacy: false });
+  } catch (err) {
+    console.error(`[watcher error] ${err.message}`);
+    writeResponse({
+      success: false,
+      error: parseError(err),
+      timestamp: new Date().toISOString()
+    }, { requestId, legacy: false });
+  } finally {
+    try {
+      fs.unlinkSync(filePath);
+    } catch (_) {
+      // best effort cleanup
+    }
+  }
+}
+
+async function checkForRequest() {
+  if (watcherBusy) return;
+  watcherBusy = true;
+  try {
+    ensureBusDirs();
+    maybeCleanupBusFiles();
+
+    for (const filePath of listPendingRequestFiles(REQUEST_DIR)) {
+      await processRequestFile(filePath);
+    }
+
+    await processLegacyRequest();
+  } catch (err) {
+    console.error(`[watcher error] ${err.message}`);
+  } finally {
+    watcherBusy = false;
+  }
+}
+
+setInterval(() => {
+  checkForRequest().catch(err => {
+    console.error(`[watcher error] ${err.message}`);
+  });
+}, POLL_INTERVAL_MS);
 
 // --- HTTP server for health + direct queries ---
 
@@ -1699,12 +2011,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/prep-proposals/refresh' && (req.method === 'POST' || req.method === 'GET')) {
+    try {
+      const result = await refreshPrepProposals();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(buildSuccessResponse('refresh_prep_proposals', {}, result), null, 2));
+    } catch (err) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: parseError(err) }));
+    }
+    return;
+  }
+
   res.writeHead(404);
   res.end('Not found');
 });
 
 server.listen(PORT, () => {
   console.log(`Prestigio query service running on port ${PORT}`);
-  console.log(`Watching ${REQUEST_FILE} for queries`);
+  console.log(`Watching ${LEGACY_REQUEST_FILE} and ${REQUEST_DIR} for queries`);
   console.log(`Health: http://localhost:${PORT}/health`);
 });
