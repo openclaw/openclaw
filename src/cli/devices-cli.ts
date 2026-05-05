@@ -48,6 +48,7 @@ type DeviceTokenSummary = {
   role: string;
   scopes?: string[];
   revokedAtMs?: number;
+  lastUsedAtMs?: number;
 };
 
 type PendingDevice = {
@@ -55,6 +56,10 @@ type PendingDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];
@@ -67,6 +72,10 @@ type PairedDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  platform?: string;
+  deviceFamily?: string;
+  clientId?: string;
+  clientMode?: string;
   roles?: string[];
   scopes?: string[];
   remoteIp?: string;
@@ -348,6 +357,51 @@ function formatTokenSummary(tokens: DeviceTokenSummary[] | undefined) {
   return parts.join(", ");
 }
 
+function formatClientLabel(clientId?: string, clientMode?: string): string {
+  const id = typeof clientId === "string" ? clientId.trim() : "";
+  const mode = typeof clientMode === "string" ? clientMode.trim() : "";
+  if (id && mode) {
+    return `${id} (${mode})`;
+  }
+  return id || mode;
+}
+
+function formatOsLabel(platform?: string, deviceFamily?: string): string {
+  const p = typeof platform === "string" ? platform.trim() : "";
+  const f = typeof deviceFamily === "string" ? deviceFamily.trim() : "";
+  if (p && f) {
+    return `${p} / ${f}`;
+  }
+  return p || f;
+}
+
+function maxActiveTokenLastUsedAtMs(tokens: DeviceTokenSummary[] | undefined): number | undefined {
+  if (!tokens?.length) {
+    return undefined;
+  }
+  let max: number | undefined;
+  for (const t of tokens) {
+    if (t.revokedAtMs) {
+      continue;
+    }
+    if (typeof t.lastUsedAtMs !== "number" || !Number.isFinite(t.lastUsedAtMs)) {
+      continue;
+    }
+    if (max === undefined || t.lastUsedAtMs > max) {
+      max = t.lastUsedAtMs;
+    }
+  }
+  return max;
+}
+
+function formatLastActiveFromTokens(tokens: DeviceTokenSummary[] | undefined): string {
+  const lastUsedAtMs = maxActiveTokenLastUsedAtMs(tokens);
+  if (lastUsedAtMs === undefined) {
+    return "";
+  }
+  return formatTimeAgo(Date.now() - lastUsedAtMs);
+}
+
 function formatPendingDeviceIdentity(request: PendingDevice): string {
   const displayName = normalizeOptionalString(request.displayName);
   if (displayName) {
@@ -526,22 +580,26 @@ export function registerDevicesCli(program: Command) {
             renderTable({
               width: tableWidth,
               columns: [
-                { key: "Device", header: "Device", minWidth: 16, flex: true },
+                { key: "Device ID", header: "Device ID", minWidth: 14, flex: true },
+                { key: "Name", header: "Name", minWidth: 12, flex: true },
+                { key: "Client", header: "Client", minWidth: 14, flex: true },
+                { key: "OS", header: "OS", minWidth: 16, flex: true },
+                { key: "IP", header: "IP", minWidth: 12 },
+                { key: "Last active", header: "Last active", minWidth: 11 },
                 { key: "Roles", header: "Roles", minWidth: 12, flex: true },
                 { key: "Scopes", header: "Scopes", minWidth: 12, flex: true },
                 { key: "Tokens", header: "Tokens", minWidth: 12, flex: true },
-                { key: "IP", header: "IP", minWidth: 12 },
               ],
               rows: list.paired.map((device) => ({
-                Device: sanitizeForLog(device.displayName || device.deviceId),
-                Roles: device.roles?.length
-                  ? device.roles.map((role) => sanitizeForLog(role)).join(", ")
-                  : "",
-                Scopes: device.scopes?.length
-                  ? device.scopes.map((scope) => sanitizeForLog(scope)).join(", ")
-                  : "",
+                "Device ID": device.deviceId,
+                Name: device.displayName?.trim() ? device.displayName.trim() : "",
+                Client: formatClientLabel(device.clientId, device.clientMode),
+                OS: formatOsLabel(device.platform, device.deviceFamily),
+                IP: device.remoteIp ?? "",
+                "Last active": formatLastActiveFromTokens(device.tokens),
+                Roles: device.roles?.length ? device.roles.join(", ") : "",
+                Scopes: device.scopes?.length ? device.scopes.join(", ") : "",
                 Tokens: formatTokenSummary(device.tokens),
-                IP: device.remoteIp ? sanitizeForLog(device.remoteIp) : "",
               })),
             }).trimEnd(),
           );
@@ -555,7 +613,7 @@ export function registerDevicesCli(program: Command) {
   devicesCallOpts(
     devices
       .command("remove")
-      .description("Remove a paired device entry")
+      .description("Remove a paired device entry (use devices list for Device ID values)")
       .argument("<deviceId>", "Paired device id")
       .action(async (deviceId: string, opts: DevicesRpcOpts) => {
         const trimmed = deviceId.trim();
