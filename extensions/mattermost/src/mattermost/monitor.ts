@@ -1236,6 +1236,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       logVerboseMessage("mattermost: drop post (missing message id)");
       return;
     }
+
+    if (
+      post.id &&
+      (!normalizeOptionalString(post.root_id) ||
+        !(Array.isArray(post.file_ids) && post.file_ids.length > 0))
+    ) {
+      try {
+        const hydratedPost = await client.request<MattermostPost>(`/posts/${post.id}`);
+        if (hydratedPost && typeof hydratedPost === "object") {
+          post = { ...post, ...hydratedPost };
+        }
+      } catch (err) {
+        logVerboseMessage(`mattermost: post hydration failed post=${post.id}: ${String(err)}`);
+      }
+    }
+
     const replayResult = await processMattermostReplayGuardedPost({
       accountId: account.accountId,
       messageIds: allMessageIds,
