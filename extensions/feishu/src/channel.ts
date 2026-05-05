@@ -708,6 +708,22 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
+            if (Array.isArray(ctx.params.payloads)) {
+              const runtime = await loadFeishuChannelRuntime();
+              const result = await runtime.sendOpenClawEnvelopeFeishu({
+                cfg: ctx.cfg,
+                envelope: { ...ctx.params, to },
+                accountId: ctx.accountId ?? undefined,
+                replyToMessageId,
+                replyInThread: ctx.action === "thread-reply",
+              });
+              return jsonActionResult({
+                ok: true,
+                channel: "feishu",
+                action: ctx.action,
+                ...result,
+              });
+            }
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);

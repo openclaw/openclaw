@@ -61,6 +61,8 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let buildFeishuV3MessageBodyFromOpenClawEnvelope: typeof import("./send.js").buildFeishuV3MessageBodyFromOpenClawEnvelope;
+let sendOpenClawEnvelopeFeishu: typeof import("./send.js").sendOpenClawEnvelopeFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("getMessageFeishu", () => {
@@ -71,6 +73,8 @@ describe("getMessageFeishu", () => {
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      buildFeishuV3MessageBodyFromOpenClawEnvelope,
+      sendOpenClawEnvelopeFeishu,
       sendMessageFeishu,
     } = await import("./send.js"));
   });
@@ -129,6 +133,106 @@ describe("getMessageFeishu", () => {
     });
     expect(mockConvertMarkdownTables).toHaveBeenCalledWith("hello", "preserve");
     expect(result).toEqual({ messageId: "om_send", chatId: "oc_send" });
+  });
+
+  it("serializes OpenClaw text envelopes into Feishu v3 message bodies", async () => {
+    const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
+      payloads: [{ text: "hello", replyToTag: false, audioAsVoice: false }],
+      to: "oc_group_1",
+      channel: "feishu",
+    });
+
+    expect(body).toEqual({
+      receive_id: "oc_group_1",
+      receive_id_type: "chat_id",
+      msg_type: "text",
+      content: JSON.stringify({ text: "hello" }),
+    });
+    expect(body).not.toHaveProperty("payloads");
+    expect(body).not.toHaveProperty("channel");
+    expect(body).not.toHaveProperty("replyToTag");
+    expect(body).not.toHaveProperty("audioAsVoice");
+  });
+
+  it("preserves Chinese text and maps user-prefixed Feishu open IDs", async () => {
+    const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
+      payloads: [{ text: "设置今日突破任务" }],
+      to: "user:ou_user_1",
+      channel: "feishu",
+    });
+
+    expect(body.receive_id).toBe("ou_user_1");
+    expect(body.receive_id_type).toBe("open_id");
+    expect(body.msg_type).toBe("text");
+    expect(JSON.parse(body.content)).toEqual({ text: "设置今日突破任务" });
+  });
+
+  it("preserves explicit receive_id_type on OpenClaw envelopes", () => {
+    const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
+      payloads: [{ text: "hello" }],
+      to: "oc_group_1",
+      receive_id_type: "open_id",
+    });
+
+    expect(body.receive_id).toBe("oc_group_1");
+    expect(body.receive_id_type).toBe("open_id");
+  });
+
+  it("stringifies interactive card envelope content exactly once", () => {
+    const content = JSON.stringify({ type: "template", data: { template_id: "tpl_1" } });
+    const body = buildFeishuV3MessageBodyFromOpenClawEnvelope({
+      payloads: [{ msg_type: "interactive", content }],
+      to: "oc_group_1",
+    });
+
+    expect(body).toEqual({
+      receive_id: "oc_group_1",
+      receive_id_type: "chat_id",
+      msg_type: "interactive",
+      content,
+    });
+    expect(JSON.parse(body.content)).toEqual({
+      type: "template",
+      data: { template_id: "tpl_1" },
+    });
+  });
+
+  it("sends OpenClaw envelopes through the Feishu create API without internal-only fields", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_env" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendOpenClawEnvelopeFeishu({
+      cfg: {} as ClawdbotConfig,
+      envelope: {
+        payloads: [{ text: "hello", replyToTag: false, audioAsVoice: false }],
+        to: "user:ou_user_1",
+        channel: "feishu",
+      },
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      params: { receive_id_type: "open_id" },
+      data: {
+        receive_id: "ou_user_1",
+        msg_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    });
+    expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("payloads");
+    expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("channel");
+    expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("replyToTag");
+    expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("audioAsVoice");
+    expect(typeof create.mock.calls[0][0].data.content).toBe("string");
+    expect(result).toEqual({ messageId: "om_env", chatId: "ou_user_1" });
   });
 
   it("extracts text content from interactive card elements", async () => {

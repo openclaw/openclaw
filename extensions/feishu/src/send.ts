@@ -13,11 +13,13 @@ import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import { normalizeFeishuTarget, resolveReceiveIdType } from "./targets.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
+const FEISHU_RECEIVE_ID_TYPES = new Set(["chat_id", "email", "open_id", "union_id", "user_id"]);
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
   "green",
@@ -65,6 +67,105 @@ function isWithdrawnReplyError(err: unknown): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+type FeishuReceiveIdType = "chat_id" | "email" | "open_id" | "union_id" | "user_id";
+
+type FeishuV3MessageBody = {
+  receive_id: string;
+  receive_id_type: FeishuReceiveIdType;
+  msg_type: "interactive" | "text";
+  content: string;
+};
+
+function readStringField(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function readExplicitReceiveIdType(
+  record: Record<string, unknown>,
+): FeishuReceiveIdType | undefined {
+  const raw = readStringField(record, ["receive_id_type", "receiveIdType"]);
+  return raw && FEISHU_RECEIVE_ID_TYPES.has(raw) ? (raw as FeishuReceiveIdType) : undefined;
+}
+
+function stringifyFeishuContentOnce(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function firstOpenClawEnvelopePayload(
+  envelope: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const payloads = envelope.payloads;
+  if (Array.isArray(payloads) && isRecord(payloads[0])) {
+    return payloads[0];
+  }
+  return isRecord(envelope.payload) ? envelope.payload : null;
+}
+
+function resolveFeishuEnvelopeMessage(
+  envelope: Record<string, unknown>,
+): Pick<FeishuV3MessageBody, "content" | "msg_type"> | null {
+  const payload = firstOpenClawEnvelopePayload(envelope);
+  for (const candidate of [payload, envelope]) {
+    if (!candidate) {
+      continue;
+    }
+    if (candidate.msg_type === "interactive" || candidate.msgType === "interactive") {
+      if ("content" in candidate) {
+        return {
+          msg_type: "interactive",
+          content: stringifyFeishuContentOnce(candidate.content),
+        };
+      }
+      if (isRecord(candidate.card)) {
+        return {
+          msg_type: "interactive",
+          content: JSON.stringify(candidate.card),
+        };
+      }
+    }
+    const text = readStringField(candidate, ["text", "message"]);
+    if (text !== undefined) {
+      return {
+        msg_type: "text",
+        content: JSON.stringify({ text }),
+      };
+    }
+  }
+  return null;
+}
+
+export function buildFeishuV3MessageBodyFromOpenClawEnvelope(
+  envelope: Record<string, unknown>,
+): FeishuV3MessageBody {
+  const rawTarget = readStringField(envelope, ["receive_id", "receiveId", "to", "target"]);
+  const receiveId = rawTarget ? normalizeFeishuTarget(rawTarget) : null;
+  if (!rawTarget || !receiveId) {
+    throw new Error("Feishu outbound envelope requires a receive_id or to target.");
+  }
+  const message = resolveFeishuEnvelopeMessage(envelope);
+  if (!message) {
+    throw new Error("Feishu outbound envelope requires text or an interactive card payload.");
+  }
+  const withoutProviderPrefix = rawTarget.replace(/^(feishu|lark):/i, "");
+  return {
+    receive_id: receiveId,
+    receive_id_type:
+      readExplicitReceiveIdType(envelope) ??
+      (resolveReceiveIdType(withoutProviderPrefix) as FeishuReceiveIdType),
+    msg_type: message.msg_type,
+    content: message.content,
+  };
 }
 
 type FeishuCreateMessageClient = {
@@ -601,6 +702,40 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
     directParams,
     directErrorPrefix: "Feishu card send failed",
     replyErrorPrefix: "Feishu card reply failed",
+  });
+}
+
+export async function sendOpenClawEnvelopeFeishu(params: {
+  cfg: ClawdbotConfig;
+  envelope: Record<string, unknown>;
+  accountId?: string;
+  replyToMessageId?: string;
+  replyInThread?: boolean;
+}): Promise<FeishuSendResult> {
+  const body = buildFeishuV3MessageBodyFromOpenClawEnvelope(params.envelope);
+  const rawTarget = readStringField(params.envelope, ["receive_id", "receiveId", "to", "target"]);
+  if (!rawTarget) {
+    throw new Error("Feishu outbound envelope requires a receive_id or to target.");
+  }
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg: params.cfg,
+    to: rawTarget,
+    accountId: params.accountId,
+  });
+  const directParams = {
+    receiveId,
+    receiveIdType: readExplicitReceiveIdType(params.envelope) ?? receiveIdType,
+    content: body.content,
+    msgType: body.msg_type,
+  };
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId: params.replyToMessageId,
+    replyInThread: params.replyInThread,
+    content: body.content,
+    msgType: body.msg_type,
+    directParams,
+    directErrorPrefix: "Feishu send failed",
+    replyErrorPrefix: "Feishu reply failed",
   });
 }
 

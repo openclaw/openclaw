@@ -18,6 +18,7 @@ const removePinFeishuMock = vi.hoisted(() => vi.fn());
 const getChatInfoMock = vi.hoisted(() => vi.fn());
 const getChatMembersMock = vi.hoisted(() => vi.fn());
 const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
+const sendOpenClawEnvelopeFeishuMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
@@ -48,6 +49,7 @@ vi.mock("./channel.runtime.js", () => ({
     removeReactionFeishu: removeReactionFeishuMock,
     sendCardFeishu: sendCardFeishuMock,
     sendMessageFeishu: sendMessageFeishuMock,
+    sendOpenClawEnvelopeFeishu: sendOpenClawEnvelopeFeishuMock,
     feishuOutbound: {
       sendText: vi.fn(),
       sendMedia: feishuOutboundSendMediaMock,
@@ -305,6 +307,39 @@ describe("feishuPlugin actions", () => {
       replyInThread: false,
     });
     expect(result?.details).toMatchObject({ ok: true, messageId: "om_sent", chatId: "oc_group_1" });
+  });
+
+  it("routes OpenClaw payload envelopes through the Feishu v3 envelope serializer", async () => {
+    sendOpenClawEnvelopeFeishuMock.mockResolvedValueOnce({
+      messageId: "om_env",
+      chatId: "oc_group_1",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "oc_group_1",
+        channel: "feishu",
+        payloads: [{ text: "hello", replyToTag: false, audioAsVoice: false }],
+      },
+      cfg,
+      accountId: "main",
+      toolContext: {},
+    } as never);
+
+    expect(sendOpenClawEnvelopeFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      envelope: {
+        to: "oc_group_1",
+        channel: "feishu",
+        payloads: [{ text: "hello", replyToTag: false, audioAsVoice: false }],
+      },
+      accountId: "main",
+      replyToMessageId: undefined,
+      replyInThread: false,
+    });
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(result?.details).toMatchObject({ ok: true, messageId: "om_env", chatId: "oc_group_1" });
   });
 
   it("renders presentation messages as cards", async () => {
