@@ -349,6 +349,27 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  const drift = status.pluginVersionDrift;
+  if (drift && drift.drifts.length > 0) {
+    defaultRuntime.log(
+      warnText(
+        `Plugin version drift: ${drift.drifts.length} externalized plugin${
+          drift.drifts.length === 1 ? "" : "s"
+        } not on gateway ${drift.gatewayVersion}`,
+      ),
+    );
+    for (const entry of drift.drifts) {
+      const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
+      defaultRuntime.log(
+        `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
+      );
+    }
+    defaultRuntime.log(
+      `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+    );
+    spacer();
+  }
+
   if (extraServices.length > 0) {
     defaultRuntime.error(
       errorText(

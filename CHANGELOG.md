@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/status: surface externalized npm/ClawHub plugin version drift in `openclaw [gateway] status --deep` so a gateway update via `npm install -g openclaw@<v>` (which intentionally does not sync plugin packages) no longer leaves agents running silently mismatched against `@openclaw/whatsapp`, `@openclaw/discord`, or other ext-npm plugins. Bundled plugins ship with the gateway and are skipped from the check.
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
