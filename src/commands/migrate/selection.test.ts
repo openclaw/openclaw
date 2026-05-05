@@ -8,6 +8,7 @@ import {
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
   MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
   MIGRATION_SKILL_NOT_SELECTED_REASON,
+  reconcileInteractiveMigrationShortcutValues,
   reconcileInteractiveMigrationSkillToggleValues,
   resolveInteractiveMigrationSkillSelection,
 } from "./selection.js";
@@ -185,6 +186,15 @@ describe("applyMigrationSkillSelection", () => {
       action: "select",
       selectedItemIds: new Set(["skill:alpha", "skill:beta"]),
     });
+    expect(
+      resolveInteractiveMigrationSkillSelection(items, [
+        MIGRATION_SKILL_SELECTION_SKIP,
+        "skill:alpha",
+      ]),
+    ).toEqual({
+      action: "select",
+      selectedItemIds: new Set(["skill:alpha"]),
+    });
   });
 
   it("reconciles live interactive bulk toggle checkbox state", () => {
@@ -239,6 +249,37 @@ describe("applyMigrationSkillSelection", () => {
         selectable,
       ),
     ).toEqual(["skill:alpha"]);
+
+    expect(
+      reconcileInteractiveMigrationShortcutValues(
+        [
+          MIGRATION_SKILL_SELECTION_SKIP,
+          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+          "skill:alpha",
+          "skill:beta",
+        ],
+        selectable,
+      ),
+    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, "skill:alpha", "skill:beta"]);
+
+    expect(
+      reconcileInteractiveMigrationShortcutValues(
+        [
+          MIGRATION_SKILL_SELECTION_SKIP,
+          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF,
+          MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON,
+        ],
+        selectable,
+      ),
+    ).toEqual([MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF]);
+
+    expect(
+      reconcileInteractiveMigrationShortcutValues(
+        [MIGRATION_SKILL_SELECTION_SKIP, "skill:beta"],
+        selectable,
+      ),
+    ).toEqual(["skill:beta"]);
   });
 
   it("rejects unknown explicit skill selectors with available choices", () => {

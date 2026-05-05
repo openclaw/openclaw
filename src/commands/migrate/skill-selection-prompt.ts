@@ -10,7 +10,10 @@ import {
   symbol,
   symbolBar,
 } from "@clack/prompts";
-import { reconcileInteractiveMigrationSkillToggleValues } from "./selection.js";
+import {
+  reconcileInteractiveMigrationShortcutValues,
+  reconcileInteractiveMigrationSkillToggleValues,
+} from "./selection.js";
 
 type MigrationSkillSelectionOption = {
   value: string;
@@ -175,6 +178,16 @@ export function promptMigrationSkillSelectionValues(
     prompt.value = reconcileInteractiveMigrationSkillToggleValues(
       prompt.value ?? [],
       activatedValue,
+      opts.selectableValues,
+    );
+  });
+
+  prompt.on("key", (key) => {
+    if (key !== "a" && key !== "i") {
+      return;
+    }
+    prompt.value = reconcileInteractiveMigrationShortcutValues(
+      prompt.value ?? [],
       opts.selectableValues,
     );
   });

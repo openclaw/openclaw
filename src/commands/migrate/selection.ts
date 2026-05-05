@@ -173,12 +173,17 @@ export function resolveInteractiveMigrationSkillSelection(
   items: readonly MigrationItem[],
   selectedValues: readonly string[],
 ): InteractiveMigrationSkillSelection {
+  const selectableIds = new Set(items.map(getMigrationSkillSelectionValue));
+  const selectedItemIds = new Set(selectedValues.filter((value) => selectableIds.has(value)));
+  if (selectedItemIds.size > 0) {
+    return { action: "select", selectedItemIds };
+  }
+
   const selectedValueSet = new Set(selectedValues);
   if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_SKIP)) {
     return { action: "skip" };
   }
 
-  const selectableIds = new Set(items.map(getMigrationSkillSelectionValue));
   if (selectedValueSet.has(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF)) {
     return { action: "select", selectedItemIds: new Set() };
   }
@@ -188,7 +193,7 @@ export function resolveInteractiveMigrationSkillSelection(
 
   return {
     action: "select",
-    selectedItemIds: new Set(selectedValues.filter((value) => selectableIds.has(value))),
+    selectedItemIds,
   };
 }
 
@@ -221,4 +226,18 @@ export function reconcileInteractiveMigrationSkillToggleValues(
       value !== MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON ||
       !selectedValues.includes(MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF),
   );
+}
+
+export function reconcileInteractiveMigrationShortcutValues(
+  selectedValues: readonly string[],
+  selectableValues: readonly string[],
+): string[] {
+  const selectedSelectable = selectedValues.filter((value) => selectableValues.includes(value));
+  if (selectedSelectable.length === selectableValues.length) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_ON, ...selectableValues];
+  }
+  if (selectedSelectable.length === 0) {
+    return [MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF];
+  }
+  return selectedSelectable;
 }
