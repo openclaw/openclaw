@@ -4,6 +4,7 @@
 
 ### Changes
 
+- Matrix/STT: transcribe inbound voice notes via the shared `transcribeFirstAudio` helper before the mention gate so voice-only messages can carry an `@bot` mention through the transcript and reach the agent, mirroring Discord, Telegram, WhatsApp, and Feishu. The existing media path reuses the preflight download to avoid double-fetch, and encrypted audio is decrypted on the existing crypto adapter before transcription. (#78016) [AI-assisted] Thanks @frankdierolf.
 - Matrix/E2EE: add `openclaw matrix encryption setup` to enable Matrix encryption, bootstrap recovery, and print verification status from one setup flow. Thanks @gumadeiras.
 
 ### Fixes

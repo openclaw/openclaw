@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Changes
+
+- Plugins/Matrix STT: transcribe inbound voice notes via the shared audio preflight helper before the mention gate so voice-only messages can carry an `@bot` mention through the transcript and reach the agent, mirroring Discord, Telegram, WhatsApp, and Feishu. The existing media path reuses the preflight download to avoid double-fetch. (#78016) [AI-assisted] Thanks @frankdierolf.
+
 ## 2026.4.26
 
 ### Changes
