@@ -542,7 +542,7 @@ describe("resolveGatewayLiveSuiteTimeoutMs", () => {
   });
 
   it("scales model-capped sweeps for multi-probe retries", () => {
-    expect(resolveGatewayLiveSuiteTimeoutMs(2)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
+    expect(resolveGatewayLiveSuiteTimeoutMs(3)).toBeGreaterThan(GATEWAY_LIVE_DEFAULT_TIMEOUT_MS);
   });
 
   it("caps very large model sweeps", () => {
