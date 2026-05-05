@@ -223,10 +223,19 @@ export function warnWhenAllowlistIsOpen(params: {
     .slice(0, 6)
     .map((entry) => `${entry.id} (${entry.source})`)
     .join(", ");
-  const extra = autoDiscoverable.length > 6 ? ` (+${autoDiscoverable.length - 6} more)` : "";
+  const truncated = autoDiscoverable.length > 6;
+  const extra = truncated ? ` (+${autoDiscoverable.length - 6} more)` : "";
+  // Skip the snippet when truncated: a previewed-only allowlist would silently disable the rest
+  const remediation = truncated
+    ? "Run 'openclaw plugins list --enabled --verbose' to enumerate every discovered plugin id and add the ones you trust to plugins.allow in openclaw.json. Use 'openclaw plugins inspect <id>' for per-plugin details."
+    : `To trust them explicitly, set plugins.allow in openclaw.json (e.g. "plugins": { "allow": [${autoDiscoverable
+        .map((entry) => JSON.stringify(entry.id))
+        .join(
+          ", ",
+        )}] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect <id>' to confirm plugin ids.`;
   params.warningCache.recordOpenAllowlistWarning(params.warningCacheKey);
   params.logger.warn(
-    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. Set plugins.allow to explicit trusted ids.`,
+    `[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: ${preview}${extra}. ${remediation}`,
   );
 }
 
@@ -256,8 +265,8 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    const message =
-      "loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow or install records";
+    // Inspect command keeps `<id>` placeholder; manifest ids are not shell-safe
+    const message = `loaded without install/load-path provenance; treat as untracked local code and pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or install records. Run 'openclaw plugins inspect <id>' to verify`;
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,
