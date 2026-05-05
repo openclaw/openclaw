@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-mocks.js";
 import {
@@ -16,6 +17,13 @@ import {
 } from "./test-harness.js";
 import { _setFetchGuardForTesting, type BlueBubblesSendTarget } from "./types.js";
 
+vi.mock("node:child_process", () => ({
+  execFile: vi.fn((_command, _args, _options, callback) => {
+    callback(null, "sent", "");
+  }),
+}));
+
+const mockExecFile = vi.mocked(execFile);
 const mockFetch = vi.fn();
 const privateApiStatusMock = vi.mocked(getCachedBlueBubblesPrivateApiStatus);
 const fetchServerInfoMock = vi.mocked(fetchBlueBubblesServerInfo);
@@ -647,6 +655,7 @@ describe("send", () => {
   describe("sendMessageBlueBubbles", () => {
     beforeEach(() => {
       mockFetch.mockReset();
+      mockExecFile.mockClear();
       fetchServerInfoMock.mockReset();
       fetchServerInfoMock.mockResolvedValue(null);
     });
@@ -821,6 +830,32 @@ describe("send", () => {
       expect(body.message).toBe("Hello new chat");
     });
 
+    it("falls back to imsg when new chat creation hits a disconnected helper", async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ data: [] }),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          text: () => Promise.resolve("iMessage Private API Helper is not connected!"),
+        });
+
+      const result = await sendMessageBlueBubbles("+15550008888", "Hello", {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+      });
+
+      expect(result.messageId).toBe("ok");
+      expect(mockExecFile).toHaveBeenCalledWith(
+        "imsg",
+        ["send", "--to", "+15550008888", "--service", "auto", "--text", "Hello"],
+        expect.any(Object),
+        expect.any(Function),
+      );
+    });
+
     it("throws when creating a new chat requires Private API", async () => {
       mockFetch
         .mockResolvedValueOnce({
@@ -944,6 +979,39 @@ describe("send", () => {
     // explicitly as apple-script rather than omitting `method`; BB Server's
     // behavior on an omitted field is version-dependent and silently drops
     // on some setups, which is the worse failure mode. (#64480)
+    it("falls back to imsg when BlueBubbles Private API helper is disconnected", async () => {
+      mockResolvedHandleTarget();
+      privateApiStatusMock.mockReturnValue(true);
+      isMacOS26OrHigherMock.mockReturnValue(true);
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        text: () =>
+          Promise.resolve(
+            JSON.stringify({
+              status: 500,
+              message: "Message Send Error",
+              error: {
+                type: "iMessage Error",
+                message: "iMessage Private API Helper is not connected!",
+              },
+            }),
+          ),
+      });
+
+      const result = await sendMessageBlueBubbles("+15551234567", "Hello fallback", {
+        cfg: { channels: { bluebubbles: { serverUrl: "http://localhost:1234", password: "pw" } } },
+      });
+
+      expect(result.messageId).toBe("ok");
+      expect(mockExecFile).toHaveBeenCalledWith(
+        "imsg",
+        ["send", "--to", "+15551234567", "--service", "auto", "--text", "Hello fallback"],
+        expect.any(Object),
+        expect.any(Function),
+      );
+    });
+
     it("falls back to apple-script on macOS 26 when Private API is disabled", async () => {
       mockBlueBubblesPrivateApiStatusOnce(
         privateApiStatusMock,

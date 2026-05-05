@@ -36,6 +36,25 @@ describe("BlueBubbles self-chat cache", () => {
     ).toBe(true);
   });
 
+  it("matches reflected copies with small BlueBubbles timestamp skew", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));
+
+    rememberBlueBubblesSelfChatCopy({
+      ...directLookup,
+      body: "hello skew",
+      timestamp: 10_000,
+    });
+
+    expect(
+      hasBlueBubblesSelfChatCopy({
+        ...directLookup,
+        body: "hello skew",
+        timestamp: 9_000,
+      }),
+    ).toBe(true);
+  });
+
   it("canonicalizes DM scope across chatIdentifier and chatGuid", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-07T00:00:00Z"));

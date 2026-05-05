@@ -46,4 +46,30 @@ describe("collectChannelStatusIssues", () => {
     expect(collectTelegramIssues).toHaveBeenCalledWith(telegramAccounts);
     expect(collectSlackIssues).toHaveBeenCalledWith(slackAccounts);
   });
+
+  it("keeps BlueBubbles helper issues plugin-owned", () => {
+    const collectBlueBubblesIssues = vi.fn(() => [{ code: "bluebubbles.plugin" }]);
+    const bluebubblesAccounts = [
+      {
+        accountId: "default",
+        probe: {
+          ok: true,
+          privateApi: true,
+          helperConnected: false,
+        },
+      },
+    ];
+    listChannelPluginsMock.mockReturnValue([
+      { id: "bluebubbles", status: { collectStatusIssues: collectBlueBubblesIssues } },
+    ]);
+
+    expect(
+      collectChannelStatusIssues({
+        channelAccounts: {
+          bluebubbles: bluebubblesAccounts,
+        },
+      }),
+    ).toEqual([{ code: "bluebubbles.plugin" }]);
+    expect(collectBlueBubblesIssues).toHaveBeenCalledWith(bluebubblesAccounts);
+  });
 });

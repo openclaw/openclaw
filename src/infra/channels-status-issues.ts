@@ -19,5 +19,6 @@ export function collectChannelStatusIssues(payload: Record<string, unknown>): Ch
 
     issues.push(...collect(raw as ChannelAccountSnapshot[]));
   }
+
   return issues;
 }

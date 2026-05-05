@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import crypto from "node:crypto";
+import { promisify } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -38,6 +40,8 @@ export type BlueBubblesSendResult = {
 };
 
 /** Maps short effect names to full Apple effect IDs */
+const execFileAsync = promisify(execFile);
+
 const EFFECT_MAP: Record<string, string> = {
   // Bubble effects
   slam: "com.apple.MobileSMS.expressivesend.impact",
@@ -116,6 +120,74 @@ function resolvePrivateApiDecision(params: {
     throwEffectDisabledError,
     warningMessage: `Private API status unknown; sending without ${requested}. Run a status probe to restore private-api features.`,
   };
+}
+
+function isPrivateApiHelperDisconnectedErrorText(errorText: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(errorText);
+  return (
+    normalized.includes("private api helper is not connected") ||
+    normalized.includes("bluebubbleshelper is not running")
+  );
+}
+
+function isPrivateApiHelperDisconnectedError(status: number, errorText: string): boolean {
+  return status === 500 && isPrivateApiHelperDisconnectedErrorText(errorText);
+}
+
+function resolveConfiguredImsgCliPath(cfg?: OpenClawConfig): string {
+  const channels = cfg?.channels;
+  const imessage = channels && typeof channels === "object" ? channels.imessage : undefined;
+  if (imessage && typeof imessage === "object") {
+    const cliPath = normalizeOptionalString((imessage as { cliPath?: unknown }).cliPath);
+    if (cliPath) {
+      return cliPath;
+    }
+  }
+  return "imsg";
+}
+
+function resolveImsgFallbackTarget(
+  target: BlueBubblesSendTarget,
+  chatGuid: string,
+): { to: string; service: "imessage" | "sms" | "auto" } | null {
+  if (target.kind === "handle") {
+    return { to: target.address, service: target.service ?? "auto" };
+  }
+  const handle = extractHandleFromChatGuid(chatGuid) ?? extractChatIdentifierFromChatGuid(chatGuid);
+  if (!handle) {
+    return null;
+  }
+  const service = chatGuid.startsWith("SMS;-")
+    ? "sms"
+    : chatGuid.startsWith("iMessage;-")
+      ? "imessage"
+      : "auto";
+  return { to: handle, service };
+}
+
+async function sendViaImsgFallback(params: {
+  target: BlueBubblesSendTarget;
+  chatGuid: string;
+  text: string;
+  cfg?: OpenClawConfig;
+}): Promise<BlueBubblesSendResult | null> {
+  const fallback = resolveImsgFallbackTarget(params.target, params.chatGuid);
+  if (!fallback) {
+    return null;
+  }
+  try {
+    await execFileAsync(
+      resolveConfiguredImsgCliPath(params.cfg),
+      ["send", "--to", fallback.to, "--service", fallback.service, "--text", params.text],
+      {
+        timeout: DEFAULT_SEND_TIMEOUT_MS,
+        maxBuffer: 64 * 1024,
+      },
+    );
+    return { messageId: "ok" };
+  } catch {
+    return null;
+  }
 }
 
 async function parseBlueBubblesMessageResponse(res: Response): Promise<BlueBubblesSendResult> {
@@ -523,14 +595,33 @@ export async function sendMessageBlueBubbles(
     // If target is a phone number/handle and no existing chat found,
     // auto-create a new DM chat using the /api/v1/chat/new endpoint
     if (target.kind === "handle") {
-      return createNewChatWithMessage({
-        baseUrl,
-        password,
-        address: target.address,
-        message: strippedText,
-        timeoutMs: effectiveSendTimeoutMs,
-        allowPrivateNetwork,
-      });
+      try {
+        return await createNewChatWithMessage({
+          baseUrl,
+          password,
+          address: target.address,
+          message: strippedText,
+          timeoutMs: effectiveSendTimeoutMs,
+          allowPrivateNetwork,
+        });
+      } catch (err) {
+        const errorText = err instanceof Error ? err.message : String(err);
+        if (isPrivateApiHelperDisconnectedErrorText(errorText)) {
+          const fallback = await sendViaImsgFallback({
+            target,
+            chatGuid: "",
+            text: strippedText,
+            cfg: opts.cfg,
+          });
+          if (fallback) {
+            warnBlueBubbles(
+              "BlueBubbles Private API helper is disconnected; sent via local imsg fallback.",
+            );
+            return fallback;
+          }
+        }
+        throw err;
+      }
     }
     throw new Error(
       "BlueBubbles send failed: chatGuid not found for target. Use a chat_guid target or ensure the chat exists.",
@@ -612,6 +703,20 @@ export async function sendMessageBlueBubbles(
   });
   if (!res.ok) {
     const errorText = await res.text();
+    if (isPrivateApiHelperDisconnectedError(res.status, errorText)) {
+      const fallback = await sendViaImsgFallback({
+        target,
+        chatGuid,
+        text: strippedText,
+        cfg: opts.cfg,
+      });
+      if (fallback) {
+        warnBlueBubbles(
+          "BlueBubbles Private API helper is disconnected; sent via local imsg fallback.",
+        );
+        return fallback;
+      }
+    }
     throw new Error(`BlueBubbles send failed (${res.status}): ${errorText || "unknown"}`);
   }
   return parseBlueBubblesMessageResponse(res);

@@ -848,15 +848,6 @@ async function processMessageAfterDedupe(
   };
 
   const cacheMessageId = message.messageId?.trim();
-  const confirmedOutboundCacheEntry = cacheMessageId
-    ? resolveReplyContextFromCache({
-        accountId: account.accountId,
-        replyToId: cacheMessageId,
-        chatGuid: message.chatGuid,
-        chatIdentifier: message.chatIdentifier,
-        chatId: message.chatId,
-      })
-    : null;
   let messageShortId: string | undefined;
   const cacheInboundMessage = () => {
     if (!cacheMessageId) {
@@ -876,14 +867,17 @@ async function processMessageAfterDedupe(
   };
 
   if (message.fromMe) {
+    const cachedOutboundBeforeFromMe = cacheMessageId
+      ? resolveReplyContextFromCache({
+          accountId: account.accountId,
+          replyToId: cacheMessageId,
+          chatGuid: message.chatGuid,
+          chatIdentifier: message.chatIdentifier,
+          chatId: message.chatId,
+        })
+      : null;
     // Cache from-me messages so reply context can resolve sender/body.
     cacheInboundMessage();
-    const confirmedAssistantOutbound =
-      confirmedOutboundCacheEntry?.senderLabel === "me" &&
-      normalizeSnippet(confirmedOutboundCacheEntry.body ?? "") === normalizeSnippet(rawBody);
-    if (isSelfChatMessage && confirmedAssistantOutbound) {
-      rememberBlueBubblesSelfChatCopy(selfChatLookup);
-    }
     if (cacheMessageId) {
       const pending = consumePendingOutboundMessageId({
         accountId: account.accountId,
@@ -892,6 +886,16 @@ async function processMessageAfterDedupe(
         chatId: message.chatId,
         body: rawBody,
       });
+      const matchesCachedAssistantOutbound =
+        cachedOutboundBeforeFromMe?.senderLabel === "me" &&
+        cachedOutboundBeforeFromMe.body === rawBody;
+      if (isSelfChatMessage && (pending || matchesCachedAssistantOutbound)) {
+        // BlueBubbles self-chats can emit assistant outbounds twice: first as
+        // `fromMe`, then as a reflected inbound copy from the same handle. Only
+        // mark confirmed pending/cached assistant sends; user-authored self-chat
+        // prompts must still dispatch when no assistant outbound matched.
+        rememberBlueBubblesSelfChatCopy(selfChatLookup);
+      }
       if (pending) {
         const displayId = getShortIdForUuid(cacheMessageId) || cacheMessageId;
         const previewSource = pending.snippetRaw || rawBody;
