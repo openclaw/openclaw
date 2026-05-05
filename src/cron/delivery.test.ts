@@ -297,7 +297,7 @@ describe("resolveFailureDestination", () => {
     });
   });
 
-  it("dedupes session-derived failure destinations for threaded primary delivery", () => {
+  it("keeps channel-only failure destinations for explicit threaded primary delivery", () => {
     const plan = resolveFailureDestination(
       makeCronJob({
         delivery: {
@@ -315,7 +315,12 @@ describe("resolveFailureDestination", () => {
       }),
       undefined,
     );
-    expect(plan).toBeNull();
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
   });
 
   it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
