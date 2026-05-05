@@ -592,6 +592,58 @@ describe("cron tool", () => {
     });
   });
 
+  it("prefixes discord dm targets with user: to prevent channel: default (#74375)", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-discord-dm-numeric",
+        agentSessionKey: "agent:main:discord:direct:204737678510391296",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "user:204737678510391296",
+    });
+  });
+
+  it("prefixes legacy discord dm targets with user: (#74375)", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-discord-dm-legacy",
+        agentSessionKey: "agent:main:discord:dm:204737678510391296",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "user:204737678510391296",
+    });
+  });
+
+  it("does not prefix discord group targets with user:", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-discord-group",
+        agentSessionKey: "agent:main:discord:group:123456789012345678",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "123456789012345678",
+    });
+  });
+
+  it("does not prefix discord channel targets with user:", async () => {
+    expect(
+      await executeAddAndReadDelivery({
+        callId: "call-discord-channel",
+        agentSessionKey: "agent:main:discord:channel:123456789012345678",
+      }),
+    ).toEqual({
+      mode: "announce",
+      channel: "discord",
+      to: "123456789012345678",
+    });
+  });
+
   it("prefers current delivery context over lowercased session-key targets", async () => {
     expect(
       await executeAddAndReadDelivery({
