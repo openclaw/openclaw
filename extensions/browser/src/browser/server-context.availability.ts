@@ -324,7 +324,10 @@ export function createProfileAvailability({
         formatStartGateBlockedMessage,
       } = await getChromeMcpModule();
       const health = await probeChromeMcpHealth(profile.name, profile);
-      if (health.attached) {
+      // Only short-circuit when a cached MCP session is ready. HIGH from live
+      // file/port/HTTP signals without a cache hit means we have no MCP
+      // client to hand off; the next browser action would cold-spawn one.
+      if (health.cacheAttached) {
         return;
       }
       const gate = decideStartGate(health);

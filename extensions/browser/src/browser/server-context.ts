@@ -182,7 +182,10 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         try {
           const health = await probeChromeMcpHealth(profile.name, profile);
           running = health.attached;
-          if (running) {
+          // Only probe tabs when a cached MCP session exists; a live-attached
+          // cold cache would otherwise spawn a fresh chrome-devtools-mcp child
+          // through the ephemeral lease path and re-fire the consent dialog.
+          if (health.cacheAttached) {
             const tabs = await listChromeMcpTabs(profile.name, profile, {
               ephemeral: true,
             }).catch(() => [] as BrowserTab[]);

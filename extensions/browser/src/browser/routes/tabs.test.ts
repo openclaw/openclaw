@@ -9,7 +9,34 @@ const navigationGuardMocks = vi.hoisted(() => ({
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
+type MockChromeMcpHealth = {
+  level: "high" | "medium" | "low";
+  attached: boolean;
+  mcpPid: number | null;
+  port: number | null;
+  browserUuid: string | null;
+  reasons: string[];
+  emptyState: boolean;
+  cacheAttached: boolean;
+};
+
+const chromeMcpMocks = vi.hoisted(() => ({
+  probeChromeMcpHealth: vi.fn(
+    async (): Promise<MockChromeMcpHealth> => ({
+      level: "low",
+      attached: false,
+      mcpPid: null,
+      port: null,
+      browserUuid: null,
+      reasons: ["file:user-enabled-false"],
+      emptyState: true,
+      cacheAttached: false,
+    }),
+  ),
+}));
+
 vi.mock("../navigation-guard.js", () => navigationGuardMocks);
+vi.mock("../chrome-mcp.js", () => chromeMcpMocks);
 
 const { registerBrowserTabRoutes } = await import("./tabs.js");
 
@@ -176,6 +203,18 @@ async function callTabsFocus(params: {
   return await callTabsRoute({ ...params, method: "post", path: "/tabs/focus" });
 }
 
+function createExistingSessionProfileContext(
+  overrides?: Partial<ReturnType<typeof baseProfileContext>>,
+) {
+  return createProfileContext({
+    ...overrides,
+    profile: {
+      name: "chrome-live",
+      driver: "existing-session",
+    } as never,
+  });
+}
+
 describe("browser tab routes", () => {
   beforeEach(() => {
     navigationGuardMocks.assertBrowserNavigationAllowed.mockReset();
@@ -184,6 +223,7 @@ describe("browser tab routes", () => {
     navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy?: unknown) =>
       ssrfPolicy ? { ssrfPolicy } : {},
     );
+    chromeMcpMocks.probeChromeMcpHealth.mockReset();
   });
 
   it("returns browser-not-running for close when the browser is not reachable", async () => {
@@ -397,5 +437,72 @@ describe("browser tab routes", () => {
         },
       ],
     });
+  });
+
+  it("does not call listTabs on GET /tabs when chrome-mcp is live-attached but cache is cold", async () => {
+    chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce({
+      level: "high" as const,
+      attached: true,
+      mcpPid: null,
+      port: 50211,
+      browserUuid: "abc",
+      reasons: ["file:devtools-active-port-detected", "owner:lsof-chrome-listener", "http:ok"],
+      emptyState: false,
+      cacheAttached: false,
+    });
+    const profileCtx = createExistingSessionProfileContext({
+      listTabs: vi.fn(async () => [publicTab()]),
+    });
+
+    const response = await callTabsList({ profileCtx });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ running: true, tabs: [] });
+    expect(profileCtx.listTabs).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.probeChromeMcpHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns running:false on GET /tabs for chrome-mcp profile with no Chrome detected", async () => {
+    chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce({
+      level: "low" as const,
+      attached: false,
+      mcpPid: null,
+      port: null,
+      browserUuid: null,
+      reasons: ["file:user-enabled-false"],
+      emptyState: true,
+      cacheAttached: false,
+    });
+    const profileCtx = createExistingSessionProfileContext({
+      listTabs: vi.fn(async () => [publicTab()]),
+    });
+
+    const response = await callTabsList({ profileCtx });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ running: false, tabs: [] });
+    expect(profileCtx.listTabs).not.toHaveBeenCalled();
+  });
+
+  it("uses listTabs on GET /tabs when chrome-mcp cache is attached", async () => {
+    chromeMcpMocks.probeChromeMcpHealth.mockResolvedValueOnce({
+      level: "high" as const,
+      attached: true,
+      mcpPid: 4321,
+      port: null,
+      browserUuid: null,
+      reasons: ["cache:mcp-session-ready"],
+      emptyState: false,
+      cacheAttached: true,
+    });
+    const profileCtx = createExistingSessionProfileContext({
+      listTabs: vi.fn(async () => [publicTab()]),
+    });
+
+    const response = await callTabsList({ profileCtx });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toEqual({ running: true, tabs: [publicTab()] });
+    expect(profileCtx.listTabs).toHaveBeenCalledTimes(1);
   });
 });

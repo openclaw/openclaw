@@ -242,6 +242,37 @@ describe("browser server-context existing-session profile", () => {
     expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
   });
 
+  it("reports running but skips ephemeral tab probe when chrome-mcp is live-attached but cache is cold", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValueOnce({
+      level: "high",
+      attached: true,
+      mcpPid: null,
+      port: 50211,
+      browserUuid: "abc",
+      reasons: ["file:devtools-active-port-detected", "owner:lsof-chrome-listener", "http:ok"],
+      emptyState: false,
+      cacheAttached: false,
+    });
+
+    const profiles = await ctx.listProfiles();
+    expect(profiles).toEqual([
+      expect.objectContaining({
+        name: "chrome-live",
+        transport: "chrome-mcp",
+        running: true,
+        tabCount: 0,
+      }),
+    ]);
+
+    expect(chromeMcp.probeChromeMcpHealth).toHaveBeenCalledTimes(1);
+    expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+  });
+
   it("short-circuits ensureBrowserAvailable when probeChromeMcpHealth reports attached", async () => {
     fs.mkdirSync("/tmp/brave-profile", { recursive: true });
     const state = makeState();
@@ -258,6 +289,31 @@ describe("browser server-context existing-session profile", () => {
     );
     expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
     expect(chromeMcp.listChromeMcpTabs).not.toHaveBeenCalled();
+  });
+
+  it("does not short-circuit ensureBrowserAvailable when live-attached but cache is cold", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const live = ctx.forProfile("chrome-live");
+
+    // HIGH live signals but no cached MCP session: short-circuit must NOT
+    // fire. The start-gate decides whether spawn is appropriate; HIGH is
+    // refused so the user gets a clear error rather than fake success.
+    vi.mocked(chromeMcp.probeChromeMcpHealth).mockResolvedValue({
+      level: "high",
+      attached: true,
+      mcpPid: null,
+      port: 50211,
+      browserUuid: "abc",
+      reasons: ["file:devtools-active-port-detected", "owner:lsof-chrome-listener", "http:ok"],
+      emptyState: false,
+      cacheAttached: false,
+    });
+
+    await expect(live.ensureBrowserAvailable()).rejects.toThrow(/browser-already-attached/);
+    expect(chromeMcp.ensureChromeMcpAvailable).not.toHaveBeenCalled();
+    expect(chromeMcp.decideStartGate).toHaveBeenCalledTimes(1);
   });
 
   it("attaches once and waits for ready when probeChromeMcpHealth reports unattached", async () => {

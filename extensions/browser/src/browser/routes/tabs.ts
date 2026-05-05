@@ -89,16 +89,19 @@ async function ensureBrowserRunning(profileCtx: ProfileContext, res: BrowserResp
   return true;
 }
 
-async function isChromeMcpProfileAttached(profileCtx: ProfileContext): Promise<boolean> {
-  const health = await probeChromeMcpHealth(profileCtx.profile.name, profileCtx.profile);
-  return health.attached;
-}
+type ChromeMcpTabListReadiness = "spawn-safe" | "live-no-cache" | "not-running";
 
-async function isProfileReadyForTabList(profileCtx: ProfileContext): Promise<boolean> {
-  const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-  return capabilities.usesChromeMcp
-    ? await isChromeMcpProfileAttached(profileCtx)
-    : await profileCtx.isReachable(300);
+async function probeChromeMcpTabListReadiness(
+  profileCtx: ProfileContext,
+): Promise<ChromeMcpTabListReadiness> {
+  const health = await probeChromeMcpHealth(profileCtx.profile.name, profileCtx.profile);
+  if (health.cacheAttached) {
+    return "spawn-safe";
+  }
+  if (health.attached) {
+    return "live-no-cache";
+  }
+  return "not-running";
 }
 
 async function redactBlockedTabUrls(params: {
@@ -181,7 +184,20 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         res,
         ctx,
         run: async (profileCtx) => {
-          if (!(await isProfileReadyForTabList(profileCtx))) {
+          const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
+          if (capabilities.usesChromeMcp) {
+            const readiness = await probeChromeMcpTabListReadiness(profileCtx);
+            if (readiness === "not-running") {
+              return res.json({ running: false, tabs: [] as unknown[] });
+            }
+            // Live-attached without a cached MCP session: report running but
+            // skip listTabs() to avoid spawning a chrome-devtools-mcp child on
+            // a passive GET. The user explicitly invoking the browser will
+            // warm the cache.
+            if (readiness === "live-no-cache") {
+              return res.json({ running: true, tabs: [] as unknown[] });
+            }
+          } else if (!(await profileCtx.isReachable(300))) {
             return res.json({ running: false, tabs: [] as unknown[] });
           }
           const tabs = await redactBlockedTabUrls({
