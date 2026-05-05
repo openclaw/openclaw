@@ -4431,3 +4431,115 @@ describe("openai transport stream", () => {
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });
+
+describe("normalizeStructuredContentDelta", () => {
+  // Regression for #75268 (and the closed predecessor #70806). Mistral with
+  // native reasoning enabled returns delta.content as an array of typed blocks
+  // instead of a flat string, which previously got coerced to "[object Object]"
+  // when concatenated downstream and leaked into chat replies / memory.
+  const { normalizeStructuredContentDelta } = __testing;
+
+  it("returns a single text part for a plain string", () => {
+    expect(normalizeStructuredContentDelta("hello world")).toEqual([
+      { kind: "text", text: "hello world" },
+    ]);
+  });
+
+  it("returns no parts for an empty string, null, or undefined", () => {
+    expect(normalizeStructuredContentDelta("")).toEqual([]);
+    expect(normalizeStructuredContentDelta(null)).toEqual([]);
+    expect(normalizeStructuredContentDelta(undefined)).toEqual([]);
+  });
+
+  it("flattens an array of typed blocks into uniform text/thinking parts", () => {
+    const result = normalizeStructuredContentDelta([
+      { type: "thinking", thinking: "Let me think..." },
+      { type: "text", text: "Here is the answer." },
+    ]);
+    expect(result).toEqual([
+      { kind: "thinking", signature: "thinking", text: "Let me think..." },
+      { kind: "text", text: "Here is the answer." },
+    ]);
+  });
+
+  it("recognizes reasoning and reasoning.text block types as thinking", () => {
+    expect(
+      normalizeStructuredContentDelta([
+        { type: "reasoning", text: "step one" },
+        { type: "reasoning.text", text: "step two" },
+      ]),
+    ).toEqual([
+      { kind: "thinking", signature: "reasoning", text: "step one" },
+      { kind: "thinking", signature: "reasoning.text", text: "step two" },
+    ]);
+  });
+
+  it("falls back to text when block has content but no recognized type", () => {
+    expect(normalizeStructuredContentDelta({ content: "untyped chunk" })).toEqual([
+      { kind: "text", text: "untyped chunk" },
+    ]);
+  });
+
+  it("never emits the literal string `[object Object]` even for unrecognized objects", () => {
+    const result = normalizeStructuredContentDelta({ random: "key", nested: { foo: 1 } });
+    for (const part of result) {
+      expect(part.text).not.toContain("[object Object]");
+    }
+    expect(result).toEqual([]);
+  });
+
+  it("skips blocks with empty or non-string text fields", () => {
+    expect(
+      normalizeStructuredContentDelta([
+        { type: "text", text: "" },
+        { type: "text", text: null },
+        { type: "text", text: 42 },
+        { type: "text", text: "kept" },
+      ]),
+    ).toEqual([{ kind: "text", text: "kept" }]);
+  });
+
+  // Round-2 regression for #75268: a `type:"thinking"` block can carry its
+  // payload as a nested array of typed text sub-blocks instead of a flat
+  // string. Recursively flatten and re-tag as thinking.
+  it("flattens a nested thinking block whose `thinking` value is an array of text parts", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        type: "thinking",
+        thinking: [
+          { type: "text", text: "step one " },
+          { type: "text", text: "step two" },
+        ],
+      }),
+    ).toEqual([
+      { kind: "thinking", signature: "thinking", text: "step one " },
+      { kind: "thinking", signature: "thinking", text: "step two" },
+    ]);
+  });
+
+  it("flattens a nested reasoning block whose `text` value is an array of text parts", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        type: "reasoning",
+        text: [{ type: "text", text: "internal thought" }],
+      }),
+    ).toEqual([{ kind: "thinking", signature: "reasoning", text: "internal thought" }]);
+  });
+
+  it("flattens a nested untyped block whose `content` value is an array of text parts as text", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        content: [{ type: "text", text: "visible reply" }],
+      }),
+    ).toEqual([{ kind: "text", text: "visible reply" }]);
+  });
+
+  it("returns no parts when a nested thinking block contains only empty sub-blocks", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        type: "thinking",
+        thinking: [{ type: "text", text: "" }, { type: "text" }],
+      }),
+    ).toEqual([]);
+  });
+});
