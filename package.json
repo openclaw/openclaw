@@ -1397,6 +1397,7 @@
     "leak:embedded-run": "node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts",
     "lint": "node scripts/run-oxlint-shards.mjs",
     "lint:agent:ingress-owner": "node scripts/check-ingress-agent-owner-context.mjs",
+    "lint:agents-md:size": "node --import tsx scripts/check-agents-md.ts",
     "lint:all": "node scripts/run-oxlint.mjs",
     "lint:apps": "pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
