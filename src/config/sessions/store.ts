@@ -499,7 +499,17 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
-  await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
+  // Opt out of fsync on the session store registry. The atomic-rename
+  // guarantee is preserved (so concurrent readers never see a torn write),
+  // but we skip fsync to avoid blocking the libuv thread pool while the
+  // session-write-lock is held — that lock holds caused 30s+ event-loop
+  // starvation under cron load on multiple platforms (#73655). Session
+  // metadata is fully reconstructible from the per-session JSONL
+  // transcripts the gateway also writes durably, so the trade-off is safe.
+  await writeTextAtomic(params.storePath, params.serialized, {
+    mode: 0o600,
+    durable: false,
+  });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
     store: params.store,
