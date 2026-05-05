@@ -810,7 +810,7 @@ async function walkDirWithLimit(
   maxFiles: number,
   excludeTestFiles: boolean,
 ): Promise<string[]> {
-  const skillBudget = maxFiles > 1 ? 1 : 0;
+  const skillBudget = 1;
   const skillFiles = await walkDirMatchingLimit(
     dirPath,
     skillBudget,
