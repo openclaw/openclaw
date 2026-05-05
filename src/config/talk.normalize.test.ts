@@ -31,6 +31,19 @@ describe("talk normalization", () => {
           custom: true,
         },
       },
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+          },
+        },
+        model: "gpt-realtime",
+        voice: "alloy",
+        mode: "realtime",
+        transport: "webrtc",
+        brain: "agent-consult",
+      },
       interruptOnSpeech: true,
     });
 
@@ -41,6 +54,19 @@ describe("talk normalization", () => {
           voiceId: "acme-voice",
           custom: true,
         },
+      },
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+          },
+        },
+        model: "gpt-realtime",
+        voice: "alloy",
+        mode: "realtime",
+        transport: "webrtc",
+        brain: "agent-consult",
       },
       interruptOnSpeech: true,
     });

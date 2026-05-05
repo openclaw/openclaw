@@ -41,6 +41,11 @@ describe("method scope resolution", () => {
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
+    ["talk.session.create", ["operator.write"]],
+    ["talk.session.inputAudio", ["operator.write"]],
+    ["talk.session.control", ["operator.write"]],
+    ["talk.session.toolResult", ["operator.write"]],
+    ["talk.session.close", ["operator.write"]],
     ["update.status", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
     ["nativeHook.invoke", ["operator.admin"]],
@@ -94,6 +99,24 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.write",
     });
+  });
+
+  it("allows operator.write clients to use unified Talk sessions", () => {
+    for (const method of [
+      "talk.session.create",
+      "talk.session.inputAudio",
+      "talk.session.control",
+      "talk.session.toolResult",
+      "talk.session.close",
+    ]) {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: true,
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+    }
   });
 
   it("requires admin for browser.request", () => {

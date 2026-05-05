@@ -55,10 +55,6 @@ export function buildInstructions(config: VoiceClawSessionConfigEvent): string {
     parts.push(deviceContext);
   }
 
-  if (config.instructionsOverride?.trim()) {
-    parts.push(`## About The User\n${config.instructionsOverride.trim()}`);
-  }
-
   if (config.conversationHistory && config.conversationHistory.length > 0) {
     parts.push(buildConversationHistory(config.conversationHistory));
   }

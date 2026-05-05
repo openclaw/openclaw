@@ -3,6 +3,12 @@ import type { IncomingMessage } from "node:http";
 import WebSocket, { type RawData } from "ws";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  type TalkEvent,
+  type TalkEventInput,
+  type TalkSessionController,
+  createTalkSessionController,
+} from "../../realtime-voice/talk-session-controller.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
   authorizeHttpGatewayConnect,
@@ -36,6 +42,7 @@ type VoiceClawRealtimeSessionOptions = {
   rateLimiter?: AuthRateLimiter;
   releasePreauthBudget: () => void;
   adapterFactory?: () => VoiceClawRealtimeAdapter;
+  onTalkEvent?: (event: TalkEvent) => void;
 };
 
 export class VoiceClawRealtimeSession {
@@ -50,8 +57,10 @@ export class VoiceClawRealtimeSession {
   private readonly rateLimiter: AuthRateLimiter | undefined;
   private readonly releasePreauthBudget: () => void;
   private readonly adapterFactory: () => VoiceClawRealtimeAdapter;
+  private readonly onTalkEvent: ((event: TalkEvent) => void) | undefined;
   private adapter: VoiceClawRealtimeAdapter | null = null;
   private toolRuntime: VoiceClawRealtimeToolRuntime | null = null;
+  private talk: TalkSessionController | null = null;
   private config: VoiceClawSessionConfigEvent | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
@@ -67,6 +76,7 @@ export class VoiceClawRealtimeSession {
     this.rateLimiter = opts.rateLimiter;
     this.releasePreauthBudget = once(opts.releasePreauthBudget);
     this.adapterFactory = opts.adapterFactory ?? (() => new VoiceClawGeminiLiveAdapter());
+    this.onTalkEvent = opts.onTalkEvent;
   }
 
   attach(): void {
@@ -113,24 +123,66 @@ export class VoiceClawRealtimeSession {
     }
 
     switch (event.type) {
-      case "audio.append":
+      case "audio.append": {
+        const audioTurnId = this.ensureActiveTurnId();
         this.adapter?.sendAudio(event.data);
+        this.emitTalkEvent({
+          type: "input.audio.delta",
+          payload: { byteLength: base64ByteLength(event.data) },
+          turnId: audioTurnId,
+        });
         break;
-      case "audio.commit":
+      }
+      case "audio.commit": {
+        const commitTurnId = this.ensureActiveTurnId();
         this.adapter?.commitAudio();
+        this.emitTalkEvent({
+          type: "input.audio.committed",
+          payload: {},
+          turnId: commitTurnId,
+          final: true,
+        });
         break;
+      }
       case "frame.append":
         this.adapter?.sendFrame(event.data, event.mimeType);
+        this.emitTalkEvent({
+          type: "health.changed",
+          payload: {
+            inputVideoFrame: true,
+            mimeType: event.mimeType,
+            byteLength: base64ByteLength(event.data),
+          },
+          turnId: this.talk?.activeTurnId,
+        });
         break;
       case "response.create":
         this.adapter?.createResponse();
         break;
-      case "response.cancel":
+      case "response.cancel": {
+        const cancelTurnId = this.ensureActiveTurnId();
         this.adapter?.cancelResponse();
+        const cancelled = this.talk?.cancelTurn({
+          turnId: cancelTurnId,
+          payload: { reason: "client-cancelled" },
+        });
+        if (cancelled?.ok) {
+          this.onTalkEvent?.(cancelled.event);
+        }
         break;
-      case "tool.result":
+      }
+      case "tool.result": {
+        const toolTurnId = this.ensureActiveTurnId();
         this.adapter?.sendToolResult(event.callId, event.output);
+        this.emitTalkEvent({
+          type: "tool.result",
+          payload: { output: event.output },
+          turnId: toolTurnId,
+          callId: event.callId,
+          final: true,
+        });
         break;
+      }
       case "session.config":
         this.send({ type: "error", message: "session already configured", code: 400 });
         break;
@@ -143,6 +195,16 @@ export class VoiceClawRealtimeSession {
     }
     this.configStarted = true;
     this.clearHandshakeTimer();
+
+    if (hasInstructionsOverride(config)) {
+      this.send({
+        type: "error",
+        message: "request-time instructionsOverride is not supported",
+        code: 400,
+      });
+      this.ws.close(1008, "unsupported instruction override");
+      return;
+    }
 
     const authResult = await authorizeHttpGatewayConnect({
       auth: this.auth,
@@ -190,6 +252,13 @@ export class VoiceClawRealtimeSession {
       voice: config.voice || "Zephyr",
       brainAgent: config.brainAgent ?? "enabled",
     };
+    this.talk = createTalkSessionController({
+      sessionId: this.id,
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: this.config.brainAgent === "none" ? "none" : "direct-tools",
+      provider: this.config.provider,
+    });
     this.adapter = this.adapterFactory();
 
     try {
@@ -270,7 +339,134 @@ export class VoiceClawRealtimeSession {
     if (this.closed || this.ws.readyState !== WebSocket.OPEN) {
       return;
     }
-    this.ws.send(JSON.stringify(event));
+    this.ws.send(JSON.stringify(this.withTalkEvent(event)));
+  }
+
+  private withTalkEvent(
+    event: VoiceClawServerEvent,
+  ): VoiceClawServerEvent & { talkEvent?: TalkEvent } {
+    const talkInput = this.toTalkEventInput(event);
+    if (!talkInput || !this.talk) {
+      return event;
+    }
+    return { ...event, talkEvent: this.emitTalkEvent(talkInput) };
+  }
+
+  private emitTalkEvent(input: TalkEventInput): TalkEvent | undefined {
+    if (!this.talk) {
+      return undefined;
+    }
+    let event: TalkEvent | undefined;
+    if (input.type === "turn.started") {
+      event = this.talk.startTurn({ turnId: input.turnId, payload: input.payload }).event;
+    } else if (input.type === "turn.ended") {
+      const ended = this.talk.endTurn({ turnId: input.turnId, payload: input.payload });
+      event = ended.ok ? ended.event : undefined;
+    } else if (input.type === "turn.cancelled") {
+      const cancelled = this.talk.cancelTurn({ turnId: input.turnId, payload: input.payload });
+      event = cancelled.ok ? cancelled.event : undefined;
+    } else {
+      event = this.talk.emit(input);
+    }
+    if (event) {
+      this.onTalkEvent?.(event);
+    }
+    return event;
+  }
+
+  private ensureActiveTurnId(): string {
+    if (this.talk?.activeTurnId) {
+      return this.talk.activeTurnId;
+    }
+    const turnId = randomUUID();
+    const turn = this.talk?.startTurn({
+      turnId,
+      payload: { source: "implicit" },
+    });
+    if (turn?.event) {
+      this.onTalkEvent?.(turn.event);
+    }
+    return turnId;
+  }
+
+  private toTalkEventInput(event: VoiceClawServerEvent): TalkEventInput | null {
+    switch (event.type) {
+      case "session.ready":
+        return { type: "session.ready", payload: { sessionId: event.sessionId } };
+      case "audio.delta":
+        return {
+          type: "output.audio.delta",
+          payload: { byteLength: base64ByteLength(event.data) },
+          turnId: this.ensureActiveTurnId(),
+        };
+      case "transcript.delta":
+        return {
+          type: event.role === "assistant" ? "output.text.delta" : "transcript.delta",
+          payload: { role: event.role, text: event.text },
+          turnId: this.ensureActiveTurnId(),
+        };
+      case "transcript.done":
+        return {
+          type: event.role === "assistant" ? "output.text.done" : "transcript.done",
+          payload: { role: event.role, text: event.text },
+          turnId: this.ensureActiveTurnId(),
+          final: true,
+        };
+      case "tool.call":
+        return {
+          type: "tool.call",
+          payload: { name: event.name, arguments: event.arguments },
+          turnId: this.ensureActiveTurnId(),
+          callId: event.callId,
+        };
+      case "tool.progress":
+        return {
+          type: "tool.progress",
+          payload: { summary: event.summary },
+          turnId: this.ensureActiveTurnId(),
+          callId: event.callId,
+        };
+      case "turn.started": {
+        const turnId = event.turnId || randomUUID();
+        return { type: "turn.started", payload: {}, turnId };
+      }
+      case "turn.ended": {
+        const turnId = this.ensureActiveTurnId();
+        return { type: "turn.ended", payload: {}, turnId, final: true };
+      }
+      case "session.ended":
+        return {
+          type: "session.closed",
+          payload: {
+            summary: event.summary,
+            durationSec: event.durationSec,
+            turnCount: event.turnCount,
+          },
+          final: true,
+        };
+      case "session.rotating":
+        return { type: "health.changed", payload: { status: "rotating" } };
+      case "session.rotated":
+        return { type: "session.replaced", payload: { sessionId: event.sessionId } };
+      case "usage.metrics":
+        return { type: "usage.metrics", payload: event };
+      case "latency.metrics":
+        return { type: "latency.metrics", payload: event };
+      case "tool.cancelled":
+        return {
+          type: "tool.error",
+          payload: { callIds: event.callIds, cancelled: true },
+          turnId: this.ensureActiveTurnId(),
+          final: true,
+        };
+      case "error":
+        return {
+          type: "session.error",
+          payload: { message: event.message, code: event.code },
+          final: true,
+        };
+    }
+    return null;
   }
 
   private clearHandshakeTimer(): void {
@@ -330,6 +526,11 @@ function parseClientEvent(raw: RawData): VoiceClawClientEvent | null {
   }
 }
 
+function hasInstructionsOverride(config: VoiceClawSessionConfigEvent): boolean {
+  const value = (config as { instructionsOverride?: unknown }).instructionsOverride;
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function sanitizeSessionKey(value: string | undefined): string | null {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -351,6 +552,18 @@ export function resolveRealtimeSenderIsOwner(
 
 function sanitizeErrorMessage(message: string): string {
   return message.replace(/([?&]key=)[^&\s]+/g, "$1***");
+}
+
+function base64ByteLength(value: string): number {
+  const normalized = value.trim();
+  if (!normalized) {
+    return 0;
+  }
+  try {
+    return Buffer.from(normalized, "base64").byteLength;
+  } catch {
+    return normalized.length;
+  }
 }
 
 function once(fn: () => void): () => void {

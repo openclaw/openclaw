@@ -23,7 +23,6 @@ export type VoiceClawSessionConfigEvent = {
     location?: string;
   };
   watchdog?: "enabled" | "disabled";
-  instructionsOverride?: string;
   conversationHistory?: { role: "user" | "assistant"; text: string }[];
 };
 
