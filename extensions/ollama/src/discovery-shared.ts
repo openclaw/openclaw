@@ -268,7 +268,13 @@ export async function resolveOllamaDiscoveryResult(params: {
 
   const configuredBaseUrl = readProviderBaseUrl(explicit);
   const provider = await params.buildProvider(configuredBaseUrl, {
-    quiet: !hasRealOllamaKey && !hasMeaningfulExplicitConfig,
+    // Suppress the "Ollama could not be reached" warning during ambient discovery
+    // (no explicit Ollama provider config). A stale OLLAMA_API_KEY env var or
+    // auth-profile key from a past setup triggers discovery, but the user hasn't
+    // opted Ollama back in — noisy unreachable warnings corrupt programmatic
+    // stderr consumers (CI scripts, frontends). Only warn when the user has
+    // explicitly configured Ollama (models, baseUrl, apiKey, etc.).
+    quiet: !hasMeaningfulExplicitConfig,
   });
   if (provider.models?.length === 0 && !ollamaKey && !explicit?.apiKey) {
     return null;
