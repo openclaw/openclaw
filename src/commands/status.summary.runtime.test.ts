@@ -66,6 +66,55 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
       }),
     ).toBe("OpenAI Codex");
   });
+
+  it("preserves configured default CLI runtimes when sessions lack persisted harness metadata", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
+        } as never,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 0,
+        },
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("Claude CLI");
+  });
+
+  it("preserves configured agent runtimes before harness selection", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "pi" },
+            },
+            list: [
+              {
+                id: "research",
+                agentRuntime: { id: "codex" },
+              },
+            ],
+          },
+        } as never,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 0,
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        agentId: "research",
+        sessionKey: "agent:research:main",
+      }),
+    ).toBe("OpenAI Codex");
+  });
 });
 
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {
