@@ -77,6 +77,7 @@ export type ResolvedBrowserConfig = {
   headlessSource?: "config" | "default";
   noSandbox: boolean;
   attachOnly: boolean;
+  hyprlandCapture?: boolean;
   defaultProfile: string;
   profiles: Record<string, BrowserProfileConfig>;
   tabCleanup: ResolvedBrowserTabCleanupConfig;
@@ -442,6 +443,7 @@ export function resolveBrowserConfig(
     headlessSource,
     noSandbox,
     attachOnly,
+    hyprlandCapture: cfg?.hyprlandCapture === true,
     defaultProfile,
     profiles,
     tabCleanup: resolveBrowserTabCleanupConfig(cfg),

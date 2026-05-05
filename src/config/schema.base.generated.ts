@@ -910,6 +910,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Best-effort cleanup policy for browser tabs opened by primary-agent sessions. Keep enabled to avoid stale sandbox or managed-browser tabs accumulating across long-lived gateways.",
           },
+          hyprlandCapture: {
+            title: "Hyprland Viewport Capture",
+            description:
+              "Enables a Hyprland/Wayland fallback for viewport screenshots using grim and a virtual hyprctl output. Only activates when HYPRLAND_INSTANCE_SIGNATURE is set and the browser profile is not headless. Requires grim and hyprctl to be installed.",
+            type: "boolean",
+          },
         },
         additionalProperties: false,
         title: "Browser",
