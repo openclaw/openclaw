@@ -26,6 +26,7 @@ import {
 } from "./failover-policy.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  isModelFallbackDecisionLogEnabled,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
   type ModelFallbackStepFields,
@@ -508,6 +509,11 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   return DEFAULT_PROVIDER;
 }
 
+export const __testing = {
+  resolveFallbackCandidates,
+  resolveImageFallbackCandidates,
+} as const;
+
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -815,6 +821,9 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      return;
+    }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);

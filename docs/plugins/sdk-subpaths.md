@@ -117,7 +117,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
     | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
     | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
-    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials` |
+    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials`, deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
     | `plugin-sdk/provider-catalog-runtime` | Provider catalog augmentation runtime hook and plugin-provider registry seams for contract tests |
     | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `buildManifestModelProviderConfig`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
@@ -253,7 +253,7 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
     | `plugin-sdk/string-coerce-runtime` | Narrow primitive record/string coercion and normalization helpers without markdown/logging imports |
     | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
     | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
-    | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers |
+    | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers, including `resolveAgentDir`, `resolveDefaultAgentDir`, and deprecated `resolveOpenClawAgentDir` compatibility export |
     | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
     | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
   </Accordion>

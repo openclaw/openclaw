@@ -65,7 +65,7 @@ socket path is in use. You can override with:
 export PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock
 ```
 
-## Security & permissions
+## Security and permissions
 
 - The bridge validates **caller code signatures**; an allowlist of TeamIDs is
   enforced (Peekaboo host TeamID + OpenClaw app TeamID).

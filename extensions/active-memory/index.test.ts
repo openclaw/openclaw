@@ -188,6 +188,7 @@ describe("active-memory plugin", () => {
       payloads: [{ text: "- lemon pepper wings\n- blue cheese" }],
     });
     __testing.resetActiveRecallCacheForTests();
+    __testing.setTimeoutPartialDataGraceMsForTests(5);
     plugin.register(api as unknown as OpenClawPluginApi);
   });
 

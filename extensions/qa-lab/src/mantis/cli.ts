@@ -3,7 +3,10 @@ import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-trans
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
-import type { MantisSlackDesktopSmokeOptions } from "./slack-desktop-smoke.runtime.js";
+import type {
+  MantisSlackDesktopHydrateMode,
+  MantisSlackDesktopSmokeOptions,
+} from "./slack-desktop-smoke.runtime.js";
 import type {
   MantisVisualDriverOptions,
   MantisVisualTaskOptions,
@@ -96,6 +99,7 @@ type MantisSlackDesktopSmokeCommanderOptions = {
   credentialSource?: string;
   fast?: boolean;
   gatewaySetup?: boolean;
+  hydrateMode?: MantisSlackDesktopHydrateMode;
   idleTimeout?: string;
   keepLease?: boolean;
   leaseId?: string;
@@ -278,6 +282,7 @@ export function registerMantisCli(qa: Command) {
     .option("--slack-url <url>", "Slack web URL to open in the visible browser")
     .option("--slack-channel-id <id>", "Slack channel id for gateway setup allowlist")
     .option("--provider-mode <mode>", "QA provider mode")
+    .option("--hydrate-mode <mode>", "Remote hydrate mode: source or prehydrated")
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
     .option(
@@ -297,6 +302,7 @@ export function registerMantisCli(qa: Command) {
         credentialSource: opts.credentialSource,
         fastMode: opts.fast,
         gatewaySetup: opts.gatewaySetup,
+        hydrateMode: opts.hydrateMode,
         idleTimeout: opts.idleTimeout,
         keepLease: opts.keepLease,
         leaseId: opts.leaseId,

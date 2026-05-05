@@ -72,7 +72,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - Capture: decisions, preferences, constraints, open loops.
 - Avoid secrets unless explicitly requested.
 
-## Tools & skills
+## Tools and skills
 
 - Tools live in skills; follow each skill’s `SKILL.md` when you need it.
 - Keep environment-specific notes in `TOOLS.md` (Notes for Skills).
