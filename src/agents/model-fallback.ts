@@ -760,6 +760,19 @@ function resolveCooldownDecision(params: {
     };
   }
 
+  // Quota exhaustion is calendar/plan-window based, so avoid billing's
+  // 30-second single-provider probe loop. Only probe near disabled-window expiry.
+  if (inferredReason === "quota_exhausted") {
+    if (params.isPrimary && shouldProbe) {
+      return { type: "attempt", reason: inferredReason, markProbe: true };
+    }
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+    };
+  }
+
   const shouldAttemptDespiteCooldown =
     (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
     (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));

@@ -74,6 +74,7 @@ export function resolveFailoverStatus(reason: FailoverReason): number | undefine
     case "billing":
       return 402;
     case "rate_limit":
+    case "quota_exhausted":
       return 429;
     case "overloaded":
       return 503;
