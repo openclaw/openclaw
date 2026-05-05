@@ -837,7 +837,7 @@ async function readPhaseSignalStore(
     if (code === "ENOENT" || err instanceof SyntaxError) {
       return emptyPhaseSignalStore(nowIso);
     }
-    return emptyPhaseSignalStore(nowIso);
+    throw err;
   }
 }
 
