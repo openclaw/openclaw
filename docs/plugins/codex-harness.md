@@ -555,7 +555,15 @@ state. Codex's own skill loader reads `$CODEX_HOME/skills` and
 `$HOME/.agents/skills`, so both values are isolated for local app-server
 launches. That keeps Codex-native skills, plugins, config, accounts, and thread
 state scoped to the OpenClaw agent instead of leaking in from the operator's
-personal Codex CLI home.
+personal shell.
+
+This isolation also defines the OAuth ownership boundary. Treat each isolated
+`CODEX_HOME` as having exactly one refresh-token owner. Do not copy the same
+Codex OAuth token set into multiple isolated agent homes and let each backend
+refresh independently; Codex refresh tokens rotate, so one home can invalidate
+another and produce `401 token_revoked` or `refresh_token_reused`. Safe setups
+are either one login per isolated home or one OpenClaw-managed shared profile
+that refreshes once and then mirrors fresh credentials deliberately.
 
 OpenClaw plugins and OpenClaw skill snapshots still flow through OpenClaw's own
 plugin registry and skill loader. Personal Codex CLI assets do not. If you have

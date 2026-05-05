@@ -209,6 +209,17 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
     </Steps>
 
+    <Note>
+    For native Codex runtime, keep one OAuth refresh owner per isolated Codex
+    home. OpenClaw's local app-server launches already isolate `CODEX_HOME` per
+    agent. Do not manually copy the same Codex OAuth token set into multiple
+    isolated agent homes unless you also provide one synchronized refresh owner.
+    Otherwise one backend can rotate the refresh token and the others will fail
+    later with `401 token_revoked` or `refresh_token_reused`. Safe setups are:
+    one `codex login` per isolated home, or one OpenClaw-managed shared profile
+    that owns refresh and mirrors the fresh credentials.
+    </Note>
+
     ### Route summary
 
     | Model ref | Runtime config | Route | Auth |
