@@ -10,6 +10,7 @@ import { createFeishuClient } from "./client.js";
 import { createFeishuApiError, requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
+import { normalizeFeishuOpenMessageId } from "./message-id.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -166,10 +167,11 @@ async function sendReplyOrFallbackDirect(
       )
     : null;
 
+  const replyToMessageId = normalizeFeishuOpenMessageId(params.replyToMessageId);
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
     response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
+      path: { message_id: replyToMessageId },
       data: {
         content: params.content,
         msg_type: params.msgType,
@@ -393,7 +395,8 @@ export async function getMessageFeishu(params: {
   messageId: string;
   accountId?: string;
 }): Promise<FeishuMessageInfo | null> {
-  const { cfg, messageId, accountId } = params;
+  const { cfg, accountId } = params;
+  const messageId = normalizeFeishuOpenMessageId(params.messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -619,7 +622,8 @@ export async function editMessageFeishu(params: {
   card?: Record<string, unknown>;
   accountId?: string;
 }): Promise<{ messageId: string; contentType: "post" | "interactive" }> {
-  const { cfg, messageId, text, card, accountId } = params;
+  const { cfg, text, card, accountId } = params;
+  const messageId = normalizeFeishuOpenMessageId(params.messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
@@ -671,7 +675,8 @@ export async function updateCardFeishu(params: {
   card: Record<string, unknown>;
   accountId?: string;
 }): Promise<void> {
-  const { cfg, messageId, card, accountId } = params;
+  const { cfg, card, accountId } = params;
+  const messageId = normalizeFeishuOpenMessageId(params.messageId);
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
     throw new Error(`Feishu account "${account.accountId}" not configured`);
