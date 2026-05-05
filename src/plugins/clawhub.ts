@@ -265,29 +265,47 @@ function normalizeArtifactResolverFiles(
   return files as NonNullable<ClawHubPackageVersion["version"]>["files"];
 }
 
+type ClawHubResolvedArtifactWire = {
+  artifactKind?: string | null;
+  kind?: string | null;
+  artifactSha256?: string | null;
+  sha256?: string | null;
+  npmIntegrity?: string | null;
+  npmShasum?: string | null;
+  downloadUrl?: string | null;
+};
+
 function resolveTopLevelNpmPackArtifact(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubPackageArtifactSummary | null {
-  if (artifact?.artifactKind !== "npm-pack") {
+  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
+  const artifactKind = wire?.artifactKind ?? wire?.kind;
+  if (artifactKind !== "npm-pack") {
+    return null;
+  }
+  if (typeof wire?.npmIntegrity !== "string") {
     return null;
   }
   return {
     kind: "npm-pack",
     format: "tgz",
-    sha256: artifact.artifactSha256 ?? null,
-    npmIntegrity: artifact.npmIntegrity,
-    npmShasum: artifact.npmShasum ?? null,
-    downloadUrl: artifact.downloadUrl ?? null,
+    sha256: wire.artifactSha256 ?? wire.sha256 ?? null,
+    npmIntegrity: wire.npmIntegrity,
+    npmShasum: wire.npmShasum ?? null,
+    downloadUrl: wire.downloadUrl ?? null,
   };
 }
 
 function resolveTopLevelLegacyArchiveVerification(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubArchiveVerification | null {
-  if (artifact?.artifactKind !== "legacy-zip" || typeof artifact.artifactSha256 !== "string") {
+  const wire = artifact as ClawHubResolvedArtifactWire | null | undefined;
+  const artifactKind = wire?.artifactKind ?? wire?.kind;
+  const artifactSha256 = wire?.artifactSha256 ?? wire?.sha256;
+  if (artifactKind !== "legacy-zip" || typeof artifactSha256 !== "string") {
     return null;
   }
-  const integrity = normalizeClawHubSha256Integrity(artifact.artifactSha256);
+  const integrity = normalizeClawHubSha256Integrity(artifactSha256);
   return integrity ? { kind: "archive-integrity", integrity } : null;
 }
 

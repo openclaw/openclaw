@@ -226,7 +226,9 @@ function createTunnelProxy(
     });
 
     upstream.on("error", () => {
-      clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+      if (!clientSocket.destroyed && !clientSocket.writableEnded) {
+        clientSocket.end("HTTP/1.1 502 Bad Gateway\r\n\r\n");
+      }
     });
   });
 

@@ -611,6 +611,22 @@ describe("/model chat UX", () => {
     expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
   });
 
+  it("includes additive allowlist repair when a runtime switch targets a blocked model", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openai/gpt-5.5 --runtime codex",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-6"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain('Model "openai/gpt-5.5" is not allowed.');
+    expect(resolved.errorText).toContain(
+      `openclaw config set agents.defaults.models '{"openai/gpt-5.5":{}}' --strict-json --merge`,
+    );
+    expect(resolved.errorText).toContain("Then retry: /model openai/gpt-5.5 --runtime codex");
+    expect(resolved.errorText).toContain("openclaw plugins enable codex");
+  });
+
   it("treats explicit default /model selection as resettable default", () => {
     const resolved = resolveModelSelectionForCommand({
       command: "/model anthropic/claude-opus-4-6",
@@ -983,6 +999,28 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       provider: "openai",
       model: "gpt-4o",
     });
+  });
+
+  it("keeps xhigh when switching to OpenCode Claude Opus 4.7", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "xhigh" });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model opencode/claude-opus-4-7"),
+        allowedModelKeys: new Set([...allowedModelKeys, "opencode/claude-opus-4-7"]),
+        allowedModelCatalog: [
+          ...allowedModelCatalog,
+          { provider: "opencode", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+        ],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Model set to opencode/claude-opus-4-7 for this session.");
+    expect(result?.text ?? "").not.toContain("xhigh not supported");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
 
   it("does not request a live restart when /model mutates an active session", async () => {

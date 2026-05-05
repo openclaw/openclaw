@@ -156,12 +156,18 @@ function isTerminalChatState(
   return state === "final" || state === "aborted" || state === "error";
 }
 
-function isSessionMessagePhasePayload(payload: unknown): boolean {
+function isChatTurnSessionChangedPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as { phase?: unknown; reason?: unknown };
   return (
-    Boolean(payload) &&
-    typeof payload === "object" &&
-    !Array.isArray(payload) &&
-    (payload as { phase?: unknown }).phase === "message"
+    record.phase === "start" ||
+    record.phase === "message" ||
+    record.phase === "end" ||
+    record.phase === "error" ||
+    record.reason === "send" ||
+    record.reason === "steer"
   );
 }
 
@@ -477,7 +483,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+      if (host.tab !== "chat") {
+        void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+      }
       void loadAgents(host as unknown as AgentsState);
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
@@ -749,12 +757,8 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    const applyResult = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    if (
-      applyResult.applied &&
-      applyResult.change === "updated" &&
-      isSessionMessagePhasePayload(evt.payload)
-    ) {
+    const result = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
       return;
     }
     void loadSessions(host as unknown as SessionsState);

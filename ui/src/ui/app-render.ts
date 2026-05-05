@@ -11,9 +11,11 @@ import {
   renderChatSessionSelect,
   renderTab,
   resolveAssistantAttachmentAuthToken,
+  resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
   renderTopbarThemeModeToggle,
   createChatSession,
+  dismissChatError,
   switchChatSession,
 } from "./app-render.helpers.ts";
 import { warnQueryToken } from "./app-settings.ts";
@@ -645,6 +647,7 @@ export function renderApp(state: AppViewState) {
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
+  const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
   const localAssistantAvatarOverride =
@@ -1362,6 +1365,7 @@ export function renderApp(state: AppViewState) {
             <dashboard-header
               .tab=${state.tab}
               .basePath=${state.basePath}
+              .agentLabel=${dashboardHeaderContext.agentLabel}
               @navigate=${(event: CustomEvent<Tab>) => {
                 state.setTab(event.detail);
               }}
@@ -1535,7 +1539,13 @@ export function renderApp(state: AppViewState) {
           : nothing}
         ${state.tab === "config"
           ? nothing
-          : html`<section class="content-header">
+          : html`<section
+              class=${isChat && state.chatHeaderControlsHidden
+                ? "content-header content-header--chat-hidden"
+                : "content-header"}
+              ?inert=${isChat && state.chatHeaderControlsHidden}
+              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
+            >
               <div>
                 ${isChat
                   ? renderChatSessionSelect(state)
@@ -1677,6 +1687,8 @@ export function renderApp(state: AppViewState) {
                 limit: state.sessionsFilterLimit,
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
+                showArchived: state.sessionsShowArchived,
+                filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
                 agentIdentityById: state.agentIdentityById,
@@ -1695,6 +1707,36 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = next.limit;
                   state.sessionsIncludeGlobal = next.includeGlobal;
                   state.sessionsIncludeUnknown = next.includeUnknown;
+                  state.sessionsShowArchived = next.showArchived;
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: Number(next.activeMinutes) || 0,
+                    limit: Number(next.limit) || 0,
+                    includeGlobal: next.includeGlobal,
+                    includeUnknown: next.includeUnknown,
+                    showArchived: next.showArchived,
+                  });
+                },
+                onToggleFiltersCollapsed: () => {
+                  state.sessionsFiltersCollapsed = !state.sessionsFiltersCollapsed;
+                },
+                onClearFilters: () => {
+                  state.sessionsFilterActive = "";
+                  state.sessionsFilterLimit = "";
+                  state.sessionsIncludeGlobal = true;
+                  state.sessionsIncludeUnknown = true;
+                  state.sessionsShowArchived = true;
+                  state.sessionsSearchQuery = "";
+                  state.sessionsSelectedKeys = new Set();
+                  state.sessionsPage = 0;
+                  void loadSessions(state, {
+                    activeMinutes: 0,
+                    limit: 0,
+                    includeGlobal: true,
+                    includeUnknown: true,
+                    showArchived: true,
+                  });
                 },
                 onSearchChange: (q) => {
                   state.sessionsSearchQuery = q;
@@ -1795,6 +1837,7 @@ export function renderApp(state: AppViewState) {
                 error: state.cronError,
                 busy: state.cronBusy,
                 form: state.cronForm,
+                cronFormCollapsed: state.cronFormCollapsed,
                 channels: state.channelsSnapshot?.channelMeta?.length
                   ? state.channelsSnapshot.channelMeta.map((entry) => entry.id)
                   : (state.channelsSnapshot?.channelOrder ?? []),
@@ -1825,9 +1868,18 @@ export function renderApp(state: AppViewState) {
                 },
                 onRefresh: () => state.loadCron(),
                 onAdd: () => addCronJob(state),
-                onEdit: (job) => startCronEdit(state, job),
-                onClone: (job) => startCronClone(state, job),
+                onEdit: (job) => {
+                  state.cronFormCollapsed = false;
+                  startCronEdit(state, job);
+                },
+                onClone: (job) => {
+                  state.cronFormCollapsed = false;
+                  startCronClone(state, job);
+                },
                 onCancelEdit: () => cancelCronEdit(state),
+                onToggleFormCollapsed: (collapsed) => {
+                  state.cronFormCollapsed = collapsed;
+                },
                 onToggle: (job, enabled) => toggleCronJob(state, job, enabled),
                 onRun: (job, mode) => runCronJob(state, job, mode ?? "force"),
                 onRemove: (job) => removeCronJob(state, job),
@@ -2346,6 +2398,7 @@ export function renderApp(state: AppViewState) {
               canSend: state.connected,
               disabledReason: chatDisabledReason,
               error: state.lastError,
+              onDismissError: () => dismissChatError(state),
               sessions: state.sessionsResult,
               focusMode: chatFocus,
               autoExpandToolCalls: false,

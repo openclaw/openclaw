@@ -1,11 +1,11 @@
 {
   "name": "@openclaw/ollama-provider",
-  "version": "2026.5.3",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
   "dependencies": {
-    "@mariozechner/pi-ai": "0.71.1",
+    "@mariozechner/pi-ai": "0.73.0",
     "typebox": "1.1.37"
   },
   "devDependencies": {

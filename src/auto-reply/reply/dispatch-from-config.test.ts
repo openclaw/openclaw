@@ -25,7 +25,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -109,6 +109,21 @@ const sessionStoreMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(() => ({})),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionStoreEntry: vi.fn(() => ({ existing: sessionStoreMocks.currentEntry })),
+  updateSessionStoreEntry: vi.fn(
+    async (params: {
+      update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+    }) => {
+      if (!sessionStoreMocks.currentEntry) {
+        return null;
+      }
+      const patch = await params.update(sessionStoreMocks.currentEntry);
+      if (!patch) {
+        return sessionStoreMocks.currentEntry;
+      }
+      sessionStoreMocks.currentEntry = { ...sessionStoreMocks.currentEntry, ...patch };
+      return sessionStoreMocks.currentEntry;
+    },
+  ),
 }));
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
   getAcpSessionManager: vi.fn(),
@@ -358,6 +373,7 @@ vi.mock("./dispatch-from-config.runtime.js", () => ({
   resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
   resolveStorePath: sessionStoreMocks.resolveStorePath,
   triggerInternalHook: internalHookMocks.triggerInternalHook,
+  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -1748,6 +1764,88 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("delivers text-only tool summaries when verbose overrides preview suppression", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({ text: "🔧 exec: ls" });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith({ text: "🔧 exec: ls" });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("delivers plan and working-status progress when verbose overrides preview suppression", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:main",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Inspect code.",
+        steps: ["Patch code"],
+      });
+      await opts?.onApprovalEvent?.({
+        phase: "requested",
+        status: "pending",
+        command: "pnpm test",
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(1, {
+      text: "Inspect code.\n\n1. Patch code",
+    });
+    expect(dispatcher.sendToolResult).toHaveBeenNthCalledWith(2, {
+      text: "Working: awaiting approval: pnpm test",
+    });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
@@ -4064,6 +4162,7 @@ describe("before_dispatch hook", () => {
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
   beforeEach(() => {
     resetInboundDedupe();
+    sessionStoreMocks.currentEntry = undefined;
     sessionBindingMocks.resolveByConversation.mockReset();
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
@@ -4076,6 +4175,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
     hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
+    threadInfoMocks.parseSessionThreadInfo.mockReset();
+    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
   });
 
   it("still calls the replyResolver when sendPolicy is deny", async () => {
@@ -4457,6 +4558,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
@@ -4476,6 +4578,72 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       }),
       expect.any(Object),
     );
+  });
+
+  it("delivers marked runtime failure notices in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const failureNotice = setReplyPayloadMetadata(
+      { text: "⚠️ You've reached your Codex subscription usage limit." },
+      { deliverDespiteSourceReplySuppression: true },
+    );
+    const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(failureNotice);
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+  });
+
+  it("does not deliver marked runtime failure notices when sendPolicy denies delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async () =>
+        setReplyPayloadMetadata(
+          { text: "⚠️ You've reached your Codex subscription usage limit." },
+          { deliverDespiteSourceReplySuppression: true },
+        ) satisfies ReplyPayload,
+    );
+    const ctx = buildTestCtx({ SessionKey: "test:session" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("defaults group/channel turns to message-tool-only source delivery", async () => {
@@ -4529,6 +4697,31 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps default direct source delivery automatic", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
+      return { text: "visible direct reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        SessionKey: "agent:main:telegram:direct:U1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(true);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "visible direct reply" }),
+    );
   });
 
   it("uses harness defaults for direct source delivery when config is unset", async () => {
