@@ -329,7 +329,9 @@ async function readLastTranscriptLine(transcriptPath: string): Promise<string | 
   try {
     handle = await open(transcriptPath, "r");
     const stat = await handle.stat();
-    if (stat.size === 0) return undefined;
+    if (stat.size === 0) {
+      return undefined;
+    }
     const readSize = Math.min(stat.size, 4096);
     const buf = Buffer.alloc(readSize);
     await handle.read(buf, 0, readSize, stat.size - readSize);
@@ -344,7 +346,9 @@ async function readLastTranscriptLine(transcriptPath: string): Promise<string | 
 }
 
 function lastLineIsAssistant(line: string | undefined): boolean {
-  if (!line) return false;
+  if (!line) {
+    return false;
+  }
   try {
     const parsed = JSON.parse(line) as {
       type?: string;
@@ -382,7 +386,9 @@ export async function persistEmbeddedTurnTranscript(params: {
   });
 
   const lastLine = await readLastTranscriptLine(sessionFile);
-  if (lastLineIsAssistant(lastLine)) return sessionEntry;
+  if (lastLineIsAssistant(lastLine)) {
+    return sessionEntry;
+  }
 
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "embedded";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
