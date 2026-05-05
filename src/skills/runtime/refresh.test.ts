@@ -673,6 +673,93 @@ describe("ensureSkillsWatcher", () => {
     expect(seen.some((change) => change.workspaceDir === "/tmp/ws-a")).toBe(false);
   });
 
+  it("clears workspace version state on watch disable without losing pending invalidation", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const workspaceDir = "/tmp/workspace-version-cleanup";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    const firstVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir,
+      reason: "watch",
+      changedPath: `${workspaceDir}/skills/demo/SKILL.md`,
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watch: false } } },
+    });
+
+    const nextVersion = refreshModule.getSkillsSnapshotVersion(workspaceDir);
+    expect(nextVersion).toBe(firstVersion);
+    expect(refreshModule.shouldRefreshSnapshotForVersion(0, nextVersion)).toBe(true);
+    expect(refreshModule.bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" })).toBe(
+      firstVersion,
+    );
+  });
+
+  it("evicts idle workspace subscriptions on a later ensure call", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const idleWorkspaceDir = "/tmp/workspace-idle";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: idleWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
+    const idleSkillsIndex = callPaths.findIndex(
+      (target) => target === `${idleWorkspaceDir}/skills`,
+    );
+    expect(idleSkillsIndex).toBeGreaterThanOrEqual(0);
+    const firstVersion = refreshModule.bumpSkillsSnapshotVersion({
+      workspaceDir: idleWorkspaceDir,
+      reason: "watch",
+    });
+
+    vi.advanceTimersByTime(60 * 60_000 + 1_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace-active",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    expect(createdWatchers[idleSkillsIndex]?.close).toHaveBeenCalledTimes(1);
+    expect(refreshModule.getSkillsSnapshotVersion(idleWorkspaceDir)).toBe(firstVersion);
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    expect(refreshModule.bumpSkillsSnapshotVersion({ workspaceDir: idleWorkspaceDir })).toBe(
+      firstVersion,
+    );
+  });
+
+  it("keeps refreshed workspace subscriptions within the idle TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    const activeWorkspaceDir = "/tmp/workspace-active-refresh";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: activeWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    const callPaths = (watchMock.mock.calls as unknown as Array<[string]>).map((call) => call[0]);
+    const activeSkillsIndex = callPaths.findIndex(
+      (target) => target === `${activeWorkspaceDir}/skills`,
+    );
+    expect(activeSkillsIndex).toBeGreaterThanOrEqual(0);
+
+    vi.advanceTimersByTime(30 * 60_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: activeWorkspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+    vi.advanceTimersByTime(31 * 60_000);
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace-other",
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    expect(createdWatchers[activeSkillsIndex]?.close).not.toHaveBeenCalled();
+  });
+
   it("rebuilds a shared watcher with last-writer debounce while preserving subscribers", async () => {
     vi.useFakeTimers();
     const seen: SkillsChangeEvent[] = [];
