@@ -136,6 +136,7 @@ function resetMemoryRecallMocks() {
     removedInvalidEntries: 0,
     rewroteStore: false,
     removedStaleLock: false,
+    removedTempFiles: 0,
   });
   noteWorkspaceMemoryHealth.mockClear();
   maybeRepairWorkspaceMemoryHealth.mockClear();
@@ -801,6 +802,7 @@ describe("memory recall doctor integration", () => {
       removedInvalidEntries: 1,
       rewroteStore: true,
       removedStaleLock: true,
+      removedTempFiles: 0,
     });
     const prompter = createPrompter();
 
