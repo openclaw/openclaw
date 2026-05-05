@@ -540,6 +540,21 @@ describe("amazon-bedrock provider plugin", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("preserves the caller-provided apiKey when authMode is api-key", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const context = buildBedrockRuntimeAuthContext({
+      apiKey: "literal-key",
+      authMode: "api-key",
+    });
+
+    const result = await provider.prepareRuntimeAuth?.(context);
+
+    // No synthetic runtime token is returned for api-key mode; the auth
+    // controller therefore keeps using the original apiKey unchanged.
+    expect(result).toBeUndefined();
+    expect(context.apiKey).toBe("literal-key");
+  });
+
   describe("guardrail config schema", () => {
     it("defines discovery and guardrail objects with the expected shape", () => {
       const pluginJson = JSON.parse(
