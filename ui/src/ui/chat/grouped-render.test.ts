@@ -633,6 +633,44 @@ describe("grouped chat rendering", () => {
     expect(streamingTime?.textContent?.trim()).toBe(display.label);
   });
 
+  it("strips <think> and <final> tags from streaming bubble text", () => {
+    const container = document.createElement("div");
+    const timestamp = Date.UTC(2026, 3, 24, 18, 30);
+
+    render(
+      renderStreamingGroup(
+        "<think>internal step 1</think><final>Visible answer</final>",
+        timestamp,
+      ),
+      container,
+    );
+
+    const text = container.querySelector<HTMLElement>(".chat-text")?.textContent ?? "";
+    expect(text).not.toContain("<think>");
+    expect(text).not.toContain("</think>");
+    expect(text).not.toContain("<final>");
+    expect(text).not.toContain("</final>");
+    expect(text).not.toContain("internal step 1");
+    expect(text).toContain("Visible answer");
+  });
+
+  it("strips <think> and <final> tags from non-streaming assistant bubble text", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "<think>secret reasoning</think><final>Done.</final>",
+      timestamp: 1000,
+    });
+
+    const text = container.querySelector<HTMLElement>(".chat-text")?.textContent ?? "";
+    expect(text).not.toContain("<think>");
+    expect(text).not.toContain("</think>");
+    expect(text).not.toContain("<final>");
+    expect(text).not.toContain("</final>");
+    expect(text).not.toContain("secret reasoning");
+    expect(text).toContain("Done.");
+  });
+
   it("renders configured local user names", () => {
     const renderUser = (opts: Partial<RenderMessageGroupOptions>) => {
       const container = document.createElement("div");
