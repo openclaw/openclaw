@@ -185,9 +185,11 @@ describe("resolveBootstrapFilesForRun", () => {
     });
 
     // Workspace AGENTS.md is suppressed (skipBootstrap), but hook-injected
-    // EXTRA.md still appears.
-    expect(files.some((file) => file.name === "AGENTS.md")).toBe(false);
-    const extra = files.find((file) => file.name === "EXTRA.md");
+    // EXTRA.md still appears. WorkspaceBootstrapFileName is a typed union of
+    // canonical bootstrap names; hooks can inject arbitrary file names so
+    // compare via String() to keep the assertion type-portable.
+    expect(files.some((file) => String(file.name) === "AGENTS.md")).toBe(false);
+    const extra = files.find((file) => String(file.name) === "EXTRA.md");
     expect(extra?.content).toBe("extra");
   });
 
