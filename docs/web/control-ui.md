@@ -76,7 +76,7 @@ The Control UI fetches its runtime settings from `/__openclaw/control-ui-config.
 
 ## Language support
 
-The Control UI can localize itself on first load based on your browser locale. To override it later, open **Overview -> Gateway Access -> Language**. The locale picker lives in the Gateway Access card, not under Appearance.
+The Control UI can localize itself on first load based on your browser locale. To override it later, use the language picker in the dashboard top bar, or open **Overview -> Gateway Access -> Language**. The locale picker is not under Appearance.
 
 - Supported locales: `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, `fa`
 - Non-English translations are lazy-loaded in the browser.

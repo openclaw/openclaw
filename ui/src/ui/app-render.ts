@@ -18,6 +18,7 @@ import {
   resolveAssistantAttachmentAuthToken,
   resolveDashboardHeaderContext,
   renderSidebarConnectionStatus,
+  renderTopbarLocaleSelect,
   renderTopbarThemeModeToggle,
   createChatSession,
   dismissChatError,
@@ -1717,7 +1718,7 @@ export function renderApp(state: AppViewState) {
               <kbd class="topbar-search__kbd">⌘K</kbd>
             </button>
             <div class="topbar-status">
-              ${isChat ? renderChatMobileToggle(state) : nothing}
+              ${isChat ? renderChatMobileToggle(state) : nothing} ${renderTopbarLocaleSelect(state)}
               ${renderTopbarThemeModeToggle(state)}
             </div>
           </div>

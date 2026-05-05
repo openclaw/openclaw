@@ -270,6 +270,40 @@
   height: 6px;
 }
 
+.topbar-locale {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.topbar-locale__label {
+  font-weight: 600;
+}
+
+.topbar-locale__select {
+  max-width: 180px;
+  min-height: 28px;
+  padding: 0 24px 0 8px;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.topbar-locale__select:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
 .topbar-status .theme-orb__trigger {
   width: 26px;
   height: 26px;

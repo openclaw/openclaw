@@ -355,6 +355,20 @@
     flex: 1;
   }
 
+  .topbar-locale {
+    max-width: 150px;
+    padding: 0 8px;
+  }
+
+  .topbar-locale__label {
+    display: none;
+  }
+
+  .topbar-locale__select {
+    max-width: 126px;
+    padding-left: 4px;
+  }
+
   .topbar-theme-mode {
     display: none;
   }

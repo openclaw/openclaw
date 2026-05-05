@@ -114,6 +114,12 @@ describe("i18n", () => {
     expect(translate.t("common.health")).toBe("健康状况");
   });
 
+  it("loads the built-in Vietnamese app locale without lazy loading", async () => {
+    await translate.i18n.setLocale("vi");
+    expect(translate.i18n.getLocale()).toBe("vi");
+    expect(translate.t("common.health")).toBe((viLocale.common as { health: string }).health);
+  });
+
   it("loads saved non-English locale on startup", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);

@@ -1,7 +1,9 @@
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
+import { vi } from "../locales/vi.ts";
 import {
   DEFAULT_LOCALE,
+  DEFAULT_APP_LOCALE,
   SUPPORTED_LOCALES,
   isSupportedLocale,
   loadLazyLocaleTranslation,
@@ -14,8 +16,11 @@ type Subscriber = (locale: Locale) => void;
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
 class I18nManager {
-  private locale: Locale = DEFAULT_LOCALE;
-  private translations: Partial<Record<Locale, TranslationMap>> = { [DEFAULT_LOCALE]: en };
+  private locale: Locale = DEFAULT_APP_LOCALE;
+  private translations: Partial<Record<Locale, TranslationMap>> = {
+    [DEFAULT_LOCALE]: en,
+    [DEFAULT_APP_LOCALE]: vi,
+  };
   private subscribers: Set<Subscriber> = new Set();
 
   constructor() {
