@@ -212,9 +212,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let firstPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
         #expect(firstPrompt.id == "approval-1")
         #expect(firstPrompt.commandText == "echo first")
-        #expect(firstPrompt.allowsAllowOnce)
         #expect(firstPrompt.allowsAllowAlways == false)
-        #expect(firstPrompt.allowsDeny)
 
         appModel._test_presentExecApprovalPrompt(
             try #require(
@@ -230,9 +228,7 @@ private final class MockBootstrapNotificationCenter: NotificationCentering, @unc
         let secondPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
         #expect(secondPrompt.id == "approval-2")
         #expect(secondPrompt.commandText == "echo second")
-        #expect(secondPrompt.allowsAllowOnce)
         #expect(secondPrompt.allowsAllowAlways)
-        #expect(secondPrompt.allowsDeny)
 
         appModel._test_dismissPendingExecApprovalPrompt()
         #expect(appModel._test_pendingExecApprovalPrompt() == nil)

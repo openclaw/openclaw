@@ -34,18 +34,11 @@ export function resolveApprovalDeliveryFailedNoticeText(params: {
     params.approvalKind === "exec" && params.approvalId.length > 8
       ? params.approvalId.slice(0, 8)
       : params.approvalId;
-  const allowedDecisions = params.allowedDecisions;
-  const hasExplicitAllowedDecisions = allowedDecisions !== undefined;
-  const decisions = hasExplicitAllowedDecisions
-    ? allowedDecisions.join("|")
-    : ["allow-once", "allow-always", "deny"].join("|");
-  if (!decisions) {
-    return [
-      "Approval required. I could not deliver the native approval request.",
-      "No reply decisions are currently available for this approval.",
-      "Try again from Control UI or cancel the run.",
-    ].join("\n");
-  }
+  const decisions = (
+    params.allowedDecisions?.length
+      ? params.allowedDecisions
+      : ["allow-once", "allow-always", "deny"]
+  ).join("|");
   return [
     "Approval required. I could not deliver the native approval request.",
     `Reply with: /approve ${commandId} ${decisions}`,

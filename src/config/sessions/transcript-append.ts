@@ -26,10 +26,6 @@ type TranscriptLeafInfo = {
   nonSessionEntryCount: number;
 };
 
-export type TranscriptRawAppendParentLink = {
-  parentId?: string | null;
-};
-
 async function yieldTranscriptAppendScan(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
@@ -233,32 +229,6 @@ async function withTranscriptAppendQueue<T>(
   }
 }
 
-export async function resolveTranscriptRawAppendParentLink(params: {
-  transcriptPath: string;
-  useRawWhenLinear?: boolean;
-}): Promise<TranscriptRawAppendParentLink> {
-  const stat = await fs.stat(params.transcriptPath).catch(() => null);
-  let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
-    () => ({
-      hasParentLinkedEntries: false,
-      nonSessionEntryCount: 0,
-    }),
-  );
-  const hasLinearEntries = !leafInfo.hasParentLinkedEntries && leafInfo.nonSessionEntryCount > 0;
-  const allowRawWhenLinear = params.useRawWhenLinear !== false;
-  const shouldRawAppend =
-    allowRawWhenLinear && hasLinearEntries && (stat?.size ?? 0) > SESSION_MANAGER_APPEND_MAX_BYTES;
-  if (hasLinearEntries && !shouldRawAppend) {
-    const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
-    leafInfo = {
-      ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
-      hasParentLinkedEntries: Boolean(migrated.leafId),
-      nonSessionEntryCount: leafInfo.nonSessionEntryCount,
-    };
-  }
-  return shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null };
-}
-
 export async function appendSessionTranscriptMessage(params: {
   transcriptPath: string;
   message: unknown;
@@ -294,14 +264,31 @@ async function appendSessionTranscriptMessageLocked(params: {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       ...(params.cwd ? { cwd: params.cwd } : {}),
     });
-    const parentLink = await resolveTranscriptRawAppendParentLink({
-      transcriptPath: params.transcriptPath,
-      useRawWhenLinear: params.useRawWhenLinear,
-    });
+    const stat = await fs.stat(params.transcriptPath).catch(() => null);
+    let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
+      () => ({
+        hasParentLinkedEntries: false,
+        nonSessionEntryCount: 0,
+      }),
+    );
+    const hasLinearEntries = !leafInfo.hasParentLinkedEntries && leafInfo.nonSessionEntryCount > 0;
+    const allowRawWhenLinear = params.useRawWhenLinear !== false;
+    const shouldRawAppend =
+      allowRawWhenLinear &&
+      hasLinearEntries &&
+      (stat?.size ?? 0) > SESSION_MANAGER_APPEND_MAX_BYTES;
+    if (hasLinearEntries && !shouldRawAppend) {
+      const migrated = await migrateLinearTranscriptToParentLinked(params.transcriptPath);
+      leafInfo = {
+        ...(migrated.leafId ? { leafId: migrated.leafId } : {}),
+        hasParentLinkedEntries: Boolean(migrated.leafId),
+        nonSessionEntryCount: leafInfo.nonSessionEntryCount,
+      };
+    }
     const entry = {
       type: "message",
       id: messageId,
-      ...parentLink,
+      ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
       timestamp: new Date(now).toISOString(),
       message: params.message,
     };

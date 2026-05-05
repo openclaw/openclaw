@@ -14,7 +14,6 @@ struct ExecApprovalPromptRequest: Codable {
     var agentId: String?
     var resolvedPath: String?
     var sessionKey: String?
-    var allowedDecisions: [ExecApprovalDecision]?
 }
 
 private struct ExecApprovalSocketRequest: Codable {
@@ -236,43 +235,20 @@ enum ExecApprovalsPromptPresenter {
         alert.informativeText = "Review the command details before allowing."
         alert.accessoryView = self.buildAccessoryView(request)
 
-        let decisions = self.renderedDecisions(request)
-        if decisions.isEmpty {
+        alert.addButton(withTitle: "Allow Once")
+        alert.addButton(withTitle: "Always Allow")
+        alert.addButton(withTitle: "Don't Allow")
+        if #available(macOS 11.0, *), alert.buttons.indices.contains(2) {
+            alert.buttons[2].hasDestructiveAction = true
+        }
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            return .allowOnce
+        case .alertSecondButtonReturn:
+            return .allowAlways
+        default:
             return .deny
-        }
-        for decision in decisions {
-            alert.addButton(withTitle: self.buttonTitle(decision))
-        }
-        if #available(macOS 11.0, *) {
-            for (index, decision) in decisions.enumerated()
-                where decision == .deny && alert.buttons.indices.contains(index)
-            {
-                alert.buttons[index].hasDestructiveAction = true
-            }
-        }
-
-        let response = alert.runModal()
-        let selectedIndex = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-        if decisions.indices.contains(selectedIndex) {
-            return decisions[selectedIndex]
-        }
-        return .deny
-    }
-
-    private static func renderedDecisions(_ request: ExecApprovalPromptRequest) -> [ExecApprovalDecision] {
-        let defaults: [ExecApprovalDecision] = [.allowOnce, .allowAlways, .deny]
-        let allowed = request.allowedDecisions ?? defaults
-        return defaults.filter { allowed.contains($0) }
-    }
-
-    private static func buttonTitle(_ decision: ExecApprovalDecision) -> String {
-        switch decision {
-        case .allowOnce:
-            "Allow Once"
-        case .allowAlways:
-            "Always Allow"
-        case .deny:
-            "Don't Allow"
         }
     }
 

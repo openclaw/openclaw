@@ -104,16 +104,14 @@ private struct ExecApprovalPromptCard: View {
             }
 
             VStack(spacing: 10) {
-                if self.prompt.allowsAllowOnce {
-                    Button {
-                        self.onAllowOnce()
-                    } label: {
-                        Text("Allow Once")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.isResolving)
+                Button {
+                    self.onAllowOnce()
+                } label: {
+                    Text("Allow Once")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.isResolving)
 
                 if self.prompt.allowsAllowAlways {
                     Button {
@@ -127,16 +125,14 @@ private struct ExecApprovalPromptCard: View {
                 }
 
                 HStack(spacing: 10) {
-                    if self.prompt.allowsDeny {
-                        Button(role: .destructive) {
-                            self.onDeny()
-                        } label: {
-                            Text("Deny")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(self.isResolving)
+                    Button(role: .destructive) {
+                        self.onDeny()
+                    } label: {
+                        Text("Deny")
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
+                    .disabled(self.isResolving)
 
                     Button(role: .cancel) {
                         self.onCancel()
