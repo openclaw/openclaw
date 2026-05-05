@@ -1,3 +1,4 @@
+import type { ModelCompatConfig } from "../config/types.models.js";
 import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
 export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 
@@ -6,8 +7,25 @@ type ToolWithParameters = {
   parameters: unknown;
 };
 
-export function normalizeStrictOpenAIJsonSchema(schema: unknown): unknown {
-  return normalizeStrictOpenAIJsonSchemaRecursive(normalizeToolParameterSchema(schema ?? {}), 0);
+/**
+ * Optional model-compat hint threaded through tool-schema normalization.
+ * When supplied, `normalizeToolParameterSchema` honors
+ * `compat.unsupportedToolSchemaKeywords` so providers with documented
+ * JSON Schema gaps (e.g. Fireworks rejects `not`, see #75467) get the
+ * keywords stripped before the request reaches the wire.
+ */
+export type NormalizeOpenAIToolSchemaOptions = {
+  modelCompat?: ModelCompatConfig;
+};
+
+export function normalizeStrictOpenAIJsonSchema(
+  schema: unknown,
+  options?: NormalizeOpenAIToolSchemaOptions,
+): unknown {
+  return normalizeStrictOpenAIJsonSchemaRecursive(
+    normalizeToolParameterSchema(schema ?? {}, { modelCompat: options?.modelCompat }),
+    0,
+  );
 }
 
 function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number): unknown {
@@ -56,15 +74,26 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
   return changed ? normalized : schema;
 }
 
-export function normalizeOpenAIStrictToolParameters<T>(schema: T, strict: boolean): T {
+export function normalizeOpenAIStrictToolParameters<T>(
+  schema: T,
+  strict: boolean,
+  options?: NormalizeOpenAIToolSchemaOptions,
+): T {
   if (!strict) {
-    return normalizeToolParameterSchema(schema ?? {}) as T;
+    return normalizeToolParameterSchema(schema ?? {}, {
+      modelCompat: options?.modelCompat,
+    }) as T;
   }
-  return normalizeStrictOpenAIJsonSchema(schema) as T;
+  return normalizeStrictOpenAIJsonSchema(schema, options) as T;
 }
 
-export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+export function isStrictOpenAIJsonSchemaCompatible(
+  schema: unknown,
+  options?: NormalizeOpenAIToolSchemaOptions,
+): boolean {
+  return isStrictOpenAIJsonSchemaCompatibleRecursive(
+    normalizeStrictOpenAIJsonSchema(schema, options),
+  );
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
