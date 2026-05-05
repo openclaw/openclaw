@@ -1,3 +1,5 @@
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { listPotentialConfiguredChannelIds } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -20,6 +22,7 @@ import {
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
+import { resolveOwningPluginIdsForModelRef } from "./providers.js";
 import { hasKind } from "./slots.js";
 
 function hasRuntimeContractSurface(plugin: PluginManifestRecord): boolean {
@@ -183,6 +186,26 @@ function resolveExplicitMemorySlotStartupPluginId(config: OpenClawConfig): strin
   return normalizePluginId(configuredSlot);
 }
 
+function resolveGatewayStartupProviderPluginIds(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] {
+  const { provider, model } = resolveConfiguredModelRef({
+    cfg: params.config,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  return (
+    resolveOwningPluginIdsForModelRef({
+      model: `${provider}/${model}`,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }) ?? []
+  );
+}
+
 function shouldConsiderForGatewayStartup(params: {
   plugin: PluginManifestRecord;
   startupDreamingPluginIds: ReadonlySet<string>;
@@ -276,6 +299,13 @@ export function resolveGatewayStartupPluginIds(params: {
   const explicitMemorySlotStartupPluginId = resolveExplicitMemorySlotStartupPluginId(
     params.activationSourceConfig ?? params.config,
   );
+  const startupProviderPluginIds = new Set(
+    resolveGatewayStartupProviderPluginIds({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    }),
+  );
   return loadPluginManifestRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -284,6 +314,17 @@ export function resolveGatewayStartupPluginIds(params: {
     .plugins.filter((plugin) => {
       if (plugin.channels.some((channelId) => configuredChannelIds.has(channelId))) {
         return true;
+      }
+      const activationState = resolveEffectivePluginActivationState({
+        id: plugin.id,
+        origin: plugin.origin,
+        config: pluginsConfig,
+        rootConfig: params.config,
+        enabledByDefault: plugin.enabledByDefault,
+        activationSource,
+      });
+      if (startupProviderPluginIds.has(plugin.id)) {
+        return activationState.activated;
       }
       if (
         !shouldConsiderForGatewayStartup({
@@ -294,14 +335,6 @@ export function resolveGatewayStartupPluginIds(params: {
       ) {
         return false;
       }
-      const activationState = resolveEffectivePluginActivationState({
-        id: plugin.id,
-        origin: plugin.origin,
-        config: pluginsConfig,
-        rootConfig: params.config,
-        enabledByDefault: plugin.enabledByDefault,
-        activationSource,
-      });
       if (!activationState.enabled) {
         return false;
       }

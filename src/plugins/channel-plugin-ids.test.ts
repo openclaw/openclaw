@@ -322,6 +322,22 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("includes the provider plugin that owns the configured primary model in startup scope", () => {
+    const rawConfig = createStartupConfig({
+      modelId: "demo-provider/demo-model",
+    });
+    const effectiveConfig = createStartupConfig({
+      enabledPluginIds: ["demo-provider-plugin"],
+      modelId: "demo-provider/demo-model",
+    });
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["demo-channel", "browser", "demo-provider-plugin"],
+    });
+  });
+
   it("includes the explicitly selected memory slot plugin in startup scope", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
