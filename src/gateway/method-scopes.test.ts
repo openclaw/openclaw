@@ -153,6 +153,30 @@ describe("operator scope authorization", () => {
     });
   });
 
+  it.each([
+    "config.set",
+    "config.apply",
+    "config.schema",
+    "exec.approvals.get",
+    "exec.approvals.set",
+    "exec.approvals.node.get",
+    "exec.approvals.node.set",
+    "wizard.start",
+    "wizard.next",
+    "wizard.cancel",
+    "wizard.status",
+    "update.run",
+  ])("requires admin for reserved listed method %s", (method) => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
+    expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod(method, ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
+
   it("requires admin for reserved admin namespaces even if a plugin registered a narrower scope", () => {
     setPluginGatewayMethodScope(RESERVED_ADMIN_PLUGIN_METHOD, "operator.read");
 
