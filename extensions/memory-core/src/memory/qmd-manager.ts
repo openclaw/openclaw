@@ -2236,13 +2236,26 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Fast path: source bytes look unchanged (size + mtime match) AND we
       // know the export target qmd should consume. Skip the entry build,
       // redaction, hashing, and write entirely.
+      let cachedTargetMissing = false;
       if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs) {
         if (cutoff && stat.mtimeMs < cutoff) {
           continue;
         }
-        tracked.add(sessionFile);
-        keep.add(cached.target);
-        continue;
+        // Verify the cached export target still exists on disk. The cache
+        // can survive after a `qmd/sessions/*.md` export is deleted out
+        // from under us (manual cleanup, errant rm, partial restore). If
+        // we trusted the size+mtime match alone, we'd permanently skip
+        // rebuilding the missing markdown until the source jsonl changed.
+        // On a missing target, fall through to the slow rebuild path below
+        // and force a write even when the cached hash/mtime still match.
+        try {
+          await fs.access(cached.target);
+          tracked.add(sessionFile);
+          keep.add(cached.target);
+          continue;
+        } catch {
+          cachedTargetMissing = true;
+        }
       }
       // Slow path: rebuild the entry and write the markdown if needed.
       const entry = await buildSessionEntry(sessionFile);
@@ -2255,7 +2268,12 @@ export class QmdMemoryManager implements MemorySearchManager {
       const targetName = `${path.basename(sessionFile, ".jsonl")}.md`;
       const target = path.join(exportDir, targetName);
       tracked.add(sessionFile);
-      if (!cached || cached.hash !== entry.hash || cached.mtimeMs !== entry.mtimeMs) {
+      if (
+        cachedTargetMissing ||
+        !cached ||
+        cached.hash !== entry.hash ||
+        cached.mtimeMs !== entry.mtimeMs
+      ) {
         await writeFileWithinRoot({
           rootDir: exportDir,
           relativePath: targetName,

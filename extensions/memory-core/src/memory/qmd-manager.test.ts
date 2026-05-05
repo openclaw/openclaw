@@ -4270,6 +4270,59 @@ describe("QmdMemoryManager", () => {
     }
   });
 
+  it("rebuilds the session-export markdown when the cached target is missing", async () => {
+    const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "session-1.jsonl");
+    const exportDir = path.join(stateDir, "agents", agentId, "qmd", "sessions");
+    const exportFile = path.join(exportDir, "session-1.md");
+    await fs.writeFile(
+      sessionFile,
+      '{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+
+    const currentMemory = cfg.memory;
+    cfg = {
+      ...cfg,
+      memory: {
+        ...currentMemory,
+        qmd: {
+          ...currentMemory?.qmd,
+          sessions: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    // First boot writes the markdown and persists the export-state cache.
+    const first = await createManager();
+    try {
+      await first.manager.sync({ reason: "manual" });
+      const firstExport = await fs.readFile(exportFile, "utf-8");
+      expect(firstExport).toContain("hello");
+    } finally {
+      await first.manager.close();
+    }
+
+    // Simulate the export markdown being deleted out from under us while
+    // the source jsonl (and the .export-state.json cache entry pointing
+    // at it) remain intact.
+    await fs.rm(exportFile);
+    await expect(fs.access(exportFile)).rejects.toThrow();
+
+    // Second boot: cache says "size+mtime match, target=session-1.md", but
+    // the target is missing. The fast path must fall through to the slow
+    // rebuild path so the markdown is regenerated.
+    const second = await createManager();
+    try {
+      await second.manager.sync({ reason: "manual" });
+      const rebuilt = await fs.readFile(exportFile, "utf-8");
+      expect(rebuilt).toContain("hello");
+    } finally {
+      await second.manager.close();
+    }
+  });
+
   it("fails closed when sqlite index is busy during doc lookup or search", async () => {
     const cases = [
       {
