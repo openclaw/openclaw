@@ -146,8 +146,9 @@ describe("stuck session recovery", () => {
     expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
     expect(mocks.diag.warn).toHaveBeenCalledWith(
-      expect.stringContaining("reason=active_embedded_run action=observe_only"),
+      expect.stringContaining("reason=active_embedded_run"),
     );
+    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("action=observe_only"));
   });
 
   it("force-clears and releases the session lane when abort cleanup does not drain", async () => {
