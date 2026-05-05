@@ -54,4 +54,84 @@ describe("loadSqliteVecExtension", () => {
     expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).not.toHaveBeenCalled();
   });
+
+  it("retries without .dll suffix on Windows when bundled load fails", async () => {
+    const loadablePath = "C:\\sqlite-vec\\vec0.dll";
+    vi.doMock("sqlite-vec", () => ({
+      getLoadablePath: () => loadablePath,
+      load: vi.fn().mockImplementation(() => {
+        throw new Error("no such module: vec0");
+      }),
+    }));
+    const { loadSqliteVecExtension } = await importLoader();
+    const db = {
+      enableLoadExtension: vi.fn(),
+      loadExtension: vi.fn(),
+    };
+
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const result = await loadSqliteVecExtension({ db: db as never });
+      expect(result.ok).toBe(true);
+      expect(result.extensionPath).toBe("C:\\sqlite-vec\\vec0");
+      expect(db.loadExtension).toHaveBeenCalledWith("C:\\sqlite-vec\\vec0");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("chains both errors when Windows .dll retry also fails", async () => {
+    const loadablePath = "C:\\sqlite-vec\\vec0.dll";
+    vi.doMock("sqlite-vec", () => ({
+      getLoadablePath: () => loadablePath,
+      load: vi.fn().mockImplementation(() => {
+        throw new Error("first: no such module: vec0");
+      }),
+    }));
+    const { loadSqliteVecExtension } = await importLoader();
+    const db = {
+      enableLoadExtension: vi.fn(),
+      loadExtension: vi.fn().mockImplementation(() => {
+        throw new Error("retry: no such module: vec0");
+      }),
+    };
+
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const result = await loadSqliteVecExtension({ db: db as never });
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("both load attempts failed on Windows");
+      expect(result.error).toContain("retry: no such module: vec0");
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
+
+  it("does not retry on non-Windows platforms when bundled load fails", async () => {
+    const loadablePath = "/usr/lib/sqlite-vec/vec0.so";
+    vi.doMock("sqlite-vec", () => ({
+      getLoadablePath: () => loadablePath,
+      load: vi.fn().mockImplementation(() => {
+        throw new Error("no such module: vec0");
+      }),
+    }));
+    const { loadSqliteVecExtension } = await importLoader();
+    const db = {
+      enableLoadExtension: vi.fn(),
+      loadExtension: vi.fn(),
+    };
+
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      const result = await loadSqliteVecExtension({ db: db as never });
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("no such module");
+      expect(db.loadExtension).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    }
+  });
 });
