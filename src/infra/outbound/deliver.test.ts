@@ -130,6 +130,54 @@ function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
   };
 }
 
+type SignalSendFnForTest = (
+  to: string,
+  text: string,
+  options?: { replyTo?: string; quoteAuthor?: string; mediaUrl?: string },
+) => Promise<{ messageId: string; timestamp?: number }>;
+
+const signalOutboundForTest: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkText,
+  chunkerMode: "text",
+  textChunkLimit: 4000,
+  sendText: async ({ to, text, replyToId, quoteAuthor, deps }) => {
+    const send = deps?.signal as SignalSendFnForTest | undefined;
+    const sendLegacy = deps?.sendSignal as SignalSendFnForTest | undefined;
+    const sender = send ?? sendLegacy;
+    if (!sender) {
+      throw new Error("missing signal sender");
+    }
+    const result = await sender(to, text, {
+      replyTo: typeof replyToId === "string" ? replyToId : undefined,
+      quoteAuthor: typeof quoteAuthor === "string" ? quoteAuthor : undefined,
+    });
+    return {
+      ...result,
+      channel: "signal",
+      messageId: result.messageId,
+    };
+  },
+  sendMedia: async ({ to, text, mediaUrl, replyToId, quoteAuthor, deps }) => {
+    const send = deps?.signal as SignalSendFnForTest | undefined;
+    const sendLegacy = deps?.sendSignal as SignalSendFnForTest | undefined;
+    const sender = send ?? sendLegacy;
+    if (!sender) {
+      throw new Error("missing signal sender");
+    }
+    const result = await sender(to, text, {
+      replyTo: typeof replyToId === "string" ? replyToId : undefined,
+      quoteAuthor: typeof quoteAuthor === "string" ? quoteAuthor : undefined,
+      mediaUrl,
+    });
+    return {
+      ...result,
+      channel: "signal",
+      messageId: result.messageId,
+    };
+  },
+};
+
 const matrixOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkText,
@@ -1798,6 +1846,26 @@ describe("deliverOutboundPayloads", () => {
     ) => Promise<{ messageId: string; channelId?: string }>;
     const slackThreadOutbound: ChannelOutboundAdapter = {
       deliveryMode: "direct",
+      sendText: async ({ to, text, replyToId, deps }) => {
+        const send = deps?.sendSlack as SendSlackForTest | undefined;
+        if (!send) {
+          throw new Error("sendSlack test dep missing");
+        }
+        const result = await send(to, text, {
+          threadTs: typeof replyToId === "string" ? replyToId : undefined,
+        });
+        return { channel: "slack", messageId: result.messageId, channelId: result.channelId };
+      },
+      sendMedia: async ({ to, text, replyToId, deps }) => {
+        const send = deps?.sendSlack as SendSlackForTest | undefined;
+        if (!send) {
+          throw new Error("sendSlack test dep missing");
+        }
+        const result = await send(to, text, {
+          threadTs: typeof replyToId === "string" ? replyToId : undefined,
+        });
+        return { channel: "slack", messageId: result.messageId, channelId: result.channelId };
+      },
       sendPayload: async (ctx) => {
         const send = ctx.deps?.sendSlack as SendSlackForTest | undefined;
         if (!send) {
@@ -2436,6 +2504,11 @@ const defaultRegistry = createTestRegistry([
   {
     pluginId: "matrix",
     plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
+    source: "test",
+  },
+  {
+    pluginId: "signal",
+    plugin: createOutboundTestPlugin({ id: "signal", outbound: signalOutboundForTest }),
     source: "test",
   },
 ]);

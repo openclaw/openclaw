@@ -344,8 +344,18 @@ async function deliverReplies(params: {
   replyDeliveryState?: SignalReplyDeliveryState;
   resolveQuoteAuthor?: (replyToId: string) => string | undefined;
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountId,
+    runtime: _runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+  } = params;
+  void _runtime;
   for (const payload of replies) {
     const { payload: resolvedPayload, effectiveReplyTo } = resolveSignalReplyDelivery({
       payload,

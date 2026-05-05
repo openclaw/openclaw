@@ -648,10 +648,10 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx?.ReplyToSender).toBe("+15550003333");
     expect(capture.ctx?.ReplyToBody).toBe("@+15550004444 sent the details");
     expect(capture.ctx?.ReplyToIsQuote).toBe(true);
-    expect(String(capture.ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
+    expect((capture.ctx?.Body ?? "")).toContain("[Quoting +15550003333 id:1700000000000]");
 
     const userContext = buildInboundUserContextPrefix(capture.ctx!);
-    expect(userContext).toContain("Replied message (untrusted, for context):");
+    expect(userContext).toContain("Reply target of current user message (untrusted, for context):");
     expect(userContext).toContain('"sender_label": "+15550003333"');
     expect(userContext).toContain('"body": "@+15550004444 sent the details"');
   });
@@ -683,7 +683,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx).toBeTruthy();
     expect(capture.ctx?.RawBody).toBe("");
     expect(capture.ctx?.ReplyToBody).toBe("original context");
-    expect(String(capture.ctx?.Body ?? "")).toContain('"original context"');
+    expect((capture.ctx?.Body ?? "")).toContain('"original context"');
   });
 
   it("uses quoted attachment metadata for media-only quoted replies", async () => {
@@ -713,7 +713,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx).toBeTruthy();
     expect(capture.ctx?.ReplyToId).toBe("1700000000000");
     expect(capture.ctx?.ReplyToBody).toBe("<media:image>");
-    expect(String(capture.ctx?.Body ?? "")).toContain('"<media:image>"');
+    expect((capture.ctx?.Body ?? "")).toContain('"<media:image>"');
   });
 
   it("ignores invalid quote ids while preserving the quoted body context", async () => {
@@ -743,7 +743,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(capture.ctx).toBeTruthy();
     expect(capture.ctx?.ReplyToId).toBeUndefined();
     expect(capture.ctx?.ReplyToBody).toBe("quoted context");
-    expect(String(capture.ctx?.Body ?? "")).not.toContain("id:1700000000000abc");
+    expect((capture.ctx?.Body ?? "")).not.toContain("id:1700000000000abc");
   });
 
   it("drops own UUID inbound messages when only accountUuid is configured", async () => {
