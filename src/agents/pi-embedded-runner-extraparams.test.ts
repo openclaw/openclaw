@@ -793,12 +793,12 @@ describe("applyExtraParamsToAgent", () => {
   it("injects parallel_tool_calls for openai-completions payloads when configured", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
-      applyModelId: "moonshotai/kimi-k2.5",
+      applyModelId: "moonshotai/kimi-k2.6",
       cfg: {
         agents: {
           defaults: {
             models: {
-              "nvidia-nim/moonshotai/kimi-k2.5": {
+              "nvidia-nim/moonshotai/kimi-k2.6": {
                 params: {
                   parallel_tool_calls: false,
                 },
@@ -810,7 +810,7 @@ describe("applyExtraParamsToAgent", () => {
       model: {
         api: "openai-completions",
         provider: "nvidia-nim",
-        id: "moonshotai/kimi-k2.5",
+        id: "moonshotai/kimi-k2.6",
       } as unknown as Model<"openai-completions">,
     });
 
@@ -1240,12 +1240,12 @@ describe("applyExtraParamsToAgent", () => {
   it("lets runtime override win across alias styles for parallel_tool_calls", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
-      applyModelId: "moonshotai/kimi-k2.5",
+      applyModelId: "moonshotai/kimi-k2.6",
       cfg: {
         agents: {
           defaults: {
             models: {
-              "nvidia-nim/moonshotai/kimi-k2.5": {
+              "nvidia-nim/moonshotai/kimi-k2.6": {
                 params: {
                   parallel_tool_calls: true,
                 },
@@ -1260,7 +1260,7 @@ describe("applyExtraParamsToAgent", () => {
       model: {
         api: "openai-completions",
         provider: "nvidia-nim",
-        id: "moonshotai/kimi-k2.5",
+        id: "moonshotai/kimi-k2.6",
       } as Model<"openai-completions">,
     });
 
@@ -1270,12 +1270,12 @@ describe("applyExtraParamsToAgent", () => {
   it("lets null runtime override suppress inherited parallel_tool_calls injection", () => {
     const payload = runParallelToolCallsPayloadMutationCase({
       applyProvider: "nvidia-nim",
-      applyModelId: "moonshotai/kimi-k2.5",
+      applyModelId: "moonshotai/kimi-k2.6",
       cfg: {
         agents: {
           defaults: {
             models: {
-              "nvidia-nim/moonshotai/kimi-k2.5": {
+              "nvidia-nim/moonshotai/kimi-k2.6": {
                 params: {
                   parallel_tool_calls: true,
                 },
@@ -1290,7 +1290,7 @@ describe("applyExtraParamsToAgent", () => {
       model: {
         api: "openai-completions",
         provider: "nvidia-nim",
-        id: "moonshotai/kimi-k2.5",
+        id: "moonshotai/kimi-k2.6",
       } as Model<"openai-completions">,
     });
 
@@ -1302,12 +1302,12 @@ describe("applyExtraParamsToAgent", () => {
     try {
       const payload = runParallelToolCallsPayloadMutationCase({
         applyProvider: "nvidia-nim",
-        applyModelId: "moonshotai/kimi-k2.5",
+        applyModelId: "moonshotai/kimi-k2.6",
         cfg: {
           agents: {
             defaults: {
               models: {
-                "nvidia-nim/moonshotai/kimi-k2.5": {
+                "nvidia-nim/moonshotai/kimi-k2.6": {
                   params: {
                     parallelToolCalls: "false",
                   },
@@ -1319,7 +1319,7 @@ describe("applyExtraParamsToAgent", () => {
         model: {
           api: "openai-completions",
           provider: "nvidia-nim",
-          id: "moonshotai/kimi-k2.5",
+          id: "moonshotai/kimi-k2.6",
         } as Model<"openai-completions">,
       });
 

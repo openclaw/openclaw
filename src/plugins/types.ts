@@ -1233,7 +1233,7 @@ export type ProviderPlugin = {
    *
    * Set when the leading `<provider>/` segment in the native model id is
    * a meaningful vendor namespace (e.g. NVIDIA's `nvidia/nemotron-...`
-   * alongside `moonshotai/kimi-k2.5`).
+   * alongside `moonshotai/kimi-k2.6`).
    */
   preserveLiteralProviderPrefix?: boolean;
   /**

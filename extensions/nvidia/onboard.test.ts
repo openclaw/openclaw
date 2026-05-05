@@ -14,9 +14,9 @@ describe("nvidia onboard", () => {
     });
     expect(cfg.models?.providers?.nvidia?.models.map((model) => model.id)).toEqual([
       "nvidia/nemotron-3-super-120b-a12b",
-      "moonshotai/kimi-k2.5",
+      "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "z-ai/glm-5.1",
     ]);
     // Config stores the canonical form; the picker label shows the literal
     // form via preserveLiteralProviderPrefix.
@@ -39,9 +39,9 @@ describe("nvidia onboard", () => {
     expect(provider?.models.map((model) => model.id)).toEqual([
       "custom-model",
       "nvidia/nemotron-3-super-120b-a12b",
-      "moonshotai/kimi-k2.5",
+      "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m2.5",
-      "z-ai/glm5",
+      "z-ai/glm-5.1",
     ]);
   });
 });

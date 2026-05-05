@@ -677,9 +677,9 @@ describe("gateway server models + voicewake", () => {
       {
         agents: {
           defaults: {
-            model: { primary: "nvidia/moonshotai/kimi-k2.5" },
+            model: { primary: "nvidia/moonshotai/kimi-k2.6" },
             models: {
-              "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+              "nvidia/moonshotai/kimi-k2.6": { alias: "Kimi K2.6 (NVIDIA)" },
             },
           },
         },
@@ -689,8 +689,8 @@ describe("gateway server models + voicewake", () => {
               baseUrl: "https://nvidia.example.com",
               models: [
                 {
-                  id: "moonshotai/kimi-k2.5",
-                  name: "Kimi K2.5 (Configured)",
+                  id: "moonshotai/kimi-k2.6",
+                  name: "Kimi K2.6 (Configured)",
                   contextWindow: 32_000,
                 },
               ],
@@ -704,9 +704,9 @@ describe("gateway server models + voicewake", () => {
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
           expect.objectContaining({
-            id: "moonshotai/kimi-k2.5",
-            name: "Kimi K2.5 (Configured)",
-            alias: "Kimi K2.5 (NVIDIA)",
+            id: "moonshotai/kimi-k2.6",
+            name: "Kimi K2.6 (Configured)",
+            alias: "Kimi K2.6 (NVIDIA)",
             provider: "nvidia",
             contextWindow: 32_000,
           }),
