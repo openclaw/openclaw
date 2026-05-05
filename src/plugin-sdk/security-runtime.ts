@@ -1,5 +1,7 @@
 // Public security/policy helpers for plugins that need shared trust and DM gating logic.
 
+import { root as fsRoot, type OpenResult } from "../infra/fs-safe.js";
+
 export * from "../secrets/channel-secret-collector-runtime.js";
 export * from "../secrets/runtime-shared.js";
 export * from "../secrets/shared.js";
@@ -20,6 +22,7 @@ export {
   appendRegularFile,
   appendRegularFileSync,
   FsSafeError,
+  FsSafeError as SafeOpenError,
   openLocalFileSafely,
   pathExists,
   pathExistsSync,
@@ -34,7 +37,37 @@ export {
   root,
   statRegularFileSync,
   withTimeout,
+  type FsSafeErrorCode as SafeOpenErrorCode,
 } from "../infra/fs-safe.js";
+
+export async function openFileWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  rejectHardlinks?: boolean;
+  nonBlockingRead?: boolean;
+  allowSymlinkTargetWithinRoot?: boolean;
+}): Promise<OpenResult> {
+  const root = await fsRoot(params.rootDir);
+  return await root.open(params.relativePath, {
+    hardlinks: params.rejectHardlinks === false ? "allow" : "reject",
+    nonBlockingRead: params.nonBlockingRead,
+    symlinks: params.allowSymlinkTargetWithinRoot === true ? "follow-within-root" : "reject",
+  });
+}
+
+export async function writeFileFromPathWithinRoot(params: {
+  rootDir: string;
+  relativePath: string;
+  sourcePath: string;
+  mkdir?: boolean;
+}): Promise<void> {
+  const root = await fsRoot(params.rootDir);
+  await root.copyIn(params.relativePath, params.sourcePath, {
+    mkdir: params.mkdir,
+    sourceHardlinks: "reject",
+  });
+}
+
 export { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 export { normalizeHostname } from "../infra/net/hostname.js";
