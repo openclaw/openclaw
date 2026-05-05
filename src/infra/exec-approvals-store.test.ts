@@ -209,12 +209,44 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(linkedStateTarget, { recursive: true });
     fs.symlinkSync(realHome, linkedHome, "dir");
     fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
+    // #72572: a `.openclaw` symlink at the trusted-root boundary is now
+    // accepted when its target passes ownership/permission checks. To keep
+    // testing the original "deeper symlinks must be rejected" intent of
+    // #72377, we make the target group-writable so the trusted-symlink
+    // hardening guard rejects it.
+    fs.chmodSync(linkedStateTarget, 0o775);
     process.env.OPENCLAW_HOME = linkedHome;
 
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
     ).toThrow(/Refusing to traverse symlink in exec approvals path/);
     expect(fs.existsSync(path.join(linkedStateTarget, "exec-approvals.json"))).toBe(false);
+  });
+
+  // Regression for #72572: the common GNU Stow / chezmoi dotfile layout
+  // exposes `~/.openclaw` as a symlink into a managed checkout. #72377
+  // accepted a symlinked `OPENCLAW_HOME` but still rejected a symlinked
+  // `.openclaw` immediate child below a real home, breaking exec-policy
+  // commands for those users. We accept the trusted symlink hop as long
+  // as the target is owned by the current user and not group/other
+  // writable.
+  it("accepts a symlinked ~/.openclaw immediate child of the trusted home", () => {
+    const realHome = makeTempDir();
+    const dotfilesTarget = path.join(realHome, "dotfiles-openclaw");
+    tempDirs.push(realHome);
+    fs.mkdirSync(dotfilesTarget, { recursive: true });
+    // Force restrictive perms so the trusted-symlink ownership/mode check
+    // accepts the target on systems with a relaxed default umask.
+    fs.chmodSync(dotfilesTarget, 0o755);
+    fs.symlinkSync(dotfilesTarget, path.join(realHome, ".openclaw"), "dir");
+    process.env.OPENCLAW_HOME = realHome;
+
+    saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
+
+    // The file lands at the realpath target, not via the symlink path.
+    expect(fs.readFileSync(path.join(dotfilesTarget, "exec-approvals.json"), "utf8")).toContain(
+      '"security": "full"',
+    );
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {
