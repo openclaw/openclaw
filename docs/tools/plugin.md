@@ -207,6 +207,17 @@ Key policy rules:
   `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
   refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
 
+When `plugins.allow` is unset and non-bundled plugins are auto-discovered from
+the workspace or global plugin roots, startup logs
+`plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`.
+The warning includes discovered plugin ids and, for short lists, a minimal
+`plugins.allow` snippet. Run
+[`openclaw plugins list --enabled --verbose`](/cli/plugins#list) or
+[`openclaw plugins inspect <id>`](/cli/plugins#inspect) to confirm the ids
+before copying trusted plugins into `openclaw.json`. The same trust-pinning
+guidance applies when diagnostics say a plugin loaded
+`without install/load-path provenance`.
+
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.
 
