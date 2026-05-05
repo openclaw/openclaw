@@ -4,6 +4,7 @@ import { GatewayHeartbeatTimers } from "./gateway-lifecycle.js";
 describe("GatewayHeartbeatTimers", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("does not false-timeout when first heartbeat fires near the end of the random-delay window", () => {
