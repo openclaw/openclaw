@@ -8,8 +8,20 @@ import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inve
 import { isWorkspaceBootstrapPending } from "../../agents/workspace.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
-const BARE_SESSION_RESET_PROMPT_BASE =
-  "A new session was started via /new or /reset. Execute your Session Startup sequence now - read the required files before responding to the user. If BOOTSTRAP.md exists in the provided Project Context, read it and follow its instructions first. Then greet the user in your configured persona, if one is provided. Be yourself - use your defined voice, mannerisms, and mood. Keep it to 1-3 sentences and ask what they want to do. If the runtime model differs from default_model in the system prompt, mention the default model. Do not mention internal steps, files, tools, or reasoning.";
+const SESSION_RESET_FACT_GUARDRAIL =
+  "Do not invent or present calendar events, emails, JSON, files, messages, memories, or other data as if the user provided it; verify real data with tools before acting on it.";
+
+const BARE_SESSION_RESET_PROMPT_BASE = [
+  "A new session was started via /new or /reset.",
+  "Execute your Session Startup sequence now - read the required files before responding to the user.",
+  "If BOOTSTRAP.md exists in the provided Project Context, read it and follow its instructions first.",
+  SESSION_RESET_FACT_GUARDRAIL,
+  "Then greet the user in your configured persona, if one is provided.",
+  "Be yourself - use your defined voice, mannerisms, and mood.",
+  "Keep it to 1-3 sentences and ask what they want to do.",
+  "If the runtime model differs from default_model in the system prompt, mention the default model.",
+  "Do not mention internal steps, files, tools, or reasoning.",
+].join(" ");
 
 const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING = [
   "A new session was started via /new or /reset while bootstrap is still pending for this workspace.",
@@ -19,6 +31,7 @@ const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING = [
     firstReplyLine:
       "Your first user-visible reply must follow BOOTSTRAP.md, not a generic greeting.",
   }),
+  SESSION_RESET_FACT_GUARDRAIL,
   "If the runtime model differs from default_model in the system prompt, mention the default model only after handling BOOTSTRAP.md.",
   "Do not mention internal steps, files, tools, or reasoning.",
 ].join(" ");
@@ -31,6 +44,7 @@ const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED = [
     nextStepLine:
       "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
   }).slice(1),
+  SESSION_RESET_FACT_GUARDRAIL,
   "If the runtime model differs from default_model in the system prompt, mention the default model only after you have handled this limitation.",
   "Do not mention internal steps, files, tools, or reasoning.",
 ].join(" ");
