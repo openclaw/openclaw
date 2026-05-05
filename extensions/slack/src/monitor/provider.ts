@@ -102,12 +102,14 @@ function resolveStableSlackUserIdEntry(raw: string): string | undefined {
 }
 
 function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserResolution[] {
-  return entries
-    .map((input) => {
-      const id = resolveStableSlackUserIdEntry(input);
-      return id ? { input, resolved: true, id } : undefined;
-    })
-    .filter((entry): entry is SlackUserResolution => Boolean(entry));
+  const resolved: SlackUserResolution[] = [];
+  for (const input of entries) {
+    const id = resolveStableSlackUserIdEntry(input);
+    if (id) {
+      resolved.push({ input, resolved: true, id });
+    }
+  }
+  return resolved;
 }
 
 export function formatSlackSocketReconnectMessage(params: {
