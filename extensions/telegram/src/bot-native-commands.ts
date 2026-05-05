@@ -980,8 +980,9 @@ export const registerTelegramNativeCommands = ({
                   threadId: `${chatId}:${dmThreadId}`,
                 })
               : null;
-          cachedTargetSessionKey = threadKeys?.sessionKey ?? baseSessionKey;
-          return cachedTargetSessionKey;
+          const targetSessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+          cachedTargetSessionKey = targetSessionKey;
+          return targetSessionKey;
         };
         const menuNeedsModelContext =
           commandDefinition?.argsMenu &&
