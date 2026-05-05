@@ -220,7 +220,7 @@ async function loadHandoffHistory(
   const { loadCliSessionHistoryMessages, loadCliSessionReseedMessages } =
     await loadSessionHistoryRuntime();
   const agentId = resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
-  const reseedMessages = loadCliSessionReseedMessages({
+  const reseedMessages = await loadCliSessionReseedMessages({
     sessionId: entry.sessionId,
     sessionFile: entry.sessionFile,
     sessionKey: params.sessionKey,
@@ -230,7 +230,7 @@ async function loadHandoffHistory(
   const historyMessages =
     reseedMessages.length > 0
       ? reseedMessages
-      : loadCliSessionHistoryMessages({
+      : await loadCliSessionHistoryMessages({
           sessionId: entry.sessionId,
           sessionFile: entry.sessionFile,
           sessionKey: params.sessionKey,
