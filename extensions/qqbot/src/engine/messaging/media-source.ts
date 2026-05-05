@@ -28,7 +28,8 @@
  * reading the whole file first.
  */
 
-import * as fs from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { FsSafeError, openLocalFileSafely } from "openclaw/plugin-sdk/security-runtime";
 import { MAX_UPLOAD_SIZE, formatFileSize, getMimeType } from "../utils/file-utils.js";
 
 // ============ Types ============
@@ -92,7 +93,7 @@ function tryParseDataUrl(value: string): { mime: string; data: string } | null {
  * Callers MUST call {@link OpenedLocalFile.close} (typically in a `finally`).
  */
 export interface OpenedLocalFile {
-  handle: fs.promises.FileHandle;
+  handle: FileHandle;
   size: number;
   close(): Promise<void>;
 }
@@ -119,27 +120,26 @@ export async function openLocalFile(
   opts: { maxSize?: number } = {},
 ): Promise<OpenedLocalFile> {
   const maxSize = opts.maxSize ?? MAX_UPLOAD_SIZE;
-  const openFlags =
-    fs.constants.O_RDONLY | ("O_NOFOLLOW" in fs.constants ? fs.constants.O_NOFOLLOW : 0);
-  const handle = await fs.promises.open(filePath, openFlags);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error("Path is not a regular file");
+  const opened = await openLocalFileSafely({ filePath }).catch((err: unknown) => {
+    if (err instanceof FsSafeError && err.code === "not-file") {
+      throw new Error("Path is not a regular file", { cause: err });
     }
-    if (stat.size > maxSize) {
+    throw err;
+  });
+  try {
+    if (opened.stat.size > maxSize) {
       throw new Error(
-        `File is too large (${formatFileSize(stat.size)}); QQ Bot API limit is ${formatFileSize(maxSize)}`,
+        `File is too large (${formatFileSize(opened.stat.size)}); QQ Bot API limit is ${formatFileSize(maxSize)}`,
       );
     }
     return {
-      handle,
-      size: stat.size,
-      close: () => handle.close(),
+      handle: opened.handle,
+      size: opened.stat.size,
+      close: () => opened.handle.close(),
     };
   } catch (err) {
     // Close the handle on any validation failure to avoid fd leaks.
-    await handle.close().catch(() => undefined);
+    await opened.handle.close().catch(() => undefined);
     throw err;
   }
 }

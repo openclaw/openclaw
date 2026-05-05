@@ -20,6 +20,7 @@ export {
   appendRegularFile,
   appendRegularFileSync,
   FsSafeError,
+  openLocalFileSafely,
   pathExists,
   pathExistsSync,
   readPrivateJson,
