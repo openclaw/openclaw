@@ -115,5 +115,9 @@ describe("handleCommands send policy", () => {
         replyToCurrent: false,
       },
     });
+    const { getReplyPayloadMetadata } = await import("../reply-payload.js");
+    expect(getReplyPayloadMetadata(result.reply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 });

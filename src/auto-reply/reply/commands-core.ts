@@ -1,5 +1,6 @@
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandHandler,
@@ -22,11 +23,11 @@ function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHan
   }
   return {
     ...result,
-    reply: {
+    reply: markReplyPayloadForSourceSuppressionDelivery({
       ...result.reply,
       replyToId: undefined,
       replyToCurrent: false,
-    },
+    }),
   };
 }
 
