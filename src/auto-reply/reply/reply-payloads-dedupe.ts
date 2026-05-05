@@ -180,6 +180,9 @@ export function getMatchingMessagingToolReplyTargets(params: {
       return false;
     }
     const targetRaw = normalizeOptionalString(target.to);
+    if (originRawTarget && targetRaw === originRawTarget && target.threadId == null) {
+      return true;
+    }
     const routeAccount = originAccount ?? targetAccount;
     const originRoute = normalizeRouteTargetForDedupe({
       provider,
