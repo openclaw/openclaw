@@ -231,6 +231,27 @@ function collectSystemdFileBackedEnvironment(params: {
   return environment;
 }
 
+function sanitizeSystemdUnitBackupContent(params: {
+  content: string;
+  fileManagedKeys: ReadonlySet<string>;
+}): string {
+  if (params.fileManagedKeys.size === 0) {
+    return params.content;
+  }
+  return params.content
+    .split("\n")
+    .filter((rawLine) => {
+      const line = rawLine.trim();
+      if (!line.startsWith("Environment=")) {
+        return true;
+      }
+      const parsed = parseSystemdEnvAssignment(line.slice("Environment=".length).trim());
+      const key = parsed ? normalizeSystemdEnvironmentKey(parsed.key) : null;
+      return !key || !params.fileManagedKeys.has(key);
+    })
+    .join("\n");
+}
+
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
   // Support the common unit-specifier used in user services.
   return input.replaceAll("%h", toPosixPath(resolveHomeDir(env)));
@@ -593,13 +614,20 @@ async function writeSystemdUnit({
 
   const unitPath = resolveSystemdUnitPath(env);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  const fileManagedKeys = collectSystemdFileManagedKeys({
+    environmentValueSources,
+  });
 
   // Preserve user customizations: back up existing unit file before overwriting.
   let backedUp = false;
   try {
-    await fs.access(unitPath);
     const backupPath = `${unitPath}.bak`;
-    await fs.copyFile(unitPath, backupPath);
+    const existingUnit = await fs.readFile(unitPath, "utf8");
+    const backupUnit = sanitizeSystemdUnitBackupContent({
+      content: existingUnit,
+      fileManagedKeys,
+    });
+    await fs.writeFile(backupPath, backupUnit, "utf8");
     backedUp = true;
   } catch {
     // File does not exist yet — nothing to back up.
@@ -618,9 +646,6 @@ async function writeSystemdUnit({
   );
   const inlineManagedKeys = collectSystemdInlineManagedKeys({
     environment,
-    environmentValueSources,
-  });
-  const fileManagedKeys = collectSystemdFileManagedKeys({
     environmentValueSources,
   });
   const environmentFileResult = await writeSystemdGatewayEnvironmentFile({

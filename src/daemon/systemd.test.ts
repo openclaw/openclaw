@@ -877,6 +877,47 @@ describe("stageSystemdService", () => {
     });
   });
 
+  it("sanitizes file-backed managed secrets out of the backup unit on re-stage", async () => {
+    await withStageFixture(async ({ env, unitPath }) => {
+      await fs.mkdir(path.dirname(unitPath), { recursive: true });
+      await fs.writeFile(
+        unitPath,
+        [
+          "[Service]",
+          "ExecStart=/usr/bin/openclaw node run",
+          "Environment=OPENCLAW_GATEWAY_TOKEN=inline-token",
+          "Environment=OPENCLAW_GATEWAY_PORT=18789",
+        ].join("\n"),
+        "utf8",
+      );
+
+      mockSystemctlStatusOk();
+
+      await stageSystemdService({
+        env,
+        stdout: { write: vi.fn() } as unknown as NodeJS.WritableStream,
+        programArguments: ["/usr/bin/openclaw", "node", "run"],
+        workingDirectory: "/tmp",
+        environment: {
+          OPENCLAW_GATEWAY_TOKEN: "fresh-token",
+          OPENCLAW_GATEWAY_PORT: "18789",
+        },
+        environmentValueSources: {
+          OPENCLAW_GATEWAY_TOKEN: "file",
+        },
+      });
+
+      const [unit, backupUnit] = await Promise.all([
+        fs.readFile(unitPath, "utf8"),
+        fs.readFile(`${unitPath}.bak`, "utf8"),
+      ]);
+
+      expect(unit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=fresh-token");
+      expect(backupUnit).not.toContain("Environment=OPENCLAW_GATEWAY_TOKEN=inline-token");
+      expect(backupUnit).toContain("Environment=OPENCLAW_GATEWAY_PORT=18789");
+    });
+  });
+
   it("clears stale inline-managed keys from env file on re-stage (#76860)", async () => {
     await withStageFixture(async ({ env, stateDir, unitPath, envFilePath }) => {
       // Existing env file carries a stale OPENCLAW_GATEWAY_TOKEN that the
