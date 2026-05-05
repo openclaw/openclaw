@@ -200,12 +200,13 @@ function formatThinkingDefaultLabel(effectiveLevel: string | undefined): string 
   return `Inherited: ${normalized}`;
 }
 
-function formatThinkingOverrideLabel(value: string): string {
+function formatThinkingOverrideLabel(value: string, label?: string): string {
   const normalized = normalizeThinkLevel(value) ?? normalizeLowercaseStringOrEmpty(value);
   if (!normalized || normalized === "off") {
     return "Off";
   }
-  return `Override: ${normalized}`;
+  const displayLabel = label?.trim() || normalized;
+  return `Override: ${displayLabel}`;
 }
 
 function resolveThinkingTargetModel(state: AppViewState): {
@@ -226,15 +227,15 @@ function buildThinkingOptions(
   const seen = new Set<string>();
   const options: ChatThinkingSelectOption[] = [];
 
-  const addOption = (value: string) => {
+  const addOption = (value: string, label?: string) => {
     const normalizedValue = normalizeThinkLevel(value) ?? normalizeLowercaseStringOrEmpty(value);
-    const resolvedLabel = formatThinkingOverrideLabel(normalizedValue);
+    const resolvedLabel = formatThinkingOverrideLabel(normalizedValue, label);
     pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () => resolvedLabel);
   };
 
   for (const level of levels) {
     const normalized = normalizeThinkLevel(level.id) ?? normalizeLowercaseStringOrEmpty(level.id);
-    addOption(normalized);
+    addOption(normalized, level.label);
   }
   if (currentOverride) {
     addOption(currentOverride);

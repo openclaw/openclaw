@@ -50,8 +50,8 @@ describe("resolveChatThinkingSelectState", () => {
     expect(result.defaultLabel).toBe("Inherited: high");
     expect(result.options.map((entry) => entry.label)).toEqual([
       "Off",
-      "Override: low",
-      "Override: high",
+      "Override: Low",
+      "Override: High",
     ]);
   });
 
@@ -95,7 +95,47 @@ describe("resolveChatThinkingSelectState", () => {
 
     expect(result.currentOverride).toBe("low");
     expect(result.defaultLabel).toBe("Inherited: high");
-    expect(result.options.find((entry) => entry.value === "low")?.label).toBe("Override: low");
+    expect(result.options.find((entry) => entry.value === "low")?.label).toBe("Override: Low");
+  });
+
+  it("preserves provider supplied thinking level labels for overrides", () => {
+    const result = resolveChatThinkingSelectState(
+      createState({
+        sessionsResult: {
+          ts: 0,
+          path: "sessions.json",
+          count: 1,
+          sessions: [
+            {
+              key: "session-1",
+              kind: "direct",
+              modelProvider: "openai",
+              model: "gpt-5",
+              updatedAt: null,
+              thinkingLevel: undefined,
+              thinkingDefault: "max",
+              thinkingLevels: [
+                { id: "off", label: "Off" },
+                { id: "max", label: "maximum" },
+              ],
+            },
+          ],
+          defaults: {
+            modelProvider: "openai",
+            model: "gpt-5",
+            contextTokens: null,
+            thinkingDefault: "max",
+            thinkingLevels: [
+              { id: "off", label: "Off" },
+              { id: "max", label: "maximum" },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.defaultLabel).toBe("Inherited: max");
+    expect(result.options).toContainEqual({ value: "max", label: "Override: maximum" });
   });
 
   it("renders Off when the effective default is truly off", () => {
