@@ -8,9 +8,11 @@
 # registry's moving tags.
 #
 # Triggered by pushes to the `dev` (openclaw-dev) and `main` (openclaw-prod)
-# branches. The image is tagged with the pinned upstream release version, the
-# short commit SHA, and the branch name so consumers can pin to whichever level
-# of stability they want.
+# branches, or manually with `_OPENCLAW_RELEASE_VERSION` set to an official
+# OpenClaw release such as `2026.5.4` or `v2026.5.4`. The image is tagged with
+# that pinned upstream release version, the short commit SHA, and the selected
+# branch/tag/sha ref so consumers can pin to whichever level of stability they
+# want.
 
 steps:
   - id: read-version
@@ -19,13 +21,28 @@ steps:
     args:
       - -ceu
       - |
-        VERSION="2026.5.4"
+        VERSION="${_OPENCLAW_RELEASE_VERSION}"
+        VERSION="$${VERSION#v}"
         if [ -z "$$VERSION" ]; then
           echo "Failed to read pinned upstream release version" >&2
           exit 1
         fi
+        case "$$VERSION" in
+          [0-9]*.[0-9]*.[0-9]* | [0-9]*.[0-9]*.[0-9]*-*)
+            ;;
+          *)
+            echo "Invalid OpenClaw release version: $$VERSION" >&2
+            exit 1
+            ;;
+        esac
+        REF_TAG="${BRANCH_NAME}${TAG_NAME}"
+        if [ -z "$$REF_TAG" ]; then
+          REF_TAG="${SHORT_SHA}"
+        fi
+        REF_TAG="$$(printf '%s' "$$REF_TAG" | tr -c 'A-Za-z0-9_.-' '-')"
         echo "VERSION=$$VERSION" > /workspace/env.sh
-        echo "Building openclaw fork from official v$$VERSION (sha=${SHORT_SHA}, branch=${BRANCH_NAME})"
+        echo "REF_TAG=$$REF_TAG" >> /workspace/env.sh
+        echo "Building openclaw fork from official v$$VERSION (sha=${SHORT_SHA}, ref=$$REF_TAG)"
 
   - id: build-fork
     name: gcr.io/cloud-builders/docker
@@ -43,10 +60,10 @@ steps:
           --build-arg BASE_IMAGE=ghcr.io/openclaw/openclaw:$$VERSION-slim \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
-          -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
+          -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:$$REF_TAG \
           -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
           -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
-          -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
+          -t asia-east2-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:$$REF_TAG \
           -f Dockerfile.fork \
           .
 
@@ -111,3 +128,6 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 timeout: 7200s
+
+substitutions:
+  _OPENCLAW_RELEASE_VERSION: "2026.5.4"

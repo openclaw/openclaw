@@ -24,16 +24,24 @@ This fork tracks upstream [openclaw/openclaw](https://github.com/openclaw/opencl
 and layers a small set of additions for our own deployment. Everything else is
 unchanged from upstream.
 
-| Path              | Change                                                                                                                                                                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cloudbuild.yaml` | Fork-only Cloud Build pipeline. Triggered by pushes to `dev`. Builds the upstream image, layers `Dockerfile.fork` on top, and publishes to Artifact Registry in `us-central1` and `asia-east2` tagged with version, SHA, and branch. |
-| `Dockerfile.fork` | Overlay on the upstream runtime image. Installs common CLIs into the gateway container: `gh` (GitHub CLI, via the official apt repo) and `lark-cli` (`@larksuite/cli`, pinned via `OPENCLAW_LARK_CLI_VERSION`). `git` is already present in the upstream runtime stage. |
+| Path              | Change                                                                                                                                                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cloudbuild.yaml` | Fork-only Cloud Build pipeline. Triggered by pushes to `dev`/`main` or manually with `_OPENCLAW_RELEASE_VERSION=2026.5.4`. Builds the pinned upstream release image, layers `Dockerfile.fork` on top, and publishes to Artifact Registry in `us-central1` and `asia-east2` tagged with version, SHA, and ref. |
+| `Dockerfile.fork` | Overlay on the upstream runtime image. Installs common CLIs into the gateway container: `gh` (GitHub CLI, via the official apt repo) and `lark-cli` (`@larksuite/cli`, pinned via `OPENCLAW_LARK_CLI_VERSION`). `git` is already present in the upstream runtime stage.                                       |
 
 Building locally:
 
 ```bash
 docker build -t openclaw-base:local -f Dockerfile .
 docker build --build-arg BASE_IMAGE=openclaw-base:local -t openclaw:local -f Dockerfile.fork .
+```
+
+Manual Cloud Build release image:
+
+```bash
+gcloud builds triggers run openclaw-prod \
+  --branch=main \
+  --substitutions=_OPENCLAW_RELEASE_VERSION=2026.5.4
 ```
 
 ---
