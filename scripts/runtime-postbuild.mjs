@@ -20,6 +20,8 @@ const ROOT_STABLE_RUNTIME_ALIAS_PATTERN = /^.+\.(?:runtime|contract)\.js$/u;
 const ROOT_RUNTIME_IMPORT_SPECIFIER_PATTERN =
   /(["'])\.\/([^"']+\.(?:runtime|contract)-[A-Za-z0-9_-]+\.js)\1/gu;
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const PLUGIN_SDK_ROOT_ALIAS_OUTPUT = "dist/plugin-sdk/root-alias.cjs";
+const OFFICIAL_CHANNEL_CATALOG_OUTPUT = "dist/channel-catalog.json";
 const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // v2026.4.29 dispatch lazy chunks. Package updates used to replace the
   // dist tree before the live gateway had restarted, so an already-loaded old
@@ -117,7 +119,7 @@ const LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES = [
   aliasFileName: PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName,
   sourceIncludes: LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS,
 }));
-const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
+export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
@@ -128,6 +130,48 @@ const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   },
 ];
 
+export function listPluginSdkRootAliasOutputs() {
+  return [PLUGIN_SDK_ROOT_ALIAS_OUTPUT];
+}
+
+export function listOfficialChannelCatalogOutputs() {
+  return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
+}
+
+export function listStableRootRuntimeAliasOutputs(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  let entries = [];
+  try {
+    entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN)?.groups?.base)
+    .filter((base) => typeof base === "string" && base.length > 0)
+    .map((base) => `dist/${base}.js`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listLegacyCliExitCompatOutputs(params = {}) {
+  const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
+  return chunks
+    .map(({ dest }) => dest.replace(/\\/g, "/"))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listCoreRuntimePostBuildOutputs(params = {}) {
+  return [
+    ...listPluginSdkRootAliasOutputs(),
+    ...listOfficialChannelCatalogOutputs(),
+    ...listStableRootRuntimeAliasOutputs(params),
+    ...listLegacyCliExitCompatOutputs(params),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
 export function writeStableRootRuntimeAliases(params = {}) {
   const rootDir = params.rootDir ?? ROOT;
   const distDir = path.join(rootDir, "dist");

@@ -32,7 +32,10 @@ import {
   runNodeSourceRoots,
   runNodeWatchedPaths,
 } from "./run-node-watch-paths.mjs";
-import { runRuntimePostBuild } from "./runtime-postbuild.mjs";
+import {
+  listCoreRuntimePostBuildOutputs,
+  runRuntimePostBuild,
+} from "./runtime-postbuild.mjs";
 
 export { isBuildRelevantRunNodePath, isRestartRelevantRunNodePath, runNodeWatchedPaths };
 
@@ -427,9 +430,15 @@ const listRequiredStaticExtensionAssetOutputs = (deps) => {
     .toSorted((left, right) => left.localeCompare(right));
 };
 
-const listRequiredRuntimePostBuildOutputs = (deps) => {
+const listRequiredCoreRuntimePostBuildOutputs = (deps) =>
+  listCoreRuntimePostBuildOutputs({ rootDir: deps.cwd, fs: deps.fs }).map((relativePath) =>
+    path.join(deps.cwd, normalizePath(relativePath)),
+  );
+
+export const listRequiredRuntimePostBuildOutputs = (deps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
   return [
+    ...listRequiredCoreRuntimePostBuildOutputs(deps),
     ...listRequiredOpenClawExtensionAliasOutputs(deps),
     ...listRequiredStaticExtensionAssetOutputs(deps),
     ...listRequiredBundledPluginMetadataOutputs(builtPluginEntries, deps),

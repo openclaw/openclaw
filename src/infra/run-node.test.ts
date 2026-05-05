@@ -30,6 +30,12 @@ const DIST_ENTRY = "dist/entry.js";
 const BUILD_STAMP = `dist/${BUILD_STAMP_FILE}`;
 const RUNTIME_POSTBUILD_STAMP = `dist/${RUNTIME_POSTBUILD_STAMP_FILE}`;
 const DIST_PLUGIN_SDK_INDEX = "dist/plugin-sdk/index.js";
+const DIST_PLUGIN_SDK_ROOT_ALIAS = "dist/plugin-sdk/root-alias.cjs";
+const DIST_CHANNEL_CATALOG = "dist/channel-catalog.json";
+const DIST_LEGACY_CLI_EXIT_COMPAT = "dist/memory-state-CcqRgDZU.js";
+const DIST_LEGACY_CLI_EXIT_COMPAT_ALT = "dist/memory-state-DwGdReW4.js";
+const DIST_STABLE_ROOT_RUNTIME_SOURCE = "dist/model-catalog.runtime-AbCd1234.js";
+const DIST_STABLE_ROOT_RUNTIME_ALIAS = "dist/model-catalog.runtime.js";
 const QA_LAB_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-lab.js";
 const QA_RUNTIME_PLUGIN_SDK_ENTRY = "dist/plugin-sdk/qa-runtime.js";
 const EXTENSION_INDEX = bundledPluginFile("demo", "index.ts");
@@ -126,6 +132,25 @@ async function writeRuntimePostBuildScaffold(tmp: string): Promise<void> {
   await fs.mkdir(path.join(tmp, "extensions"), { recursive: true });
   await fs.writeFile(pluginSdkAliasPath, "module.exports = {};\n", "utf-8");
   await fs.utimes(pluginSdkAliasPath, BUILD_TIME, BUILD_TIME);
+  await writeProjectFiles(tmp, {
+    [DIST_PLUGIN_SDK_ROOT_ALIAS]: "module.exports = {};\n",
+    [DIST_CHANNEL_CATALOG]: '{"entries":[]}\n',
+    [DIST_LEGACY_CLI_EXIT_COMPAT]: "export function hasMemoryRuntime() { return false; }\n",
+    [DIST_LEGACY_CLI_EXIT_COMPAT_ALT]: "export function hasMemoryRuntime() { return false; }\n",
+    [DIST_OPENCLAW_ALIAS_PACKAGE]:
+      '{"name":"openclaw","type":"module","exports":{"./plugin-sdk":"./plugin-sdk/index.js"}}\n',
+  });
+  await touchProjectFiles(
+    tmp,
+    [
+      DIST_PLUGIN_SDK_ROOT_ALIAS,
+      DIST_CHANNEL_CATALOG,
+      DIST_LEGACY_CLI_EXIT_COMPAT,
+      DIST_LEGACY_CLI_EXIT_COMPAT_ALT,
+      DIST_OPENCLAW_ALIAS_PACKAGE,
+    ],
+    BUILD_TIME,
+  );
 }
 
 function expectedBuildSpawn() {
@@ -1785,6 +1810,48 @@ describe("run-node script", () => {
         reason: "missing_runtime_postbuild_output",
       });
     });
+  });
+
+  it("reports missing core runtime postbuild outputs when runtime stamps match HEAD", async () => {
+    for (const missingPath of [
+      DIST_PLUGIN_SDK_ROOT_ALIAS,
+      DIST_CHANNEL_CATALOG,
+      DIST_LEGACY_CLI_EXIT_COMPAT,
+      DIST_STABLE_ROOT_RUNTIME_ALIAS,
+    ]) {
+      await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+        await setupTrackedProject(tmp, {
+          files: {
+            [ROOT_SRC]: "export const value = 1;\n",
+            [DIST_STABLE_ROOT_RUNTIME_SOURCE]: "export const value = 1;\n",
+            [DIST_STABLE_ROOT_RUNTIME_ALIAS]:
+              "export * from './model-catalog.runtime-AbCd1234.js';\n",
+            [RUNTIME_POSTBUILD_STAMP]: '{"head":"abc123"}\n',
+          },
+          buildPaths: [
+            ROOT_SRC,
+            DIST_ENTRY,
+            DIST_STABLE_ROOT_RUNTIME_SOURCE,
+            DIST_STABLE_ROOT_RUNTIME_ALIAS,
+            BUILD_STAMP,
+            RUNTIME_POSTBUILD_STAMP,
+          ],
+        });
+        await fs.rm(resolvePath(tmp, missingPath));
+
+        const requirement = resolveRuntimePostBuildRequirement(
+          createBuildRequirementDeps(tmp, {
+            gitHead: "abc123\n",
+            gitStatus: "",
+          }),
+        );
+
+        expect(requirement).toEqual({
+          shouldSync: true,
+          reason: "missing_runtime_postbuild_output",
+        });
+      });
+    }
   });
 
   it("reports missing runtime skill outputs even when stamps match HEAD", async () => {
