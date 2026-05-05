@@ -52,7 +52,7 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## Notes
 
-- Gateway mode falls back to the embedded agent when the Gateway request fails. Use `--local` to force embedded execution up front.
+- Gateway mode falls back to the embedded agent only when the Gateway transport fails or the accepted run times out waiting for a final reply. Gateway request and authorization errors are surfaced directly. Use `--local` to force embedded execution up front.
 - `--local` still preloads the plugin registry first, so plugin-provided providers, tools, and channels stay available during embedded runs.
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
 - Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.

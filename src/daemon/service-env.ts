@@ -331,7 +331,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const parts: string[] = [];
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
-  const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
+  const includeUserDirs = options.includeUserDirs ?? true;
 
   const existsSync = options.existsSync ?? fs.existsSync;
   const userDirs = includeUserDirs

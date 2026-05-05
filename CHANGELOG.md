@@ -86,6 +86,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/Gateway: request admin gateway scope for `openclaw agent` `/new`, `/reset`, and model override runs, and include durable macOS user tool paths in launchd service PATHs so gateway-managed agents can spawn globally installed CLIs.
 - Discord/streaming: show live reasoning text in progress drafts instead of a bare `Reasoning` status line.
 - Doctor/status: warn when `OPENCLAW_GATEWAY_TOKEN` would shadow a different active `gateway.auth.token` source for local CLI commands, while avoiding false positives when config points at the same env token. Fixes #74271. Thanks @yelog.
 - Gateway/OpenAI-compatible: send the assistant role SSE chunk as soon as streaming chat-completion headers are accepted, so cold agent setup cannot leave `/v1/chat/completions` clients with a bodyless 200 response until their idle timeout fires.

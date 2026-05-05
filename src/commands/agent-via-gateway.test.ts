@@ -155,6 +155,7 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(callGateway.mock.calls[0]?.[0]?.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
+      expect(callGateway.mock.calls[0]?.[0]).not.toHaveProperty("scopes");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
@@ -204,12 +205,29 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+        scopes: ["operator.admin"],
         params: {
           model: "ollama/qwen3.5:9b",
         },
       });
     });
   });
+
+  it.each(["/reset", "/new start fresh"])(
+    "requests admin gateway scope for %s",
+    async (message) => {
+      await withTempStore(async () => {
+        mockGatewaySuccessReply();
+
+        await agentCliCommand({ message, to: "+1555" }, runtime);
+
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+          scopes: ["operator.admin"],
+        });
+      });
+    },
+  );
 
   it("routes diagnostics to stderr before JSON gateway execution", async () => {
     await withTempStore(async () => {

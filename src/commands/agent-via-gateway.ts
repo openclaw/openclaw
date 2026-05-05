@@ -7,6 +7,7 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError, randomIdempotencyKey } from "../gateway/call.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -33,6 +34,7 @@ type GatewayAgentResponse = {
 };
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
+const AGENT_ADMIN_COMMAND_RE = /^\/(?:new|reset)(?:\s|$)/i;
 const EMBEDDED_FALLBACK_META = {
   transport: "embedded",
   fallbackFrom: "gateway",
@@ -160,6 +162,8 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
+  const gatewayScopes =
+    AGENT_ADMIN_COMMAND_RE.test(body) || Boolean(opts.model) ? [ADMIN_SCOPE] : undefined;
 
   const response: GatewayAgentResponse = await withProgress(
     {
@@ -189,6 +193,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
           extraSystemPrompt: opts.extraSystemPrompt,
           idempotencyKey,
         },
+        ...(gatewayScopes ? { scopes: gatewayScopes } : {}),
         expectFinal: true,
         timeoutMs: gatewayTimeoutMs,
         clientName: GATEWAY_CLIENT_NAMES.CLI,
