@@ -17,12 +17,14 @@ import {
   type ModelCatalogEntry,
 } from "../agents/model-catalog.js";
 import {
+  buildModelAliasIndex,
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
   normalizeStoredOverrideModel,
   parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolvePersistedSelectedModelRef,
   resolveSubagentConfiguredModelSelection,
   resolveThinkingDefault,
@@ -1145,11 +1147,27 @@ export function resolveSessionModelRef(
       Boolean(entry?.subagentRole);
     if (isSubagent) {
       const subagentSelection = resolveSubagentConfiguredModelSelection({ cfg, agentId });
-      const subagentRef = subagentSelection
-        ? parseModelRef(subagentSelection, resolved.provider || DEFAULT_PROVIDER)
-        : null;
-      if (subagentRef) {
-        return { provider: subagentRef.provider, model: subagentRef.model };
+      if (subagentSelection) {
+        // Use alias-aware resolution so a configured alias such as `gpt`
+        // resolves through the model alias index instead of being parsed as a
+        // bare model under the default provider. This keeps the gateway
+        // fallback consistent with `resolveSubagentSpawnModelSelection`.
+        const aliasIndex = buildModelAliasIndex({
+          cfg,
+          defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+        });
+        const aliasResolved = resolveModelRefFromString({
+          cfg,
+          raw: subagentSelection,
+          defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+          aliasIndex,
+        });
+        if (aliasResolved) {
+          return {
+            provider: aliasResolved.ref.provider,
+            model: aliasResolved.ref.model,
+          };
+        }
       }
     }
   }

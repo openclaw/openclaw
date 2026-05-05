@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: resolve the runtime model for spawned subagent runs from the configured subagent default (`agents.list[<id>].subagents.model` -> `agents.defaults.subagents.model` -> `agents.list[<id>].model`) instead of the parent agent's primary, in both the gateway-side fallback (`resolveSessionModelRef`) and a new reply-time helper (`resolveSubagentSessionDefaultModel`) that overrides `getReplyFromConfig` defaults once the session entry is loaded; both fallbacks reuse the alias-aware resolver so configured subagent aliases (for example `gpt`) continue to resolve through `agents.defaults.models`, matching the spawn-side resolver and the existing `sessions.json` write-side fix. (#72984) Thanks @joeykrug.
 - Agents/pi-embedded-runner: extract the `abortable` provider-call wrapper from `runEmbeddedAttempt` to module scope so its promise handlers no longer close over the run lexical context, releasing transcripts, tool buffers, and subscription callbacks when a provider call hangs past abort. (#74182) Thanks @cjboy007.
 - Docker: restore `python3` in the gateway runtime image after the slim-runtime switch. Fixes #75041.
 - CLI/Voice Call: scope `voicecall` command activation to the Voice Call plugin so setup and smoke checks no longer broad-load unrelated plugin runtimes or hang after printing JSON. Thanks @vincentkoc.

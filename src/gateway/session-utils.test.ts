@@ -1214,6 +1214,34 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-7" });
   });
+
+  test("subagent fallback resolves a configured subagent model alias through the alias index", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "openai/gpt-5.4": { alias: "gpt" },
+          },
+          subagents: { model: "gpt" },
+        },
+        list: [{ id: "main", default: true, model: { primary: "anthropic/claude-opus-4-7" } }],
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(
+      cfg,
+      {
+        sessionId: "subagent-alias",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        subagentRole: "leaf",
+      } as SessionEntry,
+      "main",
+    );
+
+    expect(resolved).toEqual({ provider: "openai", model: "gpt-5.4" });
+  });
 });
 
 describe("listSessionsFromStore selected model display", () => {
