@@ -60,8 +60,7 @@ export function renderCockpitSessionRail(state: AppViewState, navCollapsed: bool
   }
   const recentSessions = (state.sessionsResult?.sessions ?? [])
     .filter((session) => !session.archived)
-    .slice()
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
     .slice(0, 7);
   const agentId =
     resolveAgentIdFromSessionKey(state.sessionKey) ?? state.agentsList?.defaultId ?? null;
@@ -148,7 +147,7 @@ export function renderCapabilityInspector(state: AppViewState) {
   const blockedSkills = skills.filter(
     (skill) => skill.disabled || skill.blockedByAllowlist || !skill.eligible,
   ).length;
-  const enabledCronJobs = state.cronJobs.filter((job) => job.enabled !== false).length;
+  const enabledCronJobs = state.cronJobs.filter((job) => job.enabled).length;
   const nextCron =
     typeof state.cronStatus?.nextWakeAtMs === "number"
       ? formatCompactRelativeTime(state.cronStatus.nextWakeAtMs)
