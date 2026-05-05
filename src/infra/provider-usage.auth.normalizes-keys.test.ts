@@ -187,6 +187,12 @@ const providerRuntimeMocks = vi.hoisted(() => ({
       }
 
       if (params.provider === "minimax") {
+        const portalAuth = await params.context.resolveOAuthToken({ provider: "minimax-portal" });
+        if (portalAuth?.token) {
+          return portalAuth.accountId
+            ? { token: portalAuth.token, accountId: portalAuth.accountId }
+            : { token: portalAuth.token };
+        }
         const token = resolveToken({
           providerIds: ["minimax"],
           envDirect: [
@@ -691,6 +697,84 @@ describe("resolveProviderAuths key normalization", () => {
         env: buildSuiteEnv(home),
       });
       expect(auths).toEqual([{ provider: "anthropic", token: "anthropic-token" }]);
+    });
+  });
+
+  it("prefers the requested OAuth profile when resolving provider usage auth", async () => {
+    await withSuiteHome(async (home) => {
+      await writeAuthProfiles(home, {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "default-token",
+        },
+        "anthropic:work": {
+          type: "token",
+          provider: "anthropic",
+          token: "work-token",
+        },
+      });
+      await writeProfileOrder(home, "anthropic", ["anthropic:default"]);
+
+      const auths = await resolveProviderAuths({
+        providers: ["anthropic"],
+        agentDir: agentDirForHome(home),
+        config: {},
+        env: buildSuiteEnv(home),
+        preferredProfileIds: { anthropic: "anthropic:work" },
+      });
+      expect(auths).toEqual([{ provider: "anthropic", token: "work-token" }]);
+    });
+  });
+
+  it("ignores a preferred usage profile id owned by another provider", async () => {
+    await withSuiteHome(async (home) => {
+      await writeAuthProfiles(home, {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "anthropic-token",
+        },
+        "zai:work": {
+          type: "token",
+          provider: "zai",
+          token: "wrong-provider-token",
+        },
+      });
+      await writeProfileOrder(home, "anthropic", ["anthropic:default"]);
+
+      const auths = await resolveProviderAuths({
+        providers: ["anthropic"],
+        agentDir: agentDirForHome(home),
+        config: {},
+        env: buildSuiteEnv(home),
+        preferredProfileIds: { anthropic: "zai:work" },
+      });
+      expect(auths).toEqual([{ provider: "anthropic", token: "anthropic-token" }]);
+    });
+  });
+
+  it("preserves preferred profile ids across provider override usage lookups", async () => {
+    await withSuiteHome(async (home) => {
+      await writeAuthProfiles(home, {
+        "minimax-portal:work": {
+          type: "oauth",
+          provider: "minimax-portal",
+          token: "portal-token",
+          accountId: "portal-account",
+        },
+      });
+
+      const auths = await resolveProviderAuths({
+        providers: ["minimax"],
+        agentDir: agentDirForHome(home),
+        config: {},
+        env: buildSuiteEnv(home),
+        preferredProfileIds: { minimax: "minimax-portal:work" },
+      });
+      expect(auths).toEqual([
+        { provider: "minimax", token: "portal-token", accountId: "portal-account" },
+      ]);
     });
   });
 

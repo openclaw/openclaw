@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Status/usage: prefer the session-selected OAuth profile when resolving provider usage summaries, so `/status` matches the active model auth profile instead of falling back to the provider default. Fixes #58498. (#59208) Thanks @luoxiao6645 and @vincentkoc.
 - Codex plugin: mirror the experimental upstream app-server protocol and format generated TypeScript before drift checks, keeping OpenClaw's `experimentalApi` bridge compatible with latest Codex while preserving formatter gates.
 - Telegram/media: derive no-caption inbound media placeholders from saved MIME metadata instead of the Telegram `photo` shape, so non-image and mixed attachments no longer reach the model as `<media:image>`. Fixes #69793. Thanks @aspalagin.
 - Agents/cache: keep per-turn runtime context out of ordinary chat system prompts while still delivering hidden current-turn context, restoring prompt-cache reuse on chat continuations. Fixes #77431. Thanks @Udjin79.
