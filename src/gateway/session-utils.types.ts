@@ -92,6 +92,15 @@ export type GatewaySessionRow = {
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
   pluginExtensions?: PluginSessionExtensionProjection[];
+  archivedTranscripts?: ArchivedTranscriptPreview[];
+};
+
+export type ArchivedTranscriptPreview = {
+  archivedFileName: string;
+  archivedAt: number;
+  reason: "reset" | "deleted";
+  sessionId: string;
+  sizeBytes: number;
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;

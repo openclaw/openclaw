@@ -86,6 +86,7 @@ import {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
+import { enumerateArchivedTranscriptsInDir } from "./session-transcript-files.fs.js";
 import {
   readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
@@ -113,6 +114,7 @@ export {
   readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
   readRecentSessionUsageFromTranscript,
+  readMessagesFromTranscriptPathAsync,
   readSessionMessageCountAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
@@ -1704,6 +1706,17 @@ export function buildGatewaySessionRow(params: {
   });
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
+  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: sessionAgentId });
+  const archivedTranscripts =
+    key === agentMainSessionKey
+      ? enumerateArchivedTranscriptsInDir(path.dirname(storePath)).map((info) => ({
+          archivedFileName: info.archivedFileName,
+          archivedAt: info.archivedAt,
+          reason: info.reason,
+          sessionId: info.sessionId,
+          sizeBytes: info.sizeBytes,
+        }))
+      : undefined;
 
   return {
     key,
@@ -1772,6 +1785,8 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount: entry?.compactionCheckpoints?.length,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
+    archivedTranscripts:
+      archivedTranscripts && archivedTranscripts.length > 0 ? archivedTranscripts : undefined,
   };
 }
 

@@ -100,8 +100,10 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import {
   branchSessionFromCheckpoint,
+  closeArchivedTranscriptViewer,
   deleteSessionsAndRefresh,
   loadSessions,
+  openArchivedTranscriptViewer,
   patchSession,
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
@@ -1812,6 +1814,10 @@ export function renderApp(state: AppViewState) {
                 },
                 onRestoreCheckpoint: (sessionKey, checkpointId) =>
                   restoreSessionFromCheckpoint(state, sessionKey, checkpointId),
+                archivedViewer: state.sessionsArchivedViewer,
+                onOpenArchivedTranscript: (sessionKey, info) =>
+                  openArchivedTranscriptViewer(state, sessionKey, info),
+                onCloseArchivedTranscript: () => closeArchivedTranscriptViewer(state),
               }),
             )
           : nothing}

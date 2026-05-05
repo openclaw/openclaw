@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import type { SessionsArchivedViewerState } from "../controllers/sessions.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
@@ -8,6 +9,8 @@ import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../str
 import { normalizeThinkLevel } from "../thinking.ts";
 import type {
   AgentIdentityResult,
+  ArchivedTranscriptInfo,
+  ArchivedTranscriptPreview,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
   SessionCompactionCheckpoint,
@@ -70,6 +73,12 @@ export type SessionsProps = {
   onToggleCheckpointDetails: (sessionKey: string) => void;
   onBranchFromCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
+  archivedViewer: SessionsArchivedViewerState | null;
+  onOpenArchivedTranscript: (
+    sessionKey: string,
+    info: ArchivedTranscriptInfo,
+  ) => void | Promise<void>;
+  onCloseArchivedTranscript: () => void;
 };
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
@@ -622,7 +631,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
   const latestCheckpoint = row.latestCompactionCheckpoint;
   const checkpointCount = row.compactionCheckpointCount ?? 0;
+  const archivedTranscripts: ArchivedTranscriptPreview[] = row.archivedTranscripts ?? [];
+  const hasArchivedTranscripts = archivedTranscripts.length > 0;
   const hasCheckpoints = checkpointCount > 0 || Boolean(latestCheckpoint);
+  const isExpandable = hasCheckpoints || hasArchivedTranscripts;
   const isExpanded = props.expandedCheckpointKey === row.key;
   const checkpointItems = props.checkpointItemsByKey[row.key] ?? [];
   const checkpointError = props.checkpointErrorByKey[row.key];
@@ -659,13 +671,13 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             : "data-table-badge--unknown";
   const rowClass = [
     "session-data-row",
-    hasCheckpoints ? "session-data-row--expandable" : "",
+    isExpandable ? "session-data-row--expandable" : "",
     isExpanded ? "session-data-row--expanded" : "",
   ]
     .filter(Boolean)
     .join(" ");
   const activateCheckpointDetails = () => {
-    if (hasCheckpoints) {
+    if (isExpandable) {
       props.onToggleCheckpointDetails(row.key);
     }
   };
@@ -673,17 +685,17 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   return [
     html`<tr
       class=${rowClass}
-      tabindex=${hasCheckpoints ? "0" : nothing}
-      aria-expanded=${hasCheckpoints ? String(isExpanded) : nothing}
-      aria-controls=${hasCheckpoints ? detailsId : nothing}
+      tabindex=${isExpandable ? "0" : nothing}
+      aria-expanded=${isExpandable ? String(isExpanded) : nothing}
+      aria-controls=${isExpandable ? detailsId : nothing}
       @click=${(e: MouseEvent) => {
-        if (!hasCheckpoints || isRowControlTarget(e.target)) {
+        if (!isExpandable || isRowControlTarget(e.target)) {
           return;
         }
         activateCheckpointDetails();
       }}
       @keydown=${(e: KeyboardEvent) => {
-        if (!hasCheckpoints || isRowControlTarget(e.target)) {
+        if (!isExpandable || isRowControlTarget(e.target)) {
           return;
         }
         if (e.key === "Enter" || e.key === " ") {
@@ -767,7 +779,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                 </span>
               `
             : nothing}
-          ${hasCheckpoints
+          ${isExpandable
             ? html`
                 <button
                   class="btn btn--sm session-checkpoint-toggle"
@@ -778,9 +790,16 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                 >
                   ${isExpanded
                     ? t("sessionsView.hideCheckpoints")
-                    : t("sessionsView.showCheckpoints")}
+                    : hasArchivedTranscripts && !hasCheckpoints
+                      ? t("sessionsView.showArchived")
+                      : t("sessionsView.showCheckpoints")}
                 </button>
               `
+            : nothing}
+          ${hasArchivedTranscripts && !hasCheckpoints
+            ? html`<span class="muted" style="font-size: 12px;"
+                >${archivedTranscripts.length} archived</span
+              >`
             : nothing}
         </div>
       </td>
@@ -855,74 +874,297 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         </select>
       </td>
     </tr>`,
-    ...(isExpanded && hasCheckpoints
+    ...(isExpanded && isExpandable
       ? [
           html`<tr id=${detailsId} class="session-checkpoint-details-row">
             <td colspan="11" style="padding: 0;">
               <div
-                style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05));"
+                style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05)); display: grid; gap: 14px;"
               >
-                ${props.checkpointLoadingKey === row.key
-                  ? html`<div class="muted">${t("sessionsView.loadingCheckpoints")}</div>`
-                  : checkpointError
-                    ? html`<div class="callout danger">${checkpointError}</div>`
-                    : checkpointItems.length === 0
-                      ? html`<div class="muted">${t("sessionsView.noCheckpoints")}</div>`
-                      : html`
-                          <div style="display: grid; gap: 10px;">
-                            ${checkpointItems.map(
-                              (checkpoint) => html`
-                                <div
-                                  style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; display: grid; gap: 8px;"
-                                >
-                                  <div
-                                    style="display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap;"
-                                  >
-                                    <strong>
-                                      ${formatCheckpointReason(checkpoint.reason)} ·
-                                      ${formatRelativeTimestamp(checkpoint.createdAt)}
-                                    </strong>
-                                    <span class="muted" style="font-size: 12px;">
-                                      ${formatCheckpointDelta(checkpoint)}
-                                    </span>
+                ${hasCheckpoints
+                  ? html`
+                      <div style="display: grid; gap: 8px;">
+                        <strong style="font-size: 13px;"
+                          >${t("sessionsView.checkpointsSectionTitle")}</strong
+                        >
+                        ${props.checkpointLoadingKey === row.key
+                          ? html`<div class="muted">${t("sessionsView.loadingCheckpoints")}</div>`
+                          : checkpointError
+                            ? html`<div class="callout danger">${checkpointError}</div>`
+                            : checkpointItems.length === 0
+                              ? html`<div class="muted">${t("sessionsView.noCheckpoints")}</div>`
+                              : html`
+                                  <div style="display: grid; gap: 10px;">
+                                    ${checkpointItems.map(
+                                      (checkpoint) => html`
+                                        <div
+                                          style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px; display: grid; gap: 8px;"
+                                        >
+                                          <div
+                                            style="display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap;"
+                                          >
+                                            <strong>
+                                              ${formatCheckpointReason(checkpoint.reason)} ·
+                                              ${formatRelativeTimestamp(checkpoint.createdAt)}
+                                            </strong>
+                                            <span class="muted" style="font-size: 12px;">
+                                              ${formatCheckpointDelta(checkpoint)}
+                                            </span>
+                                          </div>
+                                          ${checkpoint.summary
+                                            ? html`<div style="white-space: pre-wrap;">
+                                                ${checkpoint.summary}
+                                              </div>`
+                                            : html`<div class="muted">
+                                                ${t("sessionsView.noSummary")}
+                                              </div>`}
+                                          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                                            <button
+                                              class="btn btn--sm"
+                                              ?disabled=${props.checkpointBusyKey ===
+                                              checkpoint.checkpointId}
+                                              @click=${() =>
+                                                props.onBranchFromCheckpoint(
+                                                  row.key,
+                                                  checkpoint.checkpointId,
+                                                )}
+                                            >
+                                              ${t("sessionsView.branchFromCheckpoint")}
+                                            </button>
+                                            <button
+                                              class="btn btn--sm"
+                                              ?disabled=${props.checkpointBusyKey ===
+                                              checkpoint.checkpointId}
+                                              @click=${() =>
+                                                props.onRestoreCheckpoint(
+                                                  row.key,
+                                                  checkpoint.checkpointId,
+                                                )}
+                                            >
+                                              ${t("sessionsView.restoreCheckpoint")}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      `,
+                                    )}
                                   </div>
-                                  ${checkpoint.summary
-                                    ? html`<div style="white-space: pre-wrap;">
-                                        ${checkpoint.summary}
-                                      </div>`
-                                    : html`<div class="muted">${t("sessionsView.noSummary")}</div>`}
-                                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                                    <button
-                                      class="btn btn--sm"
-                                      ?disabled=${props.checkpointBusyKey ===
-                                      checkpoint.checkpointId}
-                                      @click=${() =>
-                                        props.onBranchFromCheckpoint(
-                                          row.key,
-                                          checkpoint.checkpointId,
-                                        )}
-                                    >
-                                      ${t("sessionsView.branchFromCheckpoint")}
-                                    </button>
-                                    <button
-                                      class="btn btn--sm"
-                                      ?disabled=${props.checkpointBusyKey ===
-                                      checkpoint.checkpointId}
-                                      @click=${() =>
-                                        props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
-                                    >
-                                      ${t("sessionsView.restoreCheckpoint")}
-                                    </button>
-                                  </div>
-                                </div>
-                              `,
-                            )}
-                          </div>
-                        `}
+                                `}
+                      </div>
+                    `
+                  : nothing}
+                ${hasArchivedTranscripts
+                  ? renderArchivedTranscriptsSection({
+                      sessionKey: row.key,
+                      agentId: keyParts?.agentId,
+                      transcripts: archivedTranscripts,
+                      props,
+                    })
+                  : nothing}
               </div>
             </td>
           </tr>`,
         ]
       : []),
   ];
+}
+
+function formatBytesShort(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function renderArchivedTranscriptsSection(params: {
+  sessionKey: string;
+  agentId?: string;
+  transcripts: ArchivedTranscriptPreview[];
+  props: SessionsProps;
+}) {
+  const { sessionKey, agentId, transcripts, props } = params;
+  const viewer = props.archivedViewer;
+  return html`
+    <div style="display: grid; gap: 8px;">
+      <strong style="font-size: 13px;">${t("sessionsView.archivedTranscripts")}</strong>
+      <div class="muted" style="font-size: 12px;">${t("sessionsView.archivedTranscriptsHelp")}</div>
+      <div style="display: grid; gap: 6px;">
+        ${transcripts.map((info) => {
+          const archivedInfo: ArchivedTranscriptInfo = {
+            ...info,
+            agentId: agentId ?? "main",
+          };
+          const isOpen =
+            viewer?.sessionKey === sessionKey &&
+            viewer.info.archivedFileName === info.archivedFileName;
+          const isLoading = isOpen && (viewer?.loading ?? false);
+          return html`
+            <div
+              style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 10px 12px; display: grid; gap: 8px;"
+            >
+              <div
+                style="display: flex; gap: 8px; justify-content: space-between; align-items: center; flex-wrap: wrap;"
+              >
+                <div style="display: grid; gap: 2px;">
+                  <strong style="font-size: 13px;">
+                    ${info.reason === "reset"
+                      ? t("sessionsView.archivedReasonReset")
+                      : t("sessionsView.archivedReasonDeleted")}
+                    · ${formatRelativeTimestamp(info.archivedAt)}
+                  </strong>
+                  <span class="muted mono" style="font-size: 12px;"
+                    >${info.sessionId} · ${formatBytesShort(info.sizeBytes)}</span
+                  >
+                </div>
+                <button
+                  class="btn btn--sm"
+                  ?disabled=${isLoading}
+                  @click=${() => {
+                    if (isOpen) {
+                      props.onCloseArchivedTranscript();
+                      return;
+                    }
+                    void props.onOpenArchivedTranscript(sessionKey, archivedInfo);
+                  }}
+                >
+                  ${isOpen
+                    ? t("sessionsView.hideArchivedTranscript")
+                    : t("sessionsView.viewArchivedTranscript")}
+                </button>
+              </div>
+              ${isOpen
+                ? html`
+                    <div
+                      style="border-top: 1px solid var(--border); padding-top: 8px; max-height: 320px; overflow: auto;"
+                    >
+                      ${viewer?.loading
+                        ? html`<div class="muted">
+                            ${t("sessionsView.loadingArchivedTranscript")}
+                          </div>`
+                        : viewer?.error
+                          ? html`<div class="callout danger">${viewer.error}</div>`
+                          : viewer?.result
+                            ? renderArchivedTranscriptMessages(viewer.result.messages)
+                            : nothing}
+                    </div>
+                  `
+                : nothing}
+            </div>
+          `;
+        })}
+      </div>
+    </div>
+  `;
+}
+
+function renderArchivedTranscriptMessages(messages: unknown[]) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return html`<div class="muted">${t("sessionsView.noArchivedMessages")}</div>`;
+  }
+  return html`
+    <div style="display: grid; gap: 8px;">
+      ${messages.map((message) => renderArchivedTranscriptMessage(message))}
+    </div>
+  `;
+}
+
+function renderArchivedTranscriptMessage(message: unknown) {
+  if (!message || typeof message !== "object") {
+    return nothing;
+  }
+  const entry = message as Record<string, unknown>;
+  const role =
+    typeof entry.role === "string" ? entry.role : typeof entry.type === "string" ? entry.type : "";
+  if (!role || role === "session") {
+    return nothing;
+  }
+  const blocks = renderArchivedTranscriptContentBlocks(entry);
+  if (!blocks) {
+    return nothing;
+  }
+  return html`
+    <div style="border-left: 3px solid var(--border); padding: 6px 10px; display: grid; gap: 4px;">
+      <span class="muted" style="font-size: 11px; text-transform: uppercase;">${role}</span>
+      ${blocks}
+    </div>
+  `;
+}
+
+function renderArchivedTranscriptContentBlocks(entry: Record<string, unknown>) {
+  const content = entry.content;
+  if (typeof content === "string") {
+    if (!content.trim()) {
+      return nothing;
+    }
+    return html`<div style="white-space: pre-wrap; font-size: 13px;">${content}</div>`;
+  }
+  if (Array.isArray(content)) {
+    return html` ${content.map((block) => renderArchivedTranscriptContentBlock(block))} `;
+  }
+  if (typeof entry.text === "string" && entry.text.trim()) {
+    return html`<div style="white-space: pre-wrap; font-size: 13px;">${entry.text}</div>`;
+  }
+  return nothing;
+}
+
+function renderArchivedTranscriptContentBlock(block: unknown) {
+  if (!block || typeof block !== "object") {
+    return nothing;
+  }
+  const b = block as Record<string, unknown>;
+  const type = typeof b.type === "string" ? b.type : "";
+  if (type === "text") {
+    const text = typeof b.text === "string" ? b.text : "";
+    if (!text.trim()) {
+      return nothing;
+    }
+    return html`<div style="white-space: pre-wrap; font-size: 13px;">${text}</div>`;
+  }
+  if (type === "image") {
+    const url =
+      typeof b.url === "string"
+        ? b.url
+        : b.source &&
+            typeof b.source === "object" &&
+            typeof (b.source as Record<string, unknown>).url === "string"
+          ? ((b.source as Record<string, unknown>).url as string)
+          : "";
+    const dataUrl = (() => {
+      if (!b.source || typeof b.source !== "object") {
+        return "";
+      }
+      const source = b.source as Record<string, unknown>;
+      if (source.type !== "base64") {
+        return "";
+      }
+      if (typeof source.media_type !== "string" || typeof source.data !== "string") {
+        return "";
+      }
+      return `data:${source.media_type};base64,${source.data}`;
+    })();
+    const src = url || dataUrl;
+    if (!src) {
+      return html`<div class="muted" style="font-size: 12px;">[image]</div>`;
+    }
+    return html`<img
+      src=${src}
+      alt="archived attachment"
+      style="max-width: 100%; max-height: 240px; border-radius: 6px; border: 1px solid var(--border);"
+    />`;
+  }
+  if (type === "attachment") {
+    const att = b.attachment as Record<string, unknown> | undefined;
+    const label =
+      typeof att?.label === "string" ? att.label : typeof b.label === "string" ? b.label : "file";
+    return html`<div class="muted" style="font-size: 12px;">[attachment: ${label}]</div>`;
+  }
+  if (type === "tool_use" || type === "tool_result") {
+    return html`<div class="muted mono" style="font-size: 12px;">[${type}]</div>`;
+  }
+  return nothing;
 }

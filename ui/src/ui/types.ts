@@ -442,6 +442,7 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   status?: SessionRunStatus;
   archived?: boolean;
+  archivedTranscripts?: ArchivedTranscriptPreview[];
   hasActiveRun?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
@@ -455,6 +456,32 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+};
+
+export type ArchivedTranscriptPreview = {
+  archivedFileName: string;
+  archivedAt: number;
+  reason: "reset" | "deleted";
+  sessionId: string;
+  sizeBytes: number;
+};
+
+export type ArchivedTranscriptInfo = ArchivedTranscriptPreview & {
+  agentId: string;
+};
+
+export type SessionsArchivedListResult = {
+  archived: ArchivedTranscriptInfo[];
+};
+
+export type SessionsArchivedReadResult = {
+  archivedFileName: string;
+  archivedAt: number;
+  reason: "reset" | "deleted";
+  sessionId: string;
+  agentId: string;
+  messages: unknown[];
+  totalMessages: number;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;

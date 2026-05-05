@@ -20,6 +20,107 @@ export type ArchivedSessionTranscript = {
   archivedPath: string;
 };
 
+export type ArchivedSessionTranscriptInfo = {
+  archivedFileName: string;
+  archivedPath: string;
+  archivedAt: number;
+  reason: "reset" | "deleted";
+  sessionId: string;
+  sizeBytes: number;
+};
+
+const ARCHIVED_TRANSCRIPT_REASONS = ["reset", "deleted"] as const satisfies readonly Exclude<
+  SessionArchiveReason,
+  "bak"
+>[];
+
+function parseArchivedTranscriptFileName(
+  fileName: string,
+): { sessionId: string; reason: "reset" | "deleted"; archivedAt: number } | null {
+  for (const reason of ARCHIVED_TRANSCRIPT_REASONS) {
+    const marker = `.jsonl.${reason}.`;
+    const index = fileName.lastIndexOf(marker);
+    if (index <= 0) {
+      continue;
+    }
+    const archivedAt = parseSessionArchiveTimestamp(fileName, reason);
+    if (archivedAt == null) {
+      continue;
+    }
+    const sessionId = fileName.slice(0, index);
+    if (!sessionId) {
+      continue;
+    }
+    return { sessionId, reason, archivedAt };
+  }
+  return null;
+}
+
+export function enumerateArchivedTranscriptsInDir(
+  sessionsDir: string,
+): ArchivedSessionTranscriptInfo[] {
+  const resolved = path.resolve(sessionsDir);
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(resolved);
+  } catch {
+    return [];
+  }
+  const result: ArchivedSessionTranscriptInfo[] = [];
+  for (const fileName of entries) {
+    const parsed = parseArchivedTranscriptFileName(fileName);
+    if (!parsed) {
+      continue;
+    }
+    const fullPath = path.join(resolved, fileName);
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(fullPath);
+    } catch {
+      continue;
+    }
+    if (!stat.isFile()) {
+      continue;
+    }
+    result.push({
+      archivedFileName: fileName,
+      archivedPath: fullPath,
+      archivedAt: parsed.archivedAt,
+      reason: parsed.reason,
+      sessionId: parsed.sessionId,
+      sizeBytes: stat.size,
+    });
+  }
+  result.sort((a, b) => b.archivedAt - a.archivedAt);
+  return result;
+}
+
+export function resolveArchivedTranscriptPathWithin(
+  sessionsDir: string,
+  archivedFileName: string,
+): string | null {
+  const parsed = parseArchivedTranscriptFileName(archivedFileName);
+  if (!parsed) {
+    return null;
+  }
+  const base = path.basename(archivedFileName);
+  if (base !== archivedFileName) {
+    return null;
+  }
+  const resolvedDir = path.resolve(sessionsDir);
+  const realDir = canonicalizePathForComparison(resolvedDir);
+  const candidate = path.join(realDir, base);
+  const realCandidate = canonicalizePathForComparison(candidate);
+  const relative = path.relative(realDir, realCandidate);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+  if (!fs.existsSync(realCandidate)) {
+    return null;
+  }
+  return realCandidate;
+}
+
 function classifySessionTranscriptCandidate(
   sessionId: string,
   sessionFile?: string,

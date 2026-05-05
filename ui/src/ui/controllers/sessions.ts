@@ -1,8 +1,10 @@
 import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
+  ArchivedTranscriptInfo,
   GatewaySessionRow,
   SessionCompactionCheckpoint,
+  SessionsArchivedReadResult,
   SessionsCompactionBranchResult,
   SessionsCompactionListResult,
   SessionsCompactionRestoreResult,
@@ -29,6 +31,15 @@ export type SessionsState = {
   sessionsCheckpointLoadingKey: string | null;
   sessionsCheckpointBusyKey: string | null;
   sessionsCheckpointErrorByKey: Record<string, string>;
+  sessionsArchivedViewer: SessionsArchivedViewerState | null;
+};
+
+export type SessionsArchivedViewerState = {
+  sessionKey: string;
+  info: ArchivedTranscriptInfo;
+  loading: boolean;
+  error: string | null;
+  result: SessionsArchivedReadResult | null;
 };
 
 type LoadSessionsOverrides = {
@@ -616,4 +627,65 @@ export async function restoreSessionFromCheckpoint(
     "sessions.compaction.restore",
     "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
   );
+}
+
+export async function openArchivedTranscriptViewer(
+  state: SessionsState,
+  sessionKey: string,
+  info: ArchivedTranscriptInfo,
+): Promise<void> {
+  state.sessionsArchivedViewer = {
+    sessionKey,
+    info,
+    loading: true,
+    error: null,
+    result: null,
+  };
+  if (!state.client || !state.connected) {
+    state.sessionsArchivedViewer = {
+      ...state.sessionsArchivedViewer,
+      loading: false,
+      error: "Not connected to gateway.",
+    };
+    return;
+  }
+  try {
+    const result = await state.client.request<SessionsArchivedReadResult>(
+      "sessions.archived.read",
+      {
+        archivedFileName: info.archivedFileName,
+        agentId: info.agentId,
+        key: sessionKey,
+      },
+    );
+    if (
+      state.sessionsArchivedViewer &&
+      state.sessionsArchivedViewer.info.archivedFileName === info.archivedFileName
+    ) {
+      state.sessionsArchivedViewer = {
+        sessionKey,
+        info,
+        loading: false,
+        error: null,
+        result,
+      };
+    }
+  } catch (err) {
+    if (
+      state.sessionsArchivedViewer &&
+      state.sessionsArchivedViewer.info.archivedFileName === info.archivedFileName
+    ) {
+      state.sessionsArchivedViewer = {
+        sessionKey,
+        info,
+        loading: false,
+        error: String(err),
+        result: null,
+      };
+    }
+  }
+}
+
+export function closeArchivedTranscriptViewer(state: SessionsState): void {
+  state.sessionsArchivedViewer = null;
 }

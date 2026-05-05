@@ -296,6 +296,10 @@ import {
   SessionsPluginPatchParamsSchema,
   type SessionsPreviewParams,
   SessionsPreviewParamsSchema,
+  type SessionsArchivedListParams,
+  SessionsArchivedListParamsSchema,
+  type SessionsArchivedReadParams,
+  SessionsArchivedReadParamsSchema,
   type SessionsResetParams,
   SessionsResetParamsSchema,
   type SessionsResolveParams,
@@ -513,6 +517,12 @@ export const validateSessionsCompactionBranchParams = ajv.compile<SessionsCompac
 );
 export const validateSessionsCompactionRestoreParams = ajv.compile<SessionsCompactionRestoreParams>(
   SessionsCompactionRestoreParamsSchema,
+);
+export const validateSessionsArchivedListParams = ajv.compile<SessionsArchivedListParams>(
+  SessionsArchivedListParamsSchema,
+);
+export const validateSessionsArchivedReadParams = ajv.compile<SessionsArchivedReadParams>(
+  SessionsArchivedReadParamsSchema,
 );
 export const validateSessionsUsageParams =
   ajv.compile<SessionsUsageParams>(SessionsUsageParamsSchema);
