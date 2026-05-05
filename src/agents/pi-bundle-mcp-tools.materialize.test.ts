@@ -283,4 +283,183 @@ describe("createBundleMcpToolRuntime", () => {
     await tool.execute("call-2", { params: { key: "value" } });
     expect(capturedInput).toEqual({ params: { key: "value" } });
   });
+
+  it("coerces stringified params when schema declares array-form `type` (issue #70872)", async () => {
+    let capturedInput: unknown;
+    const runtime: SessionMcpRuntime = {
+      sessionId: "session-coerce-array-type",
+      workspaceDir: "/tmp",
+      configFingerprint: "fingerprint",
+      createdAt: 0,
+      lastUsedAt: 0,
+      markUsed: () => {},
+      getCatalog: async () => ({
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          synology: {
+            serverName: "synology",
+            launchSummary: "synology",
+            toolCount: 1,
+          },
+        },
+        tools: [
+          {
+            serverName: "synology",
+            safeServerName: "synology",
+            toolName: "test_connection",
+            description: "Test connection",
+            inputSchema: {
+              type: "object",
+              properties: {
+                params: { type: ["object", "null"] },
+                tags: { type: ["array", "null"] },
+              },
+            },
+            fallbackDescription: "Test connection",
+          },
+        ],
+      }),
+      callTool: async (_serverName, _toolName, input) => {
+        capturedInput = input;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        };
+      },
+      dispose: async () => {},
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const tool = materialized.tools[0];
+
+    await tool.execute("call-array-type", { params: "{}", tags: '["a"]' });
+    expect(capturedInput).toEqual({ params: {}, tags: ["a"] });
+  });
+
+  it("does not pollute prototypes when input contains __proto__ key", async () => {
+    let capturedInput: unknown;
+    const runtime: SessionMcpRuntime = {
+      sessionId: "session-coerce-proto",
+      workspaceDir: "/tmp",
+      configFingerprint: "fingerprint",
+      createdAt: 0,
+      lastUsedAt: 0,
+      markUsed: () => {},
+      getCatalog: async () => ({
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          synology: {
+            serverName: "synology",
+            launchSummary: "synology",
+            toolCount: 1,
+          },
+        },
+        tools: [
+          {
+            serverName: "synology",
+            safeServerName: "synology",
+            toolName: "test_connection",
+            description: "Test connection",
+            inputSchema: {
+              type: "object",
+              properties: {
+                params: { type: "object" },
+              },
+            },
+            fallbackDescription: "Test connection",
+          },
+        ],
+      }),
+      callTool: async (_serverName, _toolName, input) => {
+        capturedInput = input;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        };
+      },
+      dispose: async () => {},
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const tool = materialized.tools[0];
+
+    // Hostile input shaped to surface `__proto__` as an own enumerable key in
+    // `Object.entries`, which is the path the previous `result = {}` code took
+    // through the `__proto__` setter and which Object.create(null) + key skip
+    // now neutralizes.
+    const hostile: Record<string, unknown> = { params: "{}" };
+    Object.defineProperty(hostile, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    await tool.execute("call-proto", hostile);
+
+    // Result must not carry the polluted prototype value, and Object.prototype
+    // must remain clean for unrelated objects.
+    expect((capturedInput as Record<string, unknown>).polluted).toBeUndefined();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("leaves oversized stringified params unchanged (>1MB safety bound)", async () => {
+    let capturedInput: unknown;
+    const runtime: SessionMcpRuntime = {
+      sessionId: "session-coerce-oversize",
+      workspaceDir: "/tmp",
+      configFingerprint: "fingerprint",
+      createdAt: 0,
+      lastUsedAt: 0,
+      markUsed: () => {},
+      getCatalog: async () => ({
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          synology: {
+            serverName: "synology",
+            launchSummary: "synology",
+            toolCount: 1,
+          },
+        },
+        tools: [
+          {
+            serverName: "synology",
+            safeServerName: "synology",
+            toolName: "test_connection",
+            description: "Test connection",
+            inputSchema: {
+              type: "object",
+              properties: {
+                params: { type: "object" },
+              },
+            },
+            fallbackDescription: "Test connection",
+          },
+        ],
+      }),
+      callTool: async (_serverName, _toolName, input) => {
+        capturedInput = input;
+        return {
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        };
+      },
+      dispose: async () => {},
+    };
+
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    const tool = materialized.tools[0];
+
+    // Build a syntactically valid JSON object string longer than 1 MiB; if the
+    // size guard didn't apply we'd still get a parsed object, so the assertion
+    // below proves the parse was skipped.
+    const filler = "a".repeat(1_048_577);
+    const oversized = `{"k":"${filler}"}`;
+    expect(oversized.length).toBeGreaterThan(1_048_576);
+
+    await tool.execute("call-oversize", { params: oversized });
+    expect(capturedInput).toEqual({ params: oversized });
+  });
 });

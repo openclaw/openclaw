@@ -40,24 +40,42 @@ function coerceStringifiedObjectProperties(input: unknown, schema: TSchema | und
 
   const record = input as Record<string, unknown>;
   let mutated = false;
-  const result: Record<string, unknown> = {};
+  // Use a null-prototype object to avoid prototype pollution if input keys
+  // include `__proto__`, `constructor`, etc.
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
 
   for (const [key, value] of Object.entries(record)) {
+    // Defense-in-depth: skip keys that could be used for prototype pollution
+    // even though Object.create(null) already neutralizes the common vector.
+    if (key === "__proto__" || key === "prototype" || key === "constructor") {
+      continue;
+    }
     const propSchema = properties[key] as Record<string, unknown> | undefined;
+    const schemaTypeAcceptsObject =
+      propSchema &&
+      (typeof propSchema.type === "string"
+        ? propSchema.type === "object" || propSchema.type === "array"
+        : Array.isArray(propSchema.type) &&
+          (propSchema.type.includes("object") || propSchema.type.includes("array")));
     if (
       typeof value === "string" &&
-      propSchema &&
-      typeof propSchema.type === "string" &&
-      (propSchema.type === "object" || propSchema.type === "array")
+      // arbitrary safety bound: skip parsing very large strings to avoid
+      // unbounded JSON.parse work on hostile/oversized payloads.
+      value.length <= 1_048_576 &&
+      schemaTypeAcceptsObject
     ) {
+      const accepts = (t: string): boolean =>
+        typeof propSchema!.type === "string"
+          ? propSchema!.type === t
+          : Array.isArray(propSchema!.type) && (propSchema!.type as unknown[]).includes(t);
       try {
         const parsed = JSON.parse(value);
         if (
-          (propSchema.type === "object" &&
+          (accepts("object") &&
             parsed !== null &&
             typeof parsed === "object" &&
             !Array.isArray(parsed)) ||
-          (propSchema.type === "array" && Array.isArray(parsed))
+          (accepts("array") && Array.isArray(parsed))
         ) {
           result[key] = parsed;
           mutated = true;
