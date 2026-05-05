@@ -59,8 +59,16 @@ export async function loadSqliteVecExtension(params: {
           error: `sqlite-vec package is not installed. ${SQLITE_VEC_CONFIG_HINT} Original error: ${message}`,
         };
       }
-      params.db.loadExtension(variant.extensionPath);
-      return { ok: true, extensionPath: variant.extensionPath };
+      try {
+        params.db.loadExtension(variant.extensionPath);
+        return { ok: true, extensionPath: variant.extensionPath };
+      } catch (variantErr) {
+        const message = formatErrorMessage(variantErr);
+        return {
+          ok: false,
+          error: `sqlite-vec platform variant ${variant.pkg} failed to load from ${variant.extensionPath}. ${SQLITE_VEC_CONFIG_HINT} Original error: ${message}`,
+        };
+      }
     }
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };

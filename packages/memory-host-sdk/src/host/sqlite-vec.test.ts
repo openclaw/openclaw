@@ -88,4 +88,26 @@ describe("loadSqliteVecExtension", () => {
       "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     );
   });
+
+  it("preserves the extensionPath config hint when the platform variant loadExtension call throws", async () => {
+    mockMissingSqliteVecPackage();
+    mockPlatformVariantResolver({
+      pkg: "sqlite-vec-linux-x64",
+      extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
+    });
+    const { loadSqliteVecExtension } = await importLoader();
+    const db = {
+      enableLoadExtension: vi.fn(),
+      loadExtension: vi.fn().mockImplementation(() => {
+        throw new Error("dlopen failed: file not found");
+      }),
+    };
+
+    const result = await loadSqliteVecExtension({ db: db as never });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("sqlite-vec-linux-x64");
+    expect(result.error).toContain("agents.defaults.memorySearch.store.vector.extensionPath");
+    expect(result.error).toContain("dlopen failed: file not found");
+  });
 });
