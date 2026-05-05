@@ -23,6 +23,7 @@ import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import { IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -106,7 +107,11 @@ function isToolExplicitlyAllowedByFactoryPolicy(params: {
 }
 
 function mergeFactoryPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
-  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  const merged = lists.flatMap((list) =>
+    Array.isArray(list)
+      ? list.map((entry) => (entry === IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY ? "*" : entry))
+      : [],
+  );
   return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
 }
 
