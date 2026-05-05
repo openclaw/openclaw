@@ -272,6 +272,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     If the warning appears, choose the route you intended and edit config manually. Keep the warning as-is when PI Codex OAuth is intentional.
 
   </Accordion>
+  <Accordion title="2g. Session route cleanup">
+    Doctor also scans the active sessions store for stale auto-created route state after you move the configured default/fallback model or runtime away from a plugin-owned route such as Codex.
+
+    `openclaw doctor --fix` can clear auto-created stale state such as `modelOverrideSource: "auto"` model pins, runtime model metadata, pinned harness ids, CLI session bindings, and auto auth-profile overrides when their owning route is no longer configured. Explicit user or legacy session model choices are reported for manual review and left untouched; switch them with `/model ...`, `/new`, or reset the session when that route is no longer intended.
+
+  </Accordion>
   <Accordion title="3. Legacy state migrations (disk layout)">
     Doctor can migrate older on-disk layouts into the current structure:
 
