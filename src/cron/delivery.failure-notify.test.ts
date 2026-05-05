@@ -121,6 +121,39 @@ describe("sendFailureNotificationAnnounce", () => {
     });
   });
 
+  it("can suppress session-derived threadIds while preserving the failure session context", async () => {
+    await sendFailureNotificationAnnounce(
+      {} as never,
+      {} as never,
+      "main",
+      "job-1",
+      {
+        channel: "telegram",
+        to: "123",
+        sessionKey: "agent:main:telegram:direct:123:thread:99",
+        suppressSessionThreadId: true,
+      },
+      "Cron failed",
+    );
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(
+      {} as never,
+      "main",
+      {
+        channel: "telegram",
+        to: "123",
+        accountId: undefined,
+        sessionKey: "agent:main:telegram:direct:123:thread:99",
+      },
+      { suppressSessionThreadId: true },
+    );
+    expect(mocks.buildOutboundSessionContext).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:123:thread:99",
+    });
+  });
+
   it("does not send when target resolution fails", async () => {
     mocks.resolveDeliveryTarget.mockResolvedValue({
       ok: false,

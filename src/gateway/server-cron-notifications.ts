@@ -329,6 +329,7 @@ function dispatchCronFailureDestinationNotifications(params: {
           to: failureDest.to,
           accountId: failureDest.accountId,
           sessionKey: deliverySessionKey,
+          suppressSessionThreadId: true,
         },
         `⚠️ ${failureMessage}`,
       );

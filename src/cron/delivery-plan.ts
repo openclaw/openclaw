@@ -209,6 +209,7 @@ function isSameDeliveryTarget(
 
   const primaryTo = normalizeOptionalString(delivery.to);
   const primaryAccountId = normalizeOptionalString(delivery.accountId);
+  const primaryThreadId = normalizeOptionalThreadValue(delivery.threadId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
@@ -220,9 +221,13 @@ function isSameDeliveryTarget(
   });
   const failureChannelNormalized = failurePlan.channel ?? "last";
 
-  return (
-    failureChannelNormalized === primaryChannelNormalized &&
-    failurePlan.to === primaryTo &&
-    failurePlan.accountId === primaryAccountId
-  );
+  if (
+    failureChannelNormalized !== primaryChannelNormalized ||
+    failurePlan.to !== primaryTo ||
+    failurePlan.accountId !== primaryAccountId
+  ) {
+    return false;
+  }
+
+  return primaryThreadId === undefined;
 }

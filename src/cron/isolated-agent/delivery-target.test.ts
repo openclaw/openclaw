@@ -609,6 +609,51 @@ describe("resolveDeliveryTarget", () => {
     expect(normalizeTelegramTargetForDeliveryTest).toHaveBeenCalledWith("-100200300:topic:77");
   });
 
+  it("suppresses session Telegram topic threadId carry for threadless failure destinations", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-telegram-topic-suppressed",
+      lastChannel: "telegram",
+      lastTo: "-100200300:topic:77",
+      lastThreadId: "77",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "telegram",
+        to: "-100200300",
+      },
+      { suppressSessionThreadId: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-100200300");
+    expect(result.threadId).toBeUndefined();
+  });
+
+  it("suppresses session Telegram topic threadId carry when the failure destination inherits the session target", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-telegram-topic-suppressed-inherited",
+      lastChannel: "telegram",
+      lastTo: "-100200300:topic:77",
+      lastThreadId: "77",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "telegram",
+      },
+      { suppressSessionThreadId: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-100200300");
+    expect(result.threadId).toBeUndefined();
+  });
+
   it("drops carried threadId instead of throwing when target normalization fails", async () => {
     setLastSessionEntry({
       sessionId: "sess-telegram-topic-invalid",

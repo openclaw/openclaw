@@ -36,6 +36,7 @@ export type CronAnnounceTarget = {
   to?: string;
   accountId?: string;
   sessionKey?: string;
+  suppressSessionThreadId?: boolean;
 };
 
 type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -54,12 +55,18 @@ async function resolveCronAnnounceDelivery(params: {
     }
   | { ok: false; error: Error }
 > {
-  const resolvedTarget = await resolveDeliveryTarget(params.cfg, params.agentId, {
+  const targetPayload = {
     channel: params.target.channel as CronMessageChannel | undefined,
     to: params.target.to,
     accountId: params.target.accountId,
-    sessionKey: params.target.sessionKey,
-  });
+    ...(params.target.sessionKey !== undefined ? { sessionKey: params.target.sessionKey } : {}),
+  };
+  const targetOptions = params.target.suppressSessionThreadId
+    ? { suppressSessionThreadId: true }
+    : undefined;
+  const resolvedTarget = targetOptions
+    ? await resolveDeliveryTarget(params.cfg, params.agentId, targetPayload, targetOptions)
+    : await resolveDeliveryTarget(params.cfg, params.agentId, targetPayload);
 
   if (!resolvedTarget.ok) {
     return { ok: false, error: resolvedTarget.error };
