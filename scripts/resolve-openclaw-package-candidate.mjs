@@ -437,7 +437,7 @@ async function downloadUrl(url, target) {
   }
   const dispatcher = await createPackageDownloadDispatcher(parsed);
   try {
-    const response = await undiciFetch(parsed, { dispatcher });
+    const response = await undiciFetch(parsed, { dispatcher, redirect: "error" });
     if (!response.ok || !response.body) {
       throw new Error(`failed to download package_url: HTTP ${response.status}`);
     }
