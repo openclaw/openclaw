@@ -54,6 +54,9 @@ const createChannelReplyPipeline = vi.hoisted(() =>
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
 const loadSessionStore = vi.hoisted(() => vi.fn());
+const markTelegramInflightDispatched = vi.hoisted(() => vi.fn(() => "inflight-1"));
+const markTelegramInflightCompleted = vi.hoisted(() => vi.fn());
+const markTelegramInflightFailed = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabel = vi.hoisted(() => vi.fn());
 const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
@@ -155,6 +158,12 @@ const telegramDepsForTest: TelegramBotDeps = {
   emitInternalMessageSentHook:
     emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
+  markTelegramInflightDispatched:
+    markTelegramInflightDispatched as TelegramBotDeps["markTelegramInflightDispatched"],
+  markTelegramInflightCompleted:
+    markTelegramInflightCompleted as TelegramBotDeps["markTelegramInflightCompleted"],
+  markTelegramInflightFailed:
+    markTelegramInflightFailed as TelegramBotDeps["markTelegramInflightFailed"],
 };
 
 describe("dispatchTelegramMessage draft streaming", () => {
@@ -191,6 +200,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createChannelReplyPipeline.mockReset();
     wasSentByBot.mockReset();
     loadSessionStore.mockReset();
+    markTelegramInflightDispatched.mockReset();
+    markTelegramInflightCompleted.mockReset();
+    markTelegramInflightFailed.mockReset();
     resolveStorePath.mockReset();
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
@@ -237,6 +249,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       onModelSelected: () => undefined,
     });
     wasSentByBot.mockReturnValue(false);
+    markTelegramInflightDispatched.mockReturnValue("inflight-1");
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
     generateTopicLabel.mockResolvedValue("Topic label");
@@ -398,6 +411,118 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
     });
   }
+
+  it("records Telegram inflight completion when a final reply is delivered", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { totalTokens: 42_000 },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Done" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          MessageSid: "456",
+          Body: "please do the work",
+          BodyForAgent: "please do the work",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(markTelegramInflightDispatched).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        agentId: "default",
+        chatId: 123,
+        messageId: "456",
+        promptText: "please do the work",
+        sessionKey: "s1",
+        tokenRisk: "normal",
+        tokenTotal: 42_000,
+      }),
+    );
+    expect(markTelegramInflightCompleted).toHaveBeenCalledWith({
+      accountId: "default",
+      id: "inflight-1",
+    });
+    expect(markTelegramInflightFailed).not.toHaveBeenCalled();
+  });
+
+  it("records Telegram inflight failure and sends a timeout notice", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(
+      new Error("fetch timeout reached"),
+    );
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          MessageSid: "456",
+          Body: "please do the work",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(markTelegramInflightFailed).toHaveBeenCalledWith({
+      accountId: "default",
+      id: "inflight-1",
+      errorKind: "timeout",
+      errorText: "fetch timeout reached",
+    });
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("timed out"),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("guards long Telegram input when the session context is already high", async () => {
+    const longText = "large diagnostic report ".repeat(120);
+    loadSessionStore.mockReturnValue({
+      s1: { totalTokens: 170_000 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          MessageSid: "456",
+          Body: longText,
+          BodyForAgent: longText,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
+    expect(markTelegramInflightDispatched).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tokenRisk: "high",
+        tokenTotal: 170_000,
+      }),
+    );
+    expect(markTelegramInflightFailed).toHaveBeenCalledWith({
+      accountId: "default",
+      id: "inflight-1",
+      errorKind: "context_overflow",
+      errorText: "Large Telegram input blocked before dispatch.",
+    });
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("large context"),
+          }),
+        ],
+      }),
+    );
+  });
 
   it("streams drafts in private threads and forwards thread id", async () => {
     const draftStream = createDraftStream();
@@ -3590,7 +3715,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).toHaveBeenCalledWith(
       expect.objectContaining({
         replies: [
-          { text: "Something went wrong while processing your request. Please try again." },
+          {
+            text: "Something went wrong before a final Telegram reply could be delivered. Please try again.",
+          },
         ],
       }),
     );

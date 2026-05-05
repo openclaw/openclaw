@@ -40,6 +40,10 @@ import { tagTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramRequestTimeoutMs } from "./request-timeouts.js";
 import { createTelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
+import {
+  markStaleTelegramInflightInterrupted,
+  type TelegramInflightRecord,
+} from "./telegram-reliability-store.js";
 import { createTelegramThreadBindingManager } from "./thread-bindings.js";
 
 export type { TelegramBotOptions } from "./bot.types.js";
@@ -170,6 +174,44 @@ function resolveTelegramClientTimeoutMinimumSeconds(values: readonly (number | u
 function resolveTelegramOutboundClientTimeoutFloorSeconds(timeoutSeconds: unknown) {
   const timeoutMs = resolveTelegramRequestTimeoutMs("sendmessage", timeoutSeconds);
   return timeoutMs === undefined ? undefined : timeoutMs / 1000;
+}
+
+const TELEGRAM_INTERRUPTED_NOTICE =
+  "A previous Telegram request was interrupted before completion, likely because the gateway restarted or the Telegram runtime was stopped. Please resend it or reply with a short continue instruction. I will not rerun it automatically.";
+
+function notifyInterruptedTelegramInflight(params: {
+  bot: TelegramBotInstance;
+  accountId: string;
+  telegramDeps: TelegramBotDeps;
+  runtime: RuntimeEnv;
+}): void {
+  let interrupted: TelegramInflightRecord[];
+  try {
+    interrupted = (
+      params.telegramDeps.markStaleTelegramInflightInterrupted ??
+      markStaleTelegramInflightInterrupted
+    )({
+      accountId: params.accountId,
+    });
+  } catch (err) {
+    params.runtime.error?.(
+      danger(`telegram reliability interrupted scan failed: ${formatErrorMessage(err)}`),
+    );
+    return;
+  }
+  for (const record of interrupted.slice(0, 5)) {
+    void params.bot.api
+      .sendMessage(record.chatId, TELEGRAM_INTERRUPTED_NOTICE, {
+        ...(record.thread?.scope === "forum" && typeof record.thread.id === "number"
+          ? { message_thread_id: record.thread.id }
+          : {}),
+      })
+      .catch((err: unknown) => {
+        params.runtime.error?.(
+          danger(`telegram reliability interrupted notice failed: ${formatErrorMessage(err)}`),
+        );
+      });
+  }
 }
 
 export function createTelegramBotCore(
@@ -357,6 +399,12 @@ export function createTelegramBotCore(
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
+  });
+  notifyInterruptedTelegramInflight({
+    bot,
+    accountId: account.accountId,
+    telegramDeps,
+    runtime,
   });
 
   const initialUpdateId =

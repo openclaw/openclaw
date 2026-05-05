@@ -92,6 +92,19 @@ import {
 } from "./reasoning-lane-coordinator.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import {
+  buildTelegramFailureNotice,
+  classifyTelegramReliabilityError,
+  classifyTelegramTokenRisk,
+  shouldGuardTelegramLongInput,
+  type TelegramReliabilityErrorKind,
+  type TelegramTokenRisk,
+} from "./telegram-reliability.js";
+import {
+  markTelegramInflightCompleted,
+  markTelegramInflightDispatched,
+  markTelegramInflightFailed,
+} from "./telegram-reliability-store.js";
 
 export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
@@ -229,6 +242,127 @@ function resolveTelegramReasoningLevel(params: {
     // Fall through to default.
   }
   return "off";
+}
+
+function resolveTelegramReliabilityText(ctxPayload: {
+  BodyForAgent?: string;
+  Body?: string;
+  RawBody?: string;
+  CommandBody?: string;
+}): string {
+  return (
+    ctxPayload.BodyForAgent ??
+    ctxPayload.Body ??
+    ctxPayload.RawBody ??
+    ctxPayload.CommandBody ??
+    ""
+  );
+}
+
+function resolveTelegramSessionTokenTotal(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  agentId: string;
+  telegramDeps: TelegramBotDeps;
+}): number | undefined {
+  const { cfg, sessionKey, agentId, telegramDeps } = params;
+  if (!sessionKey) {
+    return undefined;
+  }
+  try {
+    const storePath = telegramDeps.resolveStorePath(cfg.session?.store, { agentId });
+    const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath, {
+      skipCache: true,
+    });
+    const entry = resolveSessionStoreEntry({ store, sessionKey }).existing as
+      | { totalTokens?: unknown; contextTokens?: unknown }
+      | undefined;
+    const totalTokens = coerceFiniteNumber(entry?.totalTokens);
+    if (totalTokens !== undefined) {
+      return totalTokens;
+    }
+    return coerceFiniteNumber(entry?.contextTokens);
+  } catch (err) {
+    logVerbose(`telegram reliability: session token read failed: ${formatErrorMessage(err)}`);
+    return undefined;
+  }
+}
+
+function coerceFiniteNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function markTelegramReliabilityDispatched(params: {
+  telegramDeps: TelegramBotDeps;
+  accountId?: string;
+  chatId: string | number;
+  messageId?: string | number;
+  thread?: { id?: string | number | null; scope?: string };
+  sessionKey?: string;
+  agentId?: string;
+  promptText?: string;
+  tokenTotal?: number;
+  tokenRisk?: TelegramTokenRisk;
+}): string | undefined {
+  try {
+    return (params.telegramDeps.markTelegramInflightDispatched ?? markTelegramInflightDispatched)({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId: params.messageId,
+      thread: params.thread,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      promptText: params.promptText,
+      tokenTotal: params.tokenTotal,
+      tokenRisk: params.tokenRisk,
+    });
+  } catch (err) {
+    logVerbose(`telegram reliability: inflight dispatch record failed: ${formatErrorMessage(err)}`);
+    return undefined;
+  }
+}
+
+function markTelegramReliabilityCompleted(params: {
+  telegramDeps: TelegramBotDeps;
+  accountId?: string;
+  inflightId?: string;
+}): void {
+  if (!params.inflightId) {
+    return;
+  }
+  try {
+    (params.telegramDeps.markTelegramInflightCompleted ?? markTelegramInflightCompleted)({
+      accountId: params.accountId,
+      id: params.inflightId,
+    });
+  } catch (err) {
+    logVerbose(`telegram reliability: inflight complete record failed: ${formatErrorMessage(err)}`);
+  }
+}
+
+function markTelegramReliabilityFailed(params: {
+  telegramDeps: TelegramBotDeps;
+  accountId?: string;
+  inflightId?: string;
+  errorKind: TelegramReliabilityErrorKind;
+  errorText?: string;
+}): void {
+  if (!params.inflightId) {
+    return;
+  }
+  try {
+    (params.telegramDeps.markTelegramInflightFailed ?? markTelegramInflightFailed)({
+      accountId: params.accountId,
+      id: params.inflightId,
+      errorKind: params.errorKind,
+      errorText: params.errorText,
+    });
+  } catch (err) {
+    logVerbose(`telegram reliability: inflight failed record failed: ${formatErrorMessage(err)}`);
+  }
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
@@ -737,6 +871,62 @@ export const dispatchTelegramMessage = async ({
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
+  const reliabilityPromptText = resolveTelegramReliabilityText(ctxPayload);
+  const reliabilityTokenTotal = resolveTelegramSessionTokenTotal({
+    cfg,
+    sessionKey: ctxPayload.SessionKey,
+    agentId: route.agentId,
+    telegramDeps,
+  });
+  const reliabilityTokenRisk =
+    reliabilityTokenTotal === undefined
+      ? undefined
+      : classifyTelegramTokenRisk(reliabilityTokenTotal);
+  const inflightId = markTelegramReliabilityDispatched({
+    telegramDeps,
+    accountId: route.accountId,
+    chatId,
+    messageId: ctxPayload.MessageSid ?? msg.message_id,
+    thread: threadSpec,
+    sessionKey: ctxPayload.SessionKey,
+    agentId: route.agentId,
+    promptText: reliabilityPromptText,
+    tokenTotal: reliabilityTokenTotal,
+    tokenRisk: reliabilityTokenRisk,
+  });
+  const longInputGuard =
+    reliabilityTokenTotal === undefined
+      ? { guarded: false as const }
+      : shouldGuardTelegramLongInput({
+          totalTokens: reliabilityTokenTotal,
+          text: reliabilityPromptText,
+          commandSource: ctxPayload.CommandSource,
+        });
+  if (longInputGuard.guarded && longInputGuard.message) {
+    const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
+      replies: [{ text: longInputGuard.message }],
+      ...deliveryBaseOptions,
+      silent: false,
+      mediaLoader: telegramDeps.loadWebMedia,
+    });
+    markTelegramReliabilityFailed({
+      telegramDeps,
+      accountId: route.accountId,
+      inflightId,
+      errorKind: result.delivered ? "context_overflow" : "delivery_failure",
+      errorText: "Large Telegram input blocked before dispatch.",
+    });
+    if (statusReactionController) {
+      void finalizeTelegramStatusReaction({
+        outcome: "error",
+        hasFinalResponse: result.delivered,
+      }).catch((err: unknown) => {
+        logVerbose(`telegram: status reaction guard finalize failed: ${String(err)}`);
+      });
+    }
+    clearGroupHistory();
+    return;
+  }
 
   try {
     const sticker = ctxPayload.Sticker;
@@ -1317,6 +1507,11 @@ export const dispatchTelegramMessage = async ({
         },
       });
       if (!turnResult.dispatched) {
+        markTelegramReliabilityCompleted({
+          telegramDeps,
+          accountId: route.accountId,
+          inflightId,
+        });
         return;
       }
       ({ queuedFinal } = turnResult.dispatchResult);
@@ -1404,6 +1599,13 @@ export const dispatchTelegramMessage = async ({
     releaseReplyFence();
   }
   if (dispatchWasSuperseded) {
+    markTelegramReliabilityFailed({
+      telegramDeps,
+      accountId: route.accountId,
+      inflightId,
+      errorKind: "unknown",
+      errorText: "Dispatch superseded by a newer Telegram control message.",
+    });
     if (statusReactionController) {
       void finalizeTelegramStatusReaction({ outcome: "done", hasFinalResponse: true }).catch(
         (err: unknown) => {
@@ -1441,7 +1643,7 @@ export const dispatchTelegramMessage = async ({
       (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
   ) {
     const fallbackText = dispatchError
-      ? "Something went wrong while processing your request. Please try again."
+      ? buildTelegramFailureNotice(dispatchError)
       : EMPTY_RESPONSE_FALLBACK;
     const result = await (telegramDeps.deliverReplies ?? deliverReplies)({
       replies: [{ text: fallbackText }],
@@ -1497,8 +1699,33 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (!hasFinalResponse) {
+    markTelegramReliabilityFailed({
+      telegramDeps,
+      accountId: route.accountId,
+      inflightId,
+      errorKind: dispatchError ? classifyTelegramReliabilityError(dispatchError) : "delivery_failure",
+      errorText: dispatchError ? formatErrorMessage(dispatchError) : "No final Telegram response.",
+    });
     clearGroupHistory();
     return;
+  }
+
+  if (dispatchError || sentFallback || hadErrorReplyFailureOrSkip) {
+    markTelegramReliabilityFailed({
+      telegramDeps,
+      accountId: route.accountId,
+      inflightId,
+      errorKind: dispatchError ? classifyTelegramReliabilityError(dispatchError) : "delivery_failure",
+      errorText: dispatchError
+        ? formatErrorMessage(dispatchError)
+        : "Telegram fallback or error reply path was used.",
+    });
+  } else {
+    markTelegramReliabilityCompleted({
+      telegramDeps,
+      accountId: route.accountId,
+      inflightId,
+    });
   }
 
   // Fire-and-forget: auto-rename DM topic on first message.
