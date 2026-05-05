@@ -79,7 +79,6 @@ type CiaoModule = {
 type BonjourCycle = {
   responder: BonjourResponder;
   services: Array<{ label: string; svc: BonjourService }>;
-  cleanupUnhandledRejection?: () => void;
 };
 
 type ServiceStateTracker = {
@@ -245,12 +244,7 @@ export async function startGatewayBonjourAdvertiser(
         svc: gateway as unknown as BonjourService,
       });
 
-      const cleanupUnhandledRejection =
-        services.length > 0
-          ? registerUnhandledRejectionHandler(handleCiaoUnhandledRejection)
-          : undefined;
-
-      return { responder, services, cleanupUnhandledRejection };
+      return { responder, services };
     }
 
     async function stopCycle(cycle: BonjourCycle | null) {
@@ -282,8 +276,6 @@ export async function startGatewayBonjourAdvertiser(
         await cycle.responder.shutdown();
       } catch {
         /* ignore */
-      } finally {
-        cycle.cleanupUnhandledRejection?.();
       }
     }
 
@@ -332,6 +324,14 @@ export async function startGatewayBonjourAdvertiser(
       `bonjour: starting (hostname=${hostname}, instance=${JSON.stringify(
         safeServiceName(instanceName),
       )}, gatewayPort=${opts.gatewayPort}${opts.minimal ? ", minimal=true" : `, sshPort=${opts.sshPort ?? 22}`})`,
+    );
+
+    // Register the unhandled rejection handler once at the outer scope so it
+    // persists across advertiser cycle recreations. Previously each createCycle()
+    // registered its own handler and stopCycle() removed it, leaving a window
+    // where ciao timer-fired rejections were unhandled during recreate (#77734).
+    const cleanupUnhandledRejection = registerUnhandledRejectionHandler(
+      handleCiaoUnhandledRejection,
     );
 
     let stopped = false;
@@ -450,6 +450,7 @@ export async function startGatewayBonjourAdvertiser(
           await recreatePromise;
           await stopCycle(cycle);
         } finally {
+          cleanupUnhandledRejection?.();
           restoreConsoleLog();
         }
       },
