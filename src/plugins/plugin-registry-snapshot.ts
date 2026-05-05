@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
+import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
@@ -191,6 +191,51 @@ function hasRecoveredInstallRecordsMissingFromPersistedIndex(
   );
 }
 
+// Short-lived result memo. The full discovery + freshness check walks the
+// filesystem with sync syscalls; on slow filesystems (WSL2, NFS, network
+// mounts) one pass costs 5-10s. The gateway hammers this from channels.status
+// and channel-restart paths, blocking the event loop on each call. A small TTL
+// is enough to coalesce repeated calls within the same operation while still
+// picking up real plugin changes within a couple of seconds.
+type RegistrySnapshotCacheEntry = {
+  paramsKey: string;
+  result: PluginRegistrySnapshotResult;
+  cachedAt: number;
+};
+
+const REGISTRY_SNAPSHOT_CACHE_TTL_MS = 2_000;
+let registrySnapshotCache: RegistrySnapshotCacheEntry | null = null;
+
+function buildRegistrySnapshotCacheKey(params: LoadPluginRegistryParams): string {
+  // Coalesce only when every behavior-affecting input matches; distinct
+  // load paths, workspaces, install-record sets, or env-derived bundled
+  // roots and disable flags must all return their own snapshot.
+  const env = params.env ?? process.env;
+  const policyHash = params.config ? resolveInstalledPluginIndexPolicyHash(params.config) : "";
+  const loadPathsHash = params.config?.plugins?.load ? hashJson(params.config.plugins.load) : "";
+  const installRecordsKey = params.installRecords
+    ? Object.keys(params.installRecords).sort().join(",")
+    : "";
+  const bundledRoot = resolveBundledPluginsDir(env) ?? "";
+  return [
+    params.stateDir ?? "",
+    params.filePath ?? "",
+    params.pluginIndexFilePath ?? "",
+    params.workspaceDir ?? "",
+    params.preferPersisted === undefined ? "u" : String(params.preferPersisted),
+    policyHash,
+    loadPathsHash,
+    installRecordsKey,
+    bundledRoot,
+    hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV) ? "1" : "0",
+    areBundledPluginsDisabled(env) ? "1" : "0",
+  ].join("|");
+}
+
+export function resetPluginRegistrySnapshotCache(): void {
+  registrySnapshotCache = null;
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -200,6 +245,16 @@ export function loadPluginRegistrySnapshotWithMetadata(
       source: "provided",
       diagnostics: [],
     };
+  }
+
+  const cacheKey = buildRegistrySnapshotCacheKey(params);
+  const now = Date.now();
+  if (
+    registrySnapshotCache &&
+    registrySnapshotCache.paramsKey === cacheKey &&
+    now - registrySnapshotCache.cachedAt < REGISTRY_SNAPSHOT_CACHE_TTL_MS
+  ) {
+    return registrySnapshotCache.result;
   }
 
   const env = params.env ?? process.env;
@@ -256,11 +311,13 @@ export function loadPluginRegistrySnapshotWithMetadata(
             "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
-        return {
+        const result: PluginRegistrySnapshotResult = {
           snapshot: persistedIndex,
           source: "persisted",
           diagnostics,
         };
+        registrySnapshotCache = { paramsKey: cacheKey, result, cachedAt: now };
+        return result;
       }
     } else if (persistedReadsEnabled) {
       diagnostics.push({
@@ -279,7 +336,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   }
 
-  return {
+  const result: PluginRegistrySnapshotResult = {
     snapshot: loadInstalledPluginIndex({
       ...params,
       ...(persistedInstallRecordReadsEnabled
@@ -289,6 +346,8 @@ export function loadPluginRegistrySnapshotWithMetadata(
     source: "derived",
     diagnostics,
   };
+  registrySnapshotCache = { paramsKey: cacheKey, result, cachedAt: now };
+  return result;
 }
 
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {
