@@ -4,6 +4,7 @@ import {
   resolveChatModelSelectState,
 } from "./chat-model-select-state.ts";
 import {
+  createMainSessionRow,
   createModelCatalog,
   createSessionsListResult,
   DEEPSEEK_CHAT_MODEL,
@@ -13,13 +14,12 @@ import {
 type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
 type ResolvedChatModelState = ReturnType<typeof resolveChatModelSelectState>;
 
-function createChatModelState(
-  params: Partial<Omit<ChatModelStateInput, "sessionKey">> = {},
-): ChatModelStateInput {
+function createChatModelState(params: Partial<ChatModelStateInput> = {}): ChatModelStateInput {
   return {
     sessionKey: "main",
     chatModelOverrides: {},
     chatModelCatalog: [],
+    agentsList: null,
     sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
     ...params,
   };
@@ -210,5 +210,43 @@ describe("chat-model-select-state", () => {
       value: "anthropic/claude-3-7-sonnet-thinking",
       label: "Claude Sonnet · claude-3-7-sonnet-thinking · anthropic",
     });
+  });
+
+  it("labels the default option with the active agent default when the override is cleared", () => {
+    const sessionKey = "agent:agent-b:main";
+    const state = createChatModelState({
+      sessionKey,
+      chatModelOverrides: { [sessionKey]: null },
+      chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
+      agentsList: {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "main", model: { primary: "gpt-5" } },
+          { id: "agent-b", model: { primary: "gpt-5-mini" } },
+        ],
+      },
+      sessionsResult: {
+        ...createSessionsListResult({
+          defaultsModel: "gpt-5",
+          defaultsProvider: "openai",
+          model: "gpt-5-mini",
+          modelProvider: "openai",
+        }),
+        sessions: [
+          createMainSessionRow({
+            key: sessionKey,
+            model: "gpt-5-mini",
+            modelProvider: "openai",
+          }),
+        ],
+      },
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("");
+    expect(resolved.defaultModel).toBe("openai/gpt-5-mini");
+    expect(resolved.defaultLabel).toBe("Default (GPT-5 Mini)");
   });
 });
