@@ -1,6 +1,7 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingSuppressDefaultToolProgressMessages } from "openclaw/plugin-sdk/channel-streaming";
 import {
   formatCommandArgMenuTitle,
   resolveStoredModelOverride,
@@ -764,6 +765,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         },
         replyOptions: {
           skillFilter: channelConfig?.skills,
+          suppressDefaultToolProgressMessages:
+            resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config),
           onModelSelected,
         },
       });

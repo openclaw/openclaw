@@ -166,6 +166,7 @@ function getCapturedReplyOptions() {
     capturedDispatchParams as {
       replyOptions?: {
         disableBlockStreaming?: boolean;
+        suppressDefaultToolProgressMessages?: boolean;
         sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
       };
     }
@@ -625,6 +626,40 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     expect(getCapturedReplyOptions()?.disableBlockStreaming).toBeUndefined();
+  });
+
+  it("suppresses default tool progress when WhatsApp preview toolProgress is disabled", async () => {
+    await dispatchBufferedReply({
+      cfg: {
+        channels: {
+          whatsapp: {
+            streaming: { preview: { toolProgress: false } },
+          },
+        },
+      } as never,
+    });
+
+    expect(getCapturedReplyOptions()?.suppressDefaultToolProgressMessages).toBe(true);
+  });
+
+  it("suppresses default tool progress from WhatsApp account streaming overrides", async () => {
+    await dispatchBufferedReply({
+      cfg: {
+        channels: {
+          whatsapp: {
+            accounts: {
+              work: {
+                streaming: { preview: { toolProgress: false } },
+              },
+            },
+          },
+        },
+      } as never,
+      msg: makeMsg({ accountId: "work" }),
+      route: makeRoute({ accountId: "work" }),
+    });
+
+    expect(getCapturedReplyOptions()?.suppressDefaultToolProgressMessages).toBe(true);
   });
 
   it("leaves WhatsApp direct reply mode unset by default", async () => {

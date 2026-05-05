@@ -725,6 +725,27 @@ describe("Slack native command argument menus", () => {
     expect(call.ctx?.Body).toBe("/usage tokens");
   });
 
+  it("suppresses default tool progress when Slack preview toolProgress is disabled", async () => {
+    const harness = createArgMenusHarness();
+    const account = {
+      accountId: "acct",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        streaming: { preview: { toolProgress: false } },
+      },
+    };
+    await registerCommands(harness.ctx, account);
+    const handler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
+
+    await runCommandHandler(handler);
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    const call = dispatchMock.mock.calls[0]?.[0] as {
+      replyOptions?: { suppressDefaultToolProgressMessages?: boolean };
+    };
+    expect(call.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+  });
+
   it("tracks accepted slash command activity", async () => {
     const trackingHarness = createArgMenusHarness();
     const trackEvent = vi.fn();

@@ -1,5 +1,6 @@
 import type { webhook } from "@line/bot-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+import { resolveChannelStreamingSuppressDefaultToolProgressMessages } from "openclaw/plugin-sdk/channel-streaming";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
@@ -256,6 +257,8 @@ export async function monitorLineProvider(
                 ...replyPipeline,
               },
               replyOptions: {
+                suppressDefaultToolProgressMessages:
+                  resolveChannelStreamingSuppressDefaultToolProgressMessages(bot.account.config),
                 onModelSelected,
               },
               delivery: {

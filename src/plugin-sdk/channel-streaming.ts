@@ -569,6 +569,13 @@ export function resolveChannelStreamingSuppressDefaultToolProgressMessages(
     previewStreamingEnabled?: boolean;
   },
 ): boolean {
+  const config = getChannelStreamingConfigObject(entry);
+  if (
+    asBoolean(config?.preview?.toolProgress) === false ||
+    asBoolean(config?.progress?.toolProgress) === false
+  ) {
+    return true;
+  }
   if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
     return false;
   }

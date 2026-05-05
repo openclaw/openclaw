@@ -1,4 +1,6 @@
+import { resolveChannelStreamingSuppressDefaultToolProgressMessages } from "openclaw/plugin-sdk/channel-streaming";
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { resolveMergedWhatsAppAccountConfig } from "../../account-config.js";
 import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
@@ -330,6 +332,10 @@ export async function dispatchWhatsAppBufferedReply(params: {
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
     : resolveWhatsAppDisableBlockStreaming(params.cfg);
+  const effectiveWhatsAppAccountConfig = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId: params.route.accountId ?? params.msg.accountId,
+  });
   let didSendReply = false;
   let didLogHeartbeatStrip = false;
 
@@ -417,6 +423,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
     },
     replyOptions: {
       disableBlockStreaming,
+      suppressDefaultToolProgressMessages:
+        resolveChannelStreamingSuppressDefaultToolProgressMessages(effectiveWhatsAppAccountConfig),
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,
     },

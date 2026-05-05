@@ -505,6 +505,24 @@ describe("promptSingleChannelToken", () => {
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
   });
+
+  it("does not throw when replacement token prompt returns undefined", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async () => undefined),
+    };
+
+    const result = await runPromptSingleToken({
+      prompter: prompter as unknown as ReturnType<typeof createTokenPrompter>,
+      accountConfigured: true,
+      canUseEnv: false,
+      hasConfigToken: true,
+    });
+
+    expect(result).toEqual({ useEnv: false, token: "" });
+    expect(prompter.confirm).toHaveBeenCalledTimes(1);
+    expect(prompter.text).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("promptSingleChannelSecretInput", () => {

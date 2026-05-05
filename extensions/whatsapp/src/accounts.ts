@@ -6,6 +6,7 @@ import {
   resolveUserPath,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
+import type { ChannelPreviewStreamingConfig } from "openclaw/plugin-sdk/channel-streaming";
 import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -37,6 +38,7 @@ export type ResolvedWhatsAppAccount = {
   historyLimit?: number;
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
+  streaming?: ChannelPreviewStreamingConfig;
   mediaMaxMb?: number;
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
@@ -148,6 +150,7 @@ export function resolveWhatsAppAccount(params: {
     historyLimit: merged.historyLimit,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,
+    streaming: merged.streaming,
     mediaMaxMb: merged.mediaMaxMb,
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,

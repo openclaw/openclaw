@@ -97,7 +97,7 @@ const ChannelStreamingProgressSchema = z
     commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
-const ChannelPreviewStreamingConfigSchema = z
+export const ChannelPreviewStreamingConfigSchema = z
   .object({
     mode: UnifiedStreamingModeSchema.optional(),
     chunkMode: TextChunkModeSchema.optional(),

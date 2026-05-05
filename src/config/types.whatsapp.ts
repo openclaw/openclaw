@@ -1,6 +1,7 @@
 import type { ReactionLevel } from "../utils/reaction-level.js";
 import type {
   BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -82,6 +83,8 @@ type WhatsAppSharedConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Preview/progress streaming behavior. */
+  streaming?: ChannelPreviewStreamingConfig;
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
   /** Disable block streaming for this account. */

@@ -6,6 +6,7 @@ export {
   buildJsonChannelConfigSchema,
   buildNestedDmConfigSchema,
 } from "../channels/plugins/config-schema.js";
+export { ChannelPreviewStreamingConfigSchema } from "../config/zod-schema.providers-core.js";
 export {
   BlockStreamingCoalesceSchema,
   ContextVisibilityModeSchema,
