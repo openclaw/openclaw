@@ -46,7 +46,7 @@ function createTwilioProviderStub() {
     parseWebhookEvent() {
       return { events: [], statusCode: 200 };
     },
-    async initiateCall(input) {
+    async initiateCall(_input) {
       counter += 1;
       return {
         providerCallId: `CA${String(counter).padStart(8, "0")}realstub`,
