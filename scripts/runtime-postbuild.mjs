@@ -138,49 +138,14 @@ export function listOfficialChannelCatalogOutputs() {
   return [OFFICIAL_CHANNEL_CATALOG_OUTPUT];
 }
 
-export function listStableRootRuntimeAliasOutputs(params = {}) {
-  const rootDir = params.rootDir ?? ROOT;
-  const distDir = path.join(rootDir, "dist");
-  const fsImpl = params.fs ?? fs;
+function collectStableRootRuntimeAliasCandidates(params) {
+  const distDir = params.distDir;
+  const fsImpl = params.fs;
   let entries = [];
   try {
     entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
   } catch {
-    return [];
-  }
-
-  return entries
-    .filter((entry) => entry.isFile())
-    .map((entry) => entry.name.match(ROOT_RUNTIME_ALIAS_PATTERN)?.groups?.base)
-    .filter((base) => typeof base === "string" && base.length > 0)
-    .map((base) => `dist/${base}.js`)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function listLegacyCliExitCompatOutputs(params = {}) {
-  const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
-  return chunks
-    .map(({ dest }) => dest.replace(/\\/g, "/"))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function listCoreRuntimePostBuildOutputs(params = {}) {
-  return [
-    ...listPluginSdkRootAliasOutputs(),
-    ...listOfficialChannelCatalogOutputs(),
-    ...listStableRootRuntimeAliasOutputs(params),
-    ...listLegacyCliExitCompatOutputs(params),
-  ].toSorted((left, right) => left.localeCompare(right));
-}
-export function writeStableRootRuntimeAliases(params = {}) {
-  const rootDir = params.rootDir ?? ROOT;
-  const distDir = path.join(rootDir, "dist");
-  const fsImpl = params.fs ?? fs;
-  let entries = [];
-  try {
-    entries = fsImpl.readdirSync(distDir, { withFileTypes: true });
-  } catch {
-    return;
+    return new Map();
   }
 
   const candidatesByAlias = new Map();
@@ -197,42 +162,114 @@ export function writeStableRootRuntimeAliases(params = {}) {
     candidates.push(entry.name);
     candidatesByAlias.set(aliasFileName, candidates);
   }
+  return candidatesByAlias;
+}
 
-  const resolveAliasCandidate = (aliasFileName, candidates) => {
-    if (candidates.length === 1) {
-      return candidates[0];
+function resolveStableRootRuntimeAliasCandidate(params) {
+  const { aliasFileName, candidates, distDir, fsImpl } = params;
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+  if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
+    return resolveRootRuntimeCandidateByMarkers({
+      distDir,
+      fsImpl,
+      aliasFileName,
+      sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
+    });
+  }
+  const candidateSet = new Set(candidates);
+  const wrappers = candidates.filter((candidate) => {
+    const filePath = path.join(distDir, candidate);
+    let source;
+    try {
+      source = fsImpl.readFileSync(filePath, "utf8");
+    } catch {
+      return false;
     }
-    if (aliasFileName === PLUGIN_INSTALL_RUNTIME_ALIAS.aliasFileName) {
-      return resolveRootRuntimeCandidateByMarkers({
+    return candidates.some(
+      (target) =>
+        target !== candidate &&
+        candidateSet.has(target) &&
+        source.includes(`"./${target}"`) &&
+        !source.includes("\n//#region "),
+    );
+  });
+  return wrappers.length === 1 ? wrappers[0] : null;
+}
+
+export function listStableRootRuntimeAliasOutputs(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  return [...collectStableRootRuntimeAliasCandidates({ distDir, fs: fsImpl })]
+    .filter(([aliasFileName, candidates]) =>
+      resolveStableRootRuntimeAliasCandidate({
         distDir,
         fsImpl,
         aliasFileName,
-        sourceIncludes: PLUGIN_INSTALL_RUNTIME_ALIAS.sourceIncludes,
-      });
-    }
-    const candidateSet = new Set(candidates);
-    const wrappers = candidates.filter((candidate) => {
-      const filePath = path.join(distDir, candidate);
-      let source;
-      try {
-        source = fsImpl.readFileSync(filePath, "utf8");
-      } catch {
-        return false;
-      }
-      return candidates.some(
-        (target) =>
-          target !== candidate &&
-          candidateSet.has(target) &&
-          source.includes(`"./${target}"`) &&
-          !source.includes("\n//#region "),
-      );
-    });
-    return wrappers.length === 1 ? wrappers[0] : null;
-  };
+        candidates,
+      }),
+    )
+    .map(([aliasFileName]) => `dist/${aliasFileName}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listLegacyCliExitCompatOutputs(params = {}) {
+  const chunks = params.chunks ?? LEGACY_CLI_EXIT_COMPAT_CHUNKS;
+  return chunks
+    .map(({ dest }) => dest.replace(/\\/g, "/"))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listLegacyRootRuntimeCompatOutputs(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  return [
+    ...LEGACY_ROOT_RUNTIME_COMPAT_ALIASES.map(([legacyFileName, aliasFileName]) => ({
+      legacyFileName,
+      aliasFileName,
+    })),
+    ...LEGACY_PLUGIN_INSTALL_RUNTIME_COMPAT_ALIASES,
+  ]
+    .filter((entry) =>
+      resolveLegacyRootRuntimeCompatTarget({
+        distDir,
+        fsImpl,
+        legacyFileName: entry.legacyFileName,
+        aliasFileName: entry.aliasFileName,
+        sourceIncludes: entry.sourceIncludes,
+      }),
+    )
+    .map(({ legacyFileName }) => `dist/${legacyFileName}`)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listCoreRuntimePostBuildOutputs(params = {}) {
+  return [
+    ...listPluginSdkRootAliasOutputs(),
+    ...listOfficialChannelCatalogOutputs(),
+    ...listStableRootRuntimeAliasOutputs(params),
+    ...listLegacyRootRuntimeCompatOutputs(params),
+    ...listLegacyCliExitCompatOutputs(params),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+export function writeStableRootRuntimeAliases(params = {}) {
+  const rootDir = params.rootDir ?? ROOT;
+  const distDir = path.join(rootDir, "dist");
+  const fsImpl = params.fs ?? fs;
+  const candidatesByAlias = collectStableRootRuntimeAliasCandidates({ distDir, fs: fsImpl });
 
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
-    const candidate = resolveAliasCandidate(aliasFileName, candidates);
+    const candidate = resolveStableRootRuntimeAliasCandidate({
+      distDir,
+      fsImpl,
+      aliasFileName,
+      candidates,
+    });
     if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
       continue;
