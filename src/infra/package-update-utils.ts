@@ -53,9 +53,19 @@ export async function readInstalledPackageVersion(dir: string): Promise<string |
   return typeof manifest?.version === "string" ? manifest.version : undefined;
 }
 
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
+export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
   const manifest = readInstalledPackageManifest(dir);
   const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
+  return Object.fromEntries(
+    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
+      const [, value] = entry;
+      return typeof value === "string";
+    }),
+  );
+}
+
+export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
+  const peerDependencies = readInstalledPackagePeerDependencies(dir);
   if (!Object.hasOwn(peerDependencies, "openclaw")) {
     return false;
   }

@@ -12,6 +12,7 @@ import {
 import {
   expectedIntegrityForUpdate,
   installedPackageNeedsOpenClawPeerLinkRepair,
+  readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
@@ -46,6 +47,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -758,6 +760,47 @@ function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): Ope
   };
 }
 
+async function repairOpenClawPeerLinksForNpmInstalls(params: {
+  config: OpenClawConfig;
+  logger: PluginUpdateLogger;
+}): Promise<boolean> {
+  let repaired = false;
+  for (const [pluginId, record] of Object.entries(params.config.plugins?.installs ?? {})) {
+    if (record.source !== "npm") {
+      continue;
+    }
+
+    let installPath: string;
+    try {
+      installPath = resolveUserPath(
+        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
+      );
+    } catch (err) {
+      params.logger.warn?.(
+        `Could not repair openclaw peer link for "${pluginId}" due to invalid install path: ${String(err)}`,
+      );
+      continue;
+    }
+
+    if (!installedPackageNeedsOpenClawPeerLinkRepair(installPath)) {
+      continue;
+    }
+
+    const peerDependencies = readInstalledPackagePeerDependencies(installPath);
+    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+      continue;
+    }
+
+    await linkOpenClawPeerDependencies({
+      installedDir: installPath,
+      peerDependencies,
+      logger: params.logger,
+    });
+    repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
+  }
+  return repaired;
+}
+
 export async function updateNpmInstalledPlugins(params: {
   config: OpenClawConfig;
   logger?: PluginUpdateLogger;
@@ -783,6 +826,13 @@ export async function updateNpmInstalledPlugins(params: {
   const outcomes: PluginUpdateOutcome[] = [];
   let next = params.config;
   let changed = false;
+  let ranNpmInstaller = false;
+  const installNpmSpecForUpdate = async (
+    installParams: Parameters<typeof installPluginFromNpmSpec>[0],
+  ): Promise<Awaited<ReturnType<typeof installPluginFromNpmSpec>>> => {
+    ranNpmInstaller = true;
+    return await installPluginFromNpmSpec(installParams);
+  };
 
   const recordFailure = (pluginId: string, message: string) => {
     if (params.disableOnFailure && !params.dryRun) {
@@ -1219,7 +1269,7 @@ export async function updateNpmInstalledPlugins(params: {
     try {
       result =
         record.source === "npm"
-          ? await installPluginFromNpmSpec({
+          ? await installNpmSpecForUpdate({
               spec: effectiveSpec!,
               mode: "update",
               extensionsDir,
@@ -1282,7 +1332,7 @@ export async function updateNpmInstalledPlugins(params: {
         }),
       );
       usedNpmFallback = true;
-      result = await installPluginFromNpmSpec({
+      result = await installNpmSpecForUpdate({
         spec: npmSpecs.fallbackSpec,
         mode: "update",
         extensionsDir,
@@ -1438,6 +1488,14 @@ export async function updateNpmInstalledPlugins(params: {
         message: `Updated ${pluginId}: ${currentLabel} -> ${nextLabel}.`,
       });
     }
+  }
+
+  if (ranNpmInstaller) {
+    changed =
+      (await repairOpenClawPeerLinksForNpmInstalls({
+        config: next,
+        logger,
+      })) || changed;
   }
 
   return { config: next, changed, outcomes };
