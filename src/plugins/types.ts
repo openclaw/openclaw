@@ -47,6 +47,7 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
@@ -1839,6 +1840,7 @@ export type RealtimeVoiceProviderPlugin = {
   aliases?: string[];
   defaultModel?: string;
   autoSelectOrder?: number;
+  capabilities?: RealtimeVoiceProviderCapabilities;
   resolveConfig?: (ctx: RealtimeVoiceProviderResolveConfigContext) => RealtimeVoiceProviderConfig;
   isConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   createBridge: (req: RealtimeVoiceBridgeCreateRequest) => RealtimeVoiceBridge;
