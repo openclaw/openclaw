@@ -71,6 +71,8 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/onboarding: canonicalize setup and pairing allowlist entries to WhatsApp's digit-only phone ids while still accepting E.164, JID, and `whatsapp:` inputs, so personal-phone allowlists match WhatsApp Web sender ids after setup. Thanks @vincentkoc.
 - Gateway/startup: load provider plugins that own explicitly configured image, video, or music generation defaults so generation tools become live after gateway restart instead of remaining catalog-only. Fixes #77244. Thanks @buyuangtampan, @Nikoxx99, and @vincentkoc.
 - Control UI/chat: suppress `HEARTBEAT_OK` acknowledgement history, streams, deltas, and final events before they enter the transcript view, so repeated heartbeat no-op turns do not stack noisy bubbles. Thanks @BunsDev.
+- Agents/skills: require exact `<location>` skill paths for both single-skill and multi-skill prompt selection, so agents do not guess or hard-code skill file paths. (#74161) Thanks @lanzhi-lee.
+- Agents/skills: rebuild sandboxed non-rw run skill prompts from the sandbox workspace copy, so `<available_skills>` no longer points at host-only `~/.openclaw/skills` paths. Fixes #50590. Thanks @kidroca and @sallyom.
 - Slack/subagents: keep resumed parent `message.send` calls in the originating Slack thread when ambient session thread context is present, and suppress successful silent child completion rows from follow-up findings. Thanks @bek91.
 - Slack/mentions: record thread participation for successful visible threaded Slack sends, including message-tool and media delivery paths, so unmentioned replies in bot-participated threads can bypass mention gating as documented. Fixes #77648. Thanks @bek91.
 - Infra/Windows: skip the POSIX `/tmp/openclaw` preferred path on Windows in `resolvePreferredOpenClawTmpDir` so log files, TTS temp files, and other writes land in `%TEMP%\openclaw-<uid>` instead of `C:\tmp\openclaw`. Fixes #60713. Thanks @juan-flores077.
@@ -1413,7 +1415,6 @@ Docs: https://docs.openclaw.ai
 - Gateway/plugins: enable the native `require()` fast path on Windows for bundled plugin modules so plugin loading uses `require()` instead of Jiti's transform pipeline, reducing startup from ~39s to ~2s on typical 6-plugin setups. Fixes #68656. (#74173) Thanks @galiniliev.
 - macOS app: detect stale Gateway TLS certificate pins, automatically repair trusted Tailscale Serve rotations, and surface paired-but-disconnected Mac companion nodes so partial Gateway connections no longer look healthy. Thanks @guti.
 - Feishu: recreate WebSocket clients with monitor-owned backoff only after SDK reconnect exhaustion, preserving heartbeat defaults and shutdown cleanup without treating recoverable SDK callback errors as terminal, so persistent connections recover without manual gateway restart. Fixes #52618; duplicate evidence #59753; related #55532, #68766, #72411, and #73739. Thanks @vincentkoc, @schumilin, @alex-xuweilong, @120106835, @sirfengyu, and @tianhaocui.
-- Agents/skills: require exact `<location>` skill paths for both single-skill and multi-skill prompt selection, so agents do not guess or hard-code skill file paths. (#74161) Thanks @lanzhi-lee.
 
 ## 2026.4.27
 
