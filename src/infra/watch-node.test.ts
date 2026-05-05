@@ -143,11 +143,17 @@ describe("watch-node script", () => {
             OPENCLAW_WATCH_MODE: "1",
             OPENCLAW_WATCH_SESSION: "1700000000000-4242",
             OPENCLAW_NO_RESPAWN: "1",
-            OPENCLAW_TRACE_SYNC_IO: "1",
             OPENCLAW_WATCH_COMMAND: "gateway --force",
           }),
         }),
       );
+      const spawnCalls = spawn.mock.calls as unknown as Array<
+        [string, string[], { env: Record<string, string | undefined> }]
+      >;
+      const childEnv = spawnCalls[0]?.[2].env;
+      expect(childEnv).not.toHaveProperty("OPENCLAW_TRACE_SYNC_IO");
+      expect(childEnv).not.toHaveProperty("OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR");
+      expect(childEnv).not.toHaveProperty("OPENCLAW_RUN_NODE_OUTPUT_LOG");
       fakeProcess.emit("SIGINT");
       const exitCode = await runPromise;
       expect(exitCode).toBe(130);
@@ -178,6 +184,41 @@ describe("watch-node script", () => {
           }),
         }),
       );
+
+      fakeProcess.emit("SIGINT");
+      await runPromise;
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    });
+  });
+
+  it("preserves explicit visible sync I/O tracing for gateway watch", async () => {
+    const { child, spawn, createWatcher, fakeProcess } = createWatchHarness();
+    await withTempDir({ prefix: "openclaw-watch-node-" }, async (cwd) => {
+      const runPromise = runWatch({
+        args: ["gateway", "--force"],
+        cwd,
+        createWatcher,
+        env: { OPENCLAW_TRACE_SYNC_IO: "1" },
+        lockDisabled: true,
+        process: fakeProcess,
+        spawn,
+      });
+
+      expect(spawn).toHaveBeenCalledWith(
+        "/usr/local/bin/node",
+        ["scripts/run-node.mjs", "gateway", "--force"],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            OPENCLAW_TRACE_SYNC_IO: "1",
+          }),
+        }),
+      );
+      const spawnCalls = spawn.mock.calls as unknown as Array<
+        [string, string[], { env: Record<string, string | undefined> }]
+      >;
+      const childEnv = spawnCalls[0]?.[2].env;
+      expect(childEnv).not.toHaveProperty("OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR");
+      expect(childEnv).not.toHaveProperty("OPENCLAW_RUN_NODE_OUTPUT_LOG");
 
       fakeProcess.emit("SIGINT");
       await runPromise;
