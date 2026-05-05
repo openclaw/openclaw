@@ -1,3 +1,4 @@
+import { resolveChannelConfigBlockError } from "../channels/config-block.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import {
   getChannelPlugin,
@@ -241,6 +242,14 @@ export async function runChannelLogin(
     );
   }
   // Auth-only flow: do not mutate channel config here.
+  const configBlockError = resolveChannelConfigBlockError({
+    cfg,
+    channelId: plugin.id,
+    action: "logging in",
+  });
+  if (configBlockError) {
+    throw new Error(configBlockError);
+  }
   setVerbose(Boolean(opts.verbose));
   const { accountId } = resolveAccountContext(plugin, opts, cfg);
   await login({

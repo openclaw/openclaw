@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -7,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
   getChannelPlugin: vi.fn(),
+  normalizeChannelId: vi.fn((value: string): string | null => value),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -21,7 +23,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
   getChannelPlugin: mocks.getChannelPlugin,
-  normalizeChannelId: (value: string) => value,
+  normalizeChannelId: mocks.normalizeChannelId,
 }));
 
 import { channelsHandlers } from "./channels.js";
@@ -67,8 +69,9 @@ function createOptions(
 describe("channelsHandlers channels.start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.getRuntimeConfig.mockReturnValue({ channels: { whatsapp: {} } });
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({ config, changes: [] }));
+    mocks.normalizeChannelId.mockImplementation((value: string) => value);
     mocks.getChannelPlugin.mockReturnValue({
       id: "whatsapp",
       gateway: { startAccount: vi.fn() },
@@ -116,7 +119,7 @@ describe("channelsHandlers channels.start", () => {
     );
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: {},
+      config: { channels: { whatsapp: {} } },
       env: process.env,
     });
     expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
@@ -129,6 +132,44 @@ describe("channelsHandlers channels.start", () => {
       },
       undefined,
     );
+  });
+
+  it("rejects starts for channels missing a config block", async () => {
+    const startChannel = vi.fn();
+    const respond = vi.fn();
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.normalizeChannelId.mockReturnValue(null);
+
+    await channelsHandlers["channels.start"](
+      createOptions(
+        { channel: "whatsapp" },
+        {
+          respond,
+          context: {
+            getRuntimeConfig: mocks.getRuntimeConfig,
+            startChannel,
+            getRuntimeSnapshot: vi.fn(
+              (): ChannelRuntimeSnapshot => ({
+                channels: {},
+                channelAccounts: {},
+              }),
+            ),
+          } as unknown as GatewayRequestHandlerOptions["context"],
+        },
+      ),
+    );
+
+    const call = respond.mock.calls[0] as
+      | [boolean, unknown, { code: number; message: string }]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(call?.[2]?.message).toContain(
+      "Channel whatsapp is not configured. Add channels.whatsapp to your config before starting it.",
+    );
+    expect(mocks.normalizeChannelId).not.toHaveBeenCalled();
+    expect(mocks.getChannelPlugin).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
   });
 
   it("reports started=false when the channel runtime remains stopped", async () => {

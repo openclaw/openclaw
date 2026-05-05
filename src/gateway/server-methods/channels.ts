@@ -1,14 +1,16 @@
+import { resolveChannelConfigBlockError } from "../../channels/config-block.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
   type ChannelId,
   getChannelPlugin,
   listChannelPlugins,
-  normalizeChannelId,
+  normalizeChannelId as normalizeRegisteredChannelId,
 } from "../../channels/plugins/index.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { normalizeChannelId as normalizeCatalogChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -300,7 +302,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
     const rawChannel = (params as { channel?: unknown }).channel;
     const requestedChannel =
-      typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : undefined;
+      typeof rawChannel === "string" ? normalizeRegisteredChannelId(rawChannel) : undefined;
     const cfg = applyPluginAutoEnable({
       config: context.getRuntimeConfig(),
       env: process.env,
@@ -552,37 +554,60 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
-    if (!channelId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
-      );
-      return;
-    }
-    const plugin = getChannelPlugin(channelId);
-    if (!plugin) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
-      );
-      return;
-    }
-    if (!plugin.gateway?.startAccount) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `channel ${channelId} does not support start`),
-      );
-      return;
-    }
     try {
       const cfg = applyPluginAutoEnable({
         config: context.getRuntimeConfig(),
         env: process.env,
       }).config;
+      const catalogChannelId =
+        typeof rawChannel === "string" ? normalizeCatalogChannelId(rawChannel) : null;
+      if (catalogChannelId) {
+        const configBlockError = resolveChannelConfigBlockError({
+          cfg,
+          channelId: catalogChannelId,
+          action: "starting it",
+        });
+        if (configBlockError) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, configBlockError));
+          return;
+        }
+      }
+      const channelId =
+        typeof rawChannel === "string" ? normalizeRegisteredChannelId(rawChannel) : null;
+      if (!channelId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
+        );
+        return;
+      }
+      const plugin = getChannelPlugin(channelId);
+      if (!plugin) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
+        );
+        return;
+      }
+      if (!plugin.gateway?.startAccount) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `channel ${channelId} does not support start`),
+        );
+        return;
+      }
+      const configBlockError = resolveChannelConfigBlockError({
+        cfg,
+        channelId,
+        action: "starting it",
+      });
+      if (configBlockError) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, configBlockError));
+        return;
+      }
       const payload = await startChannelAccount({
         channelId,
         accountId: (params as { accountId?: string | null }).accountId,
@@ -608,7 +633,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    const channelId =
+      typeof rawChannel === "string" ? normalizeRegisteredChannelId(rawChannel) : null;
     if (!channelId) {
       respond(
         false,
@@ -654,7 +680,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+    const channelId =
+      typeof rawChannel === "string" ? normalizeRegisteredChannelId(rawChannel) : null;
     if (!channelId) {
       respond(
         false,
