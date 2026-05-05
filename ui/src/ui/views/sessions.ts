@@ -315,7 +315,7 @@ function renderSessionSelect(params: {
 }
 
 function renderTokenMeter(row: GatewaySessionRow) {
-  const current = row.totalTokens ?? row.inputTokens ?? row.outputTokens ?? null;
+  const current = row.totalTokens ?? null;
   const max = row.contextTokens ?? null;
   if (typeof current !== "number" || typeof max !== "number" || max <= 0) {
     return html`<span class="session-token-value">${formatSessionTokens(row)}</span>`;
@@ -382,14 +382,14 @@ function renderCheckpointDetails(row: GatewaySessionRow, props: SessionsProps, d
       <div class="session-checkpoint-panel">
         <div class="session-checkpoint-panel__header">
           <div>
-            <div class="session-checkpoint-panel__eyebrow">Compaction history</div>
-            <div class="session-checkpoint-panel__title">Saved checkpoints for this session</div>
+            <div class="session-checkpoint-panel__eyebrow">${t("sessionsView.checkpointPanelEyebrow")}</div>
+            <div class="session-checkpoint-panel__title">${t("sessionsView.checkpointPanelTitle")}</div>
             <div class="session-checkpoint-panel__sub">
-              Branch or restore an earlier pre-compaction view without losing the current session.
+              ${t("sessionsView.checkpointPanelSub")}
             </div>
           </div>
           <div class="session-checkpoint-panel__stats" aria-label="Session checkpoint summary">
-            <span><strong>${formatSessionTokens(row)}</strong> tokens</span>
+            <span><strong>${formatSessionTokens(row)}</strong> ${t("sessionsView.checkpointPanelTokensUnit")}</span>
             <span
               ><strong
                 >${checkpointCountLabel(
