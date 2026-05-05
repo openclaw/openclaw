@@ -241,11 +241,11 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
   });
 
-  it("installs EnvHttpProxyAgent with explicit ALL_PROXY fallback options", () => {
+  it("installs EnvHttpProxyAgent with explicit HTTP ALL_PROXY fallback options", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
-      httpProxy: "socks5://proxy.test:1080",
-      httpsProxy: "socks5://proxy.test:1080",
+      httpProxy: "http://proxy.test:1080",
+      httpsProxy: "http://proxy.test:1080",
     });
 
     ensureGlobalUndiciEnvProxyDispatcher();
@@ -254,8 +254,8 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options).toEqual({
-      httpProxy: "socks5://proxy.test:1080",
-      httpsProxy: "socks5://proxy.test:1080",
+      httpProxy: "http://proxy.test:1080",
+      httpsProxy: "http://proxy.test:1080",
     });
   });
 

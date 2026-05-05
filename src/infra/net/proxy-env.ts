@@ -25,6 +25,22 @@ function normalizeProxyEnvValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isHttpProxyUrl(value: string | undefined): value is string {
+  if (!value) {
+    return false;
+  }
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeEnvHttpProxyAgentUrl(value: string | undefined): string | undefined {
+  return isHttpProxyUrl(value) ? value : undefined;
+}
+
 export type EnvHttpProxyAgentProxyOptions = {
   httpProxy?: string;
   httpsProxy?: string;
@@ -76,9 +92,10 @@ function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
 export function resolveEnvHttpProxyAgentOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): EnvHttpProxyAgentProxyOptions | undefined {
-  const allProxy = resolveEnvAllProxyUrl(env);
-  const httpProxy = resolveEnvHttpProxyUrl("http", env) ?? allProxy;
-  const httpsProxy = resolveEnvHttpProxyUrl("https", env) ?? httpProxy;
+  const allProxy = normalizeEnvHttpProxyAgentUrl(resolveEnvAllProxyUrl(env));
+  const httpProxy = normalizeEnvHttpProxyAgentUrl(resolveEnvHttpProxyUrl("http", env)) ?? allProxy;
+  const httpsProxy =
+    normalizeEnvHttpProxyAgentUrl(resolveEnvHttpProxyUrl("https", env)) ?? httpProxy;
   const options: EnvHttpProxyAgentProxyOptions = {
     ...(httpProxy ? { httpProxy } : {}),
     ...(httpsProxy ? { httpsProxy } : {}),

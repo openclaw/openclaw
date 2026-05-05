@@ -114,17 +114,22 @@ describe("resolveEnvHttpProxyAgentOptions", () => {
       },
     },
     {
-      name: "uses ALL_PROXY for both protocols",
-      env: { ALL_PROXY: "socks5://all-proxy.test:1080" } as NodeJS.ProcessEnv,
+      name: "uses HTTP ALL_PROXY for both protocols",
+      env: { ALL_PROXY: "http://all-proxy.test:1080" } as NodeJS.ProcessEnv,
       expected: {
-        httpProxy: "socks5://all-proxy.test:1080",
-        httpsProxy: "socks5://all-proxy.test:1080",
+        httpProxy: "http://all-proxy.test:1080",
+        httpsProxy: "http://all-proxy.test:1080",
       },
+    },
+    {
+      name: "ignores unsupported SOCKS ALL_PROXY for EnvHttpProxyAgent",
+      env: { ALL_PROXY: "socks5://all-proxy.test:1080" } as NodeJS.ProcessEnv,
+      expected: undefined,
     },
     {
       name: "lets protocol-specific proxy override ALL_PROXY",
       env: {
-        ALL_PROXY: "socks5://all-proxy.test:1080",
+        ALL_PROXY: "http://all-proxy.test:1080",
         HTTP_PROXY: "http://http-proxy.test:8080",
         HTTPS_PROXY: "http://https-proxy.test:8443",
       } as NodeJS.ProcessEnv,
@@ -137,7 +142,7 @@ describe("resolveEnvHttpProxyAgentOptions", () => {
       name: "treats empty lower-case all_proxy as authoritative over upper-case ALL_PROXY",
       env: {
         all_proxy: "",
-        ALL_PROXY: "socks5://upper-all-proxy.test:1080",
+        ALL_PROXY: "http://upper-all-proxy.test:1080",
       } as NodeJS.ProcessEnv,
       expected: undefined,
     },
