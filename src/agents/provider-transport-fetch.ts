@@ -58,15 +58,14 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let buffer = "";
 
-  const enqueueSanitized = (
+  const flushSanitizedBlocks = (
     controller: ReadableStreamDefaultController<Uint8Array>,
-    text: string,
-  ) => {
-    buffer += text;
+  ): boolean => {
+    let emitted = false;
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        return;
+        return emitted;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
@@ -75,6 +74,7 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
+        emitted = true;
       }
     }
   };
@@ -85,20 +85,26 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
     },
     async pull(controller) {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          const tail = decoder.decode();
-          if (tail) {
-            enqueueSanitized(controller, tail);
+        for (;;) {
+          if (flushSanitizedBlocks(controller)) {
+            return;
           }
-          if (buffer && hasReadableSseData(buffer)) {
-            controller.enqueue(encoder.encode(buffer));
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            const tail = decoder.decode();
+            if (tail) {
+              buffer += tail;
+            }
+            flushSanitizedBlocks(controller);
+            if (buffer && hasReadableSseData(buffer)) {
+              controller.enqueue(encoder.encode(buffer));
+            }
+            buffer = "";
+            controller.close();
+            return;
           }
-          buffer = "";
-          controller.close();
-          return;
+          buffer += decoder.decode(chunk.value, { stream: true });
         }
-        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
       } catch (error) {
         controller.error(error);
       }
