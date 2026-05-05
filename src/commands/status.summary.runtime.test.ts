@@ -50,6 +50,24 @@ describe("statusSummaryRuntime.classifySessionKey", () => {
   });
 });
 
+describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
+  it("uses the shared /status runtime labels for persisted harness metadata", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {} as never,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 0,
+          agentRuntimeOverride: "codex",
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("OpenAI Codex");
+  });
+});
+
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   const cfg = {
     agents: {
