@@ -269,6 +269,59 @@ describe("gateway silent scope-upgrade reconnect", () => {
     }
   });
 
+  test("keeps trusted-local ACP launches off stale paired CLI baseline with scopes preserved (#74650)", async () => {
+    const started = await startServerWithClient("secret");
+    const identity = loadOrCreateDeviceIdentity();
+    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const request = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: GATEWAY_CLIENT_NAMES.CLI,
+      clientMode: GATEWAY_CLIENT_MODES.CLI,
+    });
+    await approveDevicePairing(request.request.requestId, {
+      callerScopes: ["operator.read"],
+    });
+
+    try {
+      // Mirrors the GatewayClient shape that serveAcpGateway uses on a trusted
+      // loopback launch with a preauth token: gateway-client/backend identity,
+      // explicit operator scopes, and no device identity. The Gateway should
+      // accept the connection and preserve the requested scopes through the
+      // missing-device path, so a write-gated method (chat.abort, classified
+      // as operator.write per src/gateway/method-scopes.ts) succeeds even
+      // though the paired CLI baseline only carries operator.read. If scopes
+      // were dropped on the missing-device path, the Gateway would reject this
+      // call with a scope error before chat.abort runs; aborting an unknown
+      // runId returns ok with aborted:false.
+      await expect(
+        callGateway({
+          url: `ws://127.0.0.1:${started.port}`,
+          token: "secret",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId: "acp-scope-probe" },
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          clientDisplayName: "ACP",
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          scopes: ["operator.read", "operator.write", "operator.admin"],
+          deviceIdentity: null,
+          timeoutMs: 2_000,
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toHaveLength(0);
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.approvedScopes).toEqual(["operator.read"]);
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("keeps local native approval clients off stale paired gateway-client baseline", async () => {
     const started = await startServerWithClient("secret");
     const identity = loadOrCreateDeviceIdentity();

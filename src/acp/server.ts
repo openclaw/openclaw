@@ -6,6 +6,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveGatewayClientBootstrap } from "../gateway/client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import { GatewayClient } from "../gateway/client.js";
+import { shouldOmitGatewayClientDeviceIdentity } from "../gateway/loopback-shared-auth-identity.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { isMainModule } from "../infra/is-main.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -55,15 +56,36 @@ export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void
     onGatewayReadyReject(err instanceof Error ? err : new Error(String(err)));
   };
 
+  // Trusted loopback launches with a preauth token or password should not
+  // attach the host's persisted CLI device identity, which can re-trigger a
+  // scope-upgrade approval against a stale paired baseline and wedge ACP
+  // initialization in a repeated approval loop. On that path identify as the
+  // local backend gateway-client and request the operator scopes ACP needs
+  // explicitly so the Gateway preserves them through the shared-auth missing-
+  // device path (the same exemption operator-approvals uses after #74472).
+  // Remote URLs and unauthenticated loopback launches keep the normal cli/cli
+  // identity with the persisted device identity. Fixes #74650.
+  const useTrustedLocalBackendShape = shouldOmitGatewayClientDeviceIdentity({
+    url: bootstrap.url,
+    token: bootstrap.auth.token,
+    password: bootstrap.auth.password,
+  });
+
   const gateway = new GatewayClient({
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
-    clientName: GATEWAY_CLIENT_NAMES.CLI,
+    clientName: useTrustedLocalBackendShape
+      ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+      : GATEWAY_CLIENT_NAMES.CLI,
     clientDisplayName: "ACP",
     clientVersion: "acp",
-    mode: GATEWAY_CLIENT_MODES.CLI,
+    mode: useTrustedLocalBackendShape ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+    scopes: useTrustedLocalBackendShape
+      ? ["operator.read", "operator.write", "operator.admin"]
+      : undefined,
+    deviceIdentity: useTrustedLocalBackendShape ? null : undefined,
     onEvent: (evt) => {
       void agent?.handleGatewayEvent(evt);
     },
