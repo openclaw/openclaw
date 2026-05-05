@@ -505,14 +505,12 @@ async function processResponsesStream(
             partial: output,
           });
           currentBlock = null;
-        } else if (
-          !output.content.some((b) => (b as Record<string, unknown>).type === "thinking")
-        ) {
+        } else if (!output.content.some((b) => b.type === "thinking")) {
           // LM Studio path: provider skips output_item.added for reasoning and delivers
           // the full thinking text in one shot via this event. Only insert when no
           // thinking block exists yet to avoid duplicates, and only when no text blocks
           // have been emitted yet to avoid retroactively shifting stream indexes.
-          if (!output.content.some((b) => (b as Record<string, unknown>).type === "text")) {
+          if (!output.content.some((b) => b.type === "text")) {
             const thinkingBlock: Record<string, unknown> = { type: "thinking", thinking: text };
             output.content.unshift(thinkingBlock);
             stream.push({ type: "thinking_start", contentIndex: 0, partial: output });
