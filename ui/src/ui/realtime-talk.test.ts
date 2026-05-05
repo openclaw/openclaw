@@ -75,7 +75,7 @@ describe("RealtimeTalkSession", () => {
 
     await session.start();
 
-    expect(request).toHaveBeenCalledWith("talk.realtime.session", { sessionKey: "main" });
+    expect(request).toHaveBeenCalledWith("talk.client.create", { sessionKey: "main" });
     expect(googleCtor).toHaveBeenCalledTimes(1);
     expect(googleStart).toHaveBeenCalledTimes(1);
     expect(webRtcCtor).not.toHaveBeenCalled();

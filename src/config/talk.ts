@@ -238,7 +238,7 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   const resolved =
     resolveActiveTalkProviderConfig(normalized) ??
     (legacyCompat ? { provider: "elevenlabs", config: legacyCompat } : undefined);
-  const activeProvider = normalizeOptionalString(normalized?.provider) ?? resolved?.provider;
+  const activeProvider = resolved?.provider;
   if (activeProvider) {
     payload.provider = activeProvider;
   }

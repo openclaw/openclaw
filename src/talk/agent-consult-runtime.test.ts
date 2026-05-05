@@ -177,7 +177,7 @@ describe("realtime voice agent consult runtime", () => {
 
     expect(result).toEqual({ text: "Let me verify that first." });
     expect(warn).toHaveBeenCalledWith(
-      "[realtime-voice] agent consult produced no answer: agent returned no speakable text",
+      "[talk] agent consult produced no answer: agent returned no speakable text",
     );
   });
 

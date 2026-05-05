@@ -164,7 +164,7 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
       params.config.timeoutMs,
     );
     if (lookup.status === "unavailable") {
-      params.logger.debug?.(`[realtime-voice] fast context unavailable: ${lookup.error}`);
+      params.logger.debug?.(`[talk] fast context unavailable: ${lookup.error}`);
       return params.config.fallbackToConsult
         ? { handled: false }
         : { handled: true, result: { text: buildMissText(query, labels) } };
@@ -181,7 +181,7 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
     };
   } catch (error) {
     const message = formatErrorMessage(error);
-    params.logger.debug?.(`[realtime-voice] fast context lookup failed: ${message}`);
+    params.logger.debug?.(`[talk] fast context lookup failed: ${message}`);
     return params.config.fallbackToConsult
       ? { handled: false }
       : { handled: true, result: { text: buildMissText(query, labels) } };

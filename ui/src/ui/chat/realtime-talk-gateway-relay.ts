@@ -67,7 +67,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     this.closed = false;
     this.unsubscribe = this.ctx.client.addEventListener((evt) => {
-      if (evt.event !== "talk.realtime.relay") {
+      if (evt.event !== "talk.event") {
         return;
       }
       this.handleRelayEvent(evt.payload as GatewayRelayEvent);
@@ -100,8 +100,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.inputContext = null;
     void this.outputContext?.close();
     this.outputContext = null;
-    void this.ctx.client.request("talk.realtime.relayStop", {
-      relaySessionId: this.session.relaySessionId,
+    void this.ctx.client.request("talk.session.close", {
+      sessionId: this.session.relaySessionId,
     });
   }
 
@@ -120,8 +120,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       if (this.detectBargeInSpeech(samples)) {
         this.cancelOutputForBargeIn();
       }
-      void this.ctx.client.request("talk.realtime.relayAudio", {
-        relaySessionId: this.session.relaySessionId,
+      void this.ctx.client.request("talk.session.appendAudio", {
+        sessionId: this.session.relaySessionId,
         audioBase64: bytesToBase64(pcm),
         timestamp: Math.round((this.inputContext?.currentTime ?? 0) * 1000),
       });
@@ -231,9 +231,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       if (this.closed) {
         return;
       }
-      void this.ctx.client.request("talk.realtime.relayMark", {
-        relaySessionId: this.session.relaySessionId,
-      });
     }, delayMs);
   }
 
@@ -264,8 +261,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private submitToolResult(callId: string, result: unknown): void {
-    void this.ctx.client.request("talk.realtime.relayToolResult", {
-      relaySessionId: this.session.relaySessionId,
+    void this.ctx.client.request("talk.session.submitToolResult", {
+      sessionId: this.session.relaySessionId,
       callId,
       result,
     });
@@ -277,8 +274,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
     this.cancelRequestedForPlayback = true;
     this.stopOutput();
-    void this.ctx.client.request("talk.realtime.relayCancel", {
-      relaySessionId: this.session.relaySessionId,
+    void this.ctx.client.request("talk.session.cancelOutput", {
+      sessionId: this.session.relaySessionId,
       reason: "barge-in",
     });
   }

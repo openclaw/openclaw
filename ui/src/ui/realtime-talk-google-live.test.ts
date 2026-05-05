@@ -321,7 +321,7 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
           expect(params).toEqual({ sessionKey: "main", runId });
           return { ok: true, aborted: true };
         }
-        expect(method).toBe("talk.realtime.toolCall");
+        expect(method).toBe("talk.client.toolCall");
         expect(params).toEqual(
           expect.objectContaining({
             callId: "call-1",

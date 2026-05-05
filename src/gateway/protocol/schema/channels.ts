@@ -157,7 +157,7 @@ export const TalkEventSchema = Type.Object(
   },
 );
 
-export const TalkRealtimeSessionParamsSchema = Type.Object(
+export const TalkClientCreateParamsSchema = Type.Object(
   {
     sessionKey: Type.Optional(Type.String()),
     provider: Type.Optional(Type.String()),
@@ -170,7 +170,7 @@ export const TalkRealtimeSessionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeToolCallParamsSchema = Type.Object(
+export const TalkClientToolCallParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     callId: NonEmptyString,
@@ -181,10 +181,18 @@ export const TalkRealtimeToolCallParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeToolCallResultSchema = Type.Object(
+export const TalkClientToolCallResultSchema = Type.Object(
   {
     runId: NonEmptyString,
     idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionJoinParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    token: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -203,7 +211,7 @@ export const TalkSessionCreateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkSessionInputAudioParamsSchema = Type.Object(
+export const TalkSessionAppendAudioParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
     audioBase64: NonEmptyString,
@@ -212,21 +220,33 @@ export const TalkSessionInputAudioParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkSessionControlParamsSchema = Type.Object(
+export const TalkSessionTurnParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
-    type: Type.Union([
-      Type.Literal("turn.start"),
-      Type.Literal("turn.end"),
-      Type.Literal("turn.cancel"),
-    ]),
+    turnId: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionCancelTurnParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
     turnId: Type.Optional(Type.String()),
     reason: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
 
-export const TalkSessionToolResultParamsSchema = Type.Object(
+export const TalkSessionCancelOutputParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    turnId: Type.Optional(Type.String()),
+    reason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
     callId: NonEmptyString,
@@ -242,24 +262,7 @@ export const TalkSessionCloseParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkHandoffCreateParamsSchema = Type.Object(
-  {
-    sessionKey: NonEmptyString,
-    sessionId: Type.Optional(Type.String()),
-    channel: Type.Optional(Type.String()),
-    target: Type.Optional(Type.String()),
-    provider: Type.Optional(Type.String()),
-    model: Type.Optional(Type.String()),
-    voice: Type.Optional(Type.String()),
-    mode: Type.Optional(TalkModeSchema),
-    transport: Type.Optional(TalkTransportSchema),
-    brain: Type.Optional(TalkBrainSchema),
-    ttlMs: Type.Optional(Type.Integer({ minimum: 1000, maximum: 3600000 })),
-  },
-  { additionalProperties: false },
-);
-
-const TalkHandoffRoomSchema = Type.Object(
+const TalkSessionManagedRoomStateSchema = Type.Object(
   {
     activeClientId: Type.Optional(Type.String()),
     activeTurnId: Type.Optional(Type.String()),
@@ -268,30 +271,7 @@ const TalkHandoffRoomSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkHandoffCreateResultSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    roomId: NonEmptyString,
-    roomUrl: NonEmptyString,
-    token: NonEmptyString,
-    sessionKey: NonEmptyString,
-    sessionId: Type.Optional(Type.String()),
-    channel: Type.Optional(Type.String()),
-    target: Type.Optional(Type.String()),
-    provider: Type.Optional(Type.String()),
-    model: Type.Optional(Type.String()),
-    voice: Type.Optional(Type.String()),
-    mode: TalkModeSchema,
-    transport: TalkTransportSchema,
-    brain: TalkBrainSchema,
-    createdAt: Type.Number(),
-    expiresAt: Type.Number(),
-    room: TalkHandoffRoomSchema,
-  },
-  { additionalProperties: false },
-);
-
-const TalkHandoffPublicRecordSchema = Type.Object(
+const TalkSessionManagedRoomRecordSchema = Type.Object(
   {
     id: NonEmptyString,
     roomId: NonEmptyString,
@@ -308,70 +288,7 @@ const TalkHandoffPublicRecordSchema = Type.Object(
     brain: TalkBrainSchema,
     createdAt: Type.Number(),
     expiresAt: Type.Number(),
-    room: TalkHandoffRoomSchema,
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffJoinParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    token: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffJoinResultSchema = TalkHandoffPublicRecordSchema;
-
-export const TalkHandoffRevokeParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffRevokeResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-    revoked: Type.Boolean(),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffTurnStartParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    token: NonEmptyString,
-    turnId: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffTurnEndParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    token: NonEmptyString,
-    turnId: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffTurnCancelParamsSchema = Type.Object(
-  {
-    id: NonEmptyString,
-    token: NonEmptyString,
-    turnId: Type.Optional(Type.String()),
-    reason: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkHandoffTurnResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-    record: TalkHandoffPublicRecordSchema,
-    turnId: NonEmptyString,
-    events: Type.Array(TalkEventSchema),
+    room: TalkSessionManagedRoomStateSchema,
   },
   { additionalProperties: false },
 );
@@ -442,109 +359,6 @@ export const TalkCatalogResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeRelayAudioParamsSchema = Type.Object(
-  {
-    relaySessionId: NonEmptyString,
-    audioBase64: NonEmptyString,
-    timestamp: Type.Optional(Type.Number()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkRealtimeRelayMarkParamsSchema = Type.Object(
-  {
-    relaySessionId: NonEmptyString,
-    markName: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkRealtimeRelayStopParamsSchema = Type.Object(
-  {
-    relaySessionId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const TalkRealtimeRelayCancelParamsSchema = Type.Object(
-  {
-    relaySessionId: NonEmptyString,
-    reason: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkRealtimeRelayToolResultParamsSchema = Type.Object(
-  {
-    relaySessionId: NonEmptyString,
-    callId: NonEmptyString,
-    result: Type.Unknown(),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkRealtimeRelayOkResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkTranscriptionSessionParamsSchema = Type.Object(
-  {
-    provider: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkTranscriptionSessionResultSchema = Type.Object(
-  {
-    provider: NonEmptyString,
-    mode: Type.Literal("transcription"),
-    transport: Type.Literal("gateway-relay"),
-    transcriptionSessionId: NonEmptyString,
-    audio: Type.Object(
-      {
-        inputEncoding: Type.Literal("pcm16"),
-        inputSampleRateHz: Type.Integer({ minimum: 1 }),
-      },
-      { additionalProperties: false },
-    ),
-    expiresAt: Type.Number(),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkTranscriptionRelayAudioParamsSchema = Type.Object(
-  {
-    transcriptionSessionId: NonEmptyString,
-    audioBase64: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const TalkTranscriptionRelayStopParamsSchema = Type.Object(
-  {
-    transcriptionSessionId: NonEmptyString,
-  },
-  { additionalProperties: false },
-);
-
-export const TalkTranscriptionRelayCancelParamsSchema = Type.Object(
-  {
-    transcriptionSessionId: NonEmptyString,
-    reason: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const TalkTranscriptionRelayOkResultSchema = Type.Object(
-  {
-    ok: Type.Boolean(),
-  },
-  { additionalProperties: false },
-);
-
 const BrowserRealtimeAudioContractSchema = Type.Object(
   {
     inputEncoding: Type.Union([Type.Literal("pcm16"), Type.Literal("g711_ulaw")]),
@@ -576,7 +390,7 @@ export const TalkSessionCreateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkSessionControlResultSchema = Type.Object(
+export const TalkSessionTurnResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
     turnId: Type.Optional(Type.String()),
@@ -584,6 +398,8 @@ export const TalkSessionControlResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const TalkSessionJoinResultSchema = TalkSessionManagedRoomRecordSchema;
 
 export const TalkSessionOkResultSchema = Type.Object(
   {
@@ -648,7 +464,7 @@ const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const TalkRealtimeSessionResultSchema = Type.Union([
+export const TalkClientCreateResultSchema = Type.Union([
   BrowserRealtimeWebRtcSdpSessionSchema,
   BrowserRealtimeJsonPcmWebSocketSessionSchema,
   BrowserRealtimeGatewayRelaySessionSchema,

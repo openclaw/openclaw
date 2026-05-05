@@ -7,7 +7,7 @@ import {
   type TalkMode,
   type TalkSessionController,
   type TalkTransport,
-} from "../realtime-voice/talk-session-controller.js";
+} from "../talk/talk-session-controller.js";
 
 const DEFAULT_TALK_HANDOFF_TTL_MS = 10 * 60 * 1000;
 const MAX_TALK_HANDOFF_TTL_MS = 60 * 60 * 1000;

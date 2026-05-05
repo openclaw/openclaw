@@ -322,9 +322,8 @@ describe("gateway broadcaster", () => {
     expect(readSocket.send).toHaveBeenCalledTimes(0);
 
     broadcastToConnIds("tick", { ts: 1 }, new Set(["c-read"]));
-    broadcastToConnIds("talk.realtime.relay", { type: "ready" }, new Set(["c-read"]));
-    broadcastToConnIds("talk.transcription.relay", { type: "session.ready" }, new Set(["c-read"]));
-    expect(readSocket.send).toHaveBeenCalledTimes(3);
+    broadcastToConnIds("talk.event", { type: "session.ready" }, new Set(["c-read"]));
+    expect(readSocket.send).toHaveBeenCalledTimes(2);
     expect(approvalsSocket.send).toHaveBeenCalledTimes(1);
     expect(pairingSocket.send).toHaveBeenCalledTimes(1);
   });

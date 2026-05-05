@@ -5,17 +5,17 @@ import {
   type RealtimeVoiceBrowserAudioContract,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
-} from "../realtime-voice/provider-types.js";
+} from "../talk/provider-types.js";
 import {
   createRealtimeVoiceBridgeSession,
   type RealtimeVoiceBridgeSession,
-} from "../realtime-voice/session-runtime.js";
+} from "../talk/session-runtime.js";
 import {
   type TalkEvent,
   type TalkEventInput,
   type TalkSessionController,
   createTalkSessionController,
-} from "../realtime-voice/talk-session-controller.js";
+} from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -23,7 +23,7 @@ const RELAY_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
-const RELAY_EVENT = "talk.realtime.relay";
+const RELAY_EVENT = "talk.event";
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
@@ -179,7 +179,7 @@ export function createTalkRealtimeRelaySession(
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
     tools: params.tools,
-    markStrategy: "transport",
+    markStrategy: "ack-immediately",
     audioSink: {
       isOpen: () => Boolean(relay && relaySessions.has(relay.id)),
       sendAudio: (audio) => {
@@ -375,13 +375,6 @@ export function sendTalkRealtimeRelayAudio(params: {
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
-}
-
-export function acknowledgeTalkRealtimeRelayMark(params: {
-  relaySessionId: string;
-  connId: string;
-}): void {
-  getRelaySession(params.relaySessionId, params.connId).bridge.acknowledgeMark();
 }
 
 export function submitTalkRealtimeRelayToolResult(params: {

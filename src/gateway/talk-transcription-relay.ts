@@ -6,14 +6,14 @@ import {
   type TalkEventInput,
   type TalkSessionController,
   createTalkSessionController,
-} from "../realtime-voice/talk-session-controller.js";
+} from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
 const TRANSCRIPTION_SESSION_TTL_MS = 30 * 60 * 1000;
 const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
 const MAX_TRANSCRIPTION_SESSIONS_GLOBAL = 64;
-const TRANSCRIPTION_EVENT = "talk.transcription.relay";
+const TRANSCRIPTION_EVENT = "talk.event";
 
 type TalkTranscriptionRelayEventPayload =
   | { transcriptionSessionId: string; type: "ready" }

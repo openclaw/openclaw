@@ -1,17 +1,17 @@
 import type { OpenClawConfig } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../realtime-voice/agent-consult-tool.js";
-import type {
-  RealtimeVoiceBrowserSession,
-  RealtimeVoiceProviderConfig,
-} from "../../realtime-voice/provider-types.js";
-import type { TalkEvent } from "../../realtime-voice/talk-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
+import type {
+  RealtimeVoiceBrowserSession,
+  RealtimeVoiceProviderConfig,
+} from "../../talk/provider-types.js";
+import type { TalkEvent } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { ErrorCodes } from "../protocol/index.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";

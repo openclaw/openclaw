@@ -42,6 +42,9 @@ import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
 } from "../realtime-transcription/provider-types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
+import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
@@ -52,10 +55,7 @@ import type {
   RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
   RealtimeVoiceProviderResolveConfigContext,
-} from "../realtime-voice/provider-types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { SecurityAuditFinding } from "../security/audit.types.js";
-import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+} from "../talk/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
   SpeechDirectiveTokenParseResult,

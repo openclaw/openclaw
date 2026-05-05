@@ -1,5 +1,5 @@
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/realtime-voice/agent-consult-tool.js";
-import type { TalkEvent } from "../../../../src/realtime-voice/talk-events.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../src/talk/agent-consult-tool.js";
+import type { TalkEvent } from "../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../gateway.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
@@ -274,7 +274,7 @@ export async function submitRealtimeTalkConsult(params: {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
     const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
-      "talk.realtime.toolCall",
+      "talk.client.toolCall",
       {
         sessionKey: ctx.sessionKey,
         callId,

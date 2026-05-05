@@ -129,6 +129,45 @@ describe("talk normalization", () => {
     });
   });
 
+  it("does not report an active provider when the configured speech provider cannot resolve", () => {
+    const mismatchPayload = buildTalkConfigResponse({
+      provider: "acme",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+    expect(mismatchPayload).toEqual({
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+
+    const ambiguousPayload = buildTalkConfigResponse({
+      providers: {
+        acme: {
+          voiceId: "voice-acme",
+        },
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+    expect(ambiguousPayload).toEqual({
+      providers: {
+        acme: {
+          voiceId: "voice-acme",
+        },
+        elevenlabs: {
+          voiceId: "voice-123",
+        },
+      },
+    });
+  });
+
   it("preserves SecretRef apiKey values during normalization", () => {
     const normalized = normalizeTalkSection({
       provider: TALK_TEST_PROVIDER_ID,

@@ -33,8 +33,6 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   shutdown: [],
   tick: [],
   "talk.event": [READ_SCOPE],
-  "talk.realtime.relay": [READ_SCOPE],
-  "talk.transcription.relay": [READ_SCOPE],
   "talk.mode": [WRITE_SCOPE],
   "update.available": [],
   "voicewake.changed": [READ_SCOPE],

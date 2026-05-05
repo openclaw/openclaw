@@ -1,4 +1,4 @@
-import { normalizeTalkTransport } from "../../../../src/realtime-voice/talk-session-controller.js";
+import { normalizeTalkTransport } from "../../../../src/talk/talk-session-controller.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
@@ -66,9 +66,7 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
-    const session = await this.client.request<RealtimeTalkSessionResult>("talk.realtime.session", {
-      sessionKey: this.sessionKey,
-    });
+    const session = await this.createSession();
     if (this.closed) {
       return;
     }
@@ -78,6 +76,25 @@ export class RealtimeTalkSession {
       callbacks: this.callbacks,
     });
     await this.transport.start();
+  }
+
+  private async createSession(): Promise<RealtimeTalkSessionResult> {
+    try {
+      return await this.client.request<RealtimeTalkSessionResult>("talk.client.create", {
+        sessionKey: this.sessionKey,
+      });
+    } catch (error) {
+      try {
+        return await this.client.request<RealtimeTalkSessionResult>("talk.session.create", {
+          sessionKey: this.sessionKey,
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+        });
+      } catch {
+        throw error;
+      }
+    }
   }
 
   stop(): void {

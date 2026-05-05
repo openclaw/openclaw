@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
-import type { RealtimeVoiceBridgeCreateRequest } from "../realtime-voice/provider-types.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import {
-  acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
   clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
@@ -17,14 +16,13 @@ describe("talk realtime gateway relay", () => {
     clearTalkRealtimeRelaySessionsForTest();
   });
 
-  it("bridges browser audio, transcripts, marks, and tool results through a backend provider", async () => {
+  it("bridges browser audio, transcripts, and tool results through a backend provider", async () => {
     let bridgeRequest: RealtimeVoiceBridgeCreateRequest | undefined;
     const bridge = {
       supportsToolResultContinuation: true,
       connect: vi.fn(async () => {
         bridgeRequest?.onReady?.();
         bridgeRequest?.onAudio(Buffer.from("audio-out"));
-        bridgeRequest?.onMark?.("mark-1");
         bridgeRequest?.onTranscript?.("user", "hello", true);
         bridgeRequest?.onTranscript?.("assistant", "hi there", true);
         bridgeRequest?.onToolCall?.({
@@ -92,7 +90,7 @@ describe("talk realtime gateway relay", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          event: "talk.realtime.relay",
+          event: "talk.event",
           connIds: ["conn-1"],
           payload: expect.objectContaining({
             relaySessionId: session.relaySessionId,
@@ -114,14 +112,6 @@ describe("talk realtime gateway relay", () => {
             type: "audio",
             audioBase64: Buffer.from("audio-out").toString("base64"),
             talkEvent: expect.objectContaining({ type: "output.audio.delta" }),
-          }),
-        }),
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            relaySessionId: session.relaySessionId,
-            type: "mark",
-            markName: "mark-1",
-            talkEvent: expect.objectContaining({ type: "output.audio.done", final: true }),
           }),
         }),
         expect.objectContaining({
@@ -172,7 +162,6 @@ describe("talk realtime gateway relay", () => {
       audioBase64: Buffer.from("audio-in").toString("base64"),
       timestamp: 123,
     });
-    acknowledgeTalkRealtimeRelayMark({ relaySessionId: session.relaySessionId, connId: "conn-1" });
     submitTalkRealtimeRelayToolResult({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -188,7 +177,6 @@ describe("talk realtime gateway relay", () => {
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
-    expect(bridge.acknowledgeMark).toHaveBeenCalled();
     expect(bridge.submitToolResult).toHaveBeenCalledWith("call-1", { ok: true }, undefined);
     expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
     expect(bridge.close).toHaveBeenCalled();

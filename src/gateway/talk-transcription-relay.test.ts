@@ -78,7 +78,7 @@ describe("talk transcription gateway relay", () => {
     expect(events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          event: "talk.transcription.relay",
+          event: "talk.event",
           connIds: ["conn-1"],
           payload: expect.objectContaining({
             transcriptionSessionId: session.transcriptionSessionId,

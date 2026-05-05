@@ -263,7 +263,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         expect(params).toEqual({ sessionKey: "main", runId: "run-1" });
         return { ok: true, aborted: true };
       }
-      expect(method).toBe("talk.realtime.toolCall");
+      expect(method).toBe("talk.client.toolCall");
       expect(params).toEqual(
         expect.objectContaining({
           callId: "call-1",
@@ -307,7 +307,7 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("talk.realtime.toolCall", expect.anything()),
+      expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.anything()),
     );
 
     transport.stop();

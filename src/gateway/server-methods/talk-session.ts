@@ -1,26 +1,30 @@
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../realtime-voice/agent-consult-tool.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../realtime-voice/provider-resolver.js";
-import type { TalkBrain, TalkMode, TalkTransport } from "../../realtime-voice/talk-events.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateTalkSessionAppendAudioParams,
+  validateTalkSessionCancelOutputParams,
+  validateTalkSessionCancelTurnParams,
   validateTalkSessionCloseParams,
-  validateTalkSessionControlParams,
   validateTalkSessionCreateParams,
-  validateTalkSessionInputAudioParams,
-  validateTalkSessionToolResultParams,
+  validateTalkSessionJoinParams,
+  validateTalkSessionSubmitToolResultParams,
+  validateTalkSessionTurnParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import {
   cancelTalkHandoffTurn,
   createTalkHandoff,
   endTalkHandoffTurn,
+  joinTalkHandoff,
   revokeTalkHandoff,
   startTalkHandoffTurn,
 } from "../talk-handoff.js";
@@ -109,7 +113,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `talk.session.create is Gateway-managed; use talk.realtime.session for browser transport "${transport}"`,
+          `talk.session.create is Gateway-managed; use talk.client.create for client transport "${transport}"`,
         ),
       );
       return;
@@ -288,14 +292,66 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "talk.session.inputAudio": async ({ params, respond, client }) => {
-    if (!validateTalkSessionInputAudioParams(params)) {
+  "talk.session.join": async ({ params, respond, client, context }) => {
+    if (!validateTalkSessionJoinParams(params)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid talk.session.inputAudio params: ${formatValidationErrors(validateTalkSessionInputAudioParams.errors)}`,
+          `invalid talk.session.join params: ${formatValidationErrors(validateTalkSessionJoinParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const session = getUnifiedTalkSession(params.sessionId);
+      if (session.kind !== "managed-room") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.session.join requires a managed-room session",
+          ),
+        );
+        return;
+      }
+      const result = joinTalkHandoff(session.handoffId, params.token, { clientId: client?.connId });
+      if (!result.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            result.reason === "invalid_token" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+            `talk session join failed: ${result.reason}`,
+          ),
+        );
+        return;
+      }
+      broadcastTalkRoomEvents(context, result.replacedClientId, {
+        handoffId: result.record.id,
+        roomId: result.record.roomId,
+        events: result.replacementEvents,
+      });
+      broadcastTalkRoomEvents(context, client?.connId, {
+        handoffId: result.record.id,
+        roomId: result.record.roomId,
+        events: result.activeClientEvents,
+      });
+      respond(true, result.record, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.session.appendAudio": async ({ params, respond, client }) => {
+    if (!validateTalkSessionAppendAudioParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.session.appendAudio params: ${formatValidationErrors(validateTalkSessionAppendAudioParams.errors)}`,
         ),
       );
       return;
@@ -328,89 +384,46 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "talk.session.inputAudio is not supported for managed-room sessions",
+          "talk.session.appendAudio is not supported for managed-room sessions",
         ),
       );
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "talk.session.control": async ({ params, respond, client, context }) => {
-    if (!validateTalkSessionControlParams(params)) {
+  "talk.session.startTurn": async ({ params, respond, client, context }) => {
+    if (!validateTalkSessionTurnParams(params)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid talk.session.control params: ${formatValidationErrors(validateTalkSessionControlParams.errors)}`,
+          `invalid talk.session.startTurn params: ${formatValidationErrors(validateTalkSessionTurnParams.errors)}`,
         ),
       );
       return;
     }
     try {
       const session = getUnifiedTalkSession(params.sessionId);
-      if (session.kind === "realtime-relay") {
-        if (params.type !== "turn.cancel") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `realtime relay sessions only support talk.session.control type="turn.cancel"`,
-            ),
-          );
-          return;
-        }
-        const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        cancelTalkRealtimeRelayTurn({
-          relaySessionId: session.relaySessionId,
-          connId,
-          reason: normalizeOptionalString(params.reason),
-        });
-        respond(true, { ok: true }, undefined);
+      if (session.kind !== "managed-room") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "talk.session.startTurn requires managed-room"),
+        );
         return;
       }
-      if (session.kind === "transcription-relay") {
-        if (params.type !== "turn.cancel") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `transcription relay sessions only support talk.session.control type="turn.cancel"`,
-            ),
-          );
-          return;
-        }
-        const connId = requireUnifiedTalkSessionConn(session, client?.connId);
-        cancelTalkTranscriptionRelayTurn({
-          transcriptionSessionId: session.transcriptionSessionId,
-          connId,
-          reason: normalizeOptionalString(params.reason),
-        });
-        respond(true, { ok: true }, undefined);
-        return;
-      }
-
-      const result =
-        params.type === "turn.start"
-          ? startTalkHandoffTurn(session.handoffId, session.token, {
-              turnId: params.turnId,
-              clientId: client?.connId,
-            })
-          : params.type === "turn.end"
-            ? endTalkHandoffTurn(session.handoffId, session.token, { turnId: params.turnId })
-            : cancelTalkHandoffTurn(session.handoffId, session.token, {
-                turnId: params.turnId,
-                reason: params.reason,
-              });
+      const result = startTalkHandoffTurn(session.handoffId, session.token, {
+        turnId: params.turnId,
+        clientId: client?.connId,
+      });
       if (!result.ok) {
         respond(
           false,
           undefined,
           errorShape(
             talkHandoffErrorCode(result.reason),
-            `talk session control failed: ${result.reason}`,
+            `talk turn start failed: ${result.reason}`,
           ),
         );
         return;
@@ -425,14 +438,116 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
   },
-  "talk.session.toolResult": async ({ params, respond, client }) => {
-    if (!validateTalkSessionToolResultParams(params)) {
+  "talk.session.endTurn": async ({ params, respond, context }) => {
+    if (!validateTalkSessionTurnParams(params)) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid talk.session.toolResult params: ${formatValidationErrors(validateTalkSessionToolResultParams.errors)}`,
+          `invalid talk.session.endTurn params: ${formatValidationErrors(validateTalkSessionTurnParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const session = getUnifiedTalkSession(params.sessionId);
+      if (session.kind !== "managed-room") {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "talk.session.endTurn requires managed-room"),
+        );
+        return;
+      }
+      const result = endTalkHandoffTurn(session.handoffId, session.token, {
+        turnId: params.turnId,
+      });
+      if (!result.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(talkHandoffErrorCode(result.reason), `talk turn end failed: ${result.reason}`),
+        );
+        return;
+      }
+      broadcastTalkRoomEvents(context, result.record.room.activeClientId, {
+        handoffId: result.record.id,
+        roomId: result.record.roomId,
+        events: result.events,
+      });
+      respond(true, { ok: true, turnId: result.turnId, events: result.events }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.session.cancelTurn": async ({ params, respond, client, context }) => {
+    if (!validateTalkSessionCancelTurnParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.session.cancelTurn params: ${formatValidationErrors(validateTalkSessionCancelTurnParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const session = getUnifiedTalkSession(params.sessionId);
+      if (session.kind === "realtime-relay") {
+        const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+        cancelTalkRealtimeRelayTurn({
+          relaySessionId: session.relaySessionId,
+          connId,
+          reason: normalizeOptionalString(params.reason),
+        });
+        respond(true, { ok: true }, undefined);
+        return;
+      }
+      if (session.kind === "transcription-relay") {
+        const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+        cancelTalkTranscriptionRelayTurn({
+          transcriptionSessionId: session.transcriptionSessionId,
+          connId,
+          reason: normalizeOptionalString(params.reason),
+        });
+        respond(true, { ok: true }, undefined);
+        return;
+      }
+      const result = cancelTalkHandoffTurn(session.handoffId, session.token, {
+        turnId: params.turnId,
+        reason: params.reason,
+      });
+      if (!result.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            talkHandoffErrorCode(result.reason),
+            `talk turn cancel failed: ${result.reason}`,
+          ),
+        );
+        return;
+      }
+      broadcastTalkRoomEvents(context, result.record.room.activeClientId, {
+        handoffId: result.record.id,
+        roomId: result.record.roomId,
+        events: result.events,
+      });
+      respond(true, { ok: true, turnId: result.turnId, events: result.events }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.session.cancelOutput": async ({ params, respond, client }) => {
+    if (!validateTalkSessionCancelOutputParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.session.cancelOutput params: ${formatValidationErrors(validateTalkSessionCancelOutputParams.errors)}`,
         ),
       );
       return;
@@ -445,7 +560,43 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           undefined,
           errorShape(
             ErrorCodes.INVALID_REQUEST,
-            "talk.session.toolResult is only supported for realtime relay sessions",
+            "talk.session.cancelOutput requires realtime relay",
+          ),
+        );
+        return;
+      }
+      const connId = requireUnifiedTalkSessionConn(session, client?.connId);
+      cancelTalkRealtimeRelayTurn({
+        relaySessionId: session.relaySessionId,
+        connId,
+        reason: normalizeOptionalString(params.reason) ?? "output-cancelled",
+      });
+      respond(true, { ok: true }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
+  "talk.session.submitToolResult": async ({ params, respond, client }) => {
+    if (!validateTalkSessionSubmitToolResultParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.session.submitToolResult params: ${formatValidationErrors(validateTalkSessionSubmitToolResultParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    try {
+      const session = getUnifiedTalkSession(params.sessionId);
+      if (session.kind !== "realtime-relay") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "talk.session.submitToolResult is only supported for realtime relay sessions",
           ),
         );
         return;
