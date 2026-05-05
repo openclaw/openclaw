@@ -329,6 +329,44 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
+  it("does not poison auto-restart state when recovery stop times out", async () => {
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lastError).toContain("channel stop timed out");
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+
+    releaseFirstTask.resolve();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(10);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+  });
+
   it("marks enabled/configured when account descriptors omit them", () => {
     installTestRegistry(
       createTestPlugin({
