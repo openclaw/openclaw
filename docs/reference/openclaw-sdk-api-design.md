@@ -58,18 +58,18 @@ oc.models.list();
 oc.models.status(); // Gateway models.authStatus
 
 oc.tools.list();
-oc.tools.invoke(...); // future API: current SDK throws unsupported
+oc.tools.invoke("tool-name", { sessionKey, idempotencyKey });
 
-oc.artifacts.list({ runId }); // future API: current SDK throws unsupported
-oc.artifacts.get(artifactId); // future API: current SDK throws unsupported
-oc.artifacts.download(artifactId); // future API: current SDK throws unsupported
+oc.artifacts.list({ runId });
+oc.artifacts.get(artifactId, { runId });
+oc.artifacts.download(artifactId, { runId });
 
 oc.approvals.list();
 oc.approvals.respond(approvalId, ...);
 
-oc.environments.list(); // future API: current SDK throws unsupported
+oc.environments.list();
 oc.environments.create(...); // future API: current SDK throws unsupported
-oc.environments.status(environmentId); // future API: current SDK throws unsupported
+oc.environments.status(environmentId);
 oc.environments.delete(environmentId); // future API: current SDK throws unsupported
 ```
 

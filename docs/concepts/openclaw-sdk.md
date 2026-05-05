@@ -25,24 +25,25 @@ resources.
 
 `@openclaw/sdk` ships with:
 
-| Surface                   | Status | What it does                                                               |
-| ------------------------- | ------ | -------------------------------------------------------------------------- |
-| `OpenClaw`                | Ready  | Main client entry point. Owns transport, connection, requests, and events. |
-| `GatewayClientTransport`  | Ready  | WebSocket transport backed by the Gateway client.                          |
-| `oc.agents`               | Ready  | Lists, creates, updates, deletes, and gets agent handles.                  |
-| `Agent.run()`             | Ready  | Starts a Gateway `agent` run and returns a `Run`.                          |
-| `oc.runs`                 | Ready  | Creates, gets, waits for, cancels, and streams runs.                       |
-| `Run.events()`            | Ready  | Streams normalized per-run events with replay for fast runs.               |
-| `Run.wait()`              | Ready  | Calls `agent.wait` and returns a stable `RunResult`.                       |
-| `Run.cancel()`            | Ready  | Calls `sessions.abort` by run id, with session key when available.         |
-| `oc.sessions`             | Ready  | Creates, resolves, sends to, patches, compacts, and gets session handles.  |
-| `Session.send()`          | Ready  | Calls `sessions.send` and returns a `Run`.                                 |
-| `oc.models`               | Ready  | Calls `models.list` and the current `models.authStatus` status RPC.        |
-| `oc.tools`                | Ready  | Lists, scopes, and invokes Gateway tools through the policy pipeline.      |
-| `oc.artifacts`            | Ready  | Lists, gets, and downloads Gateway transcript artifacts.                   |
-| `oc.approvals`            | Ready  | Lists and resolves exec approvals through Gateway approval RPCs.           |
-| `oc.rawEvents()`          | Ready  | Exposes raw Gateway events for advanced consumers.                         |
-| `normalizeGatewayEvent()` | Ready  | Converts raw Gateway events into the stable SDK event shape.               |
+| Surface                   | Status  | What it does                                                                      |
+| ------------------------- | ------- | --------------------------------------------------------------------------------- |
+| `OpenClaw`                | Ready   | Main client entry point. Owns transport, connection, requests, and events.        |
+| `GatewayClientTransport`  | Ready   | WebSocket transport backed by the Gateway client.                                 |
+| `oc.agents`               | Ready   | Lists, creates, updates, deletes, and gets agent handles.                         |
+| `Agent.run()`             | Ready   | Starts a Gateway `agent` run and returns a `Run`.                                 |
+| `oc.runs`                 | Ready   | Creates, gets, waits for, cancels, and streams runs.                              |
+| `Run.events()`            | Ready   | Streams normalized per-run events with replay for fast runs.                      |
+| `Run.wait()`              | Ready   | Calls `agent.wait` and returns a stable `RunResult`.                              |
+| `Run.cancel()`            | Ready   | Calls `sessions.abort` by run id, with session key when available.                |
+| `oc.sessions`             | Ready   | Creates, resolves, sends to, patches, compacts, and gets session handles.         |
+| `Session.send()`          | Ready   | Calls `sessions.send` and returns a `Run`.                                        |
+| `oc.models`               | Ready   | Calls `models.list` and the current `models.authStatus` status RPC.               |
+| `oc.tools`                | Ready   | Lists, scopes, and invokes Gateway tools through the policy pipeline.             |
+| `oc.artifacts`            | Ready   | Lists, gets, and downloads Gateway transcript artifacts.                          |
+| `oc.approvals`            | Ready   | Lists and resolves exec approvals through Gateway approval RPCs.                  |
+| `oc.environments`         | Partial | Lists Gateway-local and node environment candidates; create/delete are not wired. |
+| `oc.rawEvents()`          | Ready   | Exposes raw Gateway events for advanced consumers.                                |
+| `normalizeGatewayEvent()` | Ready   | Converts raw Gateway events into the stable SDK event shape.                      |
 
 The SDK also exports the core types used by those surfaces:
 `AgentRunParams`, `RunResult`, `RunStatus`, `OpenClawEvent`,
@@ -253,6 +254,13 @@ const approvals = await oc.approvals.list();
 await oc.approvals.respond("approval-id", { decision: "approve" });
 ```
 
+Environment helpers expose read-only Gateway-local and node discovery:
+
+```typescript
+const { environments } = await oc.environments.list();
+await oc.environments.status(environments[0].id);
+```
+
 ## Explicitly Unsupported Today
 
 The SDK includes names for the product model we want, but it does not silently
@@ -264,9 +272,7 @@ await oc.tasks.list();
 await oc.tasks.get("task-id");
 await oc.tasks.cancel("task-id");
 
-await oc.environments.list();
 await oc.environments.create({});
-await oc.environments.status("environment-id");
 await oc.environments.delete("environment-id");
 ```
 
