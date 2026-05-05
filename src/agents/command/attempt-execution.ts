@@ -332,12 +332,28 @@ async function readLastTranscriptLine(transcriptPath: string): Promise<string | 
     if (stat.size === 0) {
       return undefined;
     }
-    const readSize = Math.min(stat.size, 4096);
-    const buf = Buffer.alloc(readSize);
-    await handle.read(buf, 0, readSize, stat.size - readSize);
-    const text = buf.toString("utf8");
-    const lines = text.split(/\r?\n/).filter((l) => l.trim());
-    return lines.length > 0 ? lines[lines.length - 1] : undefined;
+    for (let readSize = 4096; readSize <= stat.size + 4096; readSize *= 4) {
+      const actualRead = Math.min(readSize, stat.size);
+      const offset = stat.size - actualRead;
+      const buf = Buffer.alloc(actualRead);
+      await handle.read(buf, 0, actualRead, offset);
+      const text = buf.toString("utf8");
+      const lines = text.split(/\r?\n/).filter((l) => l.trim());
+      if (lines.length === 0) {
+        continue;
+      }
+      const lastLine = lines[lines.length - 1];
+      try {
+        JSON.parse(lastLine);
+        return lastLine;
+      } catch {
+        if (actualRead >= stat.size) {
+          return undefined;
+        }
+        continue;
+      }
+    }
+    return undefined;
   } catch {
     return undefined;
   } finally {
