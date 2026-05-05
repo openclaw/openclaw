@@ -1207,10 +1207,7 @@ export const dispatchTelegramMessage = async ({
                     !streamDeliveryEnabled || Boolean(answerLane.stream),
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
-                    if (statusReactionController && toolName) {
-                      await statusReactionController.setTool(toolName);
-                    }
-                    await pushStreamToolProgress(
+                    const progressPromise = pushStreamToolProgress(
                       formatChannelProgressDraftLineForEntry(
                         telegramCfg,
                         {
@@ -1223,6 +1220,10 @@ export const dispatchTelegramMessage = async ({
                       ),
                       { toolName, startImmediately: true },
                     );
+                    if (statusReactionController && toolName) {
+                      await statusReactionController.setTool(toolName);
+                    }
+                    await progressPromise;
                   },
                   onItemEvent: async (payload) => {
                     await pushStreamToolProgress(
