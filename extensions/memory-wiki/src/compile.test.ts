@@ -170,6 +170,39 @@ describe("compileMemoryWikiVault", () => {
     );
   });
 
+  it("leaves empty pages unchanged when refreshing related blocks", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    const emptySourcePath = path.join(rootDir, "sources", "empty.md");
+    await fs.writeFile(emptySourcePath, "", "utf8");
+    const whitespaceSourcePath = path.join(rootDir, "sources", "whitespace.md");
+    await fs.writeFile(whitespaceSourcePath, " \n\t\n", "utf8");
+
+    await fs.writeFile(
+      path.join(rootDir, "entities", "beta.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.beta",
+          title: "Beta",
+          sourceIds: ["source.empty"],
+        },
+        body: "# Beta\n",
+      }),
+      "utf8",
+    );
+
+    const result = await compileMemoryWikiVault(config);
+
+    await expect(fs.readFile(emptySourcePath, "utf8")).resolves.toBe("");
+    await expect(fs.readFile(whitespaceSourcePath, "utf8")).resolves.toBe(" \n\t\n");
+    expect(result.updatedFiles).not.toContain(emptySourcePath);
+    expect(result.updatedFiles).not.toContain(whitespaceSourcePath);
+  });
+
   it("does not relate every page through a broad shared source", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
