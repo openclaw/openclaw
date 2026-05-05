@@ -59,6 +59,7 @@ function makeHandler(
     streamPath: overrides?.streamPath ?? "/voice/stream/realtime",
     instructions: overrides?.instructions ?? "Be helpful.",
     toolPolicy: overrides?.toolPolicy ?? "safe-read-only",
+    consultPolicy: overrides?.consultPolicy ?? "auto",
     tools: overrides?.tools ?? [],
     fastContext: overrides?.fastContext ?? {
       enabled: false,
@@ -66,6 +67,14 @@ function makeHandler(
       maxResults: 3,
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
+    },
+    agentContext: overrides?.agentContext ?? {
+      enabled: false,
+      maxChars: 6000,
+      includeIdentity: true,
+      includeSystemPrompt: true,
+      includeWorkspaceFiles: true,
+      files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },
     providers: overrides?.providers ?? {},
     ...(overrides?.provider ? { provider: overrides.provider } : {}),

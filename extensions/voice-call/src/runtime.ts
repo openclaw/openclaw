@@ -20,6 +20,7 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
@@ -317,8 +318,15 @@ export async function createVoiceCallRuntime(params: {
   );
   if (realtimeProvider) {
     const { RealtimeCallHandler } = await loadRealtimeHandler();
+    const realtimeInstructions = await buildRealtimeVoiceInstructions({
+      baseInstructions: config.realtime.instructions,
+      config,
+      coreConfig,
+      agentRuntime,
+    });
     const realtimeConfig = {
       ...config.realtime,
+      instructions: realtimeInstructions,
       tools: resolveRealtimeVoiceAgentConsultTools(
         config.realtime.toolPolicy,
         config.realtime.tools,

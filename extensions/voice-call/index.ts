@@ -97,6 +97,11 @@ const voiceCallConfigSchema = {
       help: "Controls the shared openclaw_agent_consult tool.",
       advanced: true,
     },
+    "realtime.consultPolicy": {
+      label: "Realtime Consult Policy",
+      help: "Guides when the realtime voice model should call openclaw_agent_consult.",
+      advanced: true,
+    },
     "realtime.fastContext.enabled": {
       label: "Enable Fast Realtime Context",
       help: "Searches memory/session context before the full consult agent.",
@@ -116,6 +121,31 @@ const voiceCallConfigSchema = {
     },
     "realtime.fastContext.fallbackToConsult": {
       label: "Fallback To Full Consult",
+      advanced: true,
+    },
+    "realtime.agentContext.enabled": {
+      label: "Enable Agent Voice Context",
+      help: "Injects a compact agent identity, system prompt, and workspace context capsule into realtime voice instructions.",
+      advanced: true,
+    },
+    "realtime.agentContext.maxChars": {
+      label: "Agent Voice Context Limit",
+      advanced: true,
+    },
+    "realtime.agentContext.includeIdentity": {
+      label: "Include Agent Identity",
+      advanced: true,
+    },
+    "realtime.agentContext.includeSystemPrompt": {
+      label: "Include Agent System Prompt",
+      advanced: true,
+    },
+    "realtime.agentContext.includeWorkspaceFiles": {
+      label: "Include Agent Workspace Files",
+      advanced: true,
+    },
+    "realtime.agentContext.files": {
+      label: "Agent Voice Context Files",
       advanced: true,
     },
     "realtime.providers": { label: "Realtime Provider Config", advanced: true },
