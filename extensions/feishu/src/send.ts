@@ -425,6 +425,8 @@ export type FeishuThreadMessageInfo = {
   senderType?: string;
   content: string;
   contentType: string;
+  /** Raw JSON body content from the Feishu API (needed for media key extraction). */
+  rawContent?: string;
   createTime?: number;
 };
 
@@ -498,6 +500,7 @@ export async function listFeishuThreadMessages(params: {
       senderType: parsed.senderType,
       content: parsed.content,
       contentType: parsed.contentType,
+      rawContent: item.body?.content ?? "",
       createTime: parsed.createTime,
     });
 
