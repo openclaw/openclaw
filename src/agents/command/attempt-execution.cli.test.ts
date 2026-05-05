@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FailoverError } from "../failover-error.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
@@ -473,6 +474,73 @@ describe("CLI attempt execution", () => {
 
     messages = await readSessionMessages(updatedFirst?.sessionFile ?? "");
     expect(messages).toHaveLength(1);
+  });
+
+  it("embedded assistant gap-fill appends repeated replies after a user tail", async () => {
+    const sessionKey = "agent:main:subagent:embedded-repeated-reply";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-embedded-repeated-reply",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const result = makeCliResult("same answer");
+    result.meta.executionTrace = {
+      winnerProvider: "anthropic",
+      winnerModel: "claude-opus-4-6",
+      fallbackUsed: false,
+      runner: "embedded",
+    };
+
+    const updatedFirst = await persistCliTurnTranscript({
+      body: "ignored for gap fill",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+    const sessionFile = updatedFirst?.sessionFile;
+    expect(sessionFile).toBeTruthy();
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile!,
+      sessionId: sessionEntry.sessionId,
+      cwd: tmpDir,
+      config: {},
+      message: {
+        role: "user",
+        content: "next prompt",
+        timestamp: Date.now(),
+      },
+    });
+
+    await persistCliTurnTranscript({
+      body: "still ignored",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: updatedFirst,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    const messages = await readSessionMessages(sessionFile!);
+    expect(messages).toHaveLength(3);
+    expect(messages.map((message) => message.role)).toEqual(["assistant", "user", "assistant"]);
+    expect(messages[2]).toMatchObject({
+      content: [{ type: "text", text: "same answer" }],
+    });
   });
 
   it("persists the transcript body instead of runtime-only CLI prompt context", async () => {

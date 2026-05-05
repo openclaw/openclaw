@@ -3,7 +3,7 @@ import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import {
-  readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
   resolveSessionTranscriptFile,
 } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -88,7 +88,6 @@ type PersistTextTurnTranscriptParams = {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  /** Pi already mirrored the user prompt; append assistant only if missing from the transcript tail. */
   embeddedAssistantGapFill?: boolean;
   assistant: {
     api: string;
@@ -228,7 +227,7 @@ async function persistTextTurnTranscript(
     if (replyText) {
       let appendAssistant = true;
       if (params.embeddedAssistantGapFill) {
-        const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+        const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
         if (normalizedLatest && normalizedLatest === normalizedReply) {
@@ -316,10 +315,6 @@ export async function persistCliTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-  /**
-   * Embedded Pi runs already persist user/tool turns via SessionManager.
-   * Skip mirroring the user prompt here and only append assistant text when it is missing from the transcript tail.
-   */
   embeddedAssistantGapFill?: boolean;
 }): Promise<SessionEntry | undefined> {
   const replyText = resolveCliTranscriptReplyText(params.result);
