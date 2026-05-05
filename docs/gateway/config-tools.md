@@ -280,6 +280,35 @@ Configures inbound media understanding (image/audio/video):
 }
 ```
 
+`tools.agentToAgent` is the global participation gate for cross-agent session tools. When it is enabled, both the requester and target agent must match `tools.agentToAgent.allow` unless that allowlist is omitted.
+
+You can further restrict outbound access for one requester agent with `agents.list[].tools.agentToAgent.allow`:
+
+```json5
+{
+  tools: {
+    agentToAgent: {
+      enabled: true,
+      allow: ["home", "work", "ops"],
+    },
+  },
+  agents: {
+    list: [
+      {
+        id: "home",
+        tools: {
+          agentToAgent: {
+            allow: ["work"],
+          },
+        },
+      },
+    ],
+  },
+}
+```
+
+The per-agent list is outbound-only: it is read from the requester agent, not the target agent. `allow: []` is a deny-all outbound override for that requester.
+
 ### `tools.sessions`
 
 Controls which sessions can be targeted by the session tools (`sessions_list`, `sessions_history`, `sessions_send`).

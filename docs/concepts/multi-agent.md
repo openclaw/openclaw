@@ -429,6 +429,8 @@ Common channels supporting this pattern include:
     }
     ```
 
+    The global `tools.agentToAgent.allow` list controls which agents may participate in cross-agent session tools. Add `agents.list[].tools.agentToAgent.allow` when a specific requester agent needs a narrower outbound target list. That per-agent list is outbound-only; `allow: []` means the requester cannot contact any other agent.
+
   </Accordion>
 </AccordionGroup>
 

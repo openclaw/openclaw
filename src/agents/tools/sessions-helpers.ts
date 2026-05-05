@@ -1,6 +1,7 @@
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  formatAgentToAgentAccessError,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-access.js";
