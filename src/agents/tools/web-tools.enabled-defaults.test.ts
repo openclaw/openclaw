@@ -13,6 +13,7 @@ const runWebSearchCalls = vi.hoisted(
   () =>
     [] as Array<{
       config?: unknown;
+      providerId?: string;
       preferRuntimeProviders?: boolean;
       runtimeWebSearch?: unknown;
     }>,
@@ -51,11 +52,13 @@ vi.mock("../../web-search/runtime.js", async () => {
     await import("../../secrets/runtime-web-tools-state.js");
   const resolveRuntimeDefinition = (options?: {
     config?: unknown;
+    providerId?: string;
     runtimeWebSearch?: { selectedProvider?: string; providerConfigured?: string };
   }) => {
     // The mock mirrors production provider resolution order closely enough to
     // catch stale construction-time metadata in late-bound tool instances.
     const providerId =
+      options?.providerId ??
       options?.runtimeWebSearch?.selectedProvider ??
       options?.runtimeWebSearch?.providerConfigured ??
       getActiveRuntimeWebToolsMetadata()?.search?.selectedProvider ??
@@ -84,11 +87,13 @@ vi.mock("../../web-search/runtime.js", async () => {
     runWebSearch: async (options: {
       config?: unknown;
       args: Record<string, unknown>;
+      providerId?: string;
       preferRuntimeProviders?: boolean;
       runtimeWebSearch?: unknown;
     }) => {
       runWebSearchCalls.push({
         config: options.config,
+        providerId: options.providerId,
         preferRuntimeProviders: options.preferRuntimeProviders,
         runtimeWebSearch: options.runtimeWebSearch,
       });
@@ -312,5 +317,85 @@ describe("web tools defaults", () => {
       (runWebSearchCalls[0]?.runtimeWebSearch as { selectedProvider?: string } | undefined)
         ?.selectedProvider,
     ).toBe("fresh");
+  });
+
+  it("lets explicit config win over stale runtime web_search metadata", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.webSearchProviders.push(
+      {
+        pluginId: "stale-search",
+        pluginName: "Stale Search",
+        source: "test",
+        provider: {
+          id: "stale",
+          label: "Stale Search",
+          hint: "Stale runtime provider",
+          envVars: [],
+          placeholder: "stale-...",
+          signupUrl: "https://example.com/stale",
+          autoDetectOrder: 1,
+          credentialPath: "tools.web.search.stale.apiKey",
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: () => ({
+            description: "stale runtime tool",
+            parameters: {},
+            execute: async () => ({ provider: "stale" }),
+          }),
+        },
+      },
+      {
+        pluginId: "custom-search",
+        pluginName: "Custom Search",
+        source: "test",
+        provider: {
+          id: "custom",
+          label: "Custom Search",
+          hint: "Custom runtime provider",
+          envVars: ["CUSTOM_SEARCH_API_KEY"],
+          placeholder: "custom-...",
+          signupUrl: "https://example.com/signup",
+          autoDetectOrder: 2,
+          credentialPath: "plugins.entries.custom-search.config.webSearch.apiKey",
+          getCredentialValue: () => "configured",
+          setCredentialValue: () => {},
+          createTool: () => ({
+            description: "custom runtime tool",
+            parameters: {},
+            execute: async () => ({ provider: "custom" }),
+          }),
+        },
+      },
+    );
+    setActivePluginRegistry(registry);
+
+    const tool = createWebSearchTool({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "custom",
+            },
+          },
+        },
+      },
+      sandboxed: true,
+      runtimeWebSearch: {
+        providerConfigured: "stale",
+        providerSource: "configured",
+        selectedProvider: "stale",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+
+    const result = await tool?.execute?.("call-explicit-custom-provider", {});
+
+    expect(result?.details).toMatchObject({ provider: "custom" });
+    expect(runWebSearchCalls).toHaveLength(1);
+    expect(runWebSearchCalls[0]?.providerId).toBe("custom");
+    expect(runWebSearchCalls[0]?.runtimeWebSearch).toMatchObject({
+      selectedProvider: "stale",
+    });
   });
 });
