@@ -633,6 +633,59 @@ describe("buildInboundUserContextPrefix", () => {
     });
   });
 
+  it("renders Telegram forwarded context for direct and batched forwards", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "direct",
+      OriginatingChannel: "telegram",
+      ForwardedFrom: "Bob Smith (@bobsmith)",
+      ForwardedFromType: "user",
+      ForwardedFromId: "999",
+      ForwardedDate: 500000,
+      UntrustedStructuredContext: [
+        {
+          label: "Telegram forwarded batch item",
+          source: "telegram",
+          type: "forwarded_message",
+          payload: {
+            item_index: 2,
+            body_line: 2,
+            from: "Original B",
+            date_ms: 600000,
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    const directForward = parseUntrustedJsonBlock(
+      text,
+      "Forwarded message context (untrusted metadata):",
+    ) as Record<string, unknown>;
+    expect(directForward).toEqual(
+      expect.objectContaining({
+        from: "Bob Smith (@bobsmith)",
+        type: "user",
+        date_ms: 500000,
+      }),
+    );
+
+    const batchForward = parseUntrustedJsonBlock(
+      text,
+      "Telegram forwarded batch item (untrusted metadata):",
+    ) as Record<string, unknown>;
+    expect(batchForward).toEqual(
+      expect.objectContaining({
+        source: "telegram",
+        type: "forwarded_message",
+        payload: expect.objectContaining({
+          item_index: 2,
+          body_line: 2,
+          from: "Original B",
+          date_ms: 600000,
+        }),
+      }),
+    );
+  });
+
   it("omits forwarded metadata blocks unless ForwardedFrom is present", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

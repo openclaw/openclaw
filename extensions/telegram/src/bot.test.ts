@@ -1880,6 +1880,47 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("keeps BodyForAgent clean while carrying typed forwarded origin for direct messages", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Can I borrow a drill?",
+        date: 1736380800,
+        forward_origin: {
+          type: "user",
+          sender_user: {
+            id: 999,
+            first_name: "Bob",
+            last_name: "Smith",
+            username: "bobsmith",
+            is_bot: false,
+          },
+          date: 500,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    const forwardedPrefix = "[Forwarded from Bob Smith (@bobsmith) at 1970-01-01T00:08:20.000Z]";
+    expect(payload.ForwardedFrom).toBe("Bob Smith (@bobsmith)");
+    expect(payload.ForwardedFromType).toBe("user");
+    expect(payload.ForwardedDate).toBe(500000);
+    expect(payload.Body).toContain(forwardedPrefix);
+    expect(payload.BodyForAgent).toBe("Can I borrow a drill?");
+    expect(payload.RawBody).toBe("Can I borrow a drill?");
+    expect(payload.CommandBody).toBe("Can I borrow a drill?");
+  });
+
   it("redacts forwarded origin inside reply targets when context visibility is allowlist", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();

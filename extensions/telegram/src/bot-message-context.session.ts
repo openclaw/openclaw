@@ -226,6 +226,19 @@ export async function buildTelegramInboundContextPayload(params: {
         }
       : null;
   const visibleForwardOrigin = includeForwardOrigin ? forwardOrigin : null;
+  const visibleForwardedBatchContext = (options?.forwardedBatchContext ?? [])
+    .filter((entry) =>
+      shouldIncludeGroupSupplementalContext({
+        kind: "forwarded",
+        senderId: entry.senderId,
+        senderUsername: entry.senderUsername,
+      }),
+    )
+    .map((entry) => entry.context);
+  const untrustedStructuredContext = [
+    ...(options?.untrustedStructuredContext ?? []),
+    ...visibleForwardedBatchContext,
+  ];
   const replyForwardAnnotation = visibleReplyTarget?.forwardedFrom
     ? `[Forwarded from ${visibleReplyTarget.forwardedFrom.from}${
         visibleReplyTarget.forwardedFrom.date
@@ -403,6 +416,8 @@ export async function buildTelegramInboundContextPayload(params: {
     TopicName: isForum && topicName ? topicName : undefined,
     OriginatingChannel: "telegram" as const,
     OriginatingTo: `telegram:${chatId}`,
+    UntrustedStructuredContext:
+      untrustedStructuredContext.length > 0 ? untrustedStructuredContext : undefined,
   });
 
   const pinnedMainDmOwner = !isGroup

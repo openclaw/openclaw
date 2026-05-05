@@ -628,6 +628,287 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("coalesces forwarded text bursts with per-message attribution", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    replySpy.mockImplementation(async () => ({ text: "ok" }));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          text: "first forwarded note\ncontinued forwarded note",
+          date: 1736380800,
+          message_id: 201,
+          from: { id: 777, first_name: "N" },
+          forward_origin: {
+            type: "hidden_user",
+            date: 500,
+            sender_user_name: "Original A",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          text: "second forwarded note",
+          date: 1736380801,
+          message_id: 202,
+          from: { id: 777, first_name: "N" },
+          forward_origin: {
+            type: "hidden_user",
+            date: 600,
+            sender_user_name: "Original B",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      const forwardDebounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === 80,
+      );
+      expect(forwardDebounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[forwardDebounceCallIndex]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+      const flushForwardBurst = setTimeoutSpy.mock.calls[forwardDebounceCallIndex]?.[0] as
+        | (() => Promise<void>)
+        | undefined;
+
+      await flushForwardBurst?.();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0];
+      expect(payload.BodyForAgent).toBe(
+        ["first forwarded note\ncontinued forwarded note", "second forwarded note"].join("\n"),
+      );
+      expect(payload.Body).not.toContain("[Forwarded from");
+      expect(payload.ForwardedFrom).toBeUndefined();
+      expect(payload.UntrustedStructuredContext).toEqual([
+        expect.objectContaining({
+          label: "Telegram forwarded batch item",
+          source: "telegram",
+          type: "forwarded_message",
+          payload: expect.objectContaining({
+            item_index: 1,
+            body_line: 1,
+            from: "Original A",
+            date_ms: 500000,
+          }),
+        }),
+        expect.objectContaining({
+          label: "Telegram forwarded batch item",
+          source: "telegram",
+          type: "forwarded_message",
+          payload: expect.objectContaining({
+            item_index: 2,
+            body_line: 3,
+            from: "Original B",
+            date_ms: 600000,
+          }),
+        }),
+      ]);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("preserves forwarded attribution when flushing long text fragments", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    replySpy.mockImplementation(async () => ({ text: "ok" }));
+
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const longForwardedText = `${"forwarded long text ".repeat(210)}tail`;
+
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          text: longForwardedText,
+          date: 1736380800,
+          message_id: 401,
+          from: { id: 777, first_name: "N" },
+          forward_origin: {
+            type: "user",
+            date: 500,
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const textFragmentFlushCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+      );
+      expect(textFragmentFlushCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[textFragmentFlushCallIndex]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+      const flushTextFragment = setTimeoutSpy.mock.calls[textFragmentFlushCallIndex]?.[0] as
+        | (() => Promise<void>)
+        | undefined;
+
+      await flushTextFragment?.();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0];
+      expect(payload.BodyForAgent).toBe(longForwardedText);
+      expect(payload.RawBody).toBe(longForwardedText);
+      expect(payload.ForwardedFrom).toBe("Bob Smith (@bobsmith)");
+      expect(payload.ForwardedFromType).toBe("user");
+      expect(payload.ForwardedFromId).toBe("999");
+      expect(payload.ForwardedFromUsername).toBe("bobsmith");
+      expect(payload.ForwardedDate).toBe(500000);
+      expect(payload.Body).toContain("[Forwarded from Bob Smith (@bobsmith)");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("redacts forwarded batch attribution blocked by group context visibility", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          contextVisibility: "allowlist",
+          groups: {
+            "-1007": {
+              requireMention: false,
+              allowFrom: ["1"],
+            },
+          },
+        },
+      },
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    replySpy.mockImplementation(async () => ({ text: "ok" }));
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: -1007, type: "group", title: "Ops" },
+          text: "first forwarded note",
+          date: 1736380800,
+          message_id: 301,
+          from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+          forward_origin: {
+            type: "user",
+            date: 500,
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await handler({
+        message: {
+          chat: { id: -1007, type: "group", title: "Ops" },
+          text: "second forwarded note",
+          date: 1736380801,
+          message_id: 302,
+          from: { id: 1, first_name: "Ada", username: "ada", is_bot: false },
+          forward_origin: {
+            type: "user",
+            date: 600,
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      const forwardDebounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === 80,
+      );
+      expect(forwardDebounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[forwardDebounceCallIndex]?.value as ReturnType<
+          typeof setTimeout
+        >,
+      );
+      const flushForwardBurst = setTimeoutSpy.mock.calls[forwardDebounceCallIndex]?.[0] as
+        | (() => Promise<void>)
+        | undefined;
+
+      await flushForwardBurst?.();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0];
+      expect(payload.BodyForAgent).toBe(
+        ["first forwarded note", "second forwarded note"].join("\n"),
+      );
+      expect(payload.Body).not.toContain("[Forwarded from");
+      expect(payload.ForwardedFrom).toBeUndefined();
+      expect(payload.UntrustedStructuredContext).toBeUndefined();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
