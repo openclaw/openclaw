@@ -522,6 +522,10 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         return keys.last
     }
 
+    func historyRequestCount() async -> Int {
+        await self.state.historyCallCount
+    }
+
     func abortedRunIds() async -> [String] {
         await self.state.abortedRunIds
     }
@@ -880,6 +884,54 @@ struct ChatViewModelTests {
         #expect(await MainActor.run { vm.input } == "second")
     }
 
+    @Test @MainActor func `successful refresh after failed load makes later load idempotent`() async throws {
+        struct BootstrapFailure: Error, LocalizedError {
+            var errorDescription: String? { "bootstrap failed" }
+        }
+
+        let history = historyPayload(messages: [chatTextMessage(role: "user", text: "hello", timestamp: 1)])
+        let historyCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 1 {
+                    throw BootstrapFailure()
+                }
+            })
+
+        vm.load()
+        try await waitUntil("initial load failure is reported") {
+            await MainActor.run { vm.errorText == "bootstrap failed" }
+        }
+
+        vm.refresh()
+        try await waitUntil("manual refresh recovers initial state") {
+            await MainActor.run {
+                vm.errorText == nil &&
+                    vm.messages.contains { message in
+                        message.content.contains { $0.text == "hello" }
+                    }
+            }
+        }
+
+        vm.input = "stream"
+        vm.send()
+        let runId = try await waitForLastSentRunId(transport)
+        emitAssistantText(transport: transport, runId: runId, text: "stream survives recovered load")
+        try await waitUntil("assistant stream visible") {
+            await MainActor.run { vm.streamingAssistantText == "stream survives recovered load" }
+        }
+
+        let requestsBeforeLoad = await transport.historyRequestCount()
+        vm.load()
+        try? await Task.sleep(nanoseconds: 150_000_000)
+
+        #expect(await transport.historyRequestCount() == requestsBeforeLoad)
+        #expect(vm.streamingAssistantText == "stream survives recovered load")
+        #expect(vm.pendingRunCount == 1)
+    }
+
     @Test func `keeps optimistic user message when final refresh returns only assistant history`() async throws {
         let sessionId = "sess-main"
         let now = Date().timeIntervalSince1970 * 1000
@@ -1219,6 +1271,87 @@ struct ChatViewModelTests {
         try await waitUntil("history refresh after canonical external event") {
             await MainActor.run { vm.messages.count == 2 }
         }
+    }
+
+    @Test func acceptsAgentEventsForCanonicalSessionKeyEvenWhenRunIDDiffersFromSessionID() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        emitAssistantText(
+            transport: transport,
+            runId: "server-run-1",
+            text: "stream via session key",
+            sessionKey: "agent:main:main")
+        emitToolStart(
+            transport: transport,
+            runId: "server-run-1",
+            sessionKey: "agent:main:main")
+
+        try await waitUntil("assistant stream visible via sessionKey") {
+            await MainActor.run { vm.streamingAssistantText == "stream via session key" }
+        }
+        try await waitUntil("tool call pending via sessionKey") {
+            await MainActor.run { vm.pendingToolCalls.count == 1 }
+        }
+    }
+
+    @Test func ignoresAgentEventsForOtherSessionKeys() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        emitAssistantText(
+            transport: transport,
+            runId: "server-run-2",
+            text: "wrong session",
+            sessionKey: "agent:main:other")
+
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        #expect(await MainActor.run { vm.streamingAssistantText } == nil)
+    }
+
+    @Test func acceptsPendingRunAgentEventsEvenWhenSessionKeyMismatches() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await transport.lastSentRunId() != nil }
+        let runId = try #require(await transport.lastSentRunId())
+
+        emitAssistantText(
+            transport: transport,
+            runId: runId,
+            text: "own run still streams",
+            sessionKey: "agent:main:other")
+
+        try await waitUntil("assistant stream visible for own run despite key mismatch") {
+            await MainActor.run { vm.streamingAssistantText == "own run still streams" }
+        }
+    }
+
+    @Test func gatesSessionKeyMatchedAgentEventsWhileLocalRunIsPending() async throws {
+        let history = historyPayload(sessionId: "sess-main")
+        let (transport, vm) = await makeViewModel(historyResponses: [history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        emitAssistantText(
+            transport: transport,
+            runId: "server-run-different",
+            text: "session-key stream from another client",
+            sessionKey: "agent:main:main")
+        emitToolStart(
+            transport: transport,
+            runId: "server-run-different",
+            sessionKey: "agent:main:main")
+
+        try? await Task.sleep(nanoseconds: 150_000_000)
+        #expect(await MainActor.run { vm.streamingAssistantText } == nil)
+        #expect(await MainActor.run { vm.pendingToolCalls.count } == 0)
     }
 
     @Test func `appends external session user message for active session`() async throws {

@@ -23,6 +23,7 @@ public struct OpenClawChatView: View {
     @State private var hasPerformedInitialScroll = false
     @State private var isPinnedToBottom = true
     @State private var lastUserMessageID: UUID?
+    @State private var pendingStreamingScrollTask: Task<Void, Never>?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
     private let style: Style
@@ -108,6 +109,10 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
+        .onDisappear {
+            self.pendingStreamingScrollTask?.cancel()
+            self.pendingStreamingScrollTask = nil
+        }
         .sheet(isPresented: self.$showSessions) {
             if self.showsSessionSwitcher {
                 ChatSessionsSheet(viewModel: self.viewModel)
@@ -253,6 +258,16 @@ public struct OpenClawChatView: View {
         }
         .onChange(of: self.viewModel.streamingAssistantText) { _, _ in
             guard self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
+            self.scheduleStreamingScrollToBottom()
+        }
+    }
+
+    private func scheduleStreamingScrollToBottom() {
+        guard self.pendingStreamingScrollTask == nil else { return }
+        self.pendingStreamingScrollTask = Task { @MainActor in
+            defer { self.pendingStreamingScrollTask = nil }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled, self.hasPerformedInitialScroll, self.isPinnedToBottom else { return }
             withAnimation(.snappy(duration: 0.22)) {
                 self.scrollPosition = self.scrollerBottomID
             }
@@ -299,7 +314,7 @@ public struct OpenClawChatView: View {
                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)
         }
 
-        if self.viewModel.pendingRunCount > 0 {
+        if self.viewModel.pendingRunCount > 0 && !self.hasVisibleStreamingAssistantText {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
@@ -397,13 +412,16 @@ public struct OpenClawChatView: View {
         return self.activeErrorText
     }
 
+    private var hasVisibleStreamingAssistantText: Bool {
+        guard let text = self.viewModel.streamingAssistantText else { return false }
+        return AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
+    }
+
     private var hasVisibleMessageListContent: Bool {
         if !self.visibleMessages.isEmpty {
             return true
         }
-        if let text = self.viewModel.streamingAssistantText,
-           AssistantTextParser.hasVisibleContent(in: text, includeThinking: self.showsAssistantTrace)
-        {
+        if self.hasVisibleStreamingAssistantText {
             return true
         }
         if self.viewModel.pendingRunCount > 0 {
@@ -457,9 +475,7 @@ public struct OpenClawChatView: View {
 
     private var showsEmptyState: Bool {
         self.viewModel.messages.isEmpty &&
-            !(self.viewModel.streamingAssistantText.map {
-                AssistantTextParser.hasVisibleContent(in: $0, includeThinking: self.showsAssistantTrace)
-            } ?? false) &&
+            !self.hasVisibleStreamingAssistantText &&
             self.viewModel.pendingRunCount == 0 &&
             self.viewModel.pendingToolCalls.isEmpty
     }

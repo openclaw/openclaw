@@ -42,6 +42,7 @@ public final class OpenClawChatViewModel {
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
     @ObservationIgnored
     private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
+    private var hasLoadedInitialState = false
     private var pendingRuns = Set<String>() {
         didSet { self.pendingRunCount = self.pendingRuns.count }
     }
@@ -162,6 +163,8 @@ public final class OpenClawChatViewModel {
     }
 
     public func load() {
+        guard !self.hasLoadedInitialState else { return }
+        self.hasLoadedInitialState = true
         self.startBootstrap()
     }
 
@@ -428,9 +431,11 @@ public final class OpenClawChatViewModel {
             guard self.isCurrentBootstrap(context) else { return }
             await self.fetchModels(sessionSnapshot: context.session)
             guard self.isCurrentBootstrap(context) else { return }
+            self.hasLoadedInitialState = true
             self.errorText = nil
         } catch {
             guard self.isCurrentBootstrap(context) else { return }
+            self.hasLoadedInitialState = false
             self.errorText = error.localizedDescription
             chatUILogger.error("bootstrap failed \(error.localizedDescription, privacy: .public)")
         }
@@ -1623,12 +1628,24 @@ public final class OpenClawChatViewModel {
             errorMessage: message.errorMessage)
     }
 
-    private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
-        let isPendingRun = self.pendingRuns.contains(evt.runId)
-        let isLegacySessionStream = self.pendingRuns.isEmpty && self.sessionId == evt.runId
-        if !isPendingRun, !isLegacySessionStream {
-            return
+    private func shouldAcceptAgentEvent(_ evt: OpenClawAgentEventPayload) -> Bool {
+        if self.pendingRuns.contains(evt.runId) {
+            return true
         }
+        if let sessionKey = evt.sessionKey,
+           self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+        {
+            return self.pendingRuns.isEmpty
+        }
+        if let sessionId {
+            return evt.runId == sessionId
+        }
+        return false
+    }
+
+    private func handleAgentEvent(_ evt: OpenClawAgentEventPayload) {
+        guard self.shouldAcceptAgentEvent(evt) else { return }
+        let isPendingRun = self.pendingRuns.contains(evt.runId)
         self.logDiagnostic(
             "chat.ui event agent stream=\(evt.stream) "
                 + "runId=\(evt.runId) pending=\(self.pendingRunCount)")
