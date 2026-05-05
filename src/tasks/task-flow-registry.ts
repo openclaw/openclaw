@@ -526,6 +526,8 @@ export function finishFlow(params: {
   endedAt?: number;
 }): TaskFlowUpdateResult {
   const endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+  const updatedAt = params.updatedAt ?? endedAt;
+  const safeEndedAt = Math.max(endedAt, updatedAt);
   return updateFlowRecordByIdExpectedRevision({
     flowId: params.flowId,
     expectedRevision: params.expectedRevision,
@@ -536,8 +538,8 @@ export function finishFlow(params: {
       waitJson: null,
       blockedTaskId: null,
       blockedSummary: null,
-      endedAt,
-      updatedAt: params.updatedAt ?? endedAt,
+      endedAt: safeEndedAt,
+      updatedAt,
     },
   });
 }
@@ -553,6 +555,8 @@ export function failFlow(params: {
   endedAt?: number;
 }): TaskFlowUpdateResult {
   const endedAt = params.endedAt ?? params.updatedAt ?? Date.now();
+  const updatedAt = params.updatedAt ?? endedAt;
+  const safeEndedAt = Math.max(endedAt, updatedAt);
   return updateFlowRecordByIdExpectedRevision({
     flowId: params.flowId,
     expectedRevision: params.expectedRevision,
@@ -563,8 +567,8 @@ export function failFlow(params: {
       waitJson: null,
       blockedTaskId: params.blockedTaskId,
       blockedSummary: params.blockedSummary,
-      endedAt,
-      updatedAt: params.updatedAt ?? endedAt,
+      endedAt: safeEndedAt,
+      updatedAt,
     },
   });
 }
