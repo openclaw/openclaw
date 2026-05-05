@@ -1938,6 +1938,17 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onReplyStart: typingCallbacks.onReplyStart,
           onIdle: typingCallbacks.onIdle,
         });
+      const messageVisibilityConfig = (
+        cfg as {
+          messages?: { groupChat?: { visibleReplies?: unknown }; visibleReplies?: unknown };
+        }
+      ).messages;
+      const sourceReplyDeliveryMode =
+        isRoom &&
+        messageVisibilityConfig?.groupChat?.visibleReplies === undefined &&
+        messageVisibilityConfig?.visibleReplies === undefined
+          ? "automatic"
+          : undefined;
       const pinnedMainDmOwner = isDirectMessage
         ? await (async () => {
             const livePinnedCfg = core.config.current() as CoreConfig;
@@ -2053,6 +2064,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       dispatcher,
                       replyOptions: {
                         ...replyOptions,
+                        ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
                         skillFilter: roomConfig?.skills,
                         // Keep block streaming enabled when explicitly requested, even
                         // with draft previews on. The draft remains the live preview

@@ -402,6 +402,72 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
+  it("keeps automatic final replies for Matrix rooms when visibleReplies is unset", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: true,
+      counts: { final: 1, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      dispatchReplyFromConfig,
+      isDirectMessage: false,
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$room-auto-final",
+        body: "hello from matrix room",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.objectContaining({
+          sourceReplyDeliveryMode: "automatic",
+        }),
+      }),
+    );
+  });
+
+  it("honors explicit Matrix room visibleReplies policy", async () => {
+    const dispatchReplyFromConfig = vi.fn(async () => ({
+      queuedFinal: false,
+      counts: { final: 0, block: 0, tool: 0 },
+    }));
+    const { handler } = createMatrixHandlerTestHarness({
+      cfg: {
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+        channels: { matrix: { dm: { allowFrom: ["*"] } } },
+      },
+      dispatchReplyFromConfig,
+      isDirectMessage: false,
+      roomsConfig: {
+        "!room:example.org": { requireMention: false },
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$room-message-tool-final",
+        body: "hello from matrix room",
+      }),
+    );
+
+    expect(dispatchReplyFromConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyOptions: expect.not.objectContaining({
+          sourceReplyDeliveryMode: "automatic",
+        }),
+      }),
+    );
+  });
+
   it("drops room messages from configured Matrix bot accounts when allowBots is off", async () => {
     const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
       isDirectMessage: false,
