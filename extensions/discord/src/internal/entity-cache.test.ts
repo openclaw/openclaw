@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordEntityCache } from "./entity-cache.js";
 import type { RequestClient } from "./rest.js";
 import type { StructureClient } from "./structures.js";
@@ -18,6 +18,10 @@ function makeCache(opts: { ttlMs?: number; maxEntries?: number; sweepIntervalMs?
 }
 
 describe("DiscordEntityCache eviction", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("caps entries by dropping oldest on insert past maxEntries", async () => {
     const { cache } = makeCache({ ttlMs: 60_000, maxEntries: 3 });
 
@@ -31,19 +35,23 @@ describe("DiscordEntityCache eviction", () => {
   });
 
   it("sweeps expired entries on insert when sweep interval has elapsed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const { cache } = makeCache({ ttlMs: 1, sweepIntervalMs: 0, maxEntries: 1000 });
 
     await cache.fetchUser("u1");
     await cache.fetchUser("u2");
     expect(cache.size).toBe(2);
 
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    vi.advanceTimersByTime(5);
 
     await cache.fetchUser("u3");
     expect(cache.size).toBe(1);
   });
 
   it("does not sweep before sweep interval elapses", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
     const { cache } = makeCache({
       ttlMs: 1,
       sweepIntervalMs: 60_000,
@@ -52,7 +60,7 @@ describe("DiscordEntityCache eviction", () => {
 
     await cache.fetchUser("u1");
     await cache.fetchUser("u2");
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    vi.advanceTimersByTime(5);
     await cache.fetchUser("u3");
 
     expect(cache.size).toBe(3);
