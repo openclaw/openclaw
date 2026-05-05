@@ -71,11 +71,15 @@ export function createMSTeamsReplyDispatcher(params: {
    */
   const TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 
-  // Forward reference: sendTypingIndicator is built before the stream
+  // Forward references: sendTypingIndicator is built before the stream
   // controller exists, but the keepalive tick needs to check stream state so
-  // we don't overlay "..." typing on the visible streaming card. The ref is
-  // wired once the stream controller is constructed below.
+  // we don't overlay "..." typing on the visible streaming card, and we want
+  // to suppress typing pulses entirely once the user pressed Stop (otherwise
+  // typing keeps pulsing for the rest of the agent run, fighting the cancel
+  // signal). Both refs are wired once the stream controller is constructed
+  // below.
   const streamActiveRef: { current: () => boolean } = { current: () => false };
+  const streamCanceledRef: { current: () => boolean } = { current: () => false };
 
   const rawSendTypingIndicator = async () => {
     await withRevokedProxyFallback({
@@ -100,6 +104,14 @@ export function createMSTeamsReplyDispatcher(params: {
         // the stream is finalized, so typing indicators are appropriate
         // and they are what keep the TurnContext alive. See #59731.
         if (streamActiveRef.current()) {
+          return;
+        }
+        // Once the user pressed Stop (or Teams ended the stream), suppress
+        // typing pulses too — otherwise the bot keeps pulsing "typing..." in
+        // Teams for the rest of the agent run, fighting the user's explicit
+        // cancel. The agent can't currently be canceled, but it's about to
+        // wind down on its own; in the meantime we honor the cancel visually.
+        if (streamCanceledRef.current()) {
           return;
         }
         await rawSendTypingIndicator();
@@ -141,8 +153,9 @@ export function createMSTeamsReplyDispatcher(params: {
     context: params.context,
     feedbackLoopEnabled,
   });
-  // Wire the forward-declared gate used by sendTypingIndicator.
+  // Wire the forward-declared gates used by sendTypingIndicator.
   streamActiveRef.current = () => streamController.isStreamActive();
+  streamCanceledRef.current = () => streamController.wasCanceled();
 
   const blockStreamingEnabled =
     typeof msteamsCfg?.blockStreaming === "boolean" ? msteamsCfg.blockStreaming : false;
