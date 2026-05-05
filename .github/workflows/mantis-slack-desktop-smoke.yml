@@ -22,6 +22,14 @@ on:
         required: false
         default: false
         type: boolean
+      crabbox_provider:
+        description: Crabbox provider for the desktop lease
+        required: false
+        default: aws
+        type: choice
+        options:
+          - aws
+          - hetzner
 
 permissions:
   contents: write
@@ -185,6 +193,7 @@ jobs:
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
           KEEP_VM: ${{ inputs.keep_vm }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
         shell: bash
@@ -215,12 +224,14 @@ jobs:
           keep_args=()
           if [[ "$KEEP_VM" == "true" ]]; then
             keep_args=(--keep-lease)
+          else
+            keep_args=(--no-keep-lease)
           fi
 
           pnpm openclaw qa mantis slack-desktop-smoke \
             --repo-root "$candidate_repo" \
             --output-dir "$output_rel" \
-            --provider hetzner \
+            --provider "$CRABBOX_PROVIDER" \
             --class standard \
             --idle-timeout 45m \
             --ttl 120m \
