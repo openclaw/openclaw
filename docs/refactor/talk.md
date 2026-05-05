@@ -1,55 +1,68 @@
 ---
-summary: "Grand unification plan for Talk mode, realtime voice, voice-call, Google Meet, and VoiceClaw realtime"
+summary: "Breaking refactor plan for one Talk architecture across realtime voice, STT/TTS, browser, native, telephony, meetings, and walkie-talkie handoff"
 read_when:
-  - Refactoring Talk mode, realtime voice, voice-call, Google Meet, or VoiceClaw realtime
-  - Changing Talk protocol, provider contracts, browser realtime, or native voice behavior
-  - Deciding whether a voice feature belongs in core, a provider plugin, or a surface adapter
-title: "Talk unification plan"
+  - Refactoring Talk mode, realtime voice, voice-call, Google Meet, browser realtime voice, native push-to-talk, STT, or TTS
+  - Changing Talk Gateway protocol, provider contracts, realtime transports, managed rooms, audio events, cancellation, or tool policy
+  - Deciding whether a voice feature belongs in core, a provider plugin, a native app, a meeting adapter, or a telephony adapter
+title: "Talk refactor plan"
 ---
 
-# Talk Unification Plan
+# Talk Refactor Plan
 
-OpenClaw has several voice loops that grew from different product surfaces: native Talk mode, browser realtime Talk, Voice Call realtime, Google Meet realtime, streaming STT, TTS reply playback, and `/voiceclaw/realtime`. The goal is not to force all of them into one implementation. The goal is one session contract, one event vocabulary, one policy boundary, and small adapters for each surface.
+This is the breaking-clean plan for unifying every live voice path behind one
+Talk architecture.
 
-Core should know conversation modes, byte transports, audio formats, tool policy, and client capabilities. Core should not know platform product names such as iOS, Android, or macOS except as optional telemetry emitted by an edge client.
+The old architecture grew by product surface: browser realtime, Gateway relay,
+managed native handoff, streaming transcription, Voice Call, Google Meet, local
+STT/TTS, one-shot TTS, and a retired realtime WebSocket endpoint each learned
+their own names for sessions, turns, capture, output, barge-in, tool calls,
+cancellation, and transcript events.
 
-## Goals
+The new architecture grows by primitive. There is one public Talk API, one
+event envelope, one turn model, one cancellation contract, one provider policy
+boundary, and one place for shared runtime state. Browser, native, telephony,
+meetings, and walkie-talkie become adapters over those primitives.
 
-- Make browser Talk, native Talk, telephony, meetings, and VoiceClaw realtime share the same session semantics.
-- Keep provider-specific realtime behavior in provider plugins.
-- Keep telephony and meeting quirks in their owning plugins.
-- Move browser realtime agent consult out of browser-owned `chat.send`.
-- Keep existing public entry points only as migration adapters while the runtime converges.
-- Keep local STT/TTS as a first-class fallback, not a deprecated path.
-- Support a first-party walkie-talkie client that can hand off an existing OpenClaw session into voice without becoming a separate assistant.
-- Make event logs, latency, usage, tool calls, cancellation, and interruption observable in the same shape everywhere.
+## Product Target
 
-## Non Goals
+OpenClaw supports three Talk products:
 
-- Do not make core branch on app platforms.
-- Do not move OpenAI, Google, Twilio, or meeting-specific behavior into core.
-- Do not merge one-shot inbound audio attachments with live Talk sessions beyond sharing STT provider contracts where useful.
-- Do not remove `/voiceclaw/realtime` or existing Talk RPC entry points during the first migration; they may reject retired fields instead of preserving every old request shape.
-- Do not allow request-time instruction overrides for realtime sessions.
-- Do not copy VoiceClaw names or request fields into shared APIs; preserve the realtime runtime capabilities through the shared Talk contract, except request-time instruction overrides.
+| Product               | User experience                                                         | Mode            |
+| --------------------- | ----------------------------------------------------------------------- | --------------- |
+| Realtime conversation | Low-latency duplex speech with interruption and provider tool calls     | `realtime`      |
+| Walkie-talkie         | Press or hold to speak, release, then hear OpenClaw answer              | `stt-tts`       |
+| Transcription         | Live captions, dictation, notes, meeting transcript, no assistant audio | `transcription` |
 
-## Current Surfaces
+All three products share session identity, join/reconnect state, turn and
+capture ids, input audio metadata, output text/audio state, transcript finality,
+tool-call correlation, cancellation, replay, provider capabilities, policy,
+auth, and observability.
 
-| Surface                  | Current shape                                                                                                                                         | Keep                                                              | Refactor target                                                                                         |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Browser Talk             | `talk.realtime.session` returns WebRTC, provider WebSocket, or Gateway relay. Tool calls go through `talk.realtime.toolCall`.                         | Browser audio capture/playback and WebRTC data-channel handling.  | Keep browser media ownership while Gateway owns realtime tool policy.                                   |
-| Native Talk              | Local STT, Gateway `chat.send`, response event or `chat.history` polling, then local or Gateway TTS.                                                  | Local STT/TTS fallback and native audio controls.                 | Event-driven success path with shared Talk events.                                                      |
-| Voice Call realtime      | Telephony WebSocket with G.711 u-law, marks, interruption, and realtime voice bridge.                                                                 | Telephony adapter ownership.                                      | Adapter over shared Talk session contract.                                                              |
-| Voice Call streaming STT | Telephony stream through realtime transcription provider, then TTS playback.                                                                          | STT/TTS pipeline mode.                                            | Explicit `stt-tts` mode adapter.                                                                        |
-| Google Meet realtime     | Meeting participant context, echo suppression, realtime provider bridge, fast context.                                                                | Meeting adapter ownership.                                        | Adapter over shared Talk session contract and metrics.                                                  |
-| VoiceClaw realtime       | Separate WebSocket endpoint with Gemini Live, direct tools, audio/video frames, interruption, cancellation, session rotation/resumption, and metrics. | Migration endpoint; realtime runtime primitives except overrides. | Shared Talk contract; server-owned instructions; no request-time override.                              |
-| TTS                      | `talk.speak` and provider TTS config.                                                                                                                 | Speech provider abstraction.                                      | Cleanly separated from realtime provider config.                                                        |
-| STT                      | Batch audio and streaming transcription providers.                                                                                                    | Provider contracts.                                               | Streaming STT is an input strategy for `stt-tts`; batch voice notes stay outside live Talk.             |
-| Walkie-talkie handoff    | Prototype pattern: existing session, phone capture, push-to-talk turn, STT, agent turn, TTS playback, and transcript mirror.                          | One-button voice handoff UX and long-form PTT.                    | Gateway-backed handoff room using shared Talk events, provider catalogs, and existing session delivery. |
+One-shot uploaded audio and one-shot TTS do not need live Talk session state
+unless they participate in live capture, turns, interruption, replay, or
+cancellation.
 
-## Core Model
+## Hard Decisions
 
-Separate the dimensions. Mode is how the conversation runs. Transport is how bytes move. Brain is who handles tools and agent reasoning. Surface is edge-owned and should not drive core branching.
+This refactor intentionally removes compatibility that would keep the design
+muddy:
+
+- remove public `talk.realtime.*` RPCs
+- remove public `talk.transcription.*` RPCs
+- remove public `talk.handoff.*` RPCs
+- remove generic `talk.session.inputAudio`, `talk.session.control`, and
+  `talk.session.toolResult`
+- remove old relay event channels
+- remove `/voiceclaw/realtime`
+- remove `src/gateway/voiceclaw-realtime/`
+- remove request-time instruction overrides
+- keep `talk.speak` as one-shot TTS, not a live session API
+- keep legacy realtime config repair in doctor, not startup
+- keep platform and product names out of core branching
+
+## Vocabulary
+
+Keep mode, transport, brain, and surface separate.
 
 ```ts
 type TalkMode = "realtime" | "stt-tts" | "transcription";
@@ -61,366 +74,426 @@ type TalkBrain = "agent-consult" | "direct-tools" | "none";
 
 ### Modes
 
-`realtime` is a provider-native live session. Audio goes in, audio comes out, interruptions and tool calls happen inside one low-latency session. OpenAI Realtime and Google Live fit here. WebRTC and provider WebSockets are transports for this mode, not separate modes.
+`realtime` means a provider owns a live voice session. Audio goes in, audio
+comes out, interruptions are possible, and provider tool calls may happen during
+one provider session.
 
-`stt-tts` is the classic pipeline: speech-to-text, agent text turn, text-to-speech. It is higher latency, but it works with local native speech, streaming STT providers, low-cost fallback providers, offline-ish native paths, and providers that do not support realtime voice.
+`stt-tts` means input speech is transcribed, OpenClaw answers as text, and TTS
+renders the answer. This is the native Talk and walkie-talkie path when a full
+duplex provider session is not the right shape.
 
-`transcription` is speech-to-text without an assistant speech response. It covers dictation, captions, meeting transcript capture, and voice-note style ingestion when the live session layer is useful. Gateway-owned transcription relay sessions use `talk.transcription.session`, `talk.transcription.relayAudio`, `talk.transcription.relayCancel`, and `talk.transcription.relayStop`. One-shot batch audio attachments can still use the existing media path without becoming Talk sessions.
+`transcription` means speech-to-text without assistant audio output. It covers
+captions, dictation, notes, meeting transcript capture, and live voice-note
+ingestion.
 
 ### Transports
 
-`webrtc` is browser or WebRTC-capable client transport using SDP and media/data channels. It is the best fit for direct OpenAI Realtime browser sessions with ephemeral credentials.
+`webrtc` is client-owned SDP/media/data-channel transport. It fits browser-owned
+OpenAI Realtime sessions with ephemeral credentials.
 
-`provider-websocket` is a constrained provider WebSocket carrying JSON control messages and PCM audio. It fits Google Live-style browser or server streams where WebRTC is not the provider contract.
+`provider-websocket` is client-owned provider JSON and audio framing. It fits
+browser-owned Google Live style sessions.
 
-`gateway-relay` keeps the vendor session on the Gateway. Clients send authenticated audio frames to Gateway and receive audio/events back. This is the secure default for providers without browser-safe tokens and for server-owned tool policy.
+`gateway-relay` means the Gateway owns the provider connection. The client sends
+authenticated audio frames to the Gateway and receives `talk.event` plus audio
+output through Gateway-managed relay state.
 
-`managed-room` is a Gateway-owned room/session where one or more clients join a managed Talk handoff. It is the primitive for first-party walkie-talkie clients: Gateway owns rendezvous, expiry, replacement, turn lifecycle events, and provider credentials while the edge client owns capture and playback.
+`managed-room` means the Gateway owns a room-like session that clients can join,
+replace, and drive with explicit turn verbs. It is the primitive for
+walkie-talkie and native handoff.
 
-Telephony, meetings, and native apps are not core transports. They are surface adapters that choose one of the transports above or implement local `stt-tts` before handing text/audio events into the shared session contract.
-
-Canonical transport names are the names above. Legacy browser-session transport names should be normalized at adapter boundaries (`webrtc-sdp` to `webrtc`, `json-pcm-websocket` to `provider-websocket`) so mixed-version clients and external providers keep working. Do not keep the legacy names as a second internal vocabulary. When a versioned creation RPC exists, freeze the old RPC shape and delete the aliases only after the announced compatibility window.
+Telephony and meetings are not core transports. They are adapters that map
+phone or meeting media into `gateway-relay`, `managed-room`, or `stt-tts` while
+keeping call and meeting lifecycle outside core.
 
 ### Brain Strategies
 
-`agent-consult` means the realtime model asks Gateway to consult an OpenClaw agent. Gateway applies tool policy, chooses fork or isolated context, runs the agent, and returns a concise result to the realtime provider.
+`agent-consult` means provider tool calls or session turns consult an OpenClaw
+agent. Gateway owns prompt construction, context selection, authorization, abort
+signals, and final result delivery.
 
-`direct-tools` means the realtime provider receives a direct OpenClaw tool declaration and calls Gateway-owned tools. This is the VoiceClaw-style brain and should require owner-level authorization.
+`direct-tools` means a trusted first-party surface can call selected OpenClaw
+tools directly through Gateway policy. Keep this privileged.
 
-`none` means the session is pure transcription, external orchestration, or client-managed speech without OpenClaw tool access.
+`none` means transcription-only, external orchestration, or no OpenClaw tool
+access.
 
-## Shared Talk Session Runtime
+## Ownership Boundaries
 
-The next cleanup layer is a shared Talk session controller. It should be the only code that owns event sequencing, active turn state, capture state, output audio state, recent event retention, and stale-turn rejection. Surface adapters may decide when to call it, but they should not each reimplement turn bookkeeping.
+Core owns generic Talk semantics:
 
-The controller contract should cover:
+- mode, transport, brain, codec, and audio descriptors
+- session records and session ownership
+- turn ids and capture ids
+- event envelope, sequencing, replay, and stale-output suppression
+- active capture state
+- active assistant output state
+- replacement and reconnect state
+- cancellation propagation
+- tool policy and tool-call correlation
+- usage, latency, and health events
 
-- `emit(...)` for session, health, usage, latency, and tool events that do not mutate turn state
-- `startTurn(...)` and `ensureTurn(...)` for capture, STT, realtime provider, telephony, and meeting adapters
-- `endTurn(...)` and `cancelTurn(...)` with stale `turnId` rejection before clearing the active turn
-- `startOutputAudio(...)`, `emitOutputAudioDelta(...)`, and `finishOutputAudio(...)` for playback, marks, relay clear, and barge-in
-- recent event retention for reconnect, diagnostics, hello/event discovery tests, and native UI replay
-- compatibility normalization for legacy transport result names at adapter boundaries
+Provider plugins own vendor behavior:
 
-The public API migration is adapter-first. Keep existing RPCs such as `talk.realtime.session`, `talk.realtime.relayAudio`, `talk.transcription.session`, `talk.transcription.relayAudio`, and `talk.handoff.*` while moving their internals onto the shared controller. Gateway-managed sessions expose the common model directly:
+- OpenAI Realtime SDP and data-channel details
+- Google Live WebSocket framing
+- streaming STT provider details
+- TTS provider details
+- provider auth, model, voice, codec, and resume quirks
+- provider capability declarations
+
+Surface adapters own IO and product quirks:
+
+- browser capture and playback
+- native audio sessions, local speech engines, and foreground Talk UX
+- node command dispatch
+- telephony media streams, marks, clear events, u-law, and call lifecycle
+- meeting join/leave, participants, echo suppression, and authorization
+
+Core may store optional surface metadata for diagnostics. Core must not branch
+on browser, iOS, Android, macOS, Google Meet, Voice Call, or any retired product
+name.
+
+## Final Gateway API
+
+The public Gateway surface is deliberately small:
 
 ```ts
+// Discovery and configuration.
+talk.catalog;
+talk.config;
+
+// One-shot speech output.
+talk.speak;
+
+// Client-owned provider sessions.
+talk.client.create;
+talk.client.toolCall;
+
+// Gateway-owned live sessions.
 talk.session.create;
-talk.session.inputAudio;
-talk.session.control;
-talk.session.toolResult;
+talk.session.join;
+talk.session.appendAudio;
+talk.session.startTurn;
+talk.session.endTurn;
+talk.session.cancelTurn;
+talk.session.cancelOutput;
+talk.session.submitToolResult;
 talk.session.close;
+
+// Events and foreground node mode.
+talk.event;
+talk.mode;
 ```
 
-The old RPCs stay as compatibility adapters while new clients use `talk.session.*` for gateway-relay realtime, gateway-relay transcription, and managed-room native STT/TTS sessions. Browser-owned WebRTC/provider-websocket sessions remain on `talk.realtime.session` because the browser owns provider negotiation and media transport there. The internal controller must be provider-agnostic and platform-agnostic: provider plugins own vendor sessions, voice-call owns telephony, Google Meet owns meeting details, and browser/native clients own capture and playback UX.
+Use `talk.client.*` when the client owns provider media transport. Use
+`talk.session.*` when the Gateway owns live session state.
 
-## VoiceClaw Runtime Scope
+`talk.mode` is the existing foreground node mode broadcast. It can stay, but it
+is not part of the Talk session control API.
 
-VoiceClaw is an adapter target, not a feature template for the unified runtime. We do not need every VoiceClaw product or API feature. We do want the useful realtime runtime primitives: live provider sessions, audio and optional video frames, interruption, cancellation, session lifecycle, rotation/resumption, metrics, latency reporting, and direct tools when explicitly authorized. Those should arrive as shared Talk primitives instead of VoiceClaw-only knobs.
+### Supported Creation Matrix
 
-The deliberate feature removal is request-time instruction override. Unified Talk instructions must be server-owned. If a capability depends on provider support, owner-scoped auth, or the selected brain strategy, the adapter should gate it through shared Talk capability metadata rather than deleting it. Do not preserve `instructionsOverride`; it is intentionally outside the unified Talk contract. Everything else in the existing realtime runtime is presumed in scope unless a later implementation review proves that it is dead, unsafe, or impossible to express as a shared Talk primitive.
+| Method                | Mode            | Transport            | Brain           | Owner   |
+| --------------------- | --------------- | -------------------- | --------------- | ------- |
+| `talk.client.create`  | `realtime`      | `webrtc`             | `agent-consult` | client  |
+| `talk.client.create`  | `realtime`      | `provider-websocket` | `agent-consult` | client  |
+| `talk.session.create` | `realtime`      | `gateway-relay`      | `agent-consult` | Gateway |
+| `talk.session.create` | `transcription` | `gateway-relay`      | `none`          | Gateway |
+| `talk.session.create` | `stt-tts`       | `managed-room`       | `agent-consult` | Gateway |
+| `talk.session.create` | `stt-tts`       | `managed-room`       | `direct-tools`  | Gateway |
 
-Keep:
+Reject combinations that blur ownership. `talk.client.create` must reject
+Gateway-owned transports. `talk.session.create` must reject client-owned
+transports.
 
-- `/voiceclaw/realtime` endpoint shape during migration
-- existing auth expectations where they remain owner-scoped
-- Gemini Live provider bridge
-- audio input and output frames
-- video frames when the selected provider supports them
-- interruption and response cancellation
-- session rotation and resumption where the provider supports them
-- metrics and latency reporting
-- direct tool calls behind the explicit `direct-tools` brain
+## Removed API
 
-Do not keep:
+Remove these names from handlers, method lists, scopes, protocol schemas,
+generated clients, broadcast guards, tests, and docs except explicit migration
+tables:
 
-- request-time `instructionsOverride`
-- VoiceClaw-only request fields that duplicate server-owned instructions, tool policy, provider selection, or session policy
-- VoiceClaw-specific configuration names in new shared Talk APIs
+| Removed                         | Replacement                                              |
+| ------------------------------- | -------------------------------------------------------- |
+| `talk.realtime.session`         | `talk.client.create`                                     |
+| `talk.realtime.toolCall`        | `talk.client.toolCall`                                   |
+| `talk.realtime.relayAudio`      | `talk.session.appendAudio`                               |
+| `talk.realtime.relayCancel`     | `talk.session.cancelOutput` or `talk.session.cancelTurn` |
+| `talk.realtime.relayMark`       | internal relay output state                              |
+| `talk.realtime.relayToolResult` | `talk.session.submitToolResult`                          |
+| `talk.realtime.relayClose`      | `talk.session.close`                                     |
+| `talk.realtime.relay`           | `talk.event`                                             |
+| `talk.transcription.session`    | `talk.session.create({ mode: "transcription" })`         |
+| `talk.transcription.audio`      | `talk.session.appendAudio`                               |
+| `talk.transcription.cancel`     | `talk.session.cancelTurn`                                |
+| `talk.transcription.close`      | `talk.session.close`                                     |
+| `talk.transcription.relay`      | `talk.event`                                             |
+| `talk.handoff.create`           | `talk.session.create({ transport: "managed-room" })`     |
+| `talk.handoff.join`             | `talk.session.join`                                      |
+| `talk.handoff.revoke`           | `talk.session.close`                                     |
+| `talk.session.inputAudio`       | `talk.session.appendAudio`                               |
+| `talk.session.control`          | explicit turn/output verbs                               |
+| `talk.session.toolResult`       | `talk.session.submitToolResult`                          |
 
-Realtime instruction policy must come from server-side config, agent identity, selected brain strategy, or another owner-controlled policy surface. If a client sends `instructionsOverride`, the compatibility adapter should reject the request rather than silently applying, partially honoring, or translating it. Everything in the Keep list remains in scope and should migrate onto shared Talk primitives.
+Delete this endpoint:
 
-Compatibility here means "old entry point can route to the new runtime," not "old clients can keep every old knob forever." `/voiceclaw/realtime` should be allowed to return a clear unsupported-field error for retired request fields, especially `instructionsOverride`, while preserving the runtime behavior that still belongs in Talk.
-
-## Event Vocabulary
-
-All Talk sessions should emit a common event stream:
-
-- `session.started`, `session.ready`, `session.replaced`, `session.closed`, `session.error`
-- `turn.started`, `turn.ended`, `turn.cancelled`
-- `capture.started`, `capture.stopped`, `capture.cancelled`, `capture.once`
-- `input.audio.delta`, `input.audio.committed`
-- `transcript.delta`, `transcript.done`
-- `output.text.delta`, `output.text.done`
-- `output.audio.started`, `output.audio.delta`, `output.audio.done`
-- `tool.call`, `tool.progress`, `tool.result`, `tool.error`
-- `usage.metrics`
-- `latency.metrics`
-- `health.changed`
-
-Adapters may add vendor or surface metadata, but the common event names should be enough for UI, native clients, logs, tests, and metrics.
-
-Every common event must use the same envelope:
-
-```ts
-type TalkEvent<TPayload = unknown> = {
-  id: string;
-  type: TalkEventType;
-  sessionId: string;
-  turnId?: string;
-  captureId?: string;
-  seq: number;
-  timestamp: string;
-  mode: TalkMode;
-  transport: TalkTransport;
-  brain: TalkBrain;
-  provider?: string;
-  final?: boolean;
-  callId?: string;
-  itemId?: string;
-  parentId?: string;
-  payload: TPayload;
-};
+```text
+/voiceclaw/realtime
 ```
 
-`sessionId` is required for every event. `turnId` is required for every event tied to one user/assistant turn. `captureId` is required while push-to-talk capture is active. `seq` is monotonically increasing within a session. `callId`, `itemId`, and `parentId` correlate provider tool calls, realtime response items, TTS jobs, and relay frames. Replay, stale-output suppression, metrics, and tests should rely on these envelope fields rather than vendor-specific payload shapes.
+Delete this folder:
 
-Walkie-talkie clients need one extra timing rule: text-ready is not audio-ready. A client may show transcript text after `output.text.done`, but it should not transition from "thinking" to "speaking" until `output.audio.delta` or an explicit `output.audio.started` event arrives. That keeps hold music, waveform, replay, and barge-in UX honest when the agent turn finishes before TTS is ready.
-
-## Walkie-Talkie App Primitives
-
-The app should be buildable from the same primitives, not a parallel voice stack.
-
-### Session Handoff
-
-Voice handoff starts from an existing OpenClaw session. The handoff primitive should carry:
-
-- canonical session id
-- optional session key for human-readable thread lookup
-- delivery route, such as channel and target
-- caller identity and scope
-- selected `TalkMode`, `TalkTransport`, and `TalkBrain`
-- optional session-scoped provider, model, and voice ids
-- expiration, revocation, and replacement policy
-
-The existing Gateway session APIs and `chat.send`/agent delivery paths already cover the canonical conversation side. First-class Talk handoff RPCs provide the rendezvous primitive: `talk.handoff.create` returns an ephemeral room token or join URL, `talk.handoff.join` validates the later voice join without exposing stored token hashes, `talk.handoff.turnStart`/`turnEnd`/`turnCancel` drive the room turn lifecycle, and `talk.handoff.revoke` invalidates stale or replaced handoffs.
-
-### Room and Rendezvous
-
-The room model must allow one device or browser client to host multiple active voice handoffs for different sessions without cross-talk. A deterministic room key is fine for local or development flows, but the product path should prefer Gateway-owned room creation with caller auth, expiry, and revoke semantics.
-
-The minimum room events are:
-
-- `session.ready`
-- `session.replaced`
-- `turn.started`
-- `turn.ended`
-- `turn.cancelled`
-- `session.closed`
-- `session.error`
-
-`managed-room` is public only through handoff clients. Browser `talk.realtime.session` should keep rejecting `managed-room` until the browser owns a real room client instead of treating it as a browser-session result shape.
-
-### Push-To-Talk
-
-Push-to-talk is a turn-control primitive, not a platform primitive. It should map to browser capture, native local capture, or node commands:
-
-- `capture.started`
-- `capture.stopped`
-- `capture.cancelled`
-- `capture.once`
-
-Native node support has `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` command handlers. The Gateway policy treats them as first-class defaults only for trusted Talk-capable nodes: a node must advertise the `talk` capability or declare `talk.*` command support, and the command must still be present in the paired command snapshot.
-
-### Provider Catalogs and Settings
-
-Walkie-talkie settings should be per session or per device. The client should request STT, TTS, and realtime catalogs through Gateway, store only provider ids, model ids, voice ids, and locales, and never receive provider API keys or mutate global Talk provider defaults as a side effect of opening the app.
-
-The catalog contract should describe which combinations are valid:
-
-- local STT plus local TTS
-- streaming STT plus provider TTS
-- realtime provider with provider-native output audio
-- Gateway relay when browser-safe credentials are not available
-- managed room when the Gateway owns the session
-
-### Canonical Transcript
-
-The OpenClaw session is the source of truth. A walkie-talkie app may keep a local transcript cache for replay, export, reconnect, or offline UX, but the agent turn and durable transcript should go through the existing session delivery route. Transcript mirroring should be best effort and must not block the voice turn.
-
-### Connectivity and Backgrounding
-
-Native apps can use node pairing, `node.invoke`, and platform wake mechanisms when available. Browser or standalone web clients need either Gateway relay, a managed room, or hosted WebRTC signaling with ICE/TURN. Background continuous audio remains platform-limited; the product should promise foreground push-to-talk first and treat background capture as best effort.
-
-### Cancellation and Replacement
-
-Every turn should carry a turn token or capture id. Stale STT finals, stale agent replies, and stale TTS output must be ignored after `turn.cancelled` or `session.replaced`. This is required for "tap again to interrupt", reconnect replacement, and multi-session isolation.
-
-Cancellation must also abort underlying work, not only hide stale output. A cancelled or replaced turn must:
-
-- cancel provider responses or realtime sessions when the provider supports it
-- abort agent consult and tool runtime work through an `AbortSignal`
-- prevent newly queued side-effecting tools from starting after cancellation
-- let already-started side-effecting tools report cancellation status instead of inventing success
-- drain pending TTS jobs and stop audio playback/relay writes
-- close or reset relay and managed-room streams tied to the stale turn
-- emit one terminal cancellation event with the final abort reason
-
-## Config Direction
-
-The current public Talk config is speech-provider oriented. Keep it as the speech config and add realtime config beside it. Do not introduce a second `talk.speech` namespace during this refactor.
-
-```ts
-type TalkConfig = {
-  provider?: string;
-  providers?: Record<string, unknown>;
-  realtime?: {
-    provider?: string;
-    model?: string;
-    voice?: string;
-    mode?: TalkMode;
-    transport?: TalkTransport;
-    brain?: TalkBrain;
-  };
-  input?: {
-    interruptOnSpeech?: boolean;
-    silenceTimeoutMs?: number;
-  };
-};
+```text
+src/gateway/voiceclaw-realtime/
 ```
 
-Rule: `talk.provider` and `talk.providers.*` continue to mean speech, STT, and TTS provider configuration. Realtime provider selection uses `talk.realtime.provider`, then registered realtime capabilities. Voice Call fallback inference should be deleted once the realtime config exists in schema, docs, forms, and doctor repair.
+Do not leave a compatibility namespace around retired code.
 
-## Provider Contracts
+## Target Source Layout
 
-Provider plugins should declare capabilities, not force core to infer behavior from ids:
+Shared runtime:
 
-```ts
-type RealtimeVoiceProviderCapabilities = {
-  transports: TalkTransport[];
-  inputAudioFormats: AudioFormat[];
-  outputAudioFormats: AudioFormat[];
-  supportsBrowserSession?: boolean;
-  supportsBargeIn?: boolean;
-  supportsToolCalls?: boolean;
-  supportsVideoFrames?: boolean;
-  supportsSessionResumption?: boolean;
-};
+```text
+src/talk/
+  audio-codec.ts
+  agent-consult-runtime.ts
+  agent-consult-tool.ts
+  agent-talkback-runtime.ts
+  fast-context-runtime.ts
+  provider-registry.ts
+  provider-resolver.ts
+  provider-types.ts
+  session-log-runtime.ts
+  session-runtime.ts
+  talk-events.ts
+  talk-session-controller.ts
 ```
 
-OpenAI owns OpenAI Realtime details. Google owns Gemini Live details, continuation, compression, and session resumption. STT plugins own streaming transcription. TTS plugins own synthesis and telephony-compatible output formats.
+Gateway adapters:
 
-## Gateway Policy Boundary
+```text
+src/gateway/server-methods/
+  talk.ts          # catalog, config, speak, mode, composition
+  talk-client.ts   # client-owned provider sessions
+  talk-session.ts  # Gateway-owned live sessions
+```
 
-Browser realtime should not run agent consult by calling `chat.send` directly. The browser may own the media connection when a provider requires it, but Gateway should own the consult/tool policy.
+Gateway relay helpers can exist while the code moves, but the long-term shape
+is that relay, transcription, and handoff state use `src/talk` primitives
+instead of each reimplementing turns and events.
 
-Target flow for browser-owned provider sessions:
+Public SDK:
 
-1. Provider emits a tool call to the browser.
-2. Browser forwards the structured tool call to Gateway with the session id.
-3. Gateway validates the session, caller, tool policy, brain strategy, and owner permissions.
-4. Gateway runs `agent-consult`, `direct-tools`, or rejects the call.
-5. Browser submits the provider-specific tool result back to the provider.
+```text
+src/plugin-sdk/realtime-voice.ts
+```
 
-Target flow for Gateway-owned sessions:
+Keep this SDK subpath as the stable plugin import facade. It may re-export
+Talk runtime contracts, but plugin authors should not import core file layout.
 
-1. Provider emits a tool call to Gateway.
-2. Gateway runs policy and tool handling directly.
-3. Client only receives status, transcript, audio, and visible tool progress events.
+## Event Contract
 
-## Surface Adapters
+All live paths emit `talk.event` with the envelope defined in
+[Talk API and runtime contract](/refactor/talk-api-contract). The required
+shape is: `id`, `type`, `sessionId`, `seq`, `timestamp`, `mode`, `transport`,
+`brain`, and `payload`, with `turnId`, `captureId`, `callId`, `itemId`, and
+`parentId` when the event is tied to turn, capture, provider item, tool call, or
+TTS output.
 
-Adapters convert surface-specific IO into the shared model.
+Core event families are `session.*`, `turn.*`, `capture.*`, `input.audio.*`,
+`transcript.*`, `output.text.*`, `output.audio.*`, `tool.*`, `usage.metrics`,
+`latency.metrics`, and `health.changed`. Payloads must not duplicate large raw
+audio frames when the transport already carries them. Text-ready is not
+audio-ready; clients enter playback state only on audio events.
 
-Browser adapter handles microphone capture, playback, WebRTC SDP, data channels, provider WebSocket framing, relay RPCs, and provider-specific tool result submission.
+## Cancellation Contract
 
-Native adapter handles local STT/TTS, push-to-talk, continuous listening, local interruption, audio session lifecycles, and optional Gateway realtime or managed-room clients. Core sees capabilities such as PCM input support, local TTS fallback, and barge-in support, not platform names.
+Cancellation must abort underlying work, not only ignore stale output.
 
-Telephony adapter handles Twilio or Plivo media streams, G.711 u-law, stream ids, marks, clear events, backpressure, call lifecycle, and phone-specific interruption behavior.
+When a turn or session is cancelled:
 
-Meeting adapter handles room lifecycle, participant context, echo suppression, meeting transcript context, and meeting-specific authorization.
+- provider realtime response is cancelled when supported
+- provider session is closed or reset when cancellation cannot be scoped
+- streaming STT receives abort
+- agent consult receives abort
+- queued tools do not start after abort
+- already-started side-effecting tools receive abort and report cancellation
+- pending TTS jobs are drained
+- playback sources are stopped
+- relay streams are cleared
+- managed-room capture and output state reset
+- stale finals and stale audio deltas are ignored
+- one terminal cancellation event is emitted
 
-VoiceClaw adapter handles `/voiceclaw/realtime`, auth expectations that remain owner-scoped, Gemini Live compatibility, audio/video frames, interruption, response cancellation, session rotation/resumption, metrics, latency reporting, and the `direct-tools` brain while using common Talk events internally. It must reject request-time `instructionsOverride` and must not introduce VoiceClaw-only policy fields into the shared Talk API.
+Barge-in requires real speech: provider speech-started, local VAD, or an
+adapter-owned speech detector. Silence, echo, or microphone buffers alone must
+not cancel assistant output.
 
-## Migration Phases
+## Config Contract
 
-### Phase 1: Contracts
+Config stays under `talk`; do not add `talk.speech`. `talk.provider` and
+`talk.providers.*` remain speech/STT/TTS provider config. Realtime selectors
+live under `talk.realtime.provider`, `talk.realtime.providers.*`, `model`,
+`voice`, `mode`, `transport`, and `brain`.
 
-- Add shared Talk mode, transport, brain, capabilities, command, and event types.
-- Add a config resolver that preserves legacy `talk.provider`.
-- Keep existing `RealtimeVoiceProvider` APIs while introducing capability metadata.
-- Add handoff, room, capture, provider catalog, cancellation, and replacement event contracts.
-- Make `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, and `talk.ptt.once` explicit safe commands for Talk-capable nodes.
-- Add protocol tests for no request-time instruction override.
+`talk.config` returns effective config without secrets unless privileged.
+`talk.catalog` returns provider capabilities, not inferred provider-id guesses.
+Doctor migrates old realtime placement into `talk.realtime`; runtime startup
+does not reinterpret Voice Call, STT, or TTS config as realtime config.
 
-### Phase 2: Gateway Tool Policy
+## Surface Mapping
 
-- Add Gateway RPC for realtime tool calls from browser-owned provider sessions.
-- Add Gateway RPCs for `talk.handoff.create`, `talk.handoff.join`, `talk.handoff.revoke`, and explicit handoff turn start/end/cancel, with session identity, expiry, revocation, join authorization, and event replay.
-- Add session-scoped STT, TTS, and realtime provider catalog RPCs.
-- Keep browser `openclaw_agent_consult` handling on `talk.realtime.toolCall`, not browser-side `chat.send`.
-- Reuse existing agent consult runtime and tool allow policy.
-- Add owner-only gate for `direct-tools`.
+| Surface                         | Talk mapping                                                                                          |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Browser WebRTC                  | `talk.client.create`, client-owned provider media, `talk.client.toolCall` for provider tool calls     |
+| Browser provider WebSocket      | `talk.client.create`, browser-owned provider framing, Gateway-owned credentials and policy            |
+| Browser Gateway relay           | `talk.session.create`, `appendAudio`, `submitToolResult`, `cancelOutput`, `close`, and `talk.event`   |
+| Native push-to-talk             | `stt-tts` plus `managed-room`; press/startTurn, release/endTurn, cancel/cancelTurn                    |
+| Walkie-talkie                   | managed-room join/replacement plus shared turn/output events                                          |
+| Voice Call                      | telephony adapter over Talk events; call ids, stream ids, u-law, marks, clear events stay plugin side |
+| Google Meet and future meetings | meeting adapter over Talk events; participant state, permissions, mute, and echo suppression stay out |
 
-### Phase 3: Browser Runtime
+See [Talk surface mapping](/refactor/talk-surfaces) for the adapter-level
+rules.
 
-- Normalize browser WebRTC, provider WebSocket, and relay adapters behind common Talk events.
-- Keep `managed-room` scoped to handoff clients until the browser has a real room client.
-- Add a walkie-talkie browser client path over Gateway relay or managed room.
-- Keep provider credentials on Gateway; browser receives only ephemeral room/session credentials.
-- Add browser tests proving realtime consult does not call `chat.send`.
+## Detailed Refactor Phases
 
-### Phase 4: Native Runtime
+### Phase 1: Protocol Is The Source Of Truth
 
-- Make native Talk consume response events in the success path.
-- Remove normal-path `chat.history` polling and keep history polling only as a degraded fallback if needed.
-- Preserve local STT and local TTS fallback.
-- Route native push-to-talk through the shared capture and turn events.
-- Verify node command policy allows `talk.ptt.*` for trusted Talk-capable native nodes.
-- Align native emitted state with common Talk events.
+- define final `talk.client.*`, `talk.session.*`, `talk.event`, `talk.catalog`, `talk.config`, `talk.speak`, and `talk.mode`
+- delete removed RPCs from method lists and generated metadata
+- delete removed event channels from hello feature advertising
+- classify every final method in `METHOD_SCOPE_GROUPS`
+- regenerate TypeScript and Swift protocol clients
+- add protocol tests proving removed names are absent
 
-### Phase 5: VoiceClaw Runtime
+Exit criteria: generated clients expose only the final public Talk API.
 
-- Rebase `/voiceclaw/realtime` onto the shared Talk session runtime.
-- Keep the endpoint as a thin migration adapter and preserve auth expectations only where they map cleanly to the shared Talk contract.
-- Remove request-time `instructionsOverride`; owner policy must come from server-side config, agent identity, or the selected brain strategy.
-- Map Gemini Live metrics, latency reporting, rotation, resumption, interruption, cancellation, audio, video, and tool events into the common event stream.
-- Keep `direct-tools` separate from `agent-consult`.
-- Do not add VoiceClaw-specific config names, override fields, or client policy knobs to new Talk contracts.
+### Phase 2: Shared Runtime Becomes `src/talk`
 
-### Phase 6: Voice Call and Meetings
+- move provider-agnostic realtime voice modules into `src/talk`
+- keep the plugin SDK facade at `openclaw/plugin-sdk/realtime-voice`
+- rename logs and tests from realtime-voice wording to Talk wording where that improves clarity
+- centralize event sequencing, active turn state, capture state, output state, stale-turn rejection, and replay history
+- keep provider adapters out of this folder
 
-- Convert Voice Call realtime into a telephony adapter over shared Talk sessions.
-- Convert Voice Call streaming STT into explicit `stt-tts`.
-- Convert Google Meet realtime into a meeting adapter over shared Talk sessions.
-- Keep telephony marks, u-law, backpressure, participant context, and echo suppression in their owning adapters.
+Exit criteria: core and bundled surfaces import shared semantics from `src/talk`
+or the SDK facade, not from surface-local helpers.
 
-### Phase 7: Docs and Cleanup
+### Phase 3: Gateway Method Split
 
-- Update [Talk mode](/nodes/talk), [Control UI](/web/control-ui), [Gateway protocol](/gateway/protocol), [Media overview](/tools/media-overview), [Text-to-speech](/tools/tts), and plugin SDK docs.
-- Retire duplicate event names after compatibility windows.
-- Remove browser-side consult-through-chat code after all supported providers use Gateway tool policy.
+- make `talk.ts` a composition point for catalog, config, speak, mode, client, and session handlers
+- put client-owned provider session methods in `talk-client.ts`
+- put Gateway-owned session methods in `talk-session.ts`
+- make relay, transcription, and managed-room handlers thin adapters over shared runtime primitives
+- route session replacement notifications to the displaced connection
+- reject stale turn completion before mutating active room state
 
-## Test Matrix
+Exit criteria: public RPC handlers read like API adapters, not separate Talk
+implementations.
 
-- WebRTC plus `agent-consult`.
-- Provider WebSocket plus `agent-consult`.
-- Gateway relay plus `agent-consult`.
-- Public clients updated to canonical transport names, or a versioned RPC proves old result names stay isolated until deletion.
-- VoiceClaw compatibility plus `direct-tools`, without request-time `instructionsOverride`.
-- Telephony WebSocket with marks, clear, interruption, and u-law.
-- Meeting adapter with participant context and echo suppression.
-- Native `stt-tts` with no `chat.history` polling in the normal success path.
-- Transcription-only Gateway relay session with partial/final transcript Talk events and no assistant brain.
-- TTS-only `talk.speak`.
-- Walkie-talkie handoff from an existing session into a voice room.
-- Two simultaneous walkie-talkie handoffs for the same host but different sessions with no transcript, audio, or turn-token cross-talk.
-- Push-to-talk start, stop, cancel, and once through `node.invoke` on a trusted talk-capable node.
-- Text-ready before TTS-ready, proving the client does not enter playback until audio starts.
-- Session-scoped provider catalog selection that does not mutate global Talk config.
-- Cancellation aborts provider work, agent consult, queued tools, TTS, and relay/room streams.
-- Security checks for no instruction override, no browser standard API keys, owner-only direct tools, and session-scoped tool calls.
+### Phase 4: Browser UI Uses The Final API
 
-## End State
+- update WebRTC and provider WebSocket startup to `talk.client.create`
+- update browser provider tool calls to `talk.client.toolCall`
+- update Gateway relay startup to `talk.session.create`
+- update relay audio to `talk.session.appendAudio`
+- update relay tool result submission to `talk.session.submitToolResult`
+- update relay close to `talk.session.close`
+- listen only to `talk.event`
+- handle aborted consult runs immediately instead of timing out
+- gate relay barge-in on speech or VAD
 
-OpenClaw has one Talk architecture with three execution modes, four core transports, explicit brain strategies, provider-owned vendor logic, Gateway-owned tool policy, and adapters for browser, native, telephony, meetings, and VoiceClaw compatibility. Users get better Talk mode. Maintainers get one place to reason about sessions, events, policy, metrics, and tests.
+Exit criteria: UI tests contain no calls to removed Talk RPC names.
+
+### Phase 5: Native And Nodes Become Event-Driven
+
+- map native push-to-talk into managed-room sessions
+- start, end, cancel, and replace turns through explicit session verbs
+- clean capture state when push-to-talk start fails
+- keep local STT and TTS as native adapter behavior
+- remove chat-history polling from the success path
+- keep fallback polling only if there is an explicit degraded-mode test
+
+Exit criteria: native Talk success path is driven by `talk.event`, not hidden
+chat side effects.
+
+### Phase 6: Telephony And Meetings Become Adapters
+
+- map Voice Call realtime and streaming STT into Talk event/cancellation semantics
+- create or guard a turn before early speech cancellation events
+- keep telephony codec, marks, clear events, and call lifecycle outside core
+- map Google Meet transcript and assistant output into `talk.event`
+- keep participant and echo-suppression behavior in the meeting adapter
+- pass abort signals into agent consult and tool runtime
+
+Exit criteria: Voice Call and meetings share event and cancellation semantics
+without introducing telephony or meeting branches in core.
+
+### Phase 7: Config And Doctor Cleanup
+
+- keep `talk.provider` and `talk.providers.*` as speech/STT/TTS config
+- keep realtime voice selectors under `talk.realtime`
+- make `talk.config` return only resolved effective provider data
+- repair legacy realtime placement in doctor
+- document that runtime startup does not guess or rewrite config
+- update SDK migration, Gateway protocol, Talk node, Control UI, and TTS docs
+
+Exit criteria: no second speech namespace, no startup migrations, and no
+ambiguous active provider in `talk.config`.
+
+### Phase 8: Delete The Retired Stack
+
+- remove `/voiceclaw/realtime`
+- delete `src/gateway/voiceclaw-realtime/`
+- remove request-time `instructionsOverride`
+- remove old RPC handlers, scopes, broadcast guards, protocol schemas, generated clients, docs, and UI calls
+- keep old names only in explicit migration tables and negative tests
+
+Exit criteria: repository search finds removed public names only in migration
+notes or tests that assert absence.
+
+## Test And Verification Plan
+
+The full matrix lives in
+[Talk refactor execution checklist](/refactor/talk-execution). The required
+proof areas are:
+
+- protocol and generated clients expose only the final Talk API
+- Gateway tests cover every `talk.client.*` and `talk.session.*` method
+- UI tests prove browser WebRTC, provider WebSocket, and relay paths use the final API
+- native tests prove managed-room push-to-talk cleanup, replacement, and event flow
+- Voice Call and meeting tests prove early speech, barge-in, output state, and cancellation behavior
+- config tests prove `talk.config` reports only resolved effective provider data
+- architecture searches prove removed RPCs, events, endpoint, folder, and instruction override stay gone
+- docs, protocol generation, SDK API checks, Android tests, build, and `pnpm check:changed` pass before push
+
+## Definition Of Done
+
+The refactor is complete when:
+
+- final API is the only advertised public API
+- removed RPCs are gone from handlers, scopes, method lists, schemas, generated clients, docs, and UI
+- removed event channels are gone
+- retired realtime HTTP endpoint is gone
+- retired realtime folder is gone
+- browser Talk works through `talk.client.*` or `talk.session.*`
+- native Talk works through session events
+- streaming STT works through `talk.session.*`
+- TTS one-shot remains `talk.speak`
+- walkie-talkie works through managed-room sessions
+- Voice Call and meetings use shared events and cancellation semantics
+- cancellation aborts underlying work
+- event envelopes are consistent
+- config migration is handled by doctor
+- tests prove the deleted API cannot accidentally return
+
+Supporting details:
+
+- [Talk API and runtime contract](/refactor/talk-api-contract)
+- [Talk surface mapping](/refactor/talk-surfaces)
+- [Talk refactor execution checklist](/refactor/talk-execution)
+
+The end state: one Talk system, a small public API, provider-owned vendor
+logic, surface-owned IO, and a Gateway core that owns policy, events, sessions,
+turns, cancellation, and observability.

@@ -9,8 +9,8 @@ title: "Talk mode"
 Talk mode has two runtime shapes:
 
 - Native macOS/iOS/Android Talk uses local speech recognition, Gateway chat, and `talk.speak` TTS. Nodes advertise the `talk` capability and declare the `talk.*` commands they support.
-- Browser Talk uses `talk.realtime.session` with canonical transports: `webrtc`, `provider-websocket`, or `gateway-relay`. `managed-room` is reserved for Gateway handoff rooms.
-- Transcription-only clients use `talk.transcription.session` plus `talk.transcription.relayAudio`, `talk.transcription.relayCancel`, and `talk.transcription.relayStop` when they need captions or dictation without an assistant voice response.
+- Browser Talk uses `talk.client.create` for client-owned `webrtc` and `provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
+- Transcription-only clients use `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` when they need captions or dictation without an assistant voice response.
 
 Native Talk is a continuous voice conversation loop:
 
@@ -19,7 +19,7 @@ Native Talk is a continuous voice conversation loop:
 3. Wait for the response
 4. Speak it via the configured Talk provider (`talk.speak`)
 
-Browser realtime Talk forwards provider tool calls through `talk.realtime.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
+Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
 
 Transcription-only Talk emits the same common Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. It is for captions, dictation, and observe-only speech capture; one-shot uploaded voice notes still use the media/audio path.
 
@@ -132,8 +132,8 @@ Defaults:
 
 - Requires Speech + Microphone permissions.
 - Native Talk uses the active Gateway session and only falls back to history polling when response events are unavailable.
-- Browser realtime Talk uses `talk.realtime.toolCall` for `openclaw_agent_consult` instead of exposing `chat.send` to provider-owned browser sessions.
-- Transcription-only Talk uses `talk.transcription.session`, `talk.transcription.relayAudio`, `talk.transcription.relayCancel`, and `talk.transcription.relayStop`; clients subscribe to `talk.transcription.relay` events for partial/final transcript updates.
+- Browser realtime Talk uses `talk.client.toolCall` for `openclaw_agent_consult` instead of exposing `chat.send` to provider-owned browser sessions.
+- Transcription-only Talk uses `talk.session.create`, `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close`; clients subscribe to `talk.event` for partial/final transcript updates.
 - The gateway resolves Talk playback through `talk.speak` using the active Talk provider. Android falls back to local system TTS only when that RPC is unavailable.
 - macOS local MLX playback uses the bundled `openclaw-mlx-tts` helper when present, or an executable on `PATH`. Set `OPENCLAW_MLX_TTS_BIN` to point at a custom helper binary during development.
 - `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
