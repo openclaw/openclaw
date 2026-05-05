@@ -151,9 +151,11 @@ export function buildBootstrapInjectionStats(params: {
       injectedByBaseName.get(file.name);
     const injectedChars = injected ? injected.length : 0;
     const truncated = !file.missing && injectedChars < rawChars;
+    const name =
+      file.name || path.posix.basename(pathValue.replace(/\\/g, "/")) || "(virtual file)";
     return {
-      name: file.name,
-      path: pathValue || file.name,
+      name,
+      path: pathValue || name,
       missing: file.missing,
       rawChars,
       injectedChars,
