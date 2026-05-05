@@ -822,14 +822,6 @@ export async function runMantisSlackDesktopSmoke(
   let remoteMetadata: SlackDesktopRemoteMetadata | undefined;
 
   try {
-    const preparedCredentialEnv = await prepareGatewayCredentialEnv({
-      credentialRole,
-      credentialSource,
-      env,
-      gatewaySetup,
-    });
-    credentialLease = preparedCredentialEnv.credentialLease;
-    leaseHeartbeat = preparedCredentialEnv.leaseHeartbeat;
     leaseId =
       leaseId ??
       (await warmupCrabbox({
@@ -850,6 +842,14 @@ export async function runMantisSlackDesktopSmoke(
       provider,
       runner,
     });
+    const preparedCredentialEnv = await prepareGatewayCredentialEnv({
+      credentialRole,
+      credentialSource,
+      env,
+      gatewaySetup,
+    });
+    credentialLease = preparedCredentialEnv.credentialLease;
+    leaseHeartbeat = preparedCredentialEnv.leaseHeartbeat;
     let remoteRunError: unknown;
     await runCommand({
       command: crabboxBin,
@@ -989,7 +989,7 @@ export async function runMantisSlackDesktopSmoke(
       await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
       await fs.writeFile(reportPath, renderReport(summary), "utf8");
     }
-    if (summary?.status === "pass" && createdLease && leaseId && !keepLease) {
+    if (createdLease && leaseId && !keepLease) {
       await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
     }
     if (leaseHeartbeat) {
