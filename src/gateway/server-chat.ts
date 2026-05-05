@@ -181,7 +181,7 @@ export function createAgentEventHandler({
   const triggerAutoTitleAfterRunEnd = async (sessionKey: string) => {
     try {
       const entry = loadSessionEntry(sessionKey);
-      if (!entry.entry || !entry.storePath || !entry.entry.sessionId) return;
+      if (!entry.entry || !entry.storePath || !entry.entry.sessionId) { return; }
       const cfg = await getRuntimeConfig();
       const titleConfig = resolveSessionTitleConfig(cfg?.agents?.defaults?.sessionTitle);
       await triggerAutoTitleGeneration({

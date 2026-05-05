@@ -202,13 +202,13 @@ function resolveTitleProviderConfig(
   }
 
   // Final fallback: env vars only
-  const baseUrl = process.env.OPENAI_BASE_URL;
-  const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
-  if (!baseUrl) {
+  const envBaseUrl = process.env.OPENAI_BASE_URL;
+  if (!envBaseUrl) {
     return null;
   }
-  return { baseUrl: baseUrl, apiKey, model };
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
+  return { baseUrl: envBaseUrl, apiKey, model };
 }
 
 /**
@@ -304,16 +304,19 @@ export async function triggerAutoTitleGeneration(params: {
   }
 
   const aiTitle = await generateAiTitleWithFetch(conversation, config.maxChars, providerConfig);
-  if (!aiTitle?.trim()) {
+  if (!aiTitle || !aiTitle.trim()) {
     return;
   }
 
   // Persist the aiTitle to the session entry
+  if (!storePath) {
+    return;
+  }
   try {
     await updateSessionStoreEntry({
       storePath,
       sessionKey,
-      update: async () => ({ aiTitle: aiTitle!.trim() }),
+      update: async () => ({ aiTitle: aiTitle.trim() as string }),
     });
   } catch {
     // Non-critical; don't block on failure
