@@ -286,7 +286,7 @@ function createOpenClawPeerLinkFixtures(plugins: Array<{ pluginId: string; packa
     ]),
   );
   const peerLinkPath = (pluginId: string) =>
-    path.join(installPaths[pluginId]!, "node_modules", "openclaw");
+    path.join(installPaths[pluginId], "node_modules", "openclaw");
   const linkPeer = (pluginId: string) => {
     fs.mkdirSync(path.dirname(peerLinkPath(pluginId)), { recursive: true });
     fs.symlinkSync(peerTarget, peerLinkPath(pluginId), "junction");
