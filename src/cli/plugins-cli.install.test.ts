@@ -1096,6 +1096,34 @@ describe("plugins cli install", () => {
     expect(runtimeErrors.at(-1)).toContain("npm install failed");
   });
 
+  it("adds a Git PATH hint when npm plugin dependency install cannot spawn git", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: [
+        "npm install failed:",
+        "npm error code ENOENT",
+        "npm error syscall spawn git",
+        "npm error path git",
+      ].join("\n"),
+    });
+    installHooksFromNpmSpec.mockResolvedValue({
+      ok: false,
+      error: "package.json missing openclaw.hooks",
+    });
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "npm:@openclaw/whatsapp"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain(
+      "one of this plugin's npm dependencies is fetched from a git URL",
+    );
+    expect(runtimeErrors.at(-1)).toContain("winget install --id Git.Git -e");
+    expect(runtimeErrors.at(-1)).toContain("Also not a valid hook pack");
+  });
+
   it("does not resolve npm: prefixed bundled plugin ids through bundled installs", async () => {
     loadConfig.mockReturnValue({ plugins: { load: { paths: [] } } } as OpenClawConfig);
     installPluginFromNpmSpec.mockResolvedValue({

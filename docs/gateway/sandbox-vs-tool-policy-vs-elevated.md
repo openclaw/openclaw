@@ -92,11 +92,11 @@ Available groups:
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `x_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
-- `group:automation`: `cron`, `gateway`
+- `group:automation`: `heartbeat_respond`, `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:agents`: `agents_list`
-- `group:media`: `image`, `image_generate`, `video_generate`, `tts`
+- `group:agents`: `agents_list`, `update_plan`
+- `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
 ## Elevated: exec-only "run on host"
