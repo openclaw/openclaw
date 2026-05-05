@@ -180,12 +180,28 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
  */
 function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  return resolveMergedAccountConfig<FeishuConfig>({
+  const merged = resolveMergedAccountConfig<FeishuConfig>({
     channelConfig: feishuCfg,
     accounts: feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined,
     accountId,
     omitKeys: ["defaultAccount"],
+    nestedObjectKeys: ["tools"],
   });
+  const topTools = feishuCfg?.tools;
+  if (merged.tools === undefined && topTools !== undefined) {
+    return { ...merged, tools: topTools };
+  }
+  if (topTools?.bitable === false || topTools?.base === false) {
+    return {
+      ...merged,
+      tools: {
+        ...merged.tools,
+        bitable: false,
+        base: false,
+      },
+    };
+  }
+  return merged;
 }
 
 /**

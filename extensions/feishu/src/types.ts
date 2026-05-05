@@ -94,6 +94,10 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  /** Bitable/Base operations (default: true). */
+  bitable?: boolean;
+  /** Backward-compatible alias for bitable tools. */
+  base?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {
