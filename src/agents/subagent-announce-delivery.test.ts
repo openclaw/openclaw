@@ -60,6 +60,7 @@ async function deliverSlackThreadAnnouncement(params: {
   queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceTool?: string;
 }) {
   __testing.setDepsForTest({
     callGateway: params.callGateway,
@@ -88,6 +89,7 @@ async function deliverSlackThreadAnnouncement(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -95,6 +97,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
   callGateway: typeof runtimeCallGateway;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceTool?: string;
 }) {
   const origin = {
     channel: "discord",
@@ -125,6 +128,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-dm-fallback-empty",
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -185,6 +189,7 @@ async function deliverSlackChannelAnnouncement(params: {
   queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  sourceTool?: string;
 }) {
   const origin = {
     channel: "slack",
@@ -219,6 +224,7 @@ async function deliverSlackChannelAnnouncement(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: params.directIdempotencyKey,
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -1127,6 +1133,172 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
           mediaUrls: ["/tmp/generated-night-drive.mp3"],
           replyInstruction: "Deliver the generated music through the message tool.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("delivers generated media completions through the announce agent in automatic DMs", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: true,
+          channel: "discord",
+          accountId: "acct-1",
+          to: "dm:U123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to direct send for generated media completions in default group routes", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-message-tool",
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "direct-fallback",
+      }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          deliver: false,
+          channel: "slack",
+          accountId: "acct-1",
+          to: "channel:C123",
+          threadId: undefined,
+        }),
+      }),
+    );
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        threadId: undefined,
+        content: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+        requesterSessionKey: "agent:main:slack:channel:C123",
+        bestEffort: true,
+        idempotencyKey: "announce-channel-media-message-tool",
+      }),
+    );
+  });
+
+  it("does not fallback while generated media announce-agent run is still pending", async () => {
+    const callGateway = createGatewayMock({
+      runId: "video_generate:task-123:ok",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-pending",
+      sourceTool: "video_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          taskLabel: "lobster trailer",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 video.\nMEDIA:/tmp/lobster-trailer.mp4",
+          mediaUrls: ["/tmp/lobster-trailer.mp4"],
+          replyInstruction: "Deliver the generated video through the message tool.",
         },
       ],
     });
