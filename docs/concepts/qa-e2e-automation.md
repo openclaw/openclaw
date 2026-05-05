@@ -111,6 +111,10 @@ pnpm openclaw qa matrix --profile fast --fail-fast
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
 
+The scenarios cover transport behavior that unit tests cannot prove end to end: mention gating, allow-bot policies, allowlists, top-level and threaded replies, DM routing, reaction handling, inbound edit suppression, restart replay dedupe, homeserver interruption recovery, approval metadata delivery, media handling, and Matrix E2EE bootstrap/recovery/verification flows. The E2EE CLI profile also drives `openclaw matrix encryption setup` and verification commands through the same disposable homeserver before checking gateway replies.
+
+CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`. Scheduled and default manual runs execute the fast Matrix profile with live frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans out into the five profile shards so the exhaustive catalog can run in parallel while keeping one artifact directory per shard.
+
 For transport-real Telegram, Discord, and Slack smoke lanes:
 
 ```bash
@@ -191,7 +195,7 @@ Live transport lanes share one contract instead of each inventing their own scen
 | Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |
 | Telegram | x      | x              | x          |                 |                 |                |                  |                  |                      | x            |                             |
 | Discord  | x      | x              | x          |                 |                 |                |                  |                  |                      |              | x                           |
-| Slack    | x      | x              | x          |                 |                 |                |                  |                  |                      |              |                             |
+| Slack    | x      | x              | x          | x               | x               | x              | x                | x                |                      |              |                             |
 
 This keeps `qa-channel` as the broad product-behavior suite while Matrix,
 Telegram, and future live transports share one explicit transport-contract
@@ -345,6 +349,11 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39
 
 - `slack-canary`
 - `slack-mention-gating`
+- `slack-allowlist-block`
+- `slack-top-level-reply-shape`
+- `slack-restart-resume`
+- `slack-thread-follow-up`
+- `slack-thread-isolation`
 
 Output artifacts:
 
@@ -363,7 +372,7 @@ The lane needs two distinct Slack apps in one workspace, plus a channel both bot
 
 Prefer a Slack workspace dedicated to QA over reusing a production workspace.
 
-The SUT manifest below mirrors the bundled Slack plugin's production install (`extensions/slack/src/setup-shared.ts:10`). For the production-channel setup as users see it, see [Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT pair is intentionally separate because the lane needs two distinct bot user ids in one workspace.
+The SUT manifest below intentionally narrows the bundled Slack plugin's production install (`extensions/slack/src/setup-shared.ts:10`) to the permissions and events covered by the live Slack QA suite. For the production-channel setup as users see it, see [Slack channel quick setup](/channels/slack#quick-setup); the QA Driver/SUT pair is intentionally separate because the lane needs two distinct bot user ids in one workspace.
 
 **1. Create the Driver app**
 
@@ -396,7 +405,7 @@ Copy the _Bot User OAuth Token_ (`xoxb-...`) — that becomes `driverBotToken`. 
 
 **2. Create the SUT app**
 
-Repeat _Create New App → From a manifest_ in the same workspace. The scope set mirrors the bundled Slack plugin's production install (`extensions/slack/src/setup-shared.ts:10`):
+Repeat _Create New App → From a manifest_ in the same workspace. This QA app intentionally uses a narrower version of the bundled Slack plugin's production manifest (`extensions/slack/src/setup-shared.ts:10`): reaction scopes and events are omitted because the live Slack QA suite does not cover reaction handling yet.
 
 ```json
 {
@@ -437,8 +446,6 @@ Repeat _Create New App → From a manifest_ in the same workspace. The scope set
         "mpim:write",
         "pins:read",
         "pins:write",
-        "reactions:read",
-        "reactions:write",
         "usergroups:read",
         "users:read"
       ]
@@ -458,9 +465,7 @@ Repeat _Create New App → From a manifest_ in the same workspace. The scope set
         "message.im",
         "message.mpim",
         "pin_added",
-        "pin_removed",
-        "reaction_added",
-        "reaction_removed"
+        "pin_removed"
       ]
     }
   }
