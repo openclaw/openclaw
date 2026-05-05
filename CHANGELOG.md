@@ -88,6 +88,7 @@ Docs: https://docs.openclaw.ai
 
 - Discord/streaming: show live reasoning text in progress drafts instead of a bare `Reasoning` status line.
 - Doctor/status: warn when `OPENCLAW_GATEWAY_TOKEN` would shadow a different active `gateway.auth.token` source for local CLI commands, while avoiding false positives when config points at the same env token. Fixes #74271. Thanks @yelog.
+- Gateway/HTTP: avoid loading managed outgoing-image media handlers for unrelated requests, so disabled OpenAI-compatible routes return 404 without waiting on lazy media sidecars. Thanks @vincentkoc.
 - Gateway/OpenAI-compatible: send the assistant role SSE chunk as soon as streaming chat-completion headers are accepted, so cold agent setup cannot leave `/v1/chat/completions` clients with a bodyless 200 response until their idle timeout fires.
 - Agents/media: avoid direct generated-media completion fallback while the announce-agent run is still pending, so async video and music completions do not duplicate raw media messages. (#77754)
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
@@ -245,7 +246,7 @@ Docs: https://docs.openclaw.ai
 - Doctor/sessions: clear auto-created stale session routing state from the sessions store when `doctor --fix` sees plugin-owned model/runtime/auth/session bindings outside the current configured route, while leaving explicit user model choices for manual review. Refs #68615.
 - CLI/sessions: prune old unreferenced transcript, compaction checkpoint, and trajectory artifacts during normal `sessions cleanup`, so gateway restart or crash orphans do not accumulate indefinitely outside `sessions.json`. Fixes #77608. Thanks @slideshow-dingo.
 - CLI/sessions: cap `openclaw sessions` output to the newest 100 rows by default and add `--limit <n|all>` plus JSON pagination metadata, so repeated machine polling of large session stores cannot fan out into unbounded per-row enrichment/output work. Fixes #77500. Thanks @Kaotic3.
-- CLI/update: disable and skip plugins that fail package-update plugin sync, so a broken npm/ClawHub/git/marketplace plugin cannot turn a successful OpenClaw package update into a failed update result. Thanks @vincentkoc.
+- CLI/update: report corrupt or unloadable managed plugins as post-update warnings instead of disabling them or turning a successful OpenClaw package update into a failed update result. Thanks @vincentkoc and @Patrick-Erichsen.
 - CLI/update: use an absolute POSIX npm script shell during package-manager updates, so restricted PATH environments can still run dependency lifecycle scripts while updating from `--tag main`. Fixes #77530. Thanks @PeterTremonti.
 - CLI/update: make package-update follow-up processes write completion results and exit explicitly, so Windows packaged upgrades do not hang after the new package finishes post-core plugin work. Thanks @vincentkoc.
 - CLI/update: stage pnpm-detected npm-layout global package updates through a clean npm prefix swap, keep plugin install runtime imports behind a stable alias, and ship legacy install-runtime aliases back to `2026.3.22`, preventing stale overlay chunks from breaking plugin post-update sync. Thanks @vincentkoc.
