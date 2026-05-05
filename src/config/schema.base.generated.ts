@@ -151,6 +151,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
           },
+          stuckSessionAbortMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Session Abort Threshold (ms)",
+            description:
+              "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
+          },
           otel: {
             type: "object",
             properties: {
@@ -24664,6 +24672,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.stuckSessionWarnMs": {
       label: "Session Liveness Threshold (ms)",
       help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.stuckSessionAbortMs": {
+      label: "Session Abort Threshold (ms)",
+      help: "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
