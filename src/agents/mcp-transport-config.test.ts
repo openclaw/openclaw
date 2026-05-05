@@ -163,4 +163,37 @@ describe("resolveMcpTransportConfig", () => {
       url: "https://mcp.example.com/http",
     });
   });
+
+  it("propagates requestTimeoutMs from stdio server config", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+      args: ["./server.mjs"],
+      requestTimeoutMs: 120_000,
+    });
+
+    expect(resolved).toMatchObject({
+      kind: "stdio",
+      requestTimeoutMs: 120_000,
+    });
+  });
+
+  it("propagates requestTimeoutMs from HTTP server config", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/sse",
+      requestTimeoutMs: 180_000,
+    });
+
+    expect(resolved).toMatchObject({
+      kind: "http",
+      requestTimeoutMs: 180_000,
+    });
+  });
+
+  it("leaves requestTimeoutMs undefined when not configured", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      command: "node",
+    });
+
+    expect(resolved?.requestTimeoutMs).toBeUndefined();
+  });
 });

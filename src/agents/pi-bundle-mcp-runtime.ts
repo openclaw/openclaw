@@ -33,6 +33,7 @@ type BundleMcpSession = {
   client: Client;
   transport: Transport;
   transportType: "stdio" | "sse" | "streamable-http";
+  requestTimeoutMs?: number;
   detachStderr?: () => void;
 };
 
@@ -252,6 +253,7 @@ export function createSessionMcpRuntime(params: {
             client,
             transport: resolved.transport,
             transportType: resolved.transportType,
+            requestTimeoutMs: resolved.requestTimeoutMs,
             detachStderr: resolved.detachStderr,
           };
           sessions.set(serverName, session);
@@ -355,10 +357,11 @@ export function createSessionMcpRuntime(params: {
       if (!session) {
         throw new Error(`bundle-mcp server "${serverName}" is not connected`);
       }
-      return (await session.client.callTool({
-        name: toolName,
-        arguments: isMcpConfigRecord(input) ? input : {},
-      })) as CallToolResult;
+      return (await session.client.callTool(
+        { name: toolName, arguments: isMcpConfigRecord(input) ? input : {} },
+        undefined,
+        session.requestTimeoutMs !== undefined ? { timeout: session.requestTimeoutMs } : undefined,
+      )) as CallToolResult;
     },
     async dispose() {
       if (disposed) {
