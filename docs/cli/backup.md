@@ -3,6 +3,7 @@ summary: "CLI reference for `openclaw backup` (create local backup archives)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You want to preview which paths would be included before reset or uninstall
+  - You want to restore from a `.tar.gz` archive previously created by `openclaw backup`
 title: "Backup"
 ---
 
@@ -19,6 +20,8 @@ openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 ```
+
+OpenClaw does not currently ship an `openclaw backup restore` subcommand. Restore is a manual `tar` extract guided by the embedded `manifest.json`. See [Restore from a backup archive](#restore-from-a-backup-archive) below.
 
 ## Notes
 
@@ -90,6 +93,83 @@ Large workspaces are usually the main driver of archive size. If you want a smal
 
 For the smallest archive, use `--only-config`.
 
+## Restore from a backup archive
+
+`openclaw backup` does not yet provide a paired `openclaw backup restore` subcommand. Archives produced by `openclaw backup create` are plain `.tar.gz` files, and the embedded `manifest.json` records each backed-up source path so you can extract the right pieces back to the right place.
+
+### Inspect the archive first
+
+Before extracting anything, verify the archive and read the manifest so you know which paths it contains:
+
+```bash
+openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+
+# Print just the manifest from the archive (no extraction).
+tar -xOzf ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz \
+  2026-03-09T00-00-00.000Z-openclaw-backup/manifest.json
+```
+
+The manifest reports `paths.stateDir`, `paths.configPath`, `paths.oauthDir`, and `paths.workspaceDirs` — these are the absolute paths the archive was created from. The `assets[]` array lists every backed-up source plus its `archivePath` inside the tarball.
+
+### Archive layout
+
+Inside the tarball, every backed-up tree is rooted under:
+
+```
+<archive-root>/payload/posix/<absolute-source-path-without-leading-slash>/...
+```
+
+(or `<archive-root>/payload/windows/<DRIVE>/<rest>/...` on Windows). The `<archive-root>` is the timestamped directory that matches the archive basename, for example `2026-03-09T00-00-00.000Z-openclaw-backup`. There is also a top-level `<archive-root>/manifest.json`.
+
+### Restore on the same machine (paths unchanged)
+
+If you are restoring to the same machine and the original absolute paths still exist, stop the gateway, then extract the relevant payload subtrees back to their original locations. For example, to restore the state directory only:
+
+```bash
+openclaw gateway stop
+
+ARCHIVE=./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+ROOT=2026-03-09T00-00-00.000Z-openclaw-backup
+STATE_DIR="$HOME/.openclaw"
+
+# Move the existing state aside instead of deleting it.
+mv "$STATE_DIR" "$STATE_DIR.pre-restore.$(date +%s)" 2>/dev/null || true
+
+# Extract just the state-directory payload back to /.
+# (-C / + the encoded "posix/<abs-path>" layout puts files back at their original paths.)
+tar -xzf "$ARCHIVE" -C / --strip-components=3 \
+  "$ROOT/payload/posix${STATE_DIR}"
+
+openclaw doctor
+openclaw gateway start
+openclaw status
+```
+
+Repeat for `configPath`, `oauthDir`, and any `workspaceDirs` you want to restore. Use the `assets[]` entries from the manifest to confirm the exact `archivePath` for each tree before extracting.
+
+### Restore on a new machine or to a different path
+
+If the original absolute paths do not exist (new machine, new home directory, or you want to inspect first), extract into a staging directory and then copy the trees you want into place:
+
+```bash
+mkdir -p /tmp/openclaw-restore
+tar -xzf ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz -C /tmp/openclaw-restore
+
+# Read /tmp/openclaw-restore/<archive-root>/manifest.json to map archived paths
+# to where you want them on the new machine, then move trees individually, e.g.:
+mkdir -p "$HOME/.openclaw"
+cp -a /tmp/openclaw-restore/2026-03-09T00-00-00.000Z-openclaw-backup/payload/posix/Users/old-user/.openclaw/. "$HOME/.openclaw/"
+
+openclaw doctor
+openclaw gateway restart
+openclaw status
+```
+
+After any restore, run `openclaw doctor` so it can apply config migrations and repair services. The state directory's `extensions/` tree is restored without nested `node_modules/`; if a restored plugin reports missing dependencies, run `openclaw plugins update <id>` or reinstall it with `openclaw plugins install <spec> --force`.
+
+If you are migrating to a new machine and want a guided end-to-end flow rather than manual `tar` commands, see [Migrating an OpenClaw install](/install/migrating).
+
 ## Related
 
 - [CLI reference](/cli)
+- [Migrating an OpenClaw install](/install/migrating)
