@@ -2782,16 +2782,16 @@ export async function runEmbeddedAttempt(
               systemPromptText = runtimeSystemPrompt;
             }
           }
-          const runtimeContextForModel = promptSubmission.runtimeOnly
+          const runtimeContextForHook = promptSubmission.runtimeOnly
             ? undefined
             : promptSubmission.runtimeContext?.trim();
-          const runtimeSystemPromptForModel = runtimeContextForModel
+          const runtimeSystemPromptForHook = runtimeContextForHook
             ? composeSystemPromptWithHookContext({
                 baseSystemPrompt: systemPromptText,
-                appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForModel),
+                appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
               })
             : undefined;
-          const systemPromptForModel = runtimeSystemPromptForModel ?? systemPromptText;
+          const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {
             message: string;
@@ -2845,7 +2845,7 @@ export async function runEmbeddedAttempt(
               beforeRunResult = await hookRunner.runBeforeAgentRun(
                 {
                   prompt: promptForModel,
-                  systemPrompt: systemPromptForModel,
+                  systemPrompt: systemPromptForHook,
                   messages: beforeRunMessages,
                   channelId: hookCtx.channelId,
                   accountId: params.agentAccountId ?? undefined,
@@ -2940,7 +2940,7 @@ export async function runEmbeddedAttempt(
               note: `images: prompt=${imageResult.images.length}`,
             });
             trajectoryRecorder?.recordEvent("context.compiled", {
-              systemPrompt: systemPromptForModel,
+              systemPrompt: systemPromptForHook,
               prompt: promptForModel,
               messages: activeSession.messages,
               tools: toTrajectoryToolDefinitions(effectiveTools),
@@ -2978,7 +2978,7 @@ export async function runEmbeddedAttempt(
           }
 
           const msgCount = activeSession.messages.length;
-          const systemLen = systemPromptForModel?.length ?? 0;
+          const systemLen = systemPromptText?.length ?? 0;
           const promptLen = effectivePrompt.length;
           const sessionSummary = summarizeSessionContext(activeSession.messages);
           const reserveTokens = settingsManager.getCompactionReserveTokens();
@@ -3028,7 +3028,7 @@ export async function runEmbeddedAttempt(
                   sessionId: params.sessionId,
                   provider: params.provider,
                   model: params.modelId,
-                  systemPrompt: systemPromptForModel,
+                  systemPrompt: systemPromptForHook,
                   prompt: promptForModel,
                   historyMessages: cloneHookMessages(
                     normalizeMessagesForLlmBoundary(activeSession.messages),
@@ -3058,7 +3058,7 @@ export async function runEmbeddedAttempt(
                 ...(contextEnginePromptAuthority === "preassembly_may_overflow"
                   ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
                   : {}),
-                systemPrompt: systemPromptForModel,
+                systemPrompt: systemPromptForHook,
                 prompt: promptForModel,
                 contextTokenBudget,
                 reserveTokens,
@@ -3145,7 +3145,7 @@ export async function runEmbeddedAttempt(
             finalPromptText = promptForModel;
             trajectoryRecorder?.recordEvent("prompt.submitted", {
               prompt: promptForModel,
-              systemPrompt: systemPromptForModel,
+              systemPrompt: systemPromptForHook,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
@@ -3158,28 +3158,19 @@ export async function runEmbeddedAttempt(
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptForModel));
             } else {
-              if (runtimeSystemPromptForModel) {
-                applySystemPromptOverrideToSession(activeSession, runtimeSystemPromptForModel);
-              }
-              try {
-                await queueRuntimeContextForNextTurn({
-                  session: activeSession,
-                  runtimeContext: runtimeContextForModel,
-                });
+              await queueRuntimeContextForNextTurn({
+                session: activeSession,
+                runtimeContext: runtimeContextForHook,
+              });
 
-                // Only pass images option if there are actually images to pass
-                // This avoids potential issues with models that don't expect the images parameter
-                if (imageResult.images.length > 0) {
-                  await abortable(
-                    activeSession.prompt(promptForModel, { images: imageResult.images }),
-                  );
-                } else {
-                  await abortable(activeSession.prompt(promptForModel));
-                }
-              } finally {
-                if (runtimeSystemPromptForModel) {
-                  applySystemPromptOverrideToSession(activeSession, systemPromptText);
-                }
+              // Only pass images option if there are actually images to pass
+              // This avoids potential issues with models that don't expect the images parameter
+              if (imageResult.images.length > 0) {
+                await abortable(
+                  activeSession.prompt(promptForModel, { images: imageResult.images }),
+                );
+              } else {
+                await abortable(activeSession.prompt(promptForModel));
               }
             }
           }
