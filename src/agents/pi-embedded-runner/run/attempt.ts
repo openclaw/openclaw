@@ -1439,7 +1439,25 @@ export async function runEmbeddedAttempt(
         const preCompactionSessionId = activeSession.sessionId;
 
         try {
-          await abortable(waitForCompactionRetry());
+          const COMPACTION_WAIT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+          const compactionWait = abortable(waitForCompactionRetry());
+          const compactionTimeout = new Promise<void>((_, reject) => {
+            const timer = setTimeout(() => {
+              const err = new Error(
+                `compaction wait timeout (${COMPACTION_WAIT_TIMEOUT_MS}ms): runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+              err.name = "AbortError";
+              reject(err);
+            }, COMPACTION_WAIT_TIMEOUT_MS);
+            // Don't block Node from exiting
+            timer.unref?.();
+            // Clean up timer if compaction finishes first
+            void compactionWait.then(
+              () => clearTimeout(timer),
+              () => clearTimeout(timer),
+            );
+          });
+          await Promise.race([compactionWait, compactionTimeout]);
         } catch (err) {
           if (isRunnerAbortError(err)) {
             if (!promptError) {
@@ -1450,6 +1468,10 @@ export async function runEmbeddedAttempt(
               log.debug(
                 `compaction wait aborted: runId=${params.runId} sessionId=${params.sessionId}`,
               );
+            }
+            // Flag compaction timeout so snapshot selection uses pre-compaction state
+            if (!timedOutDuringCompaction) {
+              timedOutDuringCompaction = true;
             }
           } else {
             throw err;
