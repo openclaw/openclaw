@@ -2,6 +2,7 @@ export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
+  formatAgentToAgentAccessError,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-access.js";
