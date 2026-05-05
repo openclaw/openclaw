@@ -160,6 +160,8 @@ export type GatewayClientOptions = {
   onConnectError?: (err: Error) => void;
   onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
   onClose?: (code: number, reason: string) => void;
+  /** Maximum reconnect attempts before pausing. Undefined = unlimited (node-host default). */
+  maxReconnectAttempts?: number;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -925,18 +927,17 @@ export class GatewayClient {
     }, connectChallengeTimeoutMs);
   }
 
-  private static readonly MAX_RECONNECT_ATTEMPTS = 30;
-
   private scheduleReconnect() {
     if (this.closed) {
       return;
     }
-    if (this.reconnectAttempts >= GatewayClient.MAX_RECONNECT_ATTEMPTS) {
+    const maxAttempts = this.opts.maxReconnectAttempts;
+    if (maxAttempts != null && this.reconnectAttempts >= maxAttempts) {
       logDebug(`gateway reconnect giving up after ${this.reconnectAttempts} attempts`);
       this.closed = true;
       this.opts.onReconnectPaused?.({
         code: -1,
-        reason: `max reconnect attempts reached (${GatewayClient.MAX_RECONNECT_ATTEMPTS})`,
+        reason: `max reconnect attempts reached (${maxAttempts})`,
         detailCode: null,
       });
       return;
