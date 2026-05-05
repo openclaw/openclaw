@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
@@ -31,10 +32,11 @@ type PackageJson = {
 export type ParsedReleaseVersion = {
   version: string;
   baseVersion: string;
-  channel: "stable" | "beta";
+  channel: "stable" | "alpha" | "beta";
   year: number;
   month: number;
   day: number;
+  alphaNumber?: number;
   betaNumber?: number;
   correctionNumber?: number;
   date: Date;
@@ -44,15 +46,15 @@ export type ParsedReleaseTag = {
   version: string;
   packageVersion: string;
   baseVersion: string;
-  channel: "stable" | "beta";
+  channel: "stable" | "alpha" | "beta";
   correctionNumber?: number;
   date: Date;
 };
 
 export type NpmPublishPlan = {
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
-  mirrorDistTags: ("latest" | "beta")[];
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
+  mirrorDistTags: ("latest" | "alpha" | "beta")[];
 };
 
 export type NpmDistTagMirrorAuth = {
@@ -69,6 +71,11 @@ const REQUIRED_PACKED_PATHS = [
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
 const FORBIDDEN_PACKED_PATH_RULES = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS.map((prefix) => ({
+    prefix,
+    describe: (packedPath: string) =>
+      `npm package must not include local build metadata "${packedPath}".`,
+  })),
   {
     prefix: "docs/.generated/",
     describe: (packedPath: string) =>
@@ -187,14 +194,30 @@ export function compareReleaseVersions(left: string, right: string): number | nu
 export function resolveNpmPublishPlan(
   version: string,
   _currentBetaVersion?: string | null,
-  requestedPublishTag?: "latest" | "beta" | null,
+  requestedPublishTag?: "latest" | "alpha" | "beta" | null,
 ): NpmPublishPlan {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
 
-  const publishTag = requestedPublishTag?.trim() === "latest" ? "latest" : "beta";
+  const publishTag =
+    requestedPublishTag?.trim() === "latest"
+      ? "latest"
+      : requestedPublishTag?.trim() === "alpha"
+        ? "alpha"
+        : "beta";
+
+  if (parsedVersion.channel === "alpha") {
+    if (publishTag !== "alpha") {
+      throw new Error("Alpha prereleases must publish to the alpha dist-tag.");
+    }
+    return {
+      channel: "alpha",
+      publishTag: "alpha",
+      mirrorDistTags: [],
+    };
+  }
 
   if (parsedVersion.channel === "beta") {
     if (publishTag !== "beta") {
@@ -330,7 +353,7 @@ export function collectReleaseTagErrors(params: {
   const parsedVersion = parseReleaseVersion(packageVersion);
   if (parsedVersion === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
+      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion || "<missing>"}".`,
     );
   }
 
@@ -342,7 +365,7 @@ export function collectReleaseTagErrors(params: {
   const parsedTag = parseReleaseTagVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
-      `Release tag must match vYYYY.M.D, vYYYY.M.D-beta.N, or fallback correction tag vYYYY.M.D-N; found "${releaseTag || "<missing>"}".`,
+      `Release tag must match vYYYY.M.D, vYYYY.M.D-alpha.N, vYYYY.M.D-beta.N, or fallback correction tag vYYYY.M.D-N; found "${releaseTag || "<missing>"}".`,
     );
   }
 

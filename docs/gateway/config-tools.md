@@ -54,6 +54,14 @@ Global tool allow/deny policy (deny wins). Case-insensitive, supports `*` wildca
 }
 ```
 
+`write` and `apply_patch` are separate tool ids. `allow: ["write"]` also enables `apply_patch` for compatible models, but `deny: ["write"]` does not deny `apply_patch`. To block all file mutation, deny `group:fs` or list each mutating tool explicitly:
+
+```json5
+{
+  tools: { deny: ["write", "edit", "apply_patch"] },
+}
+```
+
 ### `tools.byProvider`
 
 Further restrict tools for specific providers or models. Order: base profile → provider profile → allow/deny.
@@ -201,7 +209,7 @@ Configures inbound media understanding (image/audio/video):
     media: {
       concurrency: 2,
       asyncCompletion: {
-        directSend: false, // opt-in: send finished async music/video directly to the channel
+        directSend: false, // deprecated: completions stay agent-mediated
       },
       audio: {
         enabled: true,
@@ -254,7 +262,7 @@ Configures inbound media understanding (image/audio/video):
 
     **Async completion fields:**
 
-    - `asyncCompletion.directSend`: when `true`, completed async `music_generate` and `video_generate` tasks try direct channel delivery first. Default: `false` (legacy requester-session wake/model-delivery path).
+    - `asyncCompletion.directSend`: deprecated compatibility flag. Completed async media tasks stay requester-session mediated so the agent receives the result, decides how to tell the user, and uses the message tool when source delivery requires it.
 
   </Accordion>
 </AccordionGroup>
@@ -296,6 +304,7 @@ Default: `tree` (current session + sessions spawned by it, such as subagents).
     - `agent`: any session belonging to the current agent id (can include other users if you run per-sender sessions under the same agent id).
     - `all`: any session. Cross-agent targeting still requires `tools.agentToAgent`.
     - Sandbox clamp: when the current session is sandboxed and `agents.defaults.sandbox.sessionToolsVisibility="spawned"`, visibility is forced to `tree` even if `tools.sessions.visibility="all"`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -327,6 +336,7 @@ Controls inline attachment support for `sessions_spawn`.
     - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
     - File permissions are `0700` for directories and `0600` for files.
     - Cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -420,6 +430,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
       - Matching model `contextTokens` preserves an explicit runtime cap when present; use it to limit effective context without changing native model metadata.
       - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
       - Marker persistence is source-authoritative: markers are written from the active source config snapshot (pre-resolution), not from resolved runtime secret values.
+
   </Accordion>
 </AccordionGroup>
 
@@ -430,6 +441,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `models.mode`: provider catalog behavior (`merge` or `replace`).
     - `models.providers`: custom provider map keyed by provider id.
       - Safe edits: use `openclaw config set models.providers.<id> '<json>' --strict-json --merge` or `openclaw config set models.providers.<id>.models '<json-array>' --strict-json --merge` for additive updates. `config set` refuses destructive replacements unless you pass `--replace`.
+
   </Accordion>
   <Accordion title="Provider connection and auth">
     - `models.providers.*.api`: request adapter (`openai-completions`, `openai-responses`, `anthropic-messages`, `google-generative-ai`, etc). For self-hosted `/v1/chat/completions` backends such as MLX, vLLM, SGLang, and most OpenAI-compatible local servers, use `openai-completions`. A custom provider with `baseUrl` but no `api` defaults to `openai-completions`; set `openai-responses` only when the backend supports `/v1/responses`.
@@ -443,6 +455,7 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `models.providers.*.authHeader`: force credential transport in the `Authorization` header when required.
     - `models.providers.*.baseUrl`: upstream API base URL.
     - `models.providers.*.headers`: extra static headers for proxy/tenant routing.
+
   </Accordion>
   <Accordion title="Request transport overrides">
     `models.providers.*.request`: transport overrides for model-provider HTTP requests.
@@ -456,10 +469,12 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
   </Accordion>
   <Accordion title="Model catalog entries">
     - `models.providers.*.models`: explicit provider model catalog entries.
+    - `models.providers.*.models.*.input`: model input modalities. Use `["text"]` for text-only models and `["text", "image"]` for native image/vision models. Image attachments are only injected into agent turns when the selected model is marked image-capable.
     - `models.providers.*.models.*.contextWindow`: native model context window metadata. This overrides provider-level `contextWindow` for that model.
     - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
     - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
     - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
+
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">
     - `plugins.entries.amazon-bedrock.config.discovery`: Bedrock auto-discovery settings root.
@@ -469,8 +484,11 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `plugins.entries.amazon-bedrock.config.discovery.refreshInterval`: polling interval for discovery refresh.
     - `plugins.entries.amazon-bedrock.config.discovery.defaultContextWindow`: fallback context window for discovered models.
     - `plugins.entries.amazon-bedrock.config.discovery.defaultMaxTokens`: fallback max output tokens for discovered models.
+
   </Accordion>
 </AccordionGroup>
+
+Interactive custom-provider onboarding infers image input for common vision model IDs such as GPT-4o, Claude, Gemini, Qwen-VL, LLaVA, Pixtral, InternVL, Mllama, MiniCPM-V, and GLM-4V, and skips the extra question for known text-only families. Unknown model IDs still prompt for image support. Non-interactive onboarding uses the same inference; pass `--custom-image-input` to force image-capable metadata or `--custom-text-input` to force text-only metadata.
 
 ### Provider examples
 

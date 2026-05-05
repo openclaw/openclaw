@@ -9,7 +9,13 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
+import {
+  resolveCliCommandPathPolicy,
+  resolveCliNetworkProxyPolicy,
+} from "./command-path-policy.js";
+import { isReservedNonPluginCommandRoot } from "./command-registration-policy.js";
+
+const ROOT_HELP_ALIASES = new Set(["tools"]);
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   const index = argv.indexOf("--update");
@@ -38,6 +44,9 @@ export function shouldUseRootHelpFastPath(
   return (
     env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH !== "1" &&
     (invocation.isRootHelpInvocation ||
+      (invocation.commandPath.length === 1 &&
+        ROOT_HELP_ALIASES.has(invocation.commandPath[0] ?? "") &&
+        invocation.hasHelpOrVersion) ||
       (invocation.commandPath.length === 1 &&
         invocation.commandPath[0] === "help" &&
         invocation.hasHelpOrVersion))
@@ -71,6 +80,16 @@ export function shouldStartCrestodianForModernOnboard(argv: string[]): boolean {
     argv.includes("--modern") &&
     !invocation.hasHelpOrVersion
   );
+}
+
+export function shouldStartProxyForCli(argv: string[]): boolean {
+  const policyArgv = rewriteUpdateFlagArgv(argv);
+  const invocation = resolveCliArgvInvocation(policyArgv);
+  const [primary] = invocation.commandPath;
+  if (invocation.hasHelpOrVersion || !primary) {
+    return false;
+  }
+  return resolveCliNetworkProxyPolicy(policyArgv) === "default";
 }
 
 export function resolveMissingPluginCommandMessage(
@@ -122,6 +141,17 @@ export function resolveMissingPluginCommandMessage(
         "the bundled plugin command surface."
       );
     }
+    if (
+      commandAlias.kind !== "runtime-slash" &&
+      commandAlias.enabledByDefault !== true &&
+      config?.plugins?.entries?.[parentPluginId]?.enabled !== true
+    ) {
+      return (
+        `The \`openclaw ${normalizedPluginId}\` command is provided by the ` +
+        `"${parentPluginId}" plugin, but that bundled plugin is disabled by default. Run ` +
+        `\`openclaw plugins enable ${parentPluginId}\` to enable that CLI surface.`
+      );
+    }
     if (commandAlias.kind === "runtime-slash") {
       const cliHint = commandAlias.cliCommand
         ? `Use \`openclaw ${commandAlias.cliCommand}\` for related CLI operations, or `
@@ -132,6 +162,10 @@ export function resolveMissingPluginCommandMessage(
         `${cliHint}\`/${normalizedPluginId}\` in a chat session.`
       );
     }
+  }
+
+  if (isReservedNonPluginCommandRoot(normalizedPluginId)) {
+    return null;
   }
 
   if (allow.length > 0 && !allow.includes(normalizedPluginId)) {

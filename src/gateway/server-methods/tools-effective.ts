@@ -1,6 +1,7 @@
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logDebug, logWarn } from "../../logger.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
@@ -248,11 +249,11 @@ function resolveTrustedToolsEffectiveContext(params: {
     currentChannelId: delivery?.to,
     currentThreadTs:
       delivery?.threadId != null
-        ? String(delivery.threadId)
+        ? stringifyRouteThreadId(delivery.threadId)
         : loaded.entry.lastThreadId != null
-          ? String(loaded.entry.lastThreadId)
+          ? stringifyRouteThreadId(loaded.entry.lastThreadId)
           : loaded.entry.origin?.threadId != null
-            ? String(loaded.entry.origin.threadId)
+            ? stringifyRouteThreadId(loaded.entry.origin.threadId)
             : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,

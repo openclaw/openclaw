@@ -1,4 +1,4 @@
-export * from "./src/runtime-api.js";
+export { resolvePreferredOpenClawTmpDir } from "./src/runtime-api.js";
 export {
   definePluginEntry,
   type AnyAgentTool,

@@ -54,6 +54,12 @@ OpenClaw persists sessions in two layers:
      transcript exceeds the checkpoint size cap, avoiding a second giant
      `.checkpoint.*.jsonl` copy.
 
+Gateway history readers should avoid materializing the whole transcript unless
+the surface explicitly needs arbitrary historical access. First-page history,
+embedded chat history, restart recovery, and token/usage checks use bounded tail
+reads. Full transcript scans go through the async transcript index, which is
+cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
+
 ---
 
 ## On-disk locations
@@ -70,22 +76,33 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 ## Store maintenance and disk controls
 
-Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json` and transcript artifacts:
+Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
 
 - `mode`: `warn` (default) or `enforce`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
-- `rotateBytes`: rotate `sessions.json` when oversized (default `10mb`)
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
-Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
+Normal Gateway writes flow through a per-store session writer that serializes in-process mutations without taking a runtime file lock. Hot-path patch helpers borrow the validated mutable cache while they hold that writer slot, so large `sessions.json` files are not cloned or reread for every metadata update. Runtime code should prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)`; direct whole-store saves are compatibility and offline-maintenance tools. When a Gateway is reachable, non-dry-run `openclaw sessions cleanup` and `openclaw agents delete` delegate store mutations to the Gateway so cleanup joins the same writer queue; `--store <path>` is the explicit offline repair path for direct file maintenance. `maxEntries` cleanup is still batched for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
+
+Maintenance keeps durable external conversation pointers such as group sessions
+and thread-scoped chat sessions, but synthetic runtime entries for cron, hooks,
+heartbeat, ACP, and sub-agents can still be removed when they exceed the
+configured age, count, or disk budget.
+
+OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
+
+Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
+`session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
+ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
+longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
-1. Remove oldest archived or orphan transcript artifacts first.
-2. If still above the target, evict oldest session entries and their transcript files.
+1. Remove oldest archived, orphan transcript, or orphan trajectory artifacts first.
+2. If still above the target, evict oldest session entries and their transcript/trajectory files.
 3. Keep going until usage is at or below `highWaterBytes`.
 
 In `mode: "warn"`, OpenClaw reports potential evictions but does not mutate the store/files.
@@ -142,7 +159,7 @@ Rules of thumb:
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
-- **Thread parent fork guard** (`session.parentForkMaxTokens`, default `100000`) skips parent transcript forking when the parent session is already too large; the new thread starts fresh. Set `0` to disable.
+- **Parent fork policy** uses PI's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 
@@ -271,6 +288,20 @@ reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
 and it requires `truncateAfterCompaction` so the compacted summary can become a
 new successor transcript.
 
+For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
+adds an opt-in tool-loop guard. After a tool result is appended and before the
+next model call, OpenClaw estimates the prompt pressure using the same preflight
+budget logic used at turn start. If the context no longer fits, the guard does
+not compact inside Pi's `transformContext` hook. It raises a structured
+mid-turn precheck signal, stops the current prompt submission, and lets the
+outer run loop use the existing recovery path: truncate oversized tool results
+when that is enough, or trigger the configured compaction mode and retry. The
+option is disabled by default and works with both `default` and `safeguard`
+compaction modes, including provider-backed safeguard compaction.
+This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
+before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
+loop after new tool results have been appended.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -297,6 +328,11 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
+  optional tool-loop precheck after new tool results and before the next model
+  call. This is a trigger only; summary generation still uses the configured
+  compaction path. It is independent of `maxActiveTranscriptBytes`, which is a
+  turn-start active-transcript byte-size guard.
 - Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
   string such as `"20mb"` to run local compaction before a turn when the active
   transcript gets large. This guard is active only when
@@ -381,6 +417,7 @@ OpenClaw uses the **pre-threshold flush** approach:
 Config (`agents.defaults.compaction.memoryFlush`):
 
 - `enabled` (default: `true`)
+- `model` (optional exact provider/model override for the flush turn, for example `ollama/qwen3:8b`)
 - `softThresholdTokens` (default: `4000`)
 - `prompt` (user message for the flush turn)
 - `systemPrompt` (extra system prompt appended for the flush turn)
@@ -389,6 +426,9 @@ Notes:
 
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress
   delivery.
+- When `model` is set, the flush turn uses that model without inheriting the
+  active session fallback chain, so local-only housekeeping does not silently
+  fall back to a paid conversation model.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).

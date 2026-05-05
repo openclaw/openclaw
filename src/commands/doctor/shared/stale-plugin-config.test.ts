@@ -96,6 +96,56 @@ describe("doctor stale plugin config helpers", () => {
     });
   });
 
+  it("resets stale plugin slots without changing valid slot sentinels", () => {
+    const cfg = {
+      plugins: {
+        slots: {
+          memory: "acpx",
+          contextEngine: "missing-engine",
+        },
+      },
+    } as OpenClawConfig;
+
+    const hits = scanStalePluginConfig(cfg);
+    expect(hits).toEqual([
+      {
+        pluginId: "acpx",
+        pathLabel: "plugins.slots.memory",
+        surface: "slot",
+        slotKey: "memory",
+      },
+      {
+        pluginId: "missing-engine",
+        pathLabel: "plugins.slots.contextEngine",
+        surface: "slot",
+        slotKey: "contextEngine",
+      },
+    ]);
+
+    const result = maybeRepairStalePluginConfig(cfg);
+
+    expect(result.changes).toEqual([
+      "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
+    ]);
+    expect(result.config.plugins?.slots).toEqual({
+      memory: "memory-core",
+      contextEngine: "legacy",
+    });
+  });
+
+  it("does not report slot defaults or none as stale plugin refs", () => {
+    expect(
+      scanStalePluginConfig({
+        plugins: {
+          slots: {
+            memory: "none",
+            contextEngine: "legacy",
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual([]);
+  });
+
   it("formats stale plugin warnings with a doctor hint", () => {
     const warnings = collectStalePluginConfigWarnings({
       hits: [
@@ -112,6 +162,39 @@ describe("doctor stale plugin config helpers", () => {
       expect.stringContaining('plugins.allow: stale plugin reference "acpx"'),
       expect.stringContaining('Run "openclaw doctor --fix"'),
     ]);
+  });
+
+  it("keeps built-in channel ids in restrictive plugin config", () => {
+    const result = maybeRepairStalePluginConfig({
+      plugins: {
+        allow: ["telegram", "whatsapp", "acpx"],
+        entries: {
+          telegram: { enabled: true },
+          whatsapp: { enabled: true },
+          acpx: { enabled: true },
+        },
+      },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          allowFrom: ["+15555550123"],
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(result.changes).toEqual([
+      "- plugins.allow: removed 1 stale plugin id (acpx)",
+      "- plugins.entries: removed 1 stale plugin entry (acpx)",
+    ]);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "whatsapp"]);
+    expect(result.config.plugins?.entries).toEqual({
+      telegram: { enabled: true },
+      whatsapp: { enabled: true },
+    });
+    expect(result.config.channels?.whatsapp).toEqual({
+      enabled: true,
+      allowFrom: ["+15555550123"],
+    });
   });
 
   it("removes stale third-party channel config and dependent channel refs", () => {
@@ -196,6 +279,27 @@ describe("doctor stale plugin config helpers", () => {
 
     expect(scanStalePluginConfig(cfg)).toEqual([]);
     expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+  });
+
+  it("treats stale plugin refs as inert while plugins are globally disabled", () => {
+    const cfg = {
+      plugins: {
+        enabled: false,
+        allow: ["acpx"],
+        entries: {
+          acpx: { enabled: true },
+        },
+      },
+      channels: {
+        "openclaw-weixin": {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg)).toEqual({ config: cfg, changes: [] });
+    expect(manifestRegistry.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
   it("uses missing persisted install records as stale channel evidence", () => {

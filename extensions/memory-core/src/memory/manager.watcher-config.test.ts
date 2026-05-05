@@ -5,15 +5,13 @@ import type {
   MemorySearchConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
-const { createdWatchers, watchMock } = vi.hoisted(() => {
-  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir";
-  type WatchCallback = () => void;
+const { createdWatchers, memoryLoggerWarn, watchMock } = vi.hoisted(() => {
+  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
+  type WatchCallback = (value?: unknown) => void;
   function createMockWatcher() {
     const handlers = new Map<WatchEvent, WatchCallback[]>();
     const watcher = {
@@ -22,29 +20,40 @@ const { createdWatchers, watchMock } = vi.hoisted(() => {
         return watcher;
       }),
       close: vi.fn(async () => undefined),
-      emit: (event: WatchEvent) => {
+      emit: (event: WatchEvent, value?: unknown) => {
         for (const callback of handlers.get(event) ?? []) {
-          callback();
+          callback(value);
         }
       },
     };
     return watcher;
   }
   const watchers: Array<ReturnType<typeof createMockWatcher>> = [];
-  return {
+  const result = {
     createdWatchers: watchers,
+    memoryLoggerWarn: vi.fn(),
     watchMock: vi.fn(() => {
       const watcher = createMockWatcher();
       watchers.push(watcher);
       return watcher;
     }),
   };
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.test.memoryWatchFactory")] =
+    result.watchMock;
+  return result;
 });
 
-vi.mock("chokidar", () => ({
-  default: { watch: watchMock },
-  watch: watchMock,
-}));
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: memoryLoggerWarn,
+    }),
+  };
+});
 
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
@@ -62,33 +71,30 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
-type MemoryIndexModule = typeof import("./index.js");
-type MemoryEmbeddingProvidersModule =
-  typeof import("../../../../src/plugins/memory-embedding-providers.js");
-
-let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
-let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
+import {
+  clearMemoryEmbeddingProviders as clearRegistry,
+  registerMemoryEmbeddingProvider as registerAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  closeAllMemorySearchManagers,
+  getMemorySearchManager,
+  type MemoryIndexManager,
+} from "./index.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
   let workspaceDir = "";
   let extraDir = "";
 
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-    ({
-      clearMemoryEmbeddingProviders: clearRegistry,
-      registerMemoryEmbeddingProvider: registerAdapter,
-    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
-  });
-
   beforeEach(async () => {
     vi.clearAllMocks();
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+  });
+
+  afterAll(() => {
+    Reflect.deleteProperty(globalThis, Symbol.for("openclaw.test.memoryWatchFactory"));
   });
 
   afterEach(async () => {
@@ -106,10 +112,6 @@ describe("memory watcher config", () => {
       workspaceDir = "";
       extraDir = "";
     }
-  });
-
-  afterAll(() => {
-    vi.resetModules();
   });
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
@@ -134,6 +136,7 @@ describe("memory watcher config", () => {
       },
     };
     return {
+      memory: { backend: "builtin" },
       agents: {
         defaults,
         list: [{ id: "main", default: true }],
@@ -147,6 +150,8 @@ describe("memory watcher config", () => {
     if (!result.manager) {
       throw new Error("manager missing");
     }
+    expect(result.manager.status().backend).toBe("builtin");
+    expect(result.manager.status().sources).toContain("memory");
     manager = result.manager as unknown as MemoryIndexManager;
   }
 
@@ -254,4 +259,16 @@ describe("memory watcher config", () => {
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
   );
+
+  it("attaches a logging non-throwing watcher error listener", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+
+    const watcher = createdWatchers[0];
+    expect(watcher?.on).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(() => watcher?.emit("error", new Error("watcher error: ENOSPC"))).not.toThrow();
+    expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
+  });
 });

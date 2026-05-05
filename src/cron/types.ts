@@ -88,12 +88,46 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
+
+export type CronRunDiagnosticSource =
+  | "cron-preflight"
+  | "cron-setup"
+  | "model-preflight"
+  | "agent-run"
+  | "tool"
+  | "exec"
+  | "delivery";
+
+export type CronRunDiagnostic = {
+  ts: number;
+  source: CronRunDiagnosticSource;
+  severity: CronRunDiagnosticSeverity;
+  message: string;
+  toolName?: string;
+  exitCode?: number | null;
+  truncated?: boolean;
+};
+
+export type CronRunDiagnostics = {
+  summary?: string;
+  entries: CronRunDiagnostic[];
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
   /** Optional classifier for execution errors to guide fallback behavior. */
   errorKind?: "delivery-target";
   summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  diagnostics?: CronRunDiagnostics;
+};
+
+export type CronAgentExecutionStarted = {
+  jobId: string;
+  agentId?: string;
   sessionId?: string;
   sessionKey?: string;
 };
@@ -147,9 +181,11 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
-  /** Back-compat alias for lastRunStatus. */
+  /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  lastDiagnostics?: CronRunDiagnostics;
+  lastDiagnosticSummary?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;
   lastDurationMs?: number;

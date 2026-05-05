@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -304,6 +304,99 @@ describe("media store", () => {
           run: async (store) => {
             return await store.saveMediaBuffer(Buffer.from("hello"), "text/plain", "race-buffer");
           },
+        });
+      },
+    },
+    {
+      name: "does not leave final media artifacts when buffer writes fail",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const mediaDir = await store.ensureMediaDir();
+          const originalWriteFile = fs.writeFile.bind(fs);
+          const attemptedPaths: string[] = [];
+          vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+            const [filePath] = args;
+            if (
+              typeof filePath === "string" &&
+              filePath.includes(`${path.sep}failed-buffer${path.sep}`)
+            ) {
+              attemptedPaths.push(filePath);
+              await originalWriteFile(filePath, Buffer.alloc(0), args[2]);
+              const err = new Error("no space left on device") as NodeJS.ErrnoException;
+              err.code = "ENOSPC";
+              throw err;
+            }
+            return await originalWriteFile(...args);
+          });
+
+          await expect(
+            store.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", "failed-buffer"),
+          ).rejects.toMatchObject({ code: "ENOSPC" });
+
+          const failedDir = path.join(mediaDir, "failed-buffer");
+          const entries = await fs.readdir(failedDir).catch(() => []);
+          expect(attemptedPaths).toHaveLength(1);
+          expect(path.basename(attemptedPaths[0] ?? "")).toMatch(/^\..+\.tmp$/);
+          expect(entries).toEqual([]);
+        });
+      },
+    },
+    {
+      name: "saves buffers when the best-effort fsync step reports EPERM",
+      run: async () => {
+        await withTempStore(async (store) => {
+          const originalOpen = fs.open.bind(fs);
+          vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const handle = await originalOpen(...args);
+            const filePath = args[0];
+            if (
+              typeof filePath === "string" &&
+              filePath.includes(`${path.sep}fsync-eperm${path.sep}`)
+            ) {
+              vi.spyOn(handle, "sync").mockRejectedValueOnce(
+                Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+              );
+            }
+            return handle;
+          });
+
+          const saved = await store.saveMediaBuffer(
+            Buffer.from("docx"),
+            "application/zip",
+            "fsync-eperm",
+          );
+
+          await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("docx");
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before saving buffers",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media");
+          const traversalSubdir = path.relative(mediaDir, outsideDir);
+
+          await expect(
+            store.saveMediaBuffer(Buffer.from("escape"), "text/plain", traversalSubdir),
+          ).rejects.toThrow("unsafe media subdir");
+          await expect(fs.stat(outsideDir)).rejects.toThrow();
+        });
+      },
+    },
+    {
+      name: "rejects traversal media subdirs before resolving IDs",
+      run: async () => {
+        await withTempStore(async (store, home) => {
+          const mediaDir = await store.ensureMediaDir();
+          const outsideDir = path.join(home, "outside-media-resolve");
+          await fs.mkdir(outsideDir, { recursive: true });
+          await fs.writeFile(path.join(outsideDir, "passwd"), "not media");
+
+          await expect(
+            store.resolveMediaBufferPath("passwd", path.relative(mediaDir, outsideDir)),
+          ).rejects.toThrow("unsafe media subdir");
         });
       },
     },

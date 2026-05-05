@@ -109,18 +109,22 @@ describe("resolveTsdownBuildInvocation", () => {
   it("cleans tsdown output roots before using tsdown --no-clean", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-");
     const distFile = path.join(rootDir, "dist", "stale.js");
+    const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
     const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
     const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
     await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
     await fsPromises.writeFile(distFile, "stale\n");
+    await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
     await fsPromises.writeFile(distRuntimeFile, "stale\n");
     await fsPromises.writeFile(unrelatedFile, "keep\n");
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(path.join(rootDir, "dist"))).rejects.toThrow();
+    await expect(fsPromises.stat(distFile)).rejects.toThrow();
+    await expect(fsPromises.stat(pluginGeneratedFile)).rejects.toThrow();
     await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });

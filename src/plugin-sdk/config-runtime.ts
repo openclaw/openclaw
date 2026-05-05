@@ -8,6 +8,7 @@ export {
   resolvePluginConfigObject,
 } from "./plugin-config-runtime.js";
 export {
+  clearConfigCache,
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   getRuntimeConfigSnapshot,
@@ -134,6 +135,7 @@ export {
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
+  updateSessionStoreEntry,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

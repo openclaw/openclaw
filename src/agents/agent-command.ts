@@ -17,14 +17,19 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeAgentId } from "../routing/session-key.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -47,12 +52,14 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveFastModeState } from "./fast-mode.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
-import { loadModelCatalog } from "./model-catalog.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
   buildAllowedModelSet,
+  buildConfiguredModelCatalog,
   modelKey,
   normalizeModelRef,
   parseModelRef,
@@ -60,13 +67,16 @@ import {
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "./model-selection.js";
+import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 type AttemptExecutionRuntime = typeof import("./command/attempt-execution.runtime.js");
+type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
 type AcpManagerRuntime = typeof import("../acp/control-plane/manager.js");
 type AcpPolicyRuntime = typeof import("../acp/policy.js");
 type AcpRuntimeErrorsRuntime = typeof import("../acp/runtime/errors.js");
@@ -82,95 +92,106 @@ type SkillsFilterRuntime = typeof import("./skills/filter.js");
 type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
 type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
 
-let attemptExecutionRuntimePromise: Promise<AttemptExecutionRuntime> | undefined;
-let acpManagerRuntimePromise: Promise<AcpManagerRuntime> | undefined;
-let acpPolicyRuntimePromise: Promise<AcpPolicyRuntime> | undefined;
-let acpRuntimeErrorsRuntimePromise: Promise<AcpRuntimeErrorsRuntime> | undefined;
-let acpSessionIdentifiersRuntimePromise: Promise<AcpSessionIdentifiersRuntime> | undefined;
-let deliveryRuntimePromise: Promise<DeliveryRuntime> | undefined;
-let sessionStoreRuntimePromise: Promise<SessionStoreRuntime> | undefined;
-let cliCompactionRuntimePromise: Promise<CliCompactionRuntime> | undefined;
-let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefined;
-let cliDepsRuntimePromise: Promise<CliDepsRuntime> | undefined;
-let execDefaultsRuntimePromise: Promise<ExecDefaultsRuntime> | undefined;
-let skillsRuntimePromise: Promise<SkillsRuntime> | undefined;
-let skillsFilterRuntimePromise: Promise<SkillsFilterRuntime> | undefined;
-let skillsRefreshStateRuntimePromise: Promise<SkillsRefreshStateRuntime> | undefined;
-let skillsRemoteRuntimePromise: Promise<SkillsRemoteRuntime> | undefined;
+const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
+  () => import("./command/attempt-execution.runtime.js"),
+);
+const acpManagerRuntimeLoader = createLazyImportLoader<AcpManagerRuntime>(
+  () => import("../acp/control-plane/manager.js"),
+);
+const acpPolicyRuntimeLoader = createLazyImportLoader<AcpPolicyRuntime>(
+  () => import("../acp/policy.js"),
+);
+const acpRuntimeErrorsRuntimeLoader = createLazyImportLoader<AcpRuntimeErrorsRuntime>(
+  () => import("../acp/runtime/errors.js"),
+);
+const acpSessionIdentifiersRuntimeLoader = createLazyImportLoader<AcpSessionIdentifiersRuntime>(
+  () => import("../acp/runtime/session-identifiers.js"),
+);
+const deliveryRuntimeLoader = createLazyImportLoader<DeliveryRuntime>(
+  () => import("./command/delivery.runtime.js"),
+);
+const sessionStoreRuntimeLoader = createLazyImportLoader<SessionStoreRuntime>(
+  () => import("./command/session-store.runtime.js"),
+);
+const cliCompactionRuntimeLoader = createLazyImportLoader<CliCompactionRuntime>(
+  () => import("./command/cli-compaction.js"),
+);
+const transcriptResolveRuntimeLoader = createLazyImportLoader<TranscriptResolveRuntime>(
+  () => import("../config/sessions/transcript-resolve.runtime.js"),
+);
+const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import("../cli/deps.js"));
+const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
+  () => import("./exec-defaults.js"),
+);
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(() => import("./skills.js"));
+const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
+  () => import("./skills/filter.js"),
+);
+const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
+  () => import("./skills/refresh-state.js"),
+);
+const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
+  () => import("../infra/skills-remote.js"),
+);
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
-  attemptExecutionRuntimePromise ??= import("./command/attempt-execution.runtime.js");
-  return attemptExecutionRuntimePromise;
+  return attemptExecutionRuntimeLoader.load();
 }
 
 function loadAcpManagerRuntime(): Promise<AcpManagerRuntime> {
-  acpManagerRuntimePromise ??= import("../acp/control-plane/manager.js");
-  return acpManagerRuntimePromise;
+  return acpManagerRuntimeLoader.load();
 }
 
 function loadAcpPolicyRuntime(): Promise<AcpPolicyRuntime> {
-  acpPolicyRuntimePromise ??= import("../acp/policy.js");
-  return acpPolicyRuntimePromise;
+  return acpPolicyRuntimeLoader.load();
 }
 
 function loadAcpRuntimeErrorsRuntime(): Promise<AcpRuntimeErrorsRuntime> {
-  acpRuntimeErrorsRuntimePromise ??= import("../acp/runtime/errors.js");
-  return acpRuntimeErrorsRuntimePromise;
+  return acpRuntimeErrorsRuntimeLoader.load();
 }
 
 function loadAcpSessionIdentifiersRuntime(): Promise<AcpSessionIdentifiersRuntime> {
-  acpSessionIdentifiersRuntimePromise ??= import("../acp/runtime/session-identifiers.js");
-  return acpSessionIdentifiersRuntimePromise;
+  return acpSessionIdentifiersRuntimeLoader.load();
 }
 
 function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
-  deliveryRuntimePromise ??= import("./command/delivery.runtime.js");
-  return deliveryRuntimePromise;
+  return deliveryRuntimeLoader.load();
 }
 
 function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
-  sessionStoreRuntimePromise ??= import("./command/session-store.runtime.js");
-  return sessionStoreRuntimePromise;
+  return sessionStoreRuntimeLoader.load();
 }
 
 function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
-  cliCompactionRuntimePromise ??= import("./command/cli-compaction.js");
-  return cliCompactionRuntimePromise;
+  return cliCompactionRuntimeLoader.load();
 }
 
 function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
-  transcriptResolveRuntimePromise ??= import("../config/sessions/transcript-resolve.runtime.js");
-  return transcriptResolveRuntimePromise;
+  return transcriptResolveRuntimeLoader.load();
 }
 
 function loadCliDepsRuntime(): Promise<CliDepsRuntime> {
-  cliDepsRuntimePromise ??= import("../cli/deps.js");
-  return cliDepsRuntimePromise;
+  return cliDepsRuntimeLoader.load();
 }
 
 function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
-  execDefaultsRuntimePromise ??= import("./exec-defaults.js");
-  return execDefaultsRuntimePromise;
+  return execDefaultsRuntimeLoader.load();
 }
 
 function loadSkillsRuntime(): Promise<SkillsRuntime> {
-  skillsRuntimePromise ??= import("./skills.js");
-  return skillsRuntimePromise;
+  return skillsRuntimeLoader.load();
 }
 
 function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
-  skillsFilterRuntimePromise ??= import("./skills/filter.js");
-  return skillsFilterRuntimePromise;
+  return skillsFilterRuntimeLoader.load();
 }
 
 function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
-  skillsRefreshStateRuntimePromise ??= import("./skills/refresh-state.js");
-  return skillsRefreshStateRuntimePromise;
+  return skillsRefreshStateRuntimeLoader.load();
 }
 
 function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
-  skillsRemoteRuntimePromise ??= import("../infra/skills-remote.js");
-  return skillsRemoteRuntimePromise;
+  return skillsRemoteRuntimeLoader.load();
 }
 
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
@@ -252,6 +273,7 @@ async function prepareAgentCommandExecution(
   opts: AgentCommandOpts & { senderIsOwner: boolean },
   runtime: RuntimeEnv,
 ) {
+  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const message = opts.message ?? "";
   if (!message.trim()) {
     throw new Error("Message (--message) is required");
@@ -294,7 +316,13 @@ async function prepareAgentCommandExecution(
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const thinkingLevelsHint = formatThinkingLevels(configuredModel.provider, configuredModel.model);
+  const configuredThinkingCatalog = buildConfiguredModelCatalog({ cfg });
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+    ", ",
+    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
+  );
 
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
@@ -362,6 +390,7 @@ async function prepareAgentCommandExecution(
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+    skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
   });
   const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
@@ -374,7 +403,7 @@ async function prepareAgentCommandExecution(
       })
     : null;
   const body =
-    acpResolution?.kind === "ready"
+    !isRawModelRun && acpResolution?.kind === "ready"
       ? resolveAcpPromptBody(message, opts.internalEvents)
       : prependInternalEventContext(message, opts.internalEvents);
   const transcriptBody =
@@ -384,6 +413,7 @@ async function prepareAgentCommandExecution(
     body,
     transcriptBody,
     cfg,
+    configuredThinkingCatalog,
     normalizedSpawned,
     agentCfg,
     thinkOverride,
@@ -414,11 +444,13 @@ async function agentCommandInternal(
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
+  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
   const prepared = await prepareAgentCommandExecution(opts, runtime);
   const {
     body,
     transcriptBody,
     cfg,
+    configuredThinkingCatalog,
     normalizedSpawned,
     agentCfg,
     thinkOverride,
@@ -456,11 +488,11 @@ async function agentCommandInternal(
       }
     }
 
-    if (acpResolution?.kind === "stale") {
+    if (!isRawModelRun && acpResolution?.kind === "stale") {
       throw acpResolution.error;
     }
 
-    if (acpResolution?.kind === "ready" && sessionKey) {
+    if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
       const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
       const startedAt = Date.now();
       registerAgentRunContext(runId, {
@@ -555,6 +587,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
+          config: cfg,
         });
       } catch (error) {
         log.warn(
@@ -604,35 +637,38 @@ async function agentCommandInternal(
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
+    const buildSkillsSnapshot = async () => {
+      const [
+        { buildWorkspaceSkillSnapshot },
+        { getRemoteSkillEligibility },
+        { canExecRequestNode },
+      ] = await Promise.all([
+        loadSkillsRuntime(),
+        loadSkillsRemoteRuntime(),
+        loadExecDefaultsRuntime(),
+      ]);
+      return buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: cfg,
+        eligibility: {
+          remote: getRemoteSkillEligibility({
+            advertiseExecNode: canExecRequestNode({
+              cfg,
+              sessionEntry,
+              sessionKey,
+              agentId: sessionAgentId,
+            }),
+          }),
+        },
+        snapshotVersion: skillsSnapshotVersion,
+        skillFilter,
+        agentId: sessionAgentId,
+      });
+    };
     const skillsSnapshot = needsSkillsSnapshot
-      ? await (async () => {
-          const [
-            { buildWorkspaceSkillSnapshot },
-            { getRemoteSkillEligibility },
-            { canExecRequestNode },
-          ] = await Promise.all([
-            loadSkillsRuntime(),
-            loadSkillsRemoteRuntime(),
-            loadExecDefaultsRuntime(),
-          ]);
-          return buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            eligibility: {
-              remote: getRemoteSkillEligibility({
-                advertiseExecNode: canExecRequestNode({
-                  cfg,
-                  sessionEntry,
-                  sessionKey,
-                  agentId: sessionAgentId,
-                }),
-              }),
-            },
-            snapshotVersion: skillsSnapshotVersion,
-            skillFilter,
-            agentId: sessionAgentId,
-          });
-        })()
-      : currentSkillsSnapshot;
+      ? await buildSkillsSnapshot()
+      : !currentSkillsSnapshot
+        ? undefined
+        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
       const now = Date.now();
@@ -696,6 +732,9 @@ async function agentCommandInternal(
     const hasStoredOverride = Boolean(
       sessionEntry?.modelOverride || sessionEntry?.providerOverride,
     );
+    let storedModelOverrideSource = hasStoredOverride
+      ? sessionEntry?.modelOverrideSource
+      : undefined;
     const explicitProviderOverride =
       typeof opts.provider === "string"
         ? normalizeExplicitOverrideInput(opts.provider, "provider")
@@ -710,12 +749,12 @@ async function agentCommandInternal(
     }
     const needsModelCatalog = Boolean(hasAllowlist);
     let allowedModelKeys = new Set<string>();
-    let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
-    let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
+    let allowedModelCatalog: ReturnType<typeof loadManifestModelCatalog> = [];
+    let modelCatalog: ReturnType<typeof loadManifestModelCatalog> | null = null;
     let allowAnyModel = !hasAllowlist;
 
     if (needsModelCatalog) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
+      modelCatalog = loadManifestModelCatalog({ config: cfg, workspaceDir });
       const allowed = buildAllowedModelSet({
         cfg,
         catalog: modelCatalog,
@@ -810,17 +849,21 @@ async function agentCommandInternal(
       }
     }
 
+    const catalogForThinking =
+      allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : modelCatalog && modelCatalog.length > 0
+          ? modelCatalog
+          : configuredThinkingCatalog;
+    const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
-      const catalogForThinking = modelCatalog ?? allowedModelCatalog;
       resolvedThinkLevel = resolveThinkingDefault({
         cfg,
         provider,
         model,
-        catalog: catalogForThinking.length > 0 ? catalogForThinking : undefined,
+        catalog: thinkingCatalog,
       });
     }
-    const catalogForThinking = modelCatalog ?? allowedModelCatalog;
-    const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (
       !isThinkingLevelSupported({
         provider,
@@ -899,34 +942,58 @@ async function agentCommandInternal(
       opts.replyChannel ?? opts.channel,
     );
 
-    let result: Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
+    let result: AgentAttemptResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
+    const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
+      cfg,
+      runId,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      provider,
+      modelId: model,
+      workspaceDir,
+    });
     for (;;) {
       try {
         const spawnedBy = normalizedSpawned.spawnedBy ?? sessionEntry?.spawnedBy;
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,
-          hasSessionModelOverride: Boolean(storedModelOverride),
+          hasSessionModelOverride:
+            hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
+          modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
         });
 
         let fallbackAttemptIndex = 0;
-        const fallbackResult = await runWithModelFallback({
+        let currentTurnUserMessagePersisted = false;
+        const fallbackResult = await runWithModelFallback<AgentAttemptResult>({
           cfg,
           provider,
           model,
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
+          onFallbackStep: (step) => {
+            fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
+          },
+          classifyResult: ({ provider, model, result }) =>
+            classifyEmbeddedPiRunResultForModelFallback({
+              provider,
+              model,
+              result,
+            }),
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
+              modelFallbacksOverride: effectiveFallbacksOverride,
+              originalProvider: provider,
               cfg,
               sessionEntry,
               sessionId,
@@ -937,6 +1004,13 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
+              fastMode: resolveFastModeState({
+                cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                sessionEntry,
+              }).enabled,
               timeoutMs,
               runId,
               opts,
@@ -952,14 +1026,11 @@ async function agentCommandInternal(
               allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
               sessionHasHistory:
                 !isNewSession || (await attemptExecutionRuntime.sessionFileHasContent(sessionFile)),
+              suppressPromptPersistenceOnRetry: isFallbackRetry && currentTurnUserMessagePersisted,
+              onUserMessagePersisted: () => {
+                currentTurnUserMessagePersisted = true;
+              },
               onAgentEvent: (evt) => {
-                if (evt.stream.startsWith("codex_app_server.")) {
-                  emitAgentEvent({
-                    runId,
-                    stream: evt.stream,
-                    data: evt.data ?? {},
-                  });
-                }
                 if (
                   evt.stream === "lifecycle" &&
                   typeof evt.data?.phase === "string" &&
@@ -974,6 +1045,18 @@ async function agentCommandInternal(
         result = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
+          result = {
+            ...result,
+            meta: {
+              ...result.meta,
+              agentMeta: {
+                ...result.meta.agentMeta,
+                fallbackAttempts: fallbackResult.attempts,
+              },
+            },
+          };
+        }
         if (!lifecycleEnded) {
           const stopReason = result.meta.stopReason;
           if (stopReason && stopReason !== "end_turn") {
@@ -1011,6 +1094,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Exceeded maximum live model switch retries (${MAX_LIVE_SWITCH_RETRIES})`,
               { cause: err },
@@ -1035,6 +1119,7 @@ async function agentCommandInternal(
                 },
               });
             }
+            await fallbackTrajectoryRecorder?.flush();
             throw new Error(
               `Live model switch rejected: ${sanitizeForLog(err.provider)}/${sanitizeForLog(err.model)} is not in the agent allowlist`,
               { cause: err },
@@ -1061,6 +1146,7 @@ async function agentCommandInternal(
             err.provider !== previousProvider
           ) {
             storedModelOverride = err.model;
+            storedModelOverrideSource = "user";
           }
           lifecycleEnded = false;
           log.info(
@@ -1080,9 +1166,11 @@ async function agentCommandInternal(
             },
           });
         }
+        await fallbackTrajectoryRecorder?.flush();
         throw err;
       }
     }
+    await fallbackTrajectoryRecorder?.flush();
 
     // Update token+model fields in the session store.
     if (sessionStore && sessionKey) {
@@ -1103,6 +1191,7 @@ async function agentCommandInternal(
           opts.bootstrapContextRunKind !== "cron" &&
           opts.bootstrapContextRunKind !== "heartbeat" &&
           !opts.internalEvents?.length,
+        preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
@@ -1121,6 +1210,7 @@ async function agentCommandInternal(
           sessionAgentId,
           threadId: opts.threadId,
           sessionCwd: workspaceDir,
+          config: cfg,
         });
         sessionEntry = await (
           await loadCliCompactionRuntime()
@@ -1151,8 +1241,43 @@ async function agentCommandInternal(
     }
 
     const payloads = result.payloads ?? [];
+
+    // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
+    // This ensures that if the process restarts during delivery, the payload is durable.
+    if (
+      opts.deliver === true &&
+      sessionStore &&
+      sessionKey &&
+      payloads.length > 0 &&
+      !isSubagentSessionKey(sessionKey)
+    ) {
+      const now = Date.now();
+      const combinedPayload = payloads
+        .map((p) => (typeof p.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join("\n\n");
+
+      if (combinedPayload) {
+        const entry = sessionStore[sessionKey] ?? sessionEntry;
+        const next: SessionEntry = {
+          ...entry,
+          pendingFinalDelivery: true,
+          pendingFinalDeliveryText: combinedPayload,
+          pendingFinalDeliveryCreatedAt: now,
+          updatedAt: now,
+        };
+        await persistSessionEntry({
+          sessionStore,
+          sessionKey,
+          storePath,
+          entry: next,
+        });
+        sessionEntry = next;
+      }
+    }
+
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-    return await deliverAgentCommandResult({
+    const deliveryResult = await deliverAgentCommandResult({
       cfg,
       deps: resolvedDeps,
       runtime,
@@ -1162,6 +1287,32 @@ async function agentCommandInternal(
       result,
       payloads,
     });
+
+    // Phase 2: Clear pending delivery payload after successful delivery.
+    if (
+      deliveryResult?.deliverySucceeded === true &&
+      sessionStore &&
+      sessionKey &&
+      !isSubagentSessionKey(sessionKey)
+    ) {
+      const entry = sessionStore[sessionKey] ?? sessionEntry;
+      const next: SessionEntry = {
+        ...entry,
+        pendingFinalDelivery: undefined,
+        pendingFinalDeliveryText: undefined,
+        pendingFinalDeliveryCreatedAt: undefined,
+        updatedAt: Date.now(),
+      };
+      await persistSessionEntry({
+        sessionStore,
+        sessionKey,
+        storePath,
+        entry: next,
+      });
+      sessionEntry = next;
+    }
+
+    return deliveryResult;
   } finally {
     clearAgentRunContext(runId);
   }

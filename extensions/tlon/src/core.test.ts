@@ -1,11 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardConfigure,
   createPluginSetupWizardStatus,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { TlonAuthorizationSchema, TlonConfigSchema } from "./config-schema.js";
 import { tlonSetupWizard } from "./setup-surface.js";
@@ -99,6 +99,17 @@ describe("tlon core", () => {
     });
 
     expect(parsed.accounts?.primary?.ship).toBe("~zod");
+  });
+
+  it("exposes group invite allowlists in channel config schema", () => {
+    expect(TlonConfigSchema.parse({ groupInviteAllowlist: ["~zod"] }).groupInviteAllowlist).toEqual(
+      ["~zod"],
+    );
+    expect(
+      TlonConfigSchema.parse({
+        accounts: { primary: { groupInviteAllowlist: ["~nec"] } },
+      }).accounts?.primary?.groupInviteAllowlist,
+    ).toEqual(["~nec"]);
   });
 
   it("configures ship, auth, and discovery settings", async () => {

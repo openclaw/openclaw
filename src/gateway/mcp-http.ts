@@ -4,7 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { logDebug, logWarn } from "../logger.js";
@@ -132,6 +132,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
             toolSchema: scopedTools.toolSchema,
             hookContext: {
               agentId: scopedTools.agentId,
+              config: cfg,
               sessionKey: requestContext.sessionKey,
             },
             signal: requestAbort.signal,

@@ -19,7 +19,7 @@ function createTransport(
   session: RealtimeTalkSessionResult,
   ctx: RealtimeTalkTransportContext,
 ): RealtimeTalkTransport {
-  const transport = session.transport ?? "webrtc-sdp";
+  const transport = resolveTransport(session);
   if (transport === "webrtc-sdp") {
     return new WebRtcSdpRealtimeTalkTransport(session as RealtimeTalkWebRtcSdpSessionResult, ctx);
   }
@@ -40,6 +40,33 @@ function createTransport(
   }
   const unknownTransport = (session as { transport?: string }).transport ?? "unknown";
   throw new Error(`Unsupported realtime Talk transport: ${unknownTransport}`);
+}
+
+function resolveTransport(session: RealtimeTalkSessionResult): string {
+  if (session.transport) {
+    return session.transport;
+  }
+  const raw = session as {
+    provider?: string;
+    protocol?: string;
+    websocketUrl?: string;
+  };
+  const provider = raw.provider?.trim().toLowerCase();
+  if (provider === "google" && (raw.protocol === "google-live-bidi" || raw.websocketUrl)) {
+    return "json-pcm-websocket";
+  }
+  if (provider === "google") {
+    throw new Error(buildGoogleWebRtcUnsupportedMessage());
+  }
+  return "webrtc-sdp";
+}
+
+function buildGoogleWebRtcUnsupportedMessage(): string {
+  return [
+    'Realtime voice provider "google" does not support browser WebRTC sessions.',
+    "Control UI Talk can use Google through the gateway relay or a Google Live WebSocket session instead.",
+    'Restart the gateway so it returns "gateway-relay" or "json-pcm-websocket", or switch Talk realtime to a WebRTC-capable provider such as OpenAI.',
+  ].join(" ");
 }
 
 export class RealtimeTalkSession {

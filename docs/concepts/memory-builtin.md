@@ -19,7 +19,7 @@ a per-agent SQLite database and needs no extra dependencies to get started.
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, or Mistral, the builtin
+If you have an API key for OpenAI, Gemini, Voyage, Mistral, or DeepInfra, the builtin
 engine auto-detects it and enables vector search. No config needed.
 
 To set a provider explicitly:
@@ -60,14 +60,15 @@ at a GGUF file:
 
 ## Supported embedding providers
 
-| Provider | ID        | Auto-detected | Notes                               |
-| -------- | --------- | ------------- | ----------------------------------- |
-| OpenAI   | `openai`  | Yes           | Default: `text-embedding-3-small`   |
-| Gemini   | `gemini`  | Yes           | Supports multimodal (image + audio) |
-| Voyage   | `voyage`  | Yes           |                                     |
-| Mistral  | `mistral` | Yes           |                                     |
-| Ollama   | `ollama`  | No            | Local, set explicitly               |
-| Local    | `local`   | Yes (first)   | Optional `node-llama-cpp` runtime   |
+| Provider  | ID          | Auto-detected | Notes                               |
+| --------- | ----------- | ------------- | ----------------------------------- |
+| OpenAI    | `openai`    | Yes           | Default: `text-embedding-3-small`   |
+| Gemini    | `gemini`    | Yes           | Supports multimodal (image + audio) |
+| Voyage    | `voyage`    | Yes           |                                     |
+| Mistral   | `mistral`   | Yes           |                                     |
+| DeepInfra | `deepinfra` | Yes           | Default: `BAAI/bge-m3`              |
+| Ollama    | `ollama`    | No            | Local, set explicitly               |
+| Local     | `local`     | Yes (first)   | Optional `node-llama-cpp` runtime   |
 
 Auto-detection picks the first provider whose API key can be resolved, in the
 order shown. Set `memorySearch.provider` to override.
@@ -126,7 +127,10 @@ when `memorySearch.local.modelPath` points to an existing local file.
 may miss changes in rare edge cases.
 
 **sqlite-vec not loading?** OpenClaw falls back to in-process cosine similarity
-automatically. Check logs for the specific load error.
+automatically. `openclaw memory status --deep` reports the local vector store
+separately from the embedding provider, so `Vector store: unavailable` points
+at sqlite-vec loading while `Embeddings: unavailable` points at provider/auth
+or model readiness. Check logs for the specific load error.
 
 ## Configuration
 

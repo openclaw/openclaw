@@ -67,6 +67,26 @@ Use `--json` for stable machine-readable output in CI annotations. OpenClaw
 core should expose contracts and fixtures the inspector can consume, but should
 not publish the inspector binary from the main `openclaw` package.
 
+### Maintainer acceptance lane
+
+Use Blacksmith Testbox for the installable-package acceptance lane when validating
+the external inspector against OpenClaw plugin packages. Run it from a clean
+OpenClaw checkout after the package is built:
+
+```sh
+blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
+blacksmith testbox run --id <tbx_id> "pnpm install && pnpm build && npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/telegram --json"
+blacksmith testbox run --id <tbx_id> "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- ./extensions/discord --json"
+blacksmith testbox run --id <tbx_id> "npm exec --yes @openclaw/plugin-inspector@0.1.0 -- <clawhub-plugin-dir> --json"
+blacksmith testbox stop <tbx_id>
+```
+
+Keep this lane opt-in for maintainers because it installs an external npm
+package and may inspect plugin packages cloned outside the repo. The local repo
+guards cover the SDK export map, compatibility registry metadata, deprecated
+SDK-import burn-down, and bundled extension import boundaries; Testbox inspector
+proof covers the package as external plugin authors consume it.
+
 ## Deprecation policy
 
 OpenClaw should not remove a documented plugin contract in the same release
@@ -98,7 +118,8 @@ Current compatibility records include:
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,
   `openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/command-auth`
-  status builders, `openclaw/plugin-sdk/test-utils`, and the `ClawdbotConfig` /
+  status builders, `openclaw/plugin-sdk/test-utils` (replaced by focused
+  `openclaw/plugin-sdk/*` test subpaths), and the `ClawdbotConfig` /
   `OpenClawSchemaType` type aliases
 - bundled plugin allowlist and enablement behavior
 - legacy provider/channel env-var manifest metadata
@@ -111,6 +132,8 @@ Current compatibility records include:
   `registerMemoryCapability`
 - legacy channel SDK helpers for native message schemas, mention gating,
   inbound envelope formatting, and approval capability nesting
+- legacy channel route key and comparable-target helper aliases while plugins
+  move to `openclaw/plugin-sdk/channel-route`
 - activation hints that are being replaced by manifest contribution ownership
 - `setup-api` runtime fallback while setup descriptors move to cold
   `setup.requiresRuntime: false` metadata

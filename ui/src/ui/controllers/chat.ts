@@ -1,4 +1,8 @@
 import { resetToolStream } from "../app-tool-stream.ts";
+import {
+  getChatAttachmentDataUrl,
+  getChatAttachmentPreviewUrl,
+} from "../chat/attachment-payload-store.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
@@ -10,8 +14,8 @@ import {
   isMissingOperatorReadScopeError,
 } from "./scope-errors.ts";
 
-const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
@@ -264,7 +268,7 @@ function messageDisplaySignature(message: unknown): string | null {
   }
 }
 
-function preserveOptimisticTailMessages(
+export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
 ): unknown[] {
@@ -279,20 +283,28 @@ function preserveOptimisticTailMessages(
       ? previousMessages
       : historyMessages;
   }
-  const historySignatures = new Set(
-    historyMessages
-      .map((message) => messageDisplaySignature(message))
-      .filter((signature): signature is string => Boolean(signature)),
-  );
+  const historySignatureIndexes = new Map<string, number>();
+  historyMessages.forEach((message, index) => {
+    const signature = messageDisplaySignature(message);
+    if (signature) {
+      historySignatureIndexes.set(signature, index);
+    }
+  });
   let sharedPreviousIndex = -1;
+  let sharedHistoryIndex = -1;
   for (let index = previousMessages.length - 1; index >= 0; index--) {
     const signature = messageDisplaySignature(previousMessages[index]);
-    if (signature && historySignatures.has(signature)) {
+    const historyIndex = signature ? historySignatureIndexes.get(signature) : undefined;
+    if (typeof historyIndex === "number") {
       sharedPreviousIndex = index;
+      sharedHistoryIndex = historyIndex;
       break;
     }
   }
   if (sharedPreviousIndex < 0) {
+    return historyMessages;
+  }
+  if (sharedHistoryIndex < historyMessages.length - 1) {
     return historyMessages;
   }
   const optimisticTail: unknown[] = [];
@@ -301,7 +313,7 @@ function preserveOptimisticTailMessages(
       return historyMessages;
     }
     const signature = messageDisplaySignature(message);
-    if (!signature || historySignatures.has(signature)) {
+    if (!signature || historySignatureIndexes.has(signature)) {
       return historyMessages;
     }
     optimisticTail.push(message);
@@ -338,6 +350,7 @@ export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
   sessionKey: string;
+  currentSessionId?: string | null;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatThinkingLevel: string | null;
@@ -352,7 +365,7 @@ export type ChatState = {
 };
 
 export type ChatEventPayload = {
-  runId: string;
+  runId?: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
@@ -384,16 +397,17 @@ export async function loadChatHistory(state: ChatState) {
   state.chatLoading = true;
   state.lastError = null;
   try {
-    let res: { messages?: Array<unknown>; thinkingLevel?: string };
+    let res: { messages?: Array<unknown>; sessionId?: string; thinkingLevel?: string };
     for (;;) {
       try {
-        res = await state.client.request<{ messages?: Array<unknown>; thinkingLevel?: string }>(
-          "chat.history",
-          {
-            sessionKey,
-            limit: 200,
-          },
-        );
+        res = await state.client.request<{
+          messages?: Array<unknown>;
+          sessionId?: string;
+          thinkingLevel?: string;
+        }>("chat.history", {
+          sessionKey,
+          limit: 200,
+        });
         break;
       } catch (err) {
         if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
@@ -417,6 +431,8 @@ export async function loadChatHistory(state: ChatState) {
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
     state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    state.currentSessionId =
+      typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
     // Clear all streaming state — history includes tool results and text
     // inline, so keeping streaming artifacts would cause duplicates.
@@ -454,7 +470,8 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
   return hasAttachments
     ? attachments
         .map((att) => {
-          const parsed = dataUrlToBase64(att.dataUrl);
+          const dataUrl = getChatAttachmentDataUrl(att);
+          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
           if (!parsed) {
             return null;
           }
@@ -473,8 +490,13 @@ async function requestChatSend(
   state: ChatState,
   params: { message: string; attachments?: ChatAttachment[]; runId: string },
 ) {
+  const sessionId =
+    typeof state.currentSessionId === "string" && state.currentSessionId.trim()
+      ? state.currentSessionId.trim()
+      : undefined;
   await state.client!.request("chat.send", {
     sessionKey: state.sessionKey,
+    ...(sessionId ? { sessionId } : {}),
     message: params.message,
     deliver: false,
     idempotencyKey: params.runId,
@@ -544,6 +566,9 @@ export async function sendChatMessage(
   if (!msg && !hasAttachments) {
     return null;
   }
+  if (state.chatSending) {
+    return state.chatRunId;
+  }
 
   const now = Date.now();
 
@@ -551,6 +576,7 @@ export async function sendChatMessage(
   const contentBlocks: Array<{
     type: string;
     text?: string;
+    url?: string;
     source?: unknown;
     attachment?: {
       url: string;
@@ -565,17 +591,22 @@ export async function sendChatMessage(
   // Add image previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      const previewUrl = getChatAttachmentPreviewUrl(att);
+      if (!previewUrl) {
+        continue;
+      }
       if (att.mimeType.startsWith("image/")) {
         contentBlocks.push({
           type: "image",
-          source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
+          url: previewUrl,
+          source: { type: "url", url: previewUrl },
         });
         continue;
       }
       contentBlocks.push({
         type: "attachment",
         attachment: {
-          url: att.dataUrl,
+          url: previewUrl,
           kind: att.mimeType.startsWith("audio/") ? "audio" : "document",
           label: att.fileName?.trim() || "Attached file",
           mimeType: att.mimeType,
@@ -692,13 +723,19 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  if (payload.sessionKey !== state.sessionKey) {
+  const sessionMatches = payload.sessionKey === state.sessionKey;
+  const activeRunMatches =
+    state.chatRunId !== null &&
+    typeof payload.runId === "string" &&
+    payload.runId === state.chatRunId;
+  if (!sessionMatches && !activeRunMatches) {
     return null;
   }
 
+  // Terminal events for the active client run carry runId; missing-runId events are unowned.
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
   // See https://github.com/openclaw/openclaw/issues/1909
-  if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
+  if (state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !isAssistantSilentReply(finalMessage)) {

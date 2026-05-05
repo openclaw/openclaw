@@ -58,11 +58,11 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-export function identityDeliveryContext(value: unknown) {
+function identityDeliveryContext(value: unknown) {
   return value;
 }
 
-export function createDefaultSessionHelperMocks() {
+function createDefaultSessionHelperMocks() {
   return {
     resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
     resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
@@ -97,6 +97,7 @@ export function expectPersistedRuntimeModel(params: {
   sessionKey: string | RegExp;
   provider: string;
   model: string;
+  overrideSource?: "auto" | "user";
 }) {
   const [persistedKey, persistedEntry] = Object.entries(params.persistedStore ?? {})[0] ?? [];
   if (typeof params.sessionKey === "string") {
@@ -107,16 +108,20 @@ export function expectPersistedRuntimeModel(params: {
   expect(persistedEntry).toMatchObject({
     modelProvider: params.provider,
     model: params.model,
+    providerOverride: params.provider,
+    modelOverride: params.model,
+    ...(params.overrideSource ? { modelOverrideSource: params.overrideSource } : {}),
   });
 }
 
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
+  ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
-  resolveParentForkMaxTokensMock?: MockFn;
+  resolveParentForkDecisionMock?: MockFn;
   pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
@@ -174,8 +179,33 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    ensureContextEnginesInitialized:
+      params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
-    resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
+    resolveParentForkDecision:
+      params.resolveParentForkDecisionMock ??
+      (async (forkParams: { parentEntry?: { totalTokens?: unknown } }) => {
+        const maxTokens = 100_000;
+        const parentTokens =
+          typeof forkParams.parentEntry?.totalTokens === "number" &&
+          Number.isFinite(forkParams.parentEntry.totalTokens)
+            ? Math.floor(forkParams.parentEntry.totalTokens)
+            : undefined;
+        if (maxTokens > 0 && typeof parentTokens === "number" && parentTokens > maxTokens) {
+          return {
+            status: "skip",
+            reason: "parent-too-large",
+            maxTokens,
+            parentTokens,
+            message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+          };
+        }
+        return {
+          status: "fork",
+          maxTokens,
+          ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+        };
+      }),
     mergeSessionEntry: (
       current: Record<string, unknown> | undefined,
       next: Record<string, unknown>,

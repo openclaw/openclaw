@@ -73,7 +73,7 @@ describe("sessions_spawn tool", () => {
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
-        resumeSessionId?: unknown;
+        resumeSessionId?: { description?: string };
         streamTo?: { description?: string };
       };
     };
@@ -93,7 +93,7 @@ describe("sessions_spawn tool", () => {
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
-        resumeSessionId?: unknown;
+        resumeSessionId?: { description?: string };
         streamTo?: { description?: string };
       };
     };
@@ -103,7 +103,15 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
     expect(schema.properties?.resumeSessionId).toBeDefined();
     expect(schema.properties?.streamTo).toBeDefined();
-    expect(schema.properties?.streamTo?.description).toContain('Requires runtime="acp"');
+    expect(schema.properties?.resumeSessionId?.description).toContain("ACP-only resume target");
+    expect(schema.properties?.resumeSessionId?.description).toContain(
+      'ignored for runtime="subagent"',
+    );
+    expect(schema.properties?.resumeSessionId?.description).toContain(
+      "already recorded for this requester",
+    );
+    expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
+    expect(schema.properties?.streamTo?.description).toContain('ignored for runtime="subagent"');
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -176,6 +184,58 @@ describe("sessions_spawn tool", () => {
 
     expect(tool.description).toContain('runtime="acp"');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
+  });
+
+  it("hides thread-bound spawn fields when current channel disables spawnSessions", () => {
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: false,
+            },
+          },
+        },
+      },
+    });
+    const schema = tool.parameters as {
+      properties?: {
+        thread?: unknown;
+        mode?: { enum?: string[] };
+      };
+    };
+
+    expect(schema.properties?.thread).toBeUndefined();
+    expect(schema.properties?.mode?.enum).toEqual(["run"]);
+    expect(tool.description).not.toContain("thread-bound");
+  });
+
+  it("shows thread-bound spawn fields when current channel allows spawnSessions", () => {
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
+    const schema = tool.parameters as {
+      properties?: {
+        thread?: unknown;
+        mode?: { enum?: string[] };
+      };
+    };
+
+    expect(schema.properties?.thread).toBeDefined();
+    expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
+    expect(tool.description).toContain("thread-bound");
   });
 
   it("uses subagent runtime by default", async () => {
@@ -463,6 +523,44 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("suppresses completion announces for inline ACP session delivery", async () => {
+    registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+      mode: "session",
+      inlineDelivery: true,
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:parent-channel",
+      agentThreadId: "child-thread",
+    });
+
+    await tool.execute("call-inline-acp", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+      thread: true,
+      mode: "session",
+    });
+
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:main",
+        task: "investigate",
+        cleanup: "keep",
+        spawnMode: "session",
+        expectsCompletionMessage: false,
+      }),
+    );
+  });
+
   it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
@@ -507,14 +605,16 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("ignores resumeSessionId without runtime=acp", async () => {
+  it("ignores ACP-only fields for subagent spawns", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     const result = await tool.execute("call-guard", {
+      runtime: "subagent",
       task: "resume prior work",
       resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
+      streamTo: "parent",
     });
 
     expect(result.details).toMatchObject({
@@ -526,11 +626,14 @@ describe("sessions_spawn tool", () => {
       expect.objectContaining({
         task: "resume prior work",
       }),
-      expect.any(Object),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+      }),
     );
     expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty(
       "resumeSessionId",
     );
+    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
@@ -559,14 +662,14 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
-  it('ignores streamTo when runtime is not "acp"', async () => {
+  it('ignores streamTo when runtime is omitted and defaults to "subagent"', async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
     const result = await tool.execute("call-3b", {
-      runtime: "subagent",
       task: "analyze file",
+      resumeSessionId: "7f4a78e0-f6be-43fe-855c-c1c4fd229bc4",
       streamTo: "parent",
     });
 
@@ -581,6 +684,9 @@ describe("sessions_spawn tool", () => {
         task: "analyze file",
       }),
       expect.any(Object),
+    );
+    expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty(
+      "resumeSessionId",
     );
     expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
   });

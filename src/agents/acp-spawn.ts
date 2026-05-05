@@ -128,6 +128,7 @@ export const ACP_SPAWN_ERROR_CODES = [
   "acp_disabled",
   "requester_session_required",
   "runtime_policy",
+  "resume_forbidden",
   "subagent_policy",
   "thread_required",
   "target_agent_required",
@@ -144,6 +145,7 @@ type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
+  inlineDelivery?: boolean;
   streamLogPath?: string;
   note?: string;
 };
@@ -843,6 +845,72 @@ function resolveAcpSpawnStreamPlan(params: {
   };
 }
 
+function sessionEntryMatchesAcpResumeSessionId(
+  entry: SessionEntry | undefined,
+  resumeSessionId: string,
+): boolean {
+  const identity = entry?.acp?.identity;
+  return (
+    normalizeOptionalString(identity?.agentSessionId) === resumeSessionId ||
+    normalizeOptionalString(identity?.acpxSessionId) === resumeSessionId
+  );
+}
+
+function sessionEntryIsOwnedByRequester(params: {
+  sessionKey: string;
+  entry: SessionEntry | undefined;
+  requesterSessionKey: string;
+}): boolean {
+  return (
+    params.sessionKey === params.requesterSessionKey ||
+    normalizeOptionalString(params.entry?.spawnedBy) === params.requesterSessionKey ||
+    normalizeOptionalString(params.entry?.parentSessionKey) === params.requesterSessionKey
+  );
+}
+
+function validateAcpResumeSessionOwnership(params: {
+  cfg: OpenClawConfig;
+  targetAgentId: string;
+  requesterSessionKey?: string;
+  resumeSessionId?: string;
+}): { ok: true } | { ok: false; error: string } {
+  const resumeSessionId = normalizeOptionalString(params.resumeSessionId);
+  if (!resumeSessionId) {
+    return { ok: true };
+  }
+  const requesterSessionKey = normalizeOptionalString(params.requesterSessionKey);
+  if (!requesterSessionKey) {
+    return {
+      ok: false,
+      error: "sessions_spawn resumeSessionId requires an active requester session context.",
+    };
+  }
+
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
+  const sessionStore = loadSessionStore(storePath);
+  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
+    if (!sessionEntryMatchesAcpResumeSessionId(entry, resumeSessionId)) {
+      continue;
+    }
+    if (
+      sessionEntryIsOwnedByRequester({
+        sessionKey,
+        entry,
+        requesterSessionKey,
+      })
+    ) {
+      return { ok: true };
+    }
+    break;
+  }
+
+  return {
+    ok: false,
+    error:
+      "sessions_spawn resumeSessionId is only allowed for ACP sessions previously recorded for this requester. Omit resumeSessionId to start a fresh ACP session.",
+  };
+}
+
 async function initializeAcpSpawnRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -1156,6 +1224,19 @@ export async function spawnAcpDirect(
       error: subagentEnvelopeState.error,
     });
   }
+  const resumeAuthorization = validateAcpResumeSessionOwnership({
+    cfg,
+    targetAgentId,
+    requesterSessionKey: requesterInternalKey,
+    resumeSessionId: params.resumeSessionId,
+  });
+  if (!resumeAuthorization.ok) {
+    return createAcpSpawnFailure({
+      status: "forbidden",
+      errorCode: "resume_forbidden",
+      error: resumeAuthorization.error,
+    });
+  }
   const { effectiveStreamToParent } = resolveAcpSpawnStreamPlan({
     spawnMode,
     requestThreadBinding,
@@ -1414,6 +1495,7 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
+    ...(deliveryPlan.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };
 }

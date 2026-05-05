@@ -3,7 +3,6 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
-import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
@@ -14,26 +13,11 @@ import {
   type OpenClawPackageManifest,
   type PackageManifest,
 } from "./manifest.js";
-
-const INSTALLED_MANIFEST_REGISTRY_FALLBACK_CACHE_MAX_ENTRIES = 64;
-
-type InstalledManifestRegistryCacheEntry = {
-  registry: PluginManifestRegistry;
-  lastUsed: number;
-};
-
-const installedManifestRegistryFallbackCache = new Map<
-  string,
-  InstalledManifestRegistryCacheEntry
->();
-let installedManifestRegistryFallbackCacheTick = 0;
-
-function normalizePluginIdFilter(pluginIds: readonly string[] | undefined): string[] | undefined {
-  if (!pluginIds?.length) {
-    return undefined;
-  }
-  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
-}
+import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import {
+  normalizePluginDependencySpecs,
+  type PluginDependencySpecMap,
+} from "./status-dependencies.js";
 
 function resolvePackageJsonPath(record: InstalledPluginIndexRecord): string | undefined {
   if (!record.packageJson?.path) {
@@ -60,118 +44,53 @@ function safeFileSignature(filePath: string | undefined): string | undefined {
   }
 }
 
-function shouldUseInstalledManifestRegistryCache(params: {
-  env: NodeJS.ProcessEnv;
-  bundledChannelConfigCollector?: BundledChannelConfigCollector;
-}): boolean {
-  if (params.bundledChannelConfigCollector) {
-    return false;
-  }
-  if (params.env.OPENCLAW_DISABLE_INSTALLED_PLUGIN_MANIFEST_REGISTRY_CACHE?.trim()) {
-    return false;
-  }
-  return !params.env.OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE?.trim();
+function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
+  return {
+    version: index.version,
+    hostContractVersion: index.hostContractVersion,
+    compatRegistryVersion: index.compatRegistryVersion,
+    migrationVersion: index.migrationVersion,
+    policyHash: index.policyHash,
+    installRecords: index.installRecords,
+    diagnostics: index.diagnostics,
+    plugins: index.plugins.map((record) => {
+      const packageJsonPath = resolvePackageJsonPath(record);
+      return {
+        pluginId: record.pluginId,
+        packageName: record.packageName,
+        packageVersion: record.packageVersion,
+        installRecord: record.installRecord,
+        installRecordHash: record.installRecordHash,
+        packageInstall: record.packageInstall,
+        packageChannel: record.packageChannel,
+        manifestPath: record.manifestPath,
+        manifestHash: record.manifestHash,
+        manifestFile: safeFileSignature(record.manifestPath),
+        format: record.format,
+        bundleFormat: record.bundleFormat,
+        source: record.source,
+        setupSource: record.setupSource,
+        packageJson: record.packageJson,
+        packageJsonFile: safeFileSignature(packageJsonPath),
+        rootDir: record.rootDir,
+        origin: record.origin,
+        enabled: record.enabled,
+        enabledByDefault: record.enabledByDefault,
+        enabledByDefaultOnPlatforms: record.enabledByDefaultOnPlatforms
+          ? [...record.enabledByDefaultOnPlatforms]
+          : undefined,
+        syntheticAuthRefs: record.syntheticAuthRefs,
+        startup: record.startup,
+        compat: record.compat,
+      };
+    }),
+  };
 }
 
-function buildInstalledManifestRegistryCacheKey(params: {
-  index: InstalledPluginIndex;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  pluginIds?: readonly string[];
-  includeDisabled?: boolean;
-}): string {
-  return hashJson({
-    index: {
-      version: params.index.version,
-      hostContractVersion: params.index.hostContractVersion,
-      compatRegistryVersion: params.index.compatRegistryVersion,
-      migrationVersion: params.index.migrationVersion,
-      policyHash: params.index.policyHash,
-      installRecords: params.index.installRecords,
-      diagnostics: params.index.diagnostics,
-      plugins: params.index.plugins.map((record) => {
-        const packageJsonPath = resolvePackageJsonPath(record);
-        return {
-          pluginId: record.pluginId,
-          packageName: record.packageName,
-          packageVersion: record.packageVersion,
-          installRecord: record.installRecord,
-          installRecordHash: record.installRecordHash,
-          packageInstall: record.packageInstall,
-          packageChannel: record.packageChannel,
-          manifestPath: record.manifestPath,
-          manifestHash: record.manifestHash,
-          manifestFile: safeFileSignature(record.manifestPath),
-          format: record.format,
-          bundleFormat: record.bundleFormat,
-          source: record.source,
-          setupSource: record.setupSource,
-          packageJson: record.packageJson,
-          packageJsonFile: safeFileSignature(packageJsonPath),
-          rootDir: record.rootDir,
-          origin: record.origin,
-          enabled: record.enabled,
-          enabledByDefault: record.enabledByDefault,
-          syntheticAuthRefs: record.syntheticAuthRefs,
-          startup: record.startup,
-          compat: record.compat,
-        };
-      }),
-    },
-    request: {
-      workspaceDir: params.workspaceDir,
-      pluginIds: normalizePluginIdFilter(params.pluginIds),
-      includeDisabled: params.includeDisabled === true,
-      configPolicyHash: resolveInstalledPluginIndexPolicyHash(params.config),
-      env: {
-        OPENCLAW_VERSION: params.env.OPENCLAW_VERSION,
-        HOME: params.env.HOME,
-        USERPROFILE: params.env.USERPROFILE,
-      },
-    },
-  });
-}
-
-function getCachedInstalledManifestRegistry(cacheKey: string): PluginManifestRegistry | undefined {
-  const cached = installedManifestRegistryFallbackCache.get(cacheKey);
-  if (!cached) {
-    return undefined;
-  }
-  cached.lastUsed = ++installedManifestRegistryFallbackCacheTick;
-  return cached.registry;
-}
-
-function setCachedInstalledManifestRegistry(
-  cacheKey: string,
-  registry: PluginManifestRegistry,
-): void {
-  if (
-    !installedManifestRegistryFallbackCache.has(cacheKey) &&
-    installedManifestRegistryFallbackCache.size >=
-      INSTALLED_MANIFEST_REGISTRY_FALLBACK_CACHE_MAX_ENTRIES
-  ) {
-    let oldestKey: string | undefined;
-    let oldestTick = Number.POSITIVE_INFINITY;
-    for (const [key, entry] of installedManifestRegistryFallbackCache) {
-      if (entry.lastUsed < oldestTick) {
-        oldestKey = key;
-        oldestTick = entry.lastUsed;
-      }
-    }
-    if (oldestKey) {
-      installedManifestRegistryFallbackCache.delete(oldestKey);
-    }
-  }
-  installedManifestRegistryFallbackCache.set(cacheKey, {
-    registry,
-    lastUsed: ++installedManifestRegistryFallbackCacheTick,
-  });
-}
-
-export function clearInstalledManifestRegistryCache(): void {
-  installedManifestRegistryFallbackCache.clear();
-  installedManifestRegistryFallbackCacheTick = 0;
+export function resolveInstalledManifestRegistryIndexFingerprint(
+  index: InstalledPluginIndex,
+): string {
+  return hashJson(buildInstalledManifestRegistryIndexKey(index));
 }
 
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {
@@ -189,45 +108,64 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
   return path.join(rootDir, DEFAULT_PLUGIN_ENTRY_CANDIDATES[0]);
 }
 
-function resolveInstalledPackageManifest(
-  record: InstalledPluginIndexRecord,
-): OpenClawPackageManifest | undefined {
-  if (!record.packageChannel) {
-    return undefined;
-  }
-  if (record.packageChannel.commands) {
-    return { channel: record.packageChannel };
-  }
+function resolveInstalledPackageMetadata(record: InstalledPluginIndexRecord): {
+  packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
+} {
+  const fallbackPackageManifest = record.packageChannel
+    ? {
+        channel: record.packageChannel,
+      }
+    : undefined;
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = record.packageJson?.path
     ? path.resolve(rootDir, record.packageJson.path)
     : undefined;
   if (!packageJsonPath) {
-    return { channel: record.packageChannel };
+    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   const relative = path.relative(rootDir, packageJsonPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return { channel: record.packageChannel };
+    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
     const packageManifest = getPackageManifestMetadata(packageJson);
+    const dependencies = normalizePluginDependencySpecs({
+      dependencies: packageJson.dependencies,
+      optionalDependencies: packageJson.optionalDependencies,
+    });
+    if (!packageManifest) {
+      return {
+        ...(fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {}),
+        packageDependencies: dependencies.dependencies,
+        packageOptionalDependencies: dependencies.optionalDependencies,
+      };
+    }
+    const channel =
+      record.packageChannel || packageManifest.channel
+        ? {
+            ...record.packageChannel,
+            ...packageManifest.channel,
+          }
+        : undefined;
     return {
-      channel: {
-        ...record.packageChannel,
-        ...(packageManifest?.channel?.commands
-          ? { commands: packageManifest.channel.commands }
-          : {}),
+      packageManifest: {
+        ...packageManifest,
+        ...(channel ? { channel } : {}),
       },
+      packageDependencies: dependencies.dependencies,
+      packageOptionalDependencies: dependencies.optionalDependencies,
     };
   } catch {
-    return { channel: record.packageChannel };
+    return fallbackPackageManifest ? { packageManifest: fallbackPackageManifest } : {};
   }
 }
 
 function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate {
   const rootDir = resolveInstalledPluginRootDir(record);
-  const packageManifest = resolveInstalledPackageManifest(record);
+  const packageMetadata = resolveInstalledPackageMetadata(record);
   return {
     idHint: record.pluginId,
     source: record.source ?? resolveFallbackPluginSource(record),
@@ -238,7 +176,15 @@ function toPluginCandidate(record: InstalledPluginIndexRecord): PluginCandidate 
     ...(record.bundleFormat ? { bundleFormat: record.bundleFormat } : {}),
     ...(record.packageName ? { packageName: record.packageName } : {}),
     ...(record.packageVersion ? { packageVersion: record.packageVersion } : {}),
-    ...(packageManifest ? { packageManifest } : {}),
+    ...(packageMetadata.packageManifest
+      ? { packageManifest: packageMetadata.packageManifest }
+      : {}),
+    ...(packageMetadata.packageDependencies
+      ? { packageDependencies: packageMetadata.packageDependencies }
+      : {}),
+    ...(packageMetadata.packageOptionalDependencies
+      ? { packageOptionalDependencies: packageMetadata.packageOptionalDependencies }
+      : {}),
     packageDir: rootDir,
   };
 }
@@ -252,54 +198,40 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
   includeDisabled?: boolean;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
 }): PluginManifestRegistry {
-  if (params.pluginIds && params.pluginIds.length === 0) {
-    return { plugins: [], diagnostics: [] };
-  }
-  const env = params.env ?? process.env;
-  const cacheKey = shouldUseInstalledManifestRegistryCache({
-    env,
-    bundledChannelConfigCollector: params.bundledChannelConfigCollector,
-  })
-    ? buildInstalledManifestRegistryCacheKey({
-        index: params.index,
+  return tracePluginLifecyclePhase(
+    "manifest registry",
+    () => {
+      if (params.pluginIds && params.pluginIds.length === 0) {
+        return { plugins: [], diagnostics: [] };
+      }
+      const env = params.env ?? process.env;
+      const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
+      const diagnostics = pluginIdSet
+        ? params.index.diagnostics.filter((diagnostic) => {
+            const pluginId = diagnostic.pluginId;
+            return !pluginId || pluginIdSet.has(pluginId);
+          })
+        : params.index.diagnostics;
+      const candidates = params.index.plugins
+        .filter((plugin) => params.includeDisabled || plugin.enabled)
+        .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
+        .map(toPluginCandidate);
+      return loadPluginManifestRegistry({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env,
-        pluginIds: params.pluginIds,
-        includeDisabled: params.includeDisabled,
-      })
-    : undefined;
-  if (cacheKey) {
-    const cached = getCachedInstalledManifestRegistry(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
-  const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
-  const diagnostics = pluginIdSet
-    ? params.index.diagnostics.filter((diagnostic) => {
-        const pluginId = diagnostic.pluginId;
-        return !pluginId || pluginIdSet.has(pluginId);
-      })
-    : params.index.diagnostics;
-  const candidates = params.index.plugins
-    .filter((plugin) => params.includeDisabled || plugin.enabled)
-    .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
-    .map(toPluginCandidate);
-  const registry = loadPluginManifestRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    cache: false,
-    candidates,
-    diagnostics: [...diagnostics],
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
-    ...(params.bundledChannelConfigCollector
-      ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
-      : {}),
-  });
-  if (cacheKey) {
-    setCachedInstalledManifestRegistry(cacheKey, registry);
-  }
-  return registry;
+        candidates,
+        diagnostics: [...diagnostics],
+        installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(params.index),
+        ...(params.bundledChannelConfigCollector
+          ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
+          : {}),
+      });
+    },
+    {
+      includeDisabled: params.includeDisabled === true,
+      pluginIdCount: params.pluginIds?.length,
+      indexPluginCount: params.index.plugins.length,
+    },
+  );
 }

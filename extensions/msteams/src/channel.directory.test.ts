@@ -1,17 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/plugins/directory.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
-import { msteamsDirectoryAdapter } from "./directory.js";
+import { msteamsPlugin } from "./channel.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 
-function requireDirectorySelf(): NonNullable<(typeof msteamsDirectoryAdapter)["self"]> {
-  if (!msteamsDirectoryAdapter.self) {
+const msteamsDirectoryAdapter = msteamsPlugin.directory;
+
+function requireDirectorySelf(): NonNullable<NonNullable<typeof msteamsDirectoryAdapter>["self"]> {
+  const directorySelf = msteamsDirectoryAdapter?.self;
+  if (!directorySelf) {
     throw new Error("expected msteams directory.self");
   }
-  return msteamsDirectoryAdapter.self;
+  return directorySelf;
 }
 
 describe("msteams directory", () => {

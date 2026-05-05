@@ -115,7 +115,8 @@ describe("provider attribution", () => {
       headers: {
         "HTTP-Referer": "https://openclaw.ai",
         "X-OpenRouter-Title": "OpenClaw",
-        "X-OpenRouter-Categories": "cli-agent",
+        "X-OpenRouter-Categories":
+          "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       },
     });
   });
@@ -128,7 +129,8 @@ describe("provider attribution", () => {
     ).toEqual({
       "HTTP-Referer": "https://openclaw.ai",
       "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories": "cli-agent",
+      "X-OpenRouter-Categories":
+        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
     });
   });
 
@@ -606,7 +608,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it("requires the dedicated OpenAI audio transcription API for audio attribution", () => {
+  it("applies OpenAI attribution to every verified native capability", () => {
     expect(
       resolveProviderRequestPolicy({
         provider: "openai",
@@ -636,14 +638,25 @@ describe("provider attribution", () => {
     expect(
       resolveProviderRequestPolicy({
         provider: "openai",
-        api: "not-openai-audio",
         baseUrl: "https://api.openai.com/v1",
-        transport: "media-understanding",
+        transport: "http",
+        capability: "image",
+      }),
+    ).toMatchObject({
+      attributionProvider: "openai",
+      allowsHiddenAttribution: true,
+    });
+
+    expect(
+      resolveProviderRequestPolicy({
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        transport: "websocket",
         capability: "audio",
       }),
     ).toMatchObject({
-      attributionProvider: undefined,
-      allowsHiddenAttribution: false,
+      attributionProvider: "openai",
+      allowsHiddenAttribution: true,
     });
   });
 

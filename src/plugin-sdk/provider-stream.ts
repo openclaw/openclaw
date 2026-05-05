@@ -36,6 +36,7 @@ export {
   applyAnthropicPayloadPolicyToParams,
   buildCopilotDynamicHeaders,
   composeProviderStreamWrappers,
+  createAnthropicThinkingPrefillPayloadWrapper,
   createBedrockNoCacheWrapper,
   createMoonshotThinkingWrapper,
   createToolStreamWrapper,
@@ -48,6 +49,7 @@ export {
   resolveAnthropicPayloadPolicy,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
+  stripTrailingAnthropicAssistantPrefillWhenThinking,
 } from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =
@@ -137,7 +139,7 @@ export function buildProviderStreamFamilyHooks(
             ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
               ? undefined
               : ctx.thinkingLevel;
-          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel);
+          return createOpenRouterWrapper(ctx.streamFn, thinkingLevel, ctx.extraParams);
         },
       };
     case "tool-stream-default-on":

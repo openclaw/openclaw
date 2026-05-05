@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { runBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -34,10 +36,12 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     };
     mockGetGlobalHookRunner.mockReturnValue(hookRunner as HookRunner);
     mockCallGatewayTool.mockReset();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   afterEach(() => {
     setEmbeddedMode(false);
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
@@ -64,7 +68,10 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
 
     expect(result).toEqual({
       blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
       reason: "Plugin approval required (gateway unavailable)",
+      params: { command: "ls" },
     });
     expect(mockCallGatewayTool).toHaveBeenCalledWith(
       "plugin.approval.request",
@@ -74,6 +81,34 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     );
     expect(onResolution).toHaveBeenCalledTimes(1);
     expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
+  });
+
+  it("reports approval-required tools without opening an approval request", async () => {
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Review before running",
+        severity: "info",
+      },
+      params: { adjusted: true },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-report",
+      approvalMode: "report",
+    });
+
+    expect(result).toEqual({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Review before running",
+      params: { command: "ls" },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
   it("sends approval to gateway when NOT in embedded mode", async () => {
@@ -137,6 +172,87 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         extraField: "injected",
       });
     }
+  });
+
+  it("routes trusted policy approval through the same approval gate as before_tool_call hooks", async () => {
+    setEmbeddedMode(true);
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-policy",
+        pluginName: "Trusted Policy",
+        source: "test",
+        policy: {
+          id: "approval-policy",
+          description: "Approval policy",
+          evaluate: () => ({
+            requireApproval: {
+              pluginId: "trusted-policy",
+              title: "Policy approval",
+              description: "Policy requested approval",
+            },
+          }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    (hookRunner.hasHooks as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "approval-policy",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "deploy" },
+      toolCallId: "call-policy",
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { command: "deploy" } });
+    expect(mockCallGatewayTool).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.any(Object),
+      expect.objectContaining({
+        pluginId: "trusted-policy",
+        title: "Policy approval",
+      }),
+      { expectFinal: false },
+    );
+    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves trusted policy params when before_tool_call hooks leave params unchanged", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-policy",
+        pluginName: "Trusted Policy",
+        source: "test",
+        policy: {
+          id: "param-policy",
+          description: "Param policy",
+          evaluate: () => ({ params: { command: "patched" } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    runBeforeToolCallMock.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "original", cwd: "/tmp" },
+      toolCallId: "call-policy-params",
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { command: "patched" } });
+    expect(runBeforeToolCallMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { command: "patched" },
+      }),
+      expect.any(Object),
+    );
   });
 
   it("keeps original params after an approval allow decision without overrides", async () => {

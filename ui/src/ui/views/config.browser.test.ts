@@ -65,12 +65,14 @@ describe("config view", () => {
     clearButton?: HTMLButtonElement;
     saveButton?: HTMLButtonElement;
     applyButton?: HTMLButtonElement;
+    updateButton?: HTMLButtonElement;
   } {
     const buttons = Array.from(container.querySelectorAll("button"));
     return {
       clearButton: buttons.find((btn) => btn.textContent?.trim() === "Clear"),
       saveButton: buttons.find((btn) => btn.textContent?.trim() === "Save"),
       applyButton: buttons.find((btn) => btn.textContent?.trim() === "Apply"),
+      updateButton: buttons.find((btn) => btn.textContent?.trim() === "Update"),
     };
   }
 
@@ -169,6 +171,58 @@ describe("config view", () => {
 
     clearButton?.click();
     expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders inline progress inside busy action buttons without locking adjacent controls", () => {
+    const container = document.createElement("div");
+    const renderCase = (overrides: Partial<ConfigProps>) =>
+      render(
+        renderConfig({
+          ...baseProps(),
+          schema: {
+            type: "object",
+            properties: {
+              gateway: { type: "object", properties: { mode: { type: "string" } } },
+            },
+          },
+          formValue: { gateway: { mode: "remote" } },
+          originalValue: { gateway: { mode: "local" } },
+          ...overrides,
+        }),
+        container,
+      );
+
+    renderCase({ saving: true });
+    let busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Saving…"),
+    );
+    let { clearButton, applyButton } = findActionButtons(container);
+    expect(busyButton).toBeTruthy();
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.getAttribute("aria-busy")).toBe("true");
+    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+    expect(applyButton?.disabled).toBe(false);
+
+    renderCase({ applying: true });
+    busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Applying…"),
+    );
+    ({ clearButton } = findActionButtons(container));
+    expect(busyButton).toBeTruthy();
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
+
+    renderCase({ updating: true });
+    busyButton = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Updating…"),
+    );
+    ({ clearButton } = findActionButtons(container));
+    expect(busyButton).toBeTruthy();
+    expect(busyButton?.disabled).toBe(true);
+    expect(busyButton?.querySelector(".config-action-spinner")).not.toBeNull();
+    expect(clearButton?.disabled).toBe(false);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -874,11 +928,13 @@ describe("config view", () => {
     });
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Custom",
+      (btn) => btn.textContent?.trim() === "Import",
     );
 
     expect(customButton?.disabled).toBe(false);
-    expect(normalizedText(container)).toContain("Click Custom to import a tweakcn theme");
+    expect(normalizedText(container)).toContain(
+      "Click Import to add one browser-local tweakcn theme",
+    );
 
     customButton?.click();
 
@@ -894,11 +950,15 @@ describe("config view", () => {
     });
 
     const importButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Import custom theme"),
+      btn.textContent?.includes("Import theme"),
     );
 
     expect(importButton?.disabled).toBe(true);
     expect(container.querySelector(".settings-theme-import__input")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLAnchorElement>(".settings-theme-import__external")?.href,
+    ).toBe("https://tweakcn.com/editor/theme");
+    expect(normalizedText(container)).toContain("Share links, editor URLs, registry URLs");
   });
 
   it("shows custom theme actions once a tweakcn import exists", () => {
@@ -920,17 +980,17 @@ describe("config view", () => {
     });
 
     const customButton = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === "Custom",
+      (btn) => btn.textContent?.trim() === "Light Green",
     );
     expect(customButton?.disabled).toBe(false);
     customButton?.click();
     expect(setTheme).toHaveBeenCalledWith("custom", expect.any(Object));
 
     const replaceButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Replace custom theme"),
+      btn.textContent?.includes("Replace Light Green"),
     );
     const clearButton = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes("Clear custom theme"),
+      btn.textContent?.includes("Clear Light Green"),
     );
     replaceButton?.click();
     clearButton?.click();
@@ -940,8 +1000,10 @@ describe("config view", () => {
     expect(normalizedText(container)).toContain("Loaded Light Green");
 
     const input = container.querySelector(".settings-theme-import__input") as HTMLInputElement;
-    input.value = "https://tweakcn.com/themes/custom";
+    input.value = "/r/themes/cmlhfpjhw000004l4f4ax3m7z";
     input.dispatchEvent(new Event("input"));
-    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith("https://tweakcn.com/themes/custom");
+    expect(onCustomThemeImportUrlChange).toHaveBeenCalledWith(
+      "/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    );
   });
 });

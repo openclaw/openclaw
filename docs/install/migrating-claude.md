@@ -48,6 +48,7 @@ Onboarding imports require a fresh OpenClaw setup. If you already have local Ope
   <Accordion title="Instructions and memory">
     - Project `CLAUDE.md` and `.claude/CLAUDE.md` content is copied or appended into the OpenClaw agent workspace `AGENTS.md`.
     - User `~/.claude/CLAUDE.md` content is appended into workspace `USER.md`.
+
   </Accordion>
   <Accordion title="MCP servers">
     MCP server definitions are imported from project `.mcp.json`, Claude Code `~/.claude.json`, and Claude Desktop `claude_desktop_config.json` when present.
@@ -55,6 +56,7 @@ Onboarding imports require a fresh OpenClaw setup. If you already have local Ope
   <Accordion title="Skills and commands">
     - Claude skills with a `SKILL.md` file are copied into the OpenClaw workspace skills directory.
     - Claude command Markdown files under `.claude/commands/` or `~/.claude/commands/` are converted into OpenClaw skills with `disable-model-invocation: true`.
+
   </Accordion>
 </AccordionGroup>
 

@@ -1,6 +1,10 @@
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import {
+  clearSlackThreadParticipationCache,
+  hasSlackThreadParticipation,
+} from "./sent-thread-cache.js";
 
 // --- Module mocks (must precede dynamic import) ---
 installSlackBlockTestMocks();
@@ -21,14 +25,23 @@ const fetchWithSsrFGuard = vi.fn(
     }) as const,
 );
 
-vi.mock("../../../src/infra/net/fetch-guard.js", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) =>
     fetchWithSsrFGuard(...(args as [params: { url: string; init?: RequestInit }])),
-  withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
-    ...params,
-    mode: "trusted_env_proxy",
-  }),
 }));
+
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/fetch-runtime")>(
+    "openclaw/plugin-sdk/fetch-runtime",
+  );
+  return {
+    ...actual,
+    withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
+      ...params,
+      mode: "trusted_env_proxy",
+    }),
+  };
+});
 
 vi.mock("./runtime-api.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime-api.js")>("./runtime-api.js");
@@ -87,6 +100,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     loadOutboundMediaFromUrlMock.mockClear();
     clearSlackDmChannelCache();
     clearSlackSendQueuesForTest();
+    clearSlackThreadParticipationCache();
   });
 
   afterEach(() => {
@@ -136,8 +150,9 @@ describe("sendMessageSlack file upload with user IDs", () => {
     );
   });
 
-  it("caches DM channel resolution per account", async () => {
+  it("posts text-only user-target DMs directly without conversations.open", async () => {
     const client = createUploadTestClient();
+    client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
 
     await sendMessageSlack("user:UABC123", "first", {
       token: "xoxb-test",
@@ -150,12 +165,12 @@ describe("sendMessageSlack file upload with user IDs", () => {
       client,
     });
 
-    expect(client.conversations.open).toHaveBeenCalledTimes(1);
+    expect(client.conversations.open).not.toHaveBeenCalled();
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
     expect(client.chat.postMessage).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        channel: "D99RESOLVED",
+        channel: "UABC123",
         text: "second",
       }),
     );
@@ -206,11 +221,13 @@ describe("sendMessageSlack file upload with user IDs", () => {
       token: "xoxb-test-a",
       cfg: SLACK_TEST_CFG,
       client,
+      mediaUrl: "/tmp/first.png",
     });
     await sendMessageSlack("user:UABC123", "second", {
       token: "xoxb-test-b",
       cfg: SLACK_TEST_CFG,
       client,
+      mediaUrl: "/tmp/second.png",
     });
 
     expect(client.conversations.open).toHaveBeenCalledTimes(2);
@@ -285,6 +302,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
         thread_ts: "171.222",
       }),
     );
+    expect(hasSlackThreadParticipation("default", "C123CHAN", "171.222")).toBe(true);
   });
 
   it("uses explicit upload filename and title overrides when provided", async () => {

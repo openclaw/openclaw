@@ -1,13 +1,17 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyQwenNativeStreamingUsageCompat } from "./api.js";
 import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { isQwenCodingPlanBaseUrl, QWEN_36_PLUS_MODEL_ID, QWEN_BASE_URL } from "./models.js";
+import {
+  isQwenCodingPlanBaseUrl,
+  QWEN_36_PLUS_MODEL_ID,
+  QWEN_BASE_URL,
+  QWEN_DEFAULT_MODEL_REF,
+} from "./models.js";
 import {
   applyQwenConfig,
   applyQwenConfigCn,
   applyQwenStandardConfig,
   applyQwenStandardConfigCn,
-  QWEN_DEFAULT_MODEL_REF,
 } from "./onboard.js";
 import { buildQwenProvider } from "./provider-catalog.js";
 import { wrapQwenProviderStream } from "./stream.js";
@@ -38,29 +42,6 @@ function resolveConfiguredQwenBaseUrl(
     }
   }
   return undefined;
-}
-
-function isQwen36PlusUnsupportedForConfig(params: {
-  config: Parameters<typeof resolveConfiguredQwenBaseUrl>[0];
-  baseUrl?: string;
-}): boolean {
-  return isQwenCodingPlanBaseUrl(params.baseUrl ?? resolveConfiguredQwenBaseUrl(params.config));
-}
-
-function hasExactForeignApiOwner(params: {
-  provider: string;
-  config: { models?: { providers?: Record<string, { api?: string } | undefined> } } | undefined;
-}): boolean {
-  const providers = params.config?.models?.providers;
-  if (!providers) {
-    return false;
-  }
-  const provider = normalizeProviderId(params.provider);
-  const exact = Object.entries(providers).find(
-    ([providerId]) => normalizeProviderId(providerId) === provider,
-  )?.[1];
-  const api = normalizeProviderId(exact?.api ?? "");
-  return !!api && api !== PROVIDER_ID && api !== LEGACY_PROVIDER_ID;
 }
 
 export default defineSingleProviderPluginEntry({
@@ -191,22 +172,6 @@ export default defineSingleProviderPluginEntry({
       return models && models.length !== providerConfig.models?.length
         ? { ...providerConfig, models }
         : undefined;
-    },
-    suppressBuiltInModel: (ctx) => {
-      const provider = normalizeProviderId(ctx.provider);
-      if (
-        (provider !== PROVIDER_ID && provider !== LEGACY_PROVIDER_ID) ||
-        hasExactForeignApiOwner({ provider: ctx.provider, config: ctx.config }) ||
-        ctx.modelId !== QWEN_36_PLUS_MODEL_ID ||
-        !isQwen36PlusUnsupportedForConfig({ config: ctx.config, baseUrl: ctx.baseUrl })
-      ) {
-        return undefined;
-      }
-      return {
-        suppress: true,
-        errorMessage:
-          "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.",
-      };
     },
   },
   register(api) {

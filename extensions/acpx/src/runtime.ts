@@ -231,6 +231,25 @@ function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never 
   );
 }
 
+// acpx's `decodeAcpxRuntimeHandleState` only accepts `persistent` and `oneshot`; any other
+// value silently round-trips through the encoded handle as `persistent` and later throws
+// `SessionResumeRequiredError` on agent restart. Fail fast at this boundary instead.
+// See openclaw/openclaw#73071.
+const SUPPORTED_RUNTIME_SESSION_MODES = new Set(["persistent", "oneshot"] as const);
+
+function assertSupportedRuntimeSessionMode(
+  mode: unknown,
+): asserts mode is "persistent" | "oneshot" {
+  if (typeof mode === "string" && SUPPORTED_RUNTIME_SESSION_MODES.has(mode as never)) {
+    return;
+  }
+  const supported = Array.from(SUPPORTED_RUNTIME_SESSION_MODES).join(", ");
+  throw new AcpRuntimeError(
+    "ACP_INVALID_RUNTIME_OPTION",
+    `Unsupported ACP runtime session mode ${JSON.stringify(mode)}. Expected one of: ${supported}.`,
+  );
+}
+
 function failUnsupportedCodexAcpThinking(rawThinking: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
@@ -460,6 +479,7 @@ export class AcpxRuntime implements AcpRuntime {
   async ensureSession(
     input: Parameters<AcpRuntime["ensureSession"]>[0],
   ): Promise<AcpRuntimeHandle> {
+    assertSupportedRuntimeSessionMode(input.mode);
     const command = resolveAgentCommandForName({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
@@ -510,36 +530,41 @@ export class AcpxRuntime implements AcpRuntime {
   ): Promise<void> {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
-    if (
-      (input.key === "model" ||
-        input.key === "thinking" ||
-        input.key === "thought_level" ||
-        input.key === "reasoning_effort") &&
-      isCodexAcpCommand(command)
-    ) {
-      const override =
-        input.key === "model"
-          ? normalizeCodexAcpModelOverride(input.value)
-          : normalizeCodexAcpModelOverride(undefined, input.value);
-      if (!override && input.key !== "model") {
+    const key = input.key.trim().toLowerCase();
+    if (isCodexAcpCommand(command)) {
+      if (key === "timeout" || key === "timeout_seconds") {
         return;
       }
-      if (override) {
-        if (override.model) {
-          await delegate.setConfigOption({
-            ...input,
-            key: "model",
-            value: override.model,
-          });
+      if (
+        key === "model" ||
+        key === "thinking" ||
+        key === "thought_level" ||
+        key === "reasoning_effort"
+      ) {
+        const override =
+          key === "model"
+            ? normalizeCodexAcpModelOverride(input.value)
+            : normalizeCodexAcpModelOverride(undefined, input.value);
+        if (!override && key !== "model") {
+          return;
         }
-        if (override.reasoningEffort) {
-          await delegate.setConfigOption({
-            ...input,
-            key: "reasoning_effort",
-            value: override.reasoningEffort,
-          });
+        if (override) {
+          if (override.model) {
+            await delegate.setConfigOption({
+              ...input,
+              key: "model",
+              value: override.model,
+            });
+          }
+          if (override.reasoningEffort) {
+            await delegate.setConfigOption({
+              ...input,
+              key: "reasoning_effort",
+              value: override.reasoningEffort,
+            });
+          }
+          return;
         }
-        return;
       }
     }
     await delegate.setConfigOption(input);
@@ -579,6 +604,7 @@ export {
 
 export const __testing = {
   appendCodexAcpConfigOverrides,
+  assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
   isCodexAcpCommand,
   normalizeCodexAcpModelOverride,

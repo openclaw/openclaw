@@ -1,7 +1,10 @@
+import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
@@ -19,13 +22,20 @@ import {
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
+  getGatewayAgentResult,
+  hasMessagingToolDeliveryEvidence,
+  hasVisibleAgentPayload,
+} from "./pi-embedded-runner/delivery-evidence.js";
+import {
   callGateway,
   createBoundDeliveryRouter,
   getGlobalHookRunner,
   isEmbeddedPiRunActive,
   getRuntimeConfig,
+  isSteeringQueueMode,
   loadSessionStore,
   queueEmbeddedPiMessage,
+  resolvePiSteeringModeForQueueMode,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
   resolveConversationIdFromTargets,
@@ -44,10 +54,12 @@ import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
-export { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
-
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
+const MIN_COMPLETION_INTEGRITY_RESULT_LENGTH = 120;
+const MIN_COMPLETION_INTEGRITY_PREFIX_LENGTH = 24;
+const MAX_COMPLETION_INTEGRITY_PREFIX_RATIO = 0.8;
+const AGENT_MEDIATED_COMPLETION_TOOLS = new Set(["music_generate", "video_generate"]);
 
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
@@ -115,7 +127,7 @@ function resolveBoundConversationOrigin(params: {
       ? conversationId
       : undefined) ??
     (params.requesterOrigin?.threadId != null && params.requesterOrigin.threadId !== ""
-      ? String(params.requesterOrigin.threadId)
+      ? stringifyRouteThreadId(params.requesterOrigin.threadId)
       : undefined);
   if (
     requesterTo &&
@@ -295,7 +307,7 @@ export async function resolveSubagentCompletionOrigin(params: {
   const accountId = normalizeAccountId(requesterOrigin?.accountId);
   const threadId =
     requesterOrigin?.threadId != null && requesterOrigin.threadId !== ""
-      ? String(requesterOrigin.threadId).trim()
+      ? stringifyRouteThreadId(requesterOrigin.threadId)
       : undefined;
   const conversationId =
     threadId ||
@@ -380,7 +392,9 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const requesterIsSubagent = isInternalAnnounceRequesterSession(item.sessionKey);
   const origin = item.origin;
   const threadId =
-    origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+    origin?.threadId != null && origin.threadId !== ""
+      ? stringifyRouteThreadId(origin.threadId)
+      : undefined;
   const deliveryTarget = !requesterIsSubagent
     ? resolveExternalBestEffortDeliveryTarget({
         channel: origin?.channel,
@@ -474,11 +488,15 @@ async function maybeQueueSubagentAnnounce(params: {
     sessionEntry: entry,
   });
 
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  const shouldSteer = isSteeringQueueMode(queueSettings.mode);
   if (shouldSteer) {
     const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
       sessionId,
       params.steerMessage,
+      {
+        steeringMode: resolvePiSteeringModeForQueueMode(queueSettings.mode),
+        ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
+      },
     );
     if (steered) {
       return "steered";
@@ -490,7 +508,10 @@ async function maybeQueueSubagentAnnounce(params: {
     queueSettings.mode === "collect" ||
     queueSettings.mode === "steer-backlog" ||
     queueSettings.mode === "interrupt";
-  if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
+  if (
+    isActive &&
+    (shouldFollowup || queueSettings.mode === "steer" || queueSettings.mode === "queue")
+  ) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     const didQueue = enqueueAnnounce({
       key: buildAnnounceQueueKey(canonicalKey, origin),
@@ -516,71 +537,211 @@ async function maybeQueueSubagentAnnounce(params: {
   return "none";
 }
 
-export function extractThreadCompletionFallbackText(internalEvents?: AgentInternalEvent[]): string {
-  if (!internalEvents || internalEvents.length === 0) {
-    return "";
+function extractTaskCompletionFallbackText(event: AgentInternalEvent): string {
+  const result = event.result.trim();
+  if (result) {
+    return result;
   }
-  for (const event of internalEvents) {
-    if (event.type !== "task_completion") {
-      continue;
-    }
-    const result = event.result.trim();
-    if (result) {
-      return result;
-    }
-    const statusLabel = event.statusLabel.trim();
-    const taskLabel = event.taskLabel.trim();
-    if (statusLabel && taskLabel) {
-      return `${taskLabel}: ${statusLabel}`;
-    }
-    if (statusLabel) {
-      return statusLabel;
-    }
-    if (taskLabel) {
-      return taskLabel;
-    }
+  const statusLabel = event.statusLabel.trim();
+  const taskLabel = event.taskLabel.trim();
+  if (statusLabel && taskLabel) {
+    return `${taskLabel}: ${statusLabel}`;
+  }
+  if (statusLabel) {
+    return statusLabel;
+  }
+  if (taskLabel) {
+    return taskLabel;
   }
   return "";
 }
 
+function formatTaskCompletionFallbackBlock(params: {
+  event: AgentInternalEvent;
+  text: string;
+  includeTaskLabel: boolean;
+}): string {
+  const taskLabel = params.event.taskLabel.trim();
+  if (!params.includeTaskLabel || !taskLabel || params.text.startsWith(`${taskLabel}:`)) {
+    return params.text;
+  }
+  return `${taskLabel}:\n${params.text}`;
+}
+
+export function extractThreadCompletionFallbackText(internalEvents?: AgentInternalEvent[]): string {
+  if (!internalEvents || internalEvents.length === 0) {
+    return "";
+  }
+  const completions = internalEvents
+    .filter((event) => event.type === "task_completion")
+    .map((event) => ({
+      event,
+      text: extractTaskCompletionFallbackText(event),
+    }))
+    .filter((completion) => completion.text.length > 0);
+  if (completions.length === 0) {
+    return "";
+  }
+  const onlyCompletion = completions[0];
+  if (completions.length === 1 && onlyCompletion) {
+    return onlyCompletion.text;
+  }
+  return completions
+    .map((completion) =>
+      formatTaskCompletionFallbackBlock({
+        event: completion.event,
+        text: completion.text,
+        includeTaskLabel: true,
+      }),
+    )
+    .join("\n\n")
+    .trim();
+}
+
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {
-  const result =
-    response && typeof response === "object" && "result" in response
-      ? (response as { result?: unknown }).result
-      : undefined;
-  const payloads =
-    result && typeof result === "object" && "payloads" in result
-      ? (result as { payloads?: unknown }).payloads
-      : undefined;
+  const result = getGatewayAgentResult(response);
+  return Boolean(
+    result && (hasVisibleAgentPayload(result) || hasMessagingToolDeliveryEvidence(result)),
+  );
+}
+
+function collectVisibleGatewayAgentText(response: unknown): string {
+  const result = getGatewayAgentResult(response);
+  const payloads = result?.payloads;
   if (!Array.isArray(payloads)) {
+    return "";
+  }
+  return payloads
+    .flatMap((payload) => {
+      if (!payload || typeof payload !== "object") {
+        return [];
+      }
+      const text = (payload as { text?: unknown; isError?: unknown; isReasoning?: unknown }).text;
+      if (typeof text !== "string") {
+        return [];
+      }
+      if (
+        (payload as { isError?: unknown; isReasoning?: unknown }).isError === true ||
+        (payload as { isError?: unknown; isReasoning?: unknown }).isReasoning === true
+      ) {
+        return [];
+      }
+      const trimmed = text.trim();
+      return trimmed ? [trimmed] : [];
+    })
+    .join("\n")
+    .trim();
+}
+
+function normalizeCompletionIntegrityText(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function hasCompleteCompletionSummaryBoundary(value: string): boolean {
+  const trimmed = value.replace(/[\s"')\]]+$/g, "");
+  if (!trimmed) {
     return false;
   }
-  return payloads.some((payload) => {
-    if (!payload || typeof payload !== "object") {
-      return false;
+  return /[.!?]$/.test(trimmed);
+}
+
+function hasIncompleteCompletionPrefix(response: unknown, completionFallbackText: string): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result || hasMessagingToolDeliveryEvidence(result)) {
+    return false;
+  }
+  const expected = normalizeCompletionIntegrityText(completionFallbackText);
+  if (expected.length < MIN_COMPLETION_INTEGRITY_RESULT_LENGTH) {
+    return false;
+  }
+  const visible = normalizeCompletionIntegrityText(collectVisibleGatewayAgentText(response));
+  if (
+    visible.length < MIN_COMPLETION_INTEGRITY_PREFIX_LENGTH ||
+    visible.length >= expected.length * MAX_COMPLETION_INTEGRITY_PREFIX_RATIO
+  ) {
+    return false;
+  }
+  return expected.startsWith(visible) && !hasCompleteCompletionSummaryBoundary(visible);
+}
+
+function shouldSendCompletionFallback(response: unknown, completionFallbackText: string): boolean {
+  if (!completionFallbackText) {
+    return false;
+  }
+  if (!hasVisibleGatewayAgentPayload(response)) {
+    return true;
+  }
+  return hasIncompleteCompletionPrefix(response, completionFallbackText);
+}
+
+function requiresAgentMediatedCompletionDelivery(params: {
+  expectsCompletionMessage: boolean;
+  sourceTool?: string;
+}): boolean {
+  return (
+    params.expectsCompletionMessage &&
+    AGENT_MEDIATED_COMPLETION_TOOLS.has(normalizeOptionalLowercaseString(params.sourceTool) ?? "")
+  );
+}
+
+function hasGatewayAgentMessagingToolDelivery(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  return Boolean(result && hasMessagingToolDeliveryEvidence(result));
+}
+
+function inferCompletionChatType(params: {
+  requesterSessionKey: string;
+  targetRequesterSessionKey: string;
+  requesterEntry?: {
+    chatType?: string | null;
+    origin?: { chatType?: string | null };
+  };
+  directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
+}): "direct" | "group" | "channel" | "unknown" {
+  const explicit = normalizeChatType(
+    params.requesterEntry?.chatType ?? params.requesterEntry?.origin?.chatType ?? undefined,
+  );
+  if (explicit) {
+    return explicit;
+  }
+  for (const key of [params.targetRequesterSessionKey, params.requesterSessionKey]) {
+    const derived = deriveSessionChatTypeFromKey(key);
+    if (derived !== "unknown") {
+      return derived;
     }
-    const record = payload as {
-      text?: unknown;
-      mediaUrl?: unknown;
-      mediaUrls?: unknown;
-      presentation?: unknown;
-      interactive?: unknown;
-      channelData?: unknown;
-    };
-    const text = typeof record.text === "string" ? record.text.trim() : "";
-    const mediaUrl = typeof record.mediaUrl === "string" ? record.mediaUrl.trim() : "";
-    const mediaUrls = Array.isArray(record.mediaUrls)
-      ? record.mediaUrls.some((item) => typeof item === "string" && item.trim())
-      : false;
-    return Boolean(
-      text ||
-      mediaUrl ||
-      mediaUrls ||
-      record.presentation ||
-      record.interactive ||
-      record.channelData,
-    );
-  });
+  }
+  const target = params.directOrigin?.to ?? params.requesterSessionOrigin?.to;
+  if (target?.startsWith("group:")) {
+    return "group";
+  }
+  if (target?.startsWith("channel:")) {
+    return "channel";
+  }
+  if (target?.startsWith("dm:")) {
+    return "direct";
+  }
+  return "unknown";
+}
+
+function completionRequiresMessageToolDelivery(params: {
+  cfg: OpenClawConfig;
+  requesterSessionKey: string;
+  targetRequesterSessionKey: string;
+  requesterEntry?: {
+    chatType?: string | null;
+    origin?: { chatType?: string | null };
+  };
+  directOrigin?: DeliveryContext;
+  requesterSessionOrigin?: DeliveryContext;
+}): boolean {
+  const chatType = inferCompletionChatType(params);
+  if (chatType === "group" || chatType === "channel") {
+    const configuredMode =
+      params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
+    return configuredMode !== "automatic";
+  }
+  return params.cfg.messages?.visibleReplies === "message_tool";
 }
 
 async function sendCompletionFallback(params: {
@@ -643,6 +804,7 @@ function stripNonDeliverableChannelForCompletionOrigin(
 }
 
 async function sendSubagentAnnounceDirectly(params: {
+  requesterSessionKey: string;
   targetRequesterSessionKey: string;
   triggerMessage: string;
   internalEvents?: AgentInternalEvent[];
@@ -690,6 +852,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
+    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,
@@ -706,16 +869,47 @@ async function sendSubagentAnnounceDirectly(params: {
       isGatewayMessageChannel(normalizedSessionOnlyOriginChannel)
         ? normalizedSessionOnlyOriginChannel
         : undefined;
+    const agentMediatedCompletion = requiresAgentMediatedCompletionDelivery({
+      expectsCompletionMessage: params.expectsCompletionMessage,
+      sourceTool: params.sourceTool,
+    });
+    const requiresMessageToolDelivery =
+      agentMediatedCompletion &&
+      completionRequiresMessageToolDelivery({
+        cfg,
+        requesterSessionKey: params.requesterSessionKey,
+        targetRequesterSessionKey: params.targetRequesterSessionKey,
+        requesterEntry,
+        directOrigin: effectiveDirectOrigin,
+        requesterSessionOrigin,
+      });
+    const shouldDeliverAgentFinal = deliveryTarget.deliver && !requiresMessageToolDelivery;
     const completionFallbackText =
-      params.expectsCompletionMessage && deliveryTarget.deliver
+      params.expectsCompletionMessage && shouldDeliverAgentFinal && !agentMediatedCompletion
         ? extractThreadCompletionFallbackText(params.internalEvents)
         : "";
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    const requesterQueueSettings = resolveQueueSettings({
+      cfg,
+      channel:
+        requesterEntry?.channel ??
+        requesterEntry?.lastChannel ??
+        requesterEntry?.origin?.provider ??
+        requesterSessionOrigin?.channel ??
+        directOrigin?.channel,
+      sessionEntry: requesterEntry,
+    });
     if (params.expectsCompletionMessage && requesterActivity.sessionId) {
       const woke = requesterActivity.sessionId
         ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
             requesterActivity.sessionId,
             params.triggerMessage,
+            {
+              steeringMode: "all",
+              ...(requesterQueueSettings.debounceMs !== undefined
+                ? { debounceMs: requesterQueueSettings.debounceMs }
+                : {}),
+            },
           )
         : false;
       if (woke) {
@@ -725,6 +919,13 @@ async function sendSubagentAnnounceDirectly(params: {
         };
       }
       if (requesterActivity.isActive) {
+        if (agentMediatedCompletion) {
+          return {
+            delivered: false,
+            path: "direct",
+            error: "active requester session could not be woken",
+          };
+        }
         try {
           const didFallback = await sendCompletionFallback({
             cfg,
@@ -777,21 +978,21 @@ async function sendSubagentAnnounceDirectly(params: {
             params: {
               sessionKey: canonicalRequesterSessionKey,
               message: params.triggerMessage,
-              deliver: deliveryTarget.deliver,
+              deliver: shouldDeliverAgentFinal,
               bestEffortDeliver: params.bestEffortDeliver,
               internalEvents: params.internalEvents,
-              channel: deliveryTarget.deliver ? deliveryTarget.channel : sessionOnlyOriginChannel,
-              accountId: deliveryTarget.deliver
+              channel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
+              accountId: shouldDeliverAgentFinal
                 ? deliveryTarget.accountId
                 : sessionOnlyOriginChannel
                   ? sessionOnlyOrigin?.accountId
                   : undefined,
-              to: deliveryTarget.deliver
+              to: shouldDeliverAgentFinal
                 ? deliveryTarget.to
                 : sessionOnlyOriginChannel
                   ? sessionOnlyOrigin?.to
                   : undefined,
-              threadId: deliveryTarget.deliver
+              threadId: shouldDeliverAgentFinal
                 ? deliveryTarget.threadId
                 : sessionOnlyOriginChannel
                   ? sessionOnlyOrigin?.threadId
@@ -810,6 +1011,9 @@ async function sendSubagentAnnounceDirectly(params: {
       });
     } catch (err) {
       if (isPermanentAnnounceDeliveryError(err)) {
+        throw err;
+      }
+      if (agentMediatedCompletion) {
         throw err;
       }
       let didFallback = false;
@@ -841,7 +1045,7 @@ async function sendSubagentAnnounceDirectly(params: {
       throw err;
     }
 
-    if (completionFallbackText && !hasVisibleGatewayAgentPayload(directAnnounceResponse)) {
+    if (shouldSendCompletionFallback(directAnnounceResponse, completionFallbackText)) {
       const didFallback = await sendCompletionFallback({
         cfg,
         channel: deliveryTarget.channel,
@@ -860,6 +1064,28 @@ async function sendSubagentAnnounceDirectly(params: {
           path: resolveCompletionFallbackPath(deliveryTarget.threadId),
         };
       }
+    }
+
+    if (
+      requiresMessageToolDelivery &&
+      !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not deliver through the message tool",
+      };
+    }
+    if (
+      agentMediatedCompletion &&
+      shouldDeliverAgentFinal &&
+      !hasVisibleGatewayAgentPayload(directAnnounceResponse)
+    ) {
+      return {
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not produce a visible reply",
+      };
     }
 
     return {
@@ -915,6 +1141,7 @@ export async function deliverSubagentAnnouncement(params: {
       }),
     direct: async () =>
       await sendSubagentAnnounceDirectly({
+        requesterSessionKey: params.requesterSessionKey,
         targetRequesterSessionKey: params.targetRequesterSessionKey,
         triggerMessage: params.triggerMessage,
         internalEvents: params.internalEvents,

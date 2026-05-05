@@ -65,7 +65,7 @@ export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, ["openclaw", DEFAULT_PACKAGE_NAME]);
 }
 
-export function normalizeVersionTag(tag: string): string | null {
+function normalizeVersionTag(tag: string): string | null {
   const trimmed = tag.trim();
   if (!trimmed) {
     return null;
@@ -100,7 +100,7 @@ export async function isGitCheckout(root: string): Promise<boolean> {
   }
 }
 
-export async function isCorePackage(root: string): Promise<boolean> {
+async function isCorePackage(root: string): Promise<boolean> {
   const name = await readPackageName(root);
   return Boolean(name && CORE_PACKAGE_NAMES.has(name));
 }
@@ -260,6 +260,8 @@ export async function resolveGlobalManager(params: {
 }
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
+  "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
 
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
   const binPath = path.join(root, "openclaw.mjs");
@@ -279,7 +281,16 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
 
   if (result.error) {
     if (!jsonMode) {
-      defaultRuntime.log(theme.warn(`Completion cache update failed: ${String(result.error)}`));
+      const err = result.error as NodeJS.ErrnoException;
+      const reason =
+        err.code === "ETIMEDOUT"
+          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
+          : String(result.error);
+      defaultRuntime.log(
+        theme.warn(
+          `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+        ),
+      );
     }
     return;
   }
@@ -287,7 +298,11 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
   if (result.status !== 0 && !jsonMode) {
     const stderr = (result.stderr ?? "").trim();
     const detail = stderr ? ` (${stderr})` : "";
-    defaultRuntime.log(theme.warn(`Completion cache update failed${detail}.`));
+    defaultRuntime.log(
+      theme.warn(
+        `Completion cache update failed${detail}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
+      ),
+    );
   }
 }
 

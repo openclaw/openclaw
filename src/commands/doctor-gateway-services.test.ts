@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -35,6 +38,7 @@ const mocks = vi.hoisted(() => ({
   resolveIsNixMode: vi.fn(() => false),
   findExtraGatewayServices: vi.fn().mockResolvedValue([]),
   renderGatewayServiceCleanupHints: vi.fn().mockReturnValue([]),
+  isSystemdUnitActive: vi.fn().mockResolvedValue(false),
   uninstallLegacySystemdUnits: vi.fn().mockResolvedValue([]),
   note: vi.fn(),
 }));
@@ -67,6 +71,7 @@ vi.mock("../daemon/service-audit.js", () => ({
   needsNodeRuntimeMigration: vi.fn(() => false),
   readEmbeddedGatewayToken: readEmbeddedGatewayTokenForTest,
   SERVICE_AUDIT_CODES: {
+    gatewayCommandMissing: testServiceAuditCodes.gatewayCommandMissing,
     gatewayEntrypointMismatch: testServiceAuditCodes.gatewayEntrypointMismatch,
     gatewayManagedEnvEmbedded: testServiceAuditCodes.gatewayManagedEnvEmbedded,
     gatewayPortMismatch: testServiceAuditCodes.gatewayPortMismatch,
@@ -84,6 +89,7 @@ vi.mock("../daemon/service.js", () => ({
 }));
 
 vi.mock("../daemon/systemd.js", () => ({
+  isSystemdUnitActive: mocks.isSystemdUnitActive,
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
 }));
 
@@ -106,6 +112,7 @@ import {
 import { EXTERNAL_SERVICE_REPAIR_NOTE } from "./doctor-service-repair-policy.js";
 
 const originalStdinIsTTY = process.stdin.isTTY;
+const originalPlatform = process.platform;
 const originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 
 function makeDoctorIo() {
@@ -129,6 +136,13 @@ function makeDoctorPrompts() {
       updateInProgress: false,
     },
   };
+}
+
+function mockProcessPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", {
+    value: platform,
+    configurable: true,
+  });
 }
 
 async function runRepair(cfg: OpenClawConfig) {
@@ -232,6 +246,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     vi.clearAllMocks();
     fsMocks.realpath.mockImplementation(async (value: string) => value);
     mocks.resolveGatewayPort.mockReturnValue(18789);
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
     mocks.resolveGatewayAuthTokenForService.mockImplementation(async (cfg: OpenClawConfig, env) => {
       const configToken =
         typeof cfg.gateway?.auth?.token === "string" ? cfg.gateway.auth.token.trim() : undefined;
@@ -245,6 +260,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       value: originalStdinIsTTY,
       configurable: true,
     });
+    mockProcessPlatform(originalPlatform);
     if (originalUpdateInProgress === undefined) {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     } else {
@@ -546,7 +562,109 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
-  it("repairs entrypoint mismatch in non-interactive fix mode", async () => {
+  it("skips entrypoint rewrites for an active systemd unit", async () => {
+    mockProcessPlatform("linux");
+    mocks.readCommand.mockResolvedValue({
+      ...createGatewayCommand("/opt/old-openclaw/dist/index.js"),
+      sourcePath: "/etc/systemd/system/custom-gateway.service",
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand("/opt/new-openclaw/dist/index.js"),
+      workingDirectory: "/tmp",
+    });
+    mocks.isSystemdUnitActive.mockResolvedValue(true);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
+      process.env,
+      "custom-gateway.service",
+      "system",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("skipped command/entrypoint rewrites"),
+      "Gateway service config",
+    );
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
+  });
+
+  it("repairs entrypoint drift when the systemd unit is stopped", async () => {
+    mockProcessPlatform("linux");
+    mocks.readCommand.mockResolvedValue({
+      ...createGatewayCommand("/opt/old-openclaw/dist/index.js"),
+      sourcePath: "/home/test/.config/systemd/user/custom-gateway.service",
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: true,
+      issues: [],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      ...createGatewayCommand("/opt/new-openclaw/dist/index.js"),
+      workingDirectory: "/tmp",
+    });
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
+
+    await runRepair({ gateway: {} });
+
+    expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
+      process.env,
+      "custom-gateway.service",
+      "user",
+    );
+    expect(mocks.install).toHaveBeenCalledTimes(1);
+    expect(mocks.stage).not.toHaveBeenCalled();
+  });
+
+  it("leaves all service metadata unchanged when an active unit has command drift plus other issues", async () => {
+    mockProcessPlatform("linux");
+    mocks.readCommand.mockResolvedValue({
+      programArguments: ["/usr/bin/openclaw", "run"],
+      environment: {},
+      sourcePath: "/home/test/.config/systemd/user/openclaw-gateway.service",
+    });
+    mocks.auditGatewayServiceConfig.mockResolvedValue({
+      ok: false,
+      issues: [
+        {
+          code: "gateway-command-missing",
+          message: "Service command does not include the gateway subcommand",
+          level: "aggressive",
+        },
+        {
+          code: "gateway-port-mismatch",
+          message: "Gateway service port does not match current gateway config.",
+          detail: "18789 -> 18888",
+          level: "recommended",
+        },
+      ],
+    });
+    mocks.buildGatewayInstallPlan.mockResolvedValue({
+      programArguments: gatewayProgramArguments,
+      workingDirectory: "/tmp",
+      environment: {},
+    });
+    mocks.isSystemdUnitActive.mockResolvedValue(true);
+
+    await runRepair({ gateway: { port: 18888 } });
+
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway service port does not match current gateway config."),
+      "Gateway service config",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("leaving supervisor metadata unchanged"),
+      "Gateway service config",
+    );
+    expect(mocks.install).not.toHaveBeenCalled();
+    expect(mocks.stage).not.toHaveBeenCalled();
+  });
+
+  it("skips entrypoint rewrite in non-interactive fix mode", async () => {
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -562,8 +680,12 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect.stringContaining("Gateway service entrypoint does not match the current install."),
       "Gateway service config",
     );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw gateway install --force"),
+      "Gateway service config",
+    );
     expect(mocks.stage).not.toHaveBeenCalled();
-    expect(mocks.install).toHaveBeenCalledTimes(1);
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("stages service config repairs during non-interactive update repairs", async () => {
@@ -786,6 +908,38 @@ describe("maybeRepairGatewayServiceConfig", () => {
       expect(mocks.install).not.toHaveBeenCalled();
     });
   });
+
+  it("warns when the gateway service entrypoint resolves to a source checkout", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-service-layout-"));
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const entrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(entrypoint, "export {};\n", "utf8");
+        mocks.readCommand.mockResolvedValue(createGatewayCommand(entrypoint));
+        mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayCommand(entrypoint));
+
+        await runRepair({ gateway: {} });
+
+        expect(mocks.note).toHaveBeenCalledWith(
+          expect.stringContaining("resolves to a source checkout"),
+          "Gateway service config",
+        );
+        expect(mocks.install).not.toHaveBeenCalled();
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe("maybeScanExtraGatewayServices", () => {
@@ -793,10 +947,68 @@ describe("maybeScanExtraGatewayServices", () => {
     vi.clearAllMocks();
     mocks.findExtraGatewayServices.mockResolvedValue([]);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([]);
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
     mocks.uninstallLegacySystemdUnits.mockResolvedValue([]);
   });
 
+  afterEach(() => {
+    mockProcessPlatform(originalPlatform);
+  });
+
+  it("ignores inactive non-legacy Linux gateway-like services", async () => {
+    mockProcessPlatform("linux");
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "custom-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/custom-gateway.service",
+        scope: "user",
+        legacy: false,
+      },
+    ]);
+    mocks.isSystemdUnitActive.mockResolvedValue(false);
+
+    await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
+      process.env,
+      "custom-gateway.service",
+      "user",
+    );
+    expect(mocks.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("custom-gateway.service"),
+      "Other gateway-like services detected",
+    );
+  });
+
+  it("reports active non-legacy Linux gateway-like services", async () => {
+    mockProcessPlatform("linux");
+    mocks.findExtraGatewayServices.mockResolvedValue([
+      {
+        platform: "linux",
+        label: "custom-gateway.service",
+        detail: "unit: /etc/systemd/system/custom-gateway.service",
+        scope: "system",
+        legacy: false,
+      },
+    ]);
+    mocks.isSystemdUnitActive.mockResolvedValue(true);
+
+    await maybeScanExtraGatewayServices({ deep: true }, makeDoctorIo(), makeDoctorPrompts());
+
+    expect(mocks.isSystemdUnitActive).toHaveBeenCalledWith(
+      process.env,
+      "custom-gateway.service",
+      "system",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("custom-gateway.service"),
+      "Other gateway-like services detected",
+    );
+  });
+
   it("removes legacy Linux user systemd services", async () => {
+    mockProcessPlatform("linux");
     mocks.findExtraGatewayServices.mockResolvedValue([
       {
         platform: "linux",

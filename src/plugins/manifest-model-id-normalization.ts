@@ -1,28 +1,90 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
-let manifestModelIdNormalizationCache:
-  | Map<string, PluginManifestModelIdNormalizationProvider>
-  | undefined;
+type ManifestModelIdNormalizationLookupParams = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+};
 
-function loadManifestModelIdNormalizationPolicies(): Map<
-  string,
-  PluginManifestModelIdNormalizationProvider
-> {
-  if (manifestModelIdNormalizationCache) {
-    return manifestModelIdNormalizationCache;
-  }
-
+function collectManifestModelIdNormalizationPolicies(
+  plugins: readonly Pick<PluginManifestRecord, "modelIdNormalization">[],
+): Map<string, PluginManifestModelIdNormalizationProvider> {
   const policies = new Map<string, PluginManifestModelIdNormalizationProvider>();
-  const registry = loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true });
-  for (const plugin of registry.plugins) {
+  for (const plugin of plugins) {
     for (const [provider, policy] of Object.entries(plugin.modelIdNormalization?.providers ?? {})) {
-      policies.set(provider, policy);
+      policies.set(normalizeLowercaseStringOrEmpty(provider), policy);
     }
   }
-  manifestModelIdNormalizationCache = policies;
   return policies;
+}
+
+type ManifestModelIdNormalizationPolicyCache = {
+  configFingerprint: string;
+  policies: Map<string, PluginManifestModelIdNormalizationProvider>;
+};
+
+let cachedPolicies: ManifestModelIdNormalizationPolicyCache | undefined;
+
+function resolveMetadataSnapshotForPolicies(
+  params: ManifestModelIdNormalizationLookupParams = {},
+): {
+  snapshot: PluginMetadataSnapshot;
+  cacheable: boolean;
+} {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env,
+    workspaceDir,
+  });
+  if (current) {
+    return { snapshot: current, cacheable: true };
+  }
+  return {
+    snapshot: loadPluginMetadataSnapshot({
+      config: params.config ?? {},
+      env,
+      workspaceDir,
+    }),
+    cacheable: false,
+  };
+}
+
+function loadManifestModelIdNormalizationPolicies(
+  params: ManifestModelIdNormalizationLookupParams = {},
+): Map<string, PluginManifestModelIdNormalizationProvider> {
+  if (params.plugins) {
+    return collectManifestModelIdNormalizationPolicies(params.plugins);
+  }
+  const { snapshot, cacheable } = resolveMetadataSnapshotForPolicies(params);
+  const configFingerprint = snapshot.configFingerprint;
+  if (cacheable && configFingerprint && cachedPolicies?.configFingerprint === configFingerprint) {
+    return cachedPolicies.policies;
+  }
+  const policies = collectManifestModelIdNormalizationPolicies(snapshot.plugins);
+  if (cacheable && configFingerprint) {
+    cachedPolicies = { configFingerprint, policies };
+  }
+  return policies;
+}
+
+function resolveManifestModelIdNormalizationPolicy(
+  provider: string,
+  params: ManifestModelIdNormalizationLookupParams = {},
+): PluginManifestModelIdNormalizationProvider | undefined {
+  const providerId = normalizeLowercaseStringOrEmpty(provider);
+  return loadManifestModelIdNormalizationPolicies(params).get(providerId);
 }
 
 function hasProviderPrefix(modelId: string): boolean {
@@ -35,12 +97,16 @@ function formatPrefixedModelId(prefix: string, modelId: string): string {
 
 export function normalizeProviderModelIdWithManifest(params: {
   provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
   context: {
     provider: string;
     modelId: string;
   };
 }): string | undefined {
-  const policy = loadManifestModelIdNormalizationPolicies().get(params.provider);
+  const policy = resolveManifestModelIdNormalizationPolicy(params.provider, params);
   if (!policy) {
     return undefined;
   }
@@ -72,8 +138,4 @@ export function normalizeProviderModelIdWithManifest(params: {
   }
 
   return modelId;
-}
-
-export function clearManifestModelIdNormalizationCacheForTest(): void {
-  manifestModelIdNormalizationCache = undefined;
 }

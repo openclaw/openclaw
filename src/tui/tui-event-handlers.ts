@@ -1,5 +1,6 @@
 import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
@@ -48,6 +49,8 @@ type EventHandlerContext = {
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
+const STREAMING_WATCHDOG_USER_MESSAGE =
+  "This response is taking longer than expected. Send another message to continue.";
 
 export function createEventHandlers(context: EventHandlerContext) {
   const {
@@ -72,6 +75,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamAssembler = new TuiStreamAssembler();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
+  let reconnectPendingRunId: string | null = null;
 
   const streamingWatchdogMs =
     typeof context.streamingWatchdogMs === "number" &&
@@ -82,12 +86,24 @@ export function createEventHandlers(context: EventHandlerContext) {
   let streamingWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   let streamingWatchdogRunId: string | null = null;
 
+  const flushPendingHistoryRefreshIfIdle = () => {
+    if (!pendingHistoryRefresh || state.activeChatRunId) {
+      return;
+    }
+    pendingHistoryRefresh = false;
+    void loadHistory?.();
+  };
+
   const clearStreamingWatchdog = () => {
     if (streamingWatchdogTimer) {
       clearTimeout(streamingWatchdogTimer);
       streamingWatchdogTimer = null;
     }
     streamingWatchdogRunId = null;
+  };
+
+  const pauseStreamingWatchdog = () => {
+    clearStreamingWatchdog();
   };
 
   const armStreamingWatchdog = (runId: string) => {
@@ -105,12 +121,17 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       streamingWatchdogRunId = null;
       state.activeChatRunId = null;
+      state.activityStatus = "idle";
       setActivityStatus("idle");
-      chatLog.addSystem(
-        `streaming watchdog: no stream updates for ${Math.round(
-          streamingWatchdogMs / 1000,
-        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
-      );
+      if (reconnectPendingRunId === runId) {
+        reconnectPendingRunId = null;
+        pendingHistoryRefresh = false;
+        void loadHistory?.();
+        tui.requestRender();
+        return;
+      }
+      flushPendingHistoryRefreshIfIdle();
+      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -152,18 +173,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     streamAssembler = new TuiStreamAssembler();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
+    state.pendingChatRunId = null;
+    reconnectPendingRunId = null;
     clearLocalRunIds?.();
     clearLocalBtwRunIds?.();
     btw.clear();
     clearStreamingWatchdog();
-  };
-
-  const flushPendingHistoryRefreshIfIdle = () => {
-    if (!pendingHistoryRefresh || state.activeChatRunId) {
-      return;
-    }
-    pendingHistoryRefresh = false;
-    void loadHistory?.();
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
@@ -194,6 +209,41 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
   };
 
+  const clearStaleStreamingIfNoTrackedRunRemains = () => {
+    const activeRunId = state.activeChatRunId;
+    // A missing active run is the recovery case; only tracked active runs block cleanup.
+    const activeRunIsStillTracked = activeRunId ? sessionRuns.has(activeRunId) : false;
+    if (state.activityStatus !== "streaming" || activeRunIsStillTracked || sessionRuns.size > 0) {
+      return;
+    }
+    state.activeChatRunId = null;
+    state.activityStatus = "idle";
+    setActivityStatus("idle");
+    clearStreamingWatchdog();
+    flushPendingHistoryRefreshIfIdle();
+  };
+
+  const reconnectStreamingWatchdog = () => {
+    clearStreamingWatchdog();
+    const activeRunId = state.activeChatRunId;
+    if (!activeRunId) {
+      reconnectPendingRunId = null;
+      clearStaleStreamingIfNoTrackedRunRemains();
+      return;
+    }
+    if (!sessionRuns.has(activeRunId)) {
+      reconnectPendingRunId = null;
+      state.activeChatRunId = null;
+      state.activityStatus = "idle";
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
+      return;
+    }
+    reconnectPendingRunId = activeRunId;
+    setActivityStatus("streaming");
+    armStreamingWatchdog(activeRunId);
+  };
+
   const finalizeRun = (params: {
     runId: string;
     wasActiveRun: boolean;
@@ -205,8 +255,11 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
+      clearStaleStreamingIfNoTrackedRunRemains();
     }
     void refreshSessionInfo?.();
   };
@@ -223,8 +276,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (params.wasActiveRun) {
       setActivityStatus(params.status);
       clearStreamingWatchdog();
-    } else if (streamingWatchdogRunId === params.runId) {
-      clearStreamingWatchdog();
+    } else {
+      if (streamingWatchdogRunId === params.runId) {
+        clearStreamingWatchdog();
+      }
     }
     void refreshSessionInfo?.();
   };
@@ -299,8 +354,12 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (evt.state === "final") {
+        clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
+    }
+    if (reconnectPendingRunId === evt.runId) {
+      reconnectPendingRunId = null;
     }
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
@@ -309,6 +368,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         noteLocalRunId?.(evt.runId);
         state.pendingOptimisticUserMessage = false;
       }
+    }
+    if (state.pendingChatRunId === evt.runId) {
+      state.pendingChatRunId = null;
     }
     if (evt.state === "delta") {
       // Arm watchdog and mark streaming on every delta, even when the visible
@@ -330,6 +392,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
+        clearStaleStreamingIfNoTrackedRunRemains();
         tui.requestRender();
         return;
       }
@@ -390,7 +453,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       forgetLocalBtwRunId?.(evt.runId);
       const wasActiveRun = state.activeChatRunId === evt.runId;
       const errorMessage = evt.errorMessage ?? "unknown";
-      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${errorMessage}`);
+      const renderedError = formatRawAssistantErrorForUi(errorMessage);
+      chatLog.addSystem(resolveAuthErrorHint(errorMessage) ?? `run error: ${renderedError}`);
       terminateRun({ runId: evt.runId, wasActiveRun, status: "error" });
       maybeRefreshHistoryForRun(evt.runId);
     }
@@ -412,6 +476,9 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
     if (evt.stream === "tool") {
+      if (isActiveRun) {
+        armStreamingWatchdog(evt.runId);
+      }
       const verbose = state.sessionInfo.verboseLevel ?? "off";
       const allowToolEvents = verbose !== "off";
       const allowToolOutput = verbose === "full";
@@ -451,6 +518,9 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase && phase !== "end" && phase !== "error") {
+        armStreamingWatchdog(evt.runId);
+      }
       if (phase === "start") {
         setActivityStatus("running");
       }
@@ -493,5 +563,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearStreamingWatchdog();
   };
 
-  return { handleChatEvent, handleAgentEvent, handleBtwEvent, dispose };
+  return {
+    handleChatEvent,
+    handleAgentEvent,
+    handleBtwEvent,
+    pauseStreamingWatchdog,
+    reconnectStreamingWatchdog,
+    dispose,
+  };
 }

@@ -3,18 +3,20 @@ import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
+import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
 
-type StalePluginSurface = "allow" | "entries" | "channel" | "heartbeat" | "modelByChannel";
+type StalePluginSurface = "allow" | "entries" | "slot" | "channel" | "heartbeat" | "modelByChannel";
 
 type StalePluginConfigHit = {
   pluginId: string;
   pathLabel: string;
   surface: StalePluginSurface;
+  slotKey?: PluginSlotKey;
 };
 
 type StalePluginRegistryState = {
@@ -29,12 +31,11 @@ function collectPluginRegistryState(
   env?: NodeJS.ProcessEnv,
 ): StalePluginRegistryState {
   const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const registry = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir: workspaceDir ?? undefined,
-    env,
-    includeDisabled: true,
-  });
+    env: env ?? process.env,
+  }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
   const installedIds = new Set<string>();
   for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
@@ -74,6 +75,9 @@ export function isStalePluginAutoRepairBlocked(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
+  if (cfg.plugins?.enabled === false) {
+    return false;
+  }
   return collectPluginRegistryState(cfg, env).hasDiscoveryErrors;
 }
 
@@ -81,6 +85,9 @@ export function scanStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): StalePluginConfigHit[] {
+  if (cfg.plugins?.enabled === false) {
+    return [];
+  }
   return scanStalePluginConfigWithState(cfg, collectPluginRegistryState(cfg, env));
 }
 
@@ -99,7 +106,7 @@ function scanStalePluginConfigWithState(
       continue;
     }
     const pluginId = normalizePluginId(rawPluginId);
-    if (!pluginId || knownIds.has(pluginId)) {
+    if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
       continue;
     }
     hits.push({
@@ -114,7 +121,7 @@ function scanStalePluginConfigWithState(
   if (entries) {
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
-      if (!pluginId || knownIds.has(pluginId)) {
+      if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
         continue;
       }
       hits.push({
@@ -123,6 +130,32 @@ function scanStalePluginConfigWithState(
         surface: "entries",
       });
       staleEvidenceIds.add(pluginId);
+    }
+  }
+
+  const slots = asObjectRecord(plugins?.slots);
+  if (slots) {
+    for (const slotKey of ["memory", "contextEngine"] as const satisfies readonly PluginSlotKey[]) {
+      const rawPluginId = slots[slotKey];
+      if (typeof rawPluginId !== "string") {
+        continue;
+      }
+      const pluginId = normalizePluginId(rawPluginId);
+      const defaultSlotId = defaultSlotIdForKey(slotKey);
+      if (
+        !pluginId ||
+        rawPluginId.trim().toLowerCase() === "none" ||
+        pluginId === normalizePluginId(defaultSlotId) ||
+        knownIds.has(pluginId)
+      ) {
+        continue;
+      }
+      hits.push({
+        pluginId: rawPluginId,
+        pathLabel: `plugins.slots.${slotKey}`,
+        surface: "slot",
+        slotKey,
+      });
     }
   }
 
@@ -231,6 +264,9 @@ function formatStalePluginHitWarning(hit: StalePluginConfigHit): string {
   if (hit.surface === "allow" || hit.surface === "entries") {
     return `- ${hit.pathLabel}: stale plugin reference "${hit.pluginId}" was found.`;
   }
+  if (hit.surface === "slot") {
+    return `- ${hit.pathLabel}: slot references missing plugin "${hit.pluginId}".`;
+  }
   if (hit.surface === "channel") {
     return `- ${hit.pathLabel}: dangling channel config for missing plugin "${hit.pluginId}" was found.`;
   }
@@ -268,6 +304,9 @@ export function maybeRepairStalePluginConfig(
   config: OpenClawConfig;
   changes: string[];
 } {
+  if (cfg.plugins?.enabled === false) {
+    return { config: cfg, changes: [] };
+  }
   const registryState = collectPluginRegistryState(cfg, env);
   if (registryState.hasDiscoveryErrors) {
     return { config: cfg, changes: [] };
@@ -302,6 +341,19 @@ export function maybeRepairStalePluginConfig(
     }
   }
 
+  const slotHits = hits.filter(
+    (hit): hit is StalePluginConfigHit & { slotKey: PluginSlotKey } =>
+      hit.surface === "slot" && hit.slotKey !== undefined,
+  );
+  if (slotHits.length > 0) {
+    const slots = asObjectRecord(nextPlugins?.slots);
+    if (slots) {
+      for (const hit of slotHits) {
+        slots[hit.slotKey] = defaultSlotIdForKey(hit.slotKey);
+      }
+    }
+  }
+
   const channelIds = hits.filter((hit) => hit.surface === "channel").map((hit) => hit.pluginId);
   if (channelIds.length > 0) {
     removeDanglingChannelReferences(next, channelIds);
@@ -316,6 +368,11 @@ export function maybeRepairStalePluginConfig(
   if (entryIds.length > 0) {
     changes.push(
       `- plugins.entries: removed ${entryIds.length} stale plugin entr${entryIds.length === 1 ? "y" : "ies"} (${entryIds.join(", ")})`,
+    );
+  }
+  if (slotHits.length > 0) {
+    changes.push(
+      `- plugins.slots: reset ${slotHits.length} stale plugin slot${slotHits.length === 1 ? "" : "s"} (${slotHits.map((hit) => `${hit.slotKey}: ${hit.pluginId} -> ${defaultSlotIdForKey(hit.slotKey)}`).join(", ")})`,
     );
   }
   if (channelIds.length > 0) {

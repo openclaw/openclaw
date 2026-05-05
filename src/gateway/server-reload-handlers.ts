@@ -5,14 +5,13 @@ import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
-import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
   emitGatewayRestart,
+  resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
@@ -21,14 +20,17 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
-import { getInspectableTaskRegistrySummary } from "../tasks/task-registry.maintenance.js";
+import {
+  getInspectableActiveTaskRestartBlockers,
+  type ActiveTaskRestartBlocker,
+} from "../tasks/task-registry.maintenance.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
-import { enqueueConfigRecoveryNotice } from "./config-recovery-notice.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
+import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
 import {
   type GatewayChannelManager,
   startGatewayChannelHealthMonitor,
@@ -55,6 +57,11 @@ type GatewayHotReloadState = {
 type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
+};
+
+export type GatewayPluginReloadResult = {
+  restartChannels: ReadonlySet<ChannelKind>;
+  activeChannels: ReadonlySet<ChannelKind>;
 };
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
@@ -91,6 +98,11 @@ type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  reloadPlugins: (params: {
+    nextConfig: OpenClawConfig;
+    changedPaths: readonly string[];
+    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+  }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -100,6 +112,7 @@ type GatewayReloadHandlerParams = {
   logCron: { error: (msg: string) => void };
   logReload: GatewayReloadLog;
   createHealthMonitor: (config: OpenClawConfig) => ChannelHealthMonitor | null;
+  onCronRestart?: () => void;
 };
 
 type ManagedGatewayConfigReloaderParams = Omit<
@@ -112,7 +125,6 @@ type ManagedGatewayConfigReloaderParams = Omit<
   initialInternalWriteHash: string | null;
   watchPath: string;
   readSnapshot: typeof import("../config/config.js").readConfigFileSnapshot;
-  recoverSnapshot: typeof import("../config/config.js").recoverConfigFromLastKnownGood;
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & {
@@ -130,7 +142,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
     const embeddedRuns = getActiveEmbeddedRunCount();
-    const activeTasks = getInspectableTaskRegistrySummary().active;
+    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
     return {
       queueSize,
       pendingReplies,
@@ -151,9 +163,29 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       details.push(`${counts.embeddedRuns} embedded run(s)`);
     }
     if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} task run(s)`);
+      details.push(`${counts.activeTasks} background task run(s)`);
     }
     return details;
+  };
+  const formatTaskBlocker = (task: ActiveTaskRestartBlocker) => {
+    const details = [
+      `taskId=${task.taskId}`,
+      task.runId ? `runId=${task.runId}` : null,
+      `status=${task.status}`,
+      `runtime=${task.runtime}`,
+      task.label ? `label=${task.label}` : null,
+      task.title ? `title=${task.title.slice(0, 80)}` : null,
+    ].filter((value): value is string => Boolean(value));
+    return details.join(" ");
+  };
+  const formatTaskBlockers = () => {
+    const blockers = getInspectableActiveTaskRestartBlockers();
+    if (blockers.length === 0) {
+      return null;
+    }
+    const shown = blockers.slice(0, 8).map(formatTaskBlocker);
+    const omitted = blockers.length - shown.length;
+    return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
@@ -224,6 +256,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       )
     ) {
       resetModelCatalogCache();
+      markGatewayModelCatalogStaleForReload();
     }
 
     if (plan.reloadHooks) {
@@ -241,7 +274,43 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetDirectoryCache();
 
+    const channelsToRestart = new Set(plan.restartChannels);
+    const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
+    let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
+    const shouldSkipChannelRestart = () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+    if (plan.reloadPlugins) {
+      const stopChannelsBeforePluginReplace = async (channels: ReadonlySet<ChannelKind>) => {
+        for (const channel of channels) {
+          channelsToRestart.add(channel);
+        }
+        if (channelsToRestart.size === 0 || shouldSkipChannelRestart()) {
+          return;
+        }
+        await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        for (const channel of channelsToRestart) {
+          if (channelsStoppedBeforePluginReload.has(channel)) {
+            continue;
+          }
+          params.logChannels.info(`stopping ${channel} channel before plugin reload`);
+          await params.stopChannel(channel);
+          channelsStoppedBeforePluginReload.add(channel);
+        }
+      };
+      const pluginReloadResult = await params.reloadPlugins({
+        nextConfig,
+        changedPaths: plan.changedPaths,
+        beforeReplace: stopChannelsBeforePluginReplace,
+      });
+      for (const channel of pluginReloadResult.restartChannels) {
+        channelsToRestart.add(channel);
+      }
+      activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+    }
+
     if (plan.restartCron) {
+      params.onCronRestart?.();
       state.cronState.cron.stop();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
@@ -269,6 +338,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
+      const [{ stopGmailWatcher }, { startGmailWatcherWithLogs }] = await Promise.all([
+        import("../hooks/gmail-watcher.js"),
+        import("../hooks/gmail-watcher-lifecycle.js"),
+      ]);
       await stopGmailWatcher().catch((err) => {
         params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
       });
@@ -280,22 +353,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       });
     }
 
-    if (plan.restartChannels.size > 0) {
-      if (
-        isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-        isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-      ) {
+    if (channelsToRestart.size > 0) {
+      if (shouldSkipChannelRestart()) {
         params.logChannels.info(
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
-        await waitForActiveWorkBeforeChannelReload(plan.restartChannels, nextConfig);
+        if (!plan.reloadPlugins) {
+          await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        }
         const restartChannel = async (name: ChannelKind) => {
+          if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
+            return;
+          }
           params.logChannels.info(`restarting ${name} channel`);
-          await params.stopChannel(name);
+          if (!channelsStoppedBeforePluginReload.has(name)) {
+            await params.stopChannel(name);
+          }
           await params.startChannel(name);
         };
-        for (const channel of plan.restartChannels) {
+        for (const channel of channelsToRestart) {
           await restartChannel(channel);
         }
       }
@@ -340,10 +417,16 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       params.logReload.warn(
         `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
       );
+      const taskBlockers = formatTaskBlockers();
+      if (taskBlockers) {
+        params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
+      }
 
       deferGatewayRestartUntilIdle({
         getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: nextConfig.gateway?.reload?.deferralTimeoutMs,
+        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
+          nextConfig.gateway?.reload?.deferralTimeoutMs,
+        ),
         hooks: {
           onReady: () => {
             restartPending = false;
@@ -351,15 +434,21 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onStillPending: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
+            const taskBlockers = formatTaskBlockers();
             params.logReload.warn(
-              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active`,
+              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
+                taskBlockers ? ` (${taskBlockers})` : ""
+              }`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
+            const taskBlockers = formatTaskBlockers();
             restartPending = false;
             params.logReload.warn(
-              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
+              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
+                taskBlockers ? ` (${taskBlockers})` : ""
+              }; forcing restart`,
             );
           },
           onCheckError: (err) => {
@@ -396,10 +485,12 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     setState: params.setState,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
+    reloadPlugins: params.reloadPlugins,
     logHooks: params.logHooks,
     logChannels: params.logChannels,
     logCron: params.logCron,
     logReload: params.logReload,
+    ...(params.onCronRestart ? { onCronRestart: params.onCronRestart } : {}),
     createHealthMonitor: (config) =>
       startGatewayChannelHealthMonitor({
         cfg: config,
@@ -412,17 +503,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     initialCompareConfig: params.initialCompareConfig,
     initialInternalWriteHash: params.initialInternalWriteHash,
     readSnapshot: params.readSnapshot,
-    recoverSnapshot: async (snapshot, reason) =>
-      await params.recoverSnapshot({ snapshot, reason: `reload-${reason}` }),
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
-    onRecovered: ({ reason, snapshot, recoveredSnapshot }) => {
-      enqueueConfigRecoveryNotice({
-        cfg: recoveredSnapshot.config,
-        phase: "reload",
-        reason: `reload-${reason}`,
-        configPath: snapshot.path,
-      });
-    },
     subscribeToWrites: params.subscribeToWrites,
     onHotReload: async (plan, nextConfig) => {
       const previousSharedGatewaySessionGeneration =

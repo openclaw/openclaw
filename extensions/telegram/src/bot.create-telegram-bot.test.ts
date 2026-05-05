@@ -1,6 +1,6 @@
+import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { escapeRegExp, formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
@@ -179,6 +179,22 @@ describe("createTelegramBot", () => {
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
     expect(useSpy).toHaveBeenCalledWith("throttler");
   });
+
+  it("logs middleware errors through grammY catch without rethrowing", () => {
+    const runtime = {
+      error: vi.fn(),
+    } as unknown as NonNullable<TelegramBotOptions["runtime"]>;
+    const bot = createTelegramBot({ token: "tok", runtime });
+    const catchMock = bot.catch as unknown as {
+      mock: { calls: Array<[(err: unknown) => void]> };
+    };
+    const errorHandler = catchMock.mock.calls[0]?.[0];
+
+    expect(errorHandler).toBeTypeOf("function");
+    expect(() => errorHandler?.(new Error("handler boom"))).not.toThrow();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("telegram bot error:"));
+  });
+
   it("uses wrapped fetch when global fetch is available", () => {
     const originalFetch = globalThis.fetch;
     const fetchSpy = vi.fn() as unknown as typeof fetch;
@@ -231,6 +247,84 @@ describe("createTelegramBot", () => {
       }),
     );
   });
+
+  it("keeps low timeoutSeconds above the outbound request guard", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
+      },
+    });
+    createTelegramBot({ token: "tok" });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("keeps polling client timeout above the outbound request guard", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
+      },
+    });
+    createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
+      }),
+    );
+  });
+
+  it("passes startup probe botInfo to grammY", () => {
+    const botInfo = {
+      id: 123456,
+      is_bot: true,
+      first_name: "OpenClaw",
+      username: "openclaw_bot",
+      can_join_groups: true,
+      can_read_all_group_messages: false,
+      can_manage_bots: false,
+      supports_inline_queries: false,
+      can_connect_to_business: false,
+      has_main_web_app: false,
+      has_topics_enabled: false,
+      allows_users_to_create_topics: false,
+    } as const;
+
+    createTelegramBot({ token: "tok", botInfo });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        botInfo,
+      }),
+    );
+  });
+
+  it("normalizes full Telegram bot endpoint apiRoot before passing it to grammY", () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          apiRoot: "https://api.telegram.org/bot123456:ABC/",
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+
+    expect(botCtorSpy).toHaveBeenCalledWith(
+      "tok",
+      expect.objectContaining({
+        client: expect.objectContaining({ apiRoot: "https://api.telegram.org" }),
+      }),
+    );
+  });
+
   it("sequentializes updates by chat and thread", () => {
     createTelegramBot({ token: "tok" });
     expect(sequentializeSpy).toHaveBeenCalledTimes(1);
@@ -318,7 +412,7 @@ describe("createTelegramBot", () => {
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
-      const body = String(ctx.Body ?? "");
+      const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first message")) {
         await firstTurnGate;
@@ -428,7 +522,7 @@ describe("createTelegramBot", () => {
 
     replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
       await opts?.onReplyStart?.();
-      const body = String(ctx.Body ?? "");
+      const body = ctx.Body ?? "";
       startedBodies.push(body);
       if (body.includes("first")) {
         await firstRunGate;
@@ -1634,10 +1728,12 @@ describe("createTelegramBot", () => {
             work: {
               botToken: "tok-work",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
           },
         },
@@ -1743,10 +1839,12 @@ describe("createTelegramBot", () => {
             work: {
               botToken: "tok-work",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
             opie: {
               botToken: "tok-opie",
               dmPolicy: "open",
+              allowFrom: ["*"],
             },
           },
         },
@@ -2165,6 +2263,9 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
 
     expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
+    expect(setMyCommandsSpy).toHaveBeenCalledWith([], {
+      scope: { type: "all_group_chats" },
+    });
   });
   it("handles requireMention when mentions do and do not resolve", async () => {
     const cases = [
@@ -2661,6 +2762,37 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX final reply");
   });
+
+  it("sends Codex usage-limit reset details as the Telegram reply body", async () => {
+    const codexRateLimitText =
+      "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
+    replySpy.mockResolvedValue({ text: codexRateLimitText });
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: 5, type: "private" },
+        text: "hi",
+        date: 1736380800,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0][0]).toBe("5");
+    expect(sendMessageSpy.mock.calls[0][1]).toBe(codexRateLimitText);
+    expect(String(sendMessageSpy.mock.calls[0][1])).not.toContain(
+      "All models are temporarily rate-limited",
+    );
+  });
+
   it("honors threaded replies for replyToMode=first/all", async () => {
     for (const [mode, messageId] of [
       ["first", 101],
@@ -3091,7 +3223,7 @@ describe("createTelegramBot", () => {
   it("retries reaction updates after a bubbled enqueue failure", async () => {
     loadConfig.mockReturnValue({
       channels: {
-        telegram: { dmPolicy: "open", reactionNotifications: "all" },
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
       },
     });
 
@@ -3667,7 +3799,7 @@ describe("createTelegramBot", () => {
 
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
     expect(String(editMessageTextSpy.mock.calls.at(-1)?.[2] ?? "")).toContain(
-      "This model will be used for your next message.",
+      "Session-only model selection. Runtime unchanged.",
     );
     expect(
       editMessageTextSpy.mock.calls.some((call) =>

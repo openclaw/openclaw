@@ -6,18 +6,20 @@ read_when:
 title: "Matrix"
 ---
 
-Matrix is a bundled channel plugin for OpenClaw.
+Matrix is a downloadable channel plugin for OpenClaw.
 It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
-## Bundled plugin
+## Install
 
-Current packaged OpenClaw releases ship the Matrix plugin in the box. You do not need to install anything; configuring `channels.matrix.*` (see [Setup](#setup)) is what activates it.
-
-For older builds or custom installs that exclude Matrix, install manually first:
+Install Matrix before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/matrix
-# or, from a local checkout
+```
+
+From a local checkout:
+
+```bash
 openclaw plugins install ./path/to/local/matrix-plugin
 ```
 
@@ -189,6 +191,24 @@ Matrix reply streaming is opt-in. `streaming` controls how OpenClaw delivers the
 }
 ```
 
+To keep live answer previews but hide interim tool/progress lines, use object
+form:
+
+```json5
+{
+  channels: {
+    matrix: {
+      streaming: {
+        mode: "partial",
+        preview: {
+          toolProgress: false,
+        },
+      },
+    },
+  },
+}
+```
+
 | `streaming`       | Behavior                                                                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `"off"` (default) | Wait for the full reply, send once. `true` ↔ `"partial"`, `false` ↔ `"off"`.                                                                                        |
@@ -206,7 +226,14 @@ Notes:
 
 - If a preview grows past Matrix's per-event size limit, OpenClaw stops preview streaming and falls back to final-only delivery.
 - Media replies always send attachments normally. If a stale preview can no longer be reused safely, OpenClaw redacts it before sending the final media reply.
+- Tool-progress preview updates are enabled by default when Matrix preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
 - Preview edits cost extra Matrix API calls. Leave `streaming: "off"` if you want the most conservative rate-limit profile.
+
+## Approval metadata
+
+Matrix native approval prompts are normal `m.room.message` events with OpenClaw-specific custom event content under `com.openclaw.approval`. Matrix permits custom event-content keys, so stock clients still render the text body while OpenClaw-aware clients can read the structured approval id, kind, state, available decisions, and exec/plugin details.
+
+When an approval prompt is too long for one Matrix event, OpenClaw chunks the visible text and attaches `com.openclaw.approval` to the first chunk only. Reactions for allow/deny decisions are bound to that first event, so long prompts keep the same approval target as single-event prompts.
 
 ### Self-hosted push rules for quiet finalized previews
 
@@ -497,7 +524,7 @@ Explicit conversation bindings always win over `sessionScope`, so bound rooms an
 - Message-tool sends auto-inherit the current Matrix thread when targeting the same room (or the same DM user target), unless an explicit `threadId` is provided.
 - DM user-target reuse only kicks in when the current session metadata proves the same DM peer on the same Matrix account; otherwise OpenClaw falls back to normal user-scoped routing.
 - `/focus`, `/unfocus`, `/agents`, `/session idle`, `/session max-age`, and thread-bound `/acp spawn` all work in Matrix rooms and DMs.
-- Top-level `/focus` creates a new Matrix thread and binds it to the target session when `threadBindings.spawnSubagentSessions: true`.
+- Top-level `/focus` creates a new Matrix thread and binds it to the target session when `threadBindings.spawnSessions` is enabled.
 - Running `/focus` or `/acp spawn --thread here` inside an existing Matrix thread binds that thread in place.
 
 When OpenClaw detects a Matrix DM room colliding with another DM room on the same shared session, it posts a one-time `m.notice` in that room pointing to the `/focus` escape hatch and suggesting a `dm.sessionScope` change. The notice only appears when thread bindings are enabled.
@@ -517,7 +544,7 @@ Fast operator flow:
 Notes:
 
 - `--bind here` does not create a child Matrix thread.
-- `threadBindings.spawnAcpSessions` is only required for `/acp spawn --thread auto|here`, where OpenClaw needs to create or bind a child Matrix thread.
+- `threadBindings.spawnSessions` gates `/acp spawn --thread auto|here`, where OpenClaw needs to create or bind a child Matrix thread.
 
 ### Thread binding config
 
@@ -526,13 +553,13 @@ Matrix inherits global defaults from `session.threadBindings`, and also supports
 - `threadBindings.enabled`
 - `threadBindings.idleHours`
 - `threadBindings.maxAgeHours`
-- `threadBindings.spawnSubagentSessions`
-- `threadBindings.spawnAcpSessions`
+- `threadBindings.spawnSessions`
+- `threadBindings.defaultSpawnContext`
 
-Matrix thread-bound spawn flags are opt-in:
+Matrix thread-bound session spawns default on:
 
-- Set `threadBindings.spawnSubagentSessions: true` to allow top-level `/focus` to create and bind new Matrix threads.
-- Set `threadBindings.spawnAcpSessions: true` to allow `/acp spawn --thread auto|here` to bind ACP sessions to Matrix threads.
+- Set `threadBindings.spawnSessions: false` to block top-level `/focus` and `/acp spawn --thread auto|here` from creating/binding Matrix threads.
+- Set `threadBindings.defaultSpawnContext: "isolated"` when native subagent thread spawns should not fork the parent transcript.
 
 ## Reactions
 
@@ -844,7 +871,7 @@ Allowlist-style fields (`groupAllowFrom`, `dm.allowFrom`, `groups.<room>.users`)
 - `replyToMode`: `"off"`, `"first"`, `"all"`, or `"batched"`.
 - `threadReplies`: `"off"`, `"inbound"`, or `"always"`.
 - `threadBindings`: per-channel overrides for thread-bound session routing and lifecycle.
-- `streaming`: `"off"` (default), `"partial"`, `"quiet"`. `true` ↔ `"partial"`, `false` ↔ `"off"`.
+- `streaming`: `"off"` (default), `"partial"`, `"quiet"`, or object form `{ mode, preview: { toolProgress } }`. `true` ↔ `"partial"`, `false` ↔ `"off"`.
 - `blockStreaming`: when `true`, completed assistant blocks are kept as separate progress messages.
 - `markdown`: optional Markdown rendering config for outbound text.
 - `responsePrefix`: optional string prepended to outbound replies.

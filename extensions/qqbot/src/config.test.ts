@@ -1,8 +1,7 @@
 import fs from "node:fs";
+import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
-import { validateJsonSchemaValue } from "../../../src/plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../../src/shared/json-schema.types.js";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -177,11 +176,56 @@ describe("qqbot config", () => {
     expect(resolved.name).toBe("Bot Two");
   });
 
-  it("rejects unresolved SecretRefs on runtime resolution", () => {
+  it("resolves env SecretRefs on runtime resolution", () => {
     const cfg = makeQqbotSecretRefConfig();
+    const previous = process.env.QQBOT_CLIENT_SECRET;
+
+    process.env.QQBOT_CLIENT_SECRET = "resolved-secret";
+    try {
+      const resolved = resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID);
+
+      expect(resolved.clientSecret).toBe("resolved-secret");
+      expect(resolved.secretSource).toBe("config");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.QQBOT_CLIENT_SECRET;
+      } else {
+        process.env.QQBOT_CLIENT_SECRET = previous;
+      }
+    }
+  });
+
+  it("rejects unresolved non-env SecretRefs on runtime resolution", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+          clientSecret: {
+            source: "file",
+            provider: "default",
+            id: "/qqbot/clientSecret",
+          },
+        },
+      },
+    } as OpenClawConfig;
 
     expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
-      'channels.qqbot.clientSecret: unresolved SecretRef "env:default:QQBOT_CLIENT_SECRET"',
+      'channels.qqbot.clientSecret: unresolved SecretRef "file:default:/qqbot/clientSecret"',
+    );
+  });
+
+  it("rejects legacy SecretRef marker strings before QQ token exchange", () => {
+    const cfg = {
+      channels: {
+        qqbot: {
+          appId: "123456",
+          clientSecret: "secretref:/QQBOT_CLIENT_SECRET",
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() => resolveQQBotAccount(cfg, DEFAULT_ACCOUNT_ID)).toThrow(
+      "channels.qqbot.clientSecret: legacy SecretRef marker strings are not valid QQ Bot clientSecret values; use a structured SecretRef object instead.",
     );
   });
 

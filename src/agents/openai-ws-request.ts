@@ -26,12 +26,12 @@ type WsOptions = Parameters<StreamFn>[2] & {
   reasoningSummary?: string;
 };
 
-export interface PlannedWsTurnInput {
+interface PlannedWsTurnInput {
   inputItems: InputItem[];
   previousResponseId?: string;
 }
 
-export type PlannedWsRequestPayload = {
+type PlannedWsRequestPayload = {
   mode: "full_context" | "incremental";
   payload: ResponseCreateEvent;
 };
@@ -169,6 +169,9 @@ export function buildOpenAIWebSocketResponseCreatePayload(params: {
       reasoning.summary = streamOpts.reasoningSummary;
     }
     extraParams.reasoning = reasoning;
+    if (reasoning.effort && reasoning.effort !== "none") {
+      extraParams.include = ["reasoning.encrypted_content"];
+    }
   }
 
   const textVerbosity = resolveOpenAITextVerbosity(

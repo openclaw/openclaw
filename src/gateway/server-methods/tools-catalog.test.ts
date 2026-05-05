@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolvePluginTools } from "../../plugins/tools.js";
+import {
+  ensureStandalonePluginToolRegistryLoaded,
+  resolvePluginTools,
+} from "../../plugins/tools.js";
 import { ErrorCodes } from "../protocol/index.js";
 import { toolsCatalogHandlers } from "./tools-catalog.js";
 
@@ -17,6 +20,9 @@ vi.mock("../../agents/agent-scope.js", () => ({
 const pluginToolMetaState = new Map<string, { pluginId: string; optional: boolean }>();
 
 vi.mock("../../plugins/tools.js", () => ({
+  buildPluginToolMetadataKey: (pluginId: string, toolName: string) =>
+    JSON.stringify([pluginId, toolName]),
+  ensureStandalonePluginToolRegistryLoaded: vi.fn(),
   resolvePluginTools: vi.fn(() => [
     { name: "voice_call", label: "voice_call", description: "Plugin calling tool" },
     {
@@ -153,6 +159,11 @@ describe("tools.catalog handler", () => {
     await invoke();
 
     expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+    expect(vi.mocked(ensureStandalonePluginToolRegistryLoaded)).toHaveBeenCalledWith(
       expect.objectContaining({
         allowGatewaySubagentBinding: true,
       }),

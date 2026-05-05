@@ -5,11 +5,15 @@ import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
   release: vi.fn(async () => {}),
 }));
+const consumeGatewayRestartIntentPayloadSync = vi.fn<
+  () => { force?: boolean; waitMs?: number } | null
+>(() => null);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const consumeGatewayRestartIntentSync = vi.fn(() => false);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
+const resetGatewayRestartStateForInProcessRestart = vi.fn();
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -20,14 +24,21 @@ const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?
   cooldownMsApplied: 0,
 }));
 const getActiveTaskCount = vi.fn(() => 0);
+const getInspectableActiveTaskRestartBlockers = vi.fn(
+  () =>
+    [] as Array<{
+      taskId: string;
+      status: "queued" | "running";
+      runtime: "subagent" | "acp" | "cli" | "cron";
+      runId?: string;
+      label?: string;
+      title?: string;
+    }>,
+);
 const markGatewayDraining = vi.fn();
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
-const getActiveBundledRuntimeDepsInstallCount = vi.fn(() => 0);
-const waitForBundledRuntimeDepsInstallIdle = vi.fn(async (_timeoutMs?: number) => ({
-  drained: true,
-  active: 0,
-}));
+const reloadTaskRegistryFromStore = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
   () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
 >(() => ({ mode: "disabled" }));
@@ -48,7 +59,8 @@ const abortEmbeddedPiRun = vi.fn(
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
-const loadConfig = vi.fn(() => ({
+const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
+const loadConfig = vi.fn<() => { gateway: { reload: { deferralTimeoutMs?: number } } }>(() => ({
   gateway: {
     reload: {
       deferralTimeoutMs: 90_000,
@@ -66,11 +78,22 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 vi.mock("../../infra/restart.js", () => ({
+  consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
   markGatewaySigusr1RestartHandled: () => markGatewaySigusr1RestartHandled(),
   peekGatewaySigusr1RestartReason: () => peekGatewaySigusr1RestartReason(),
+  resetGatewayRestartStateForInProcessRestart: () => resetGatewayRestartStateForInProcessRestart(),
+  resolveGatewayRestartDeferralTimeoutMs: (timeoutMs: unknown) => {
+    if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
+      return DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS;
+    }
+    if (timeoutMs <= 0) {
+      return undefined;
+    }
+    return Math.floor(timeoutMs);
+  },
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
 }));
@@ -91,10 +114,12 @@ vi.mock("../../process/command-queue.js", () => ({
   resetAllLanes: () => resetAllLanes(),
 }));
 
-vi.mock("../../plugins/bundled-runtime-deps-activity.js", () => ({
-  getActiveBundledRuntimeDepsInstallCount: () => getActiveBundledRuntimeDepsInstallCount(),
-  waitForBundledRuntimeDepsInstallIdle: (timeoutMs?: number) =>
-    waitForBundledRuntimeDepsInstallIdle(timeoutMs),
+vi.mock("../../tasks/runtime-internal.js", () => ({
+  reloadTaskRegistryFromStore: () => reloadTaskRegistryFromStore(),
+}));
+
+vi.mock("../../tasks/task-registry.maintenance.js", () => ({
+  getInspectableActiveTaskRestartBlockers: () => getInspectableActiveTaskRestartBlockers(),
 }));
 
 vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
@@ -264,17 +289,24 @@ describe("runGatewayLoop", () => {
 
   it("treats SIGTERM with a restart intent as a draining restart", async () => {
     vi.clearAllMocks();
-    consumeGatewayRestartIntentSync.mockReturnValueOnce(true);
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
     getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const closeFirst = vi.fn(async () => {});
       const closeSecond = vi.fn(async () => {});
       const { runtime, exited } = createRuntimeWithExitSignal();
+      let resolveSecond: (() => void) | null = null;
+      const startedSecond = new Promise<void>((resolve) => {
+        resolveSecond = resolve;
+      });
       const start = vi
         .fn()
         .mockResolvedValueOnce({ close: closeFirst })
-        .mockResolvedValueOnce({ close: closeSecond });
+        .mockImplementationOnce(async () => {
+          resolveSecond?.();
+          return { close: closeSecond };
+        });
       const { runGatewayLoop } = await import("./run-loop.js");
       void runGatewayLoop({
         start: start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
@@ -288,14 +320,16 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      expect(consumeGatewayRestartIntentSync).toHaveBeenCalledOnce();
+      expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledOnce();
       expect(markGatewayDraining).toHaveBeenCalledOnce();
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
       expect(closeFirst).toHaveBeenCalledWith({
         reason: "gateway restarting",
         restartExpectedMs: 1500,
       });
+      await startedSecond;
       expect(start).toHaveBeenCalledTimes(2);
+      await new Promise<void>((resolve) => setImmediate(resolve));
 
       sigint();
       await expect(exited).resolves.toBe(0);
@@ -306,7 +340,71 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("restarts after SIGUSR1 even when drain times out, and resets lanes for the new iteration", async () => {
+  it("uses restart intent wait overrides for SIGTERM drain", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 2_500 });
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveTasks).toHaveBeenCalledWith(2_500);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("forces SIGTERM restarts without waiting for active task drain", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ force: true });
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    getInspectableActiveTaskRestartBlockers.mockReturnValueOnce([
+      {
+        taskId: "task-force",
+        runId: "run-force",
+        status: "running",
+        runtime: "cron",
+        label: "forced",
+      },
+    ]);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveTasks).not.toHaveBeenCalled();
+      expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "restart blocked by active background task run(s): taskId=task-force",
+        ),
+      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "forced restart requested; skipping active work drain",
+      );
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("restarts after SIGUSR1 even when drain times out, and resets runtime state for the new iteration", async () => {
     vi.clearAllMocks();
     loadConfig.mockReturnValue({
       gateway: {
@@ -395,6 +493,8 @@ describe("runGatewayLoop", () => {
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
       expect(resetAllLanes).toHaveBeenCalledTimes(1);
+      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
+      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(1);
 
       sigusr1();
 
@@ -407,6 +507,8 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(2);
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
+      expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
+      expect(reloadTaskRegistryFromStore).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
 
       sigterm();
@@ -415,6 +517,31 @@ describe("runGatewayLoop", () => {
         reason: "gateway stopping",
         restartExpectedMs: null,
       });
+    });
+  });
+
+  it("uses the default restart drain timeout when config omits deferralTimeoutMs", async () => {
+    vi.clearAllMocks();
+    loadConfig.mockReturnValue({ gateway: { reload: {} } });
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    respawnGatewayProcessForUpdate.mockReturnValue({
+      mode: "disabled",
+      detail: "OPENCLAW_NO_RESPAWN",
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+
+      const { start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(markGatewayDraining).toHaveBeenCalledOnce();
+      expect(start).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -439,47 +566,6 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
     });
   });
-
-  it("waits for active runtime-deps installs before restart close", async () => {
-    vi.clearAllMocks();
-    loadConfig.mockReturnValue({
-      gateway: {
-        reload: {
-          deferralTimeoutMs: 90_000,
-        },
-      },
-    });
-    let releaseRuntimeDeps!: () => void;
-    getActiveBundledRuntimeDepsInstallCount.mockReturnValueOnce(1).mockReturnValue(0);
-    waitForBundledRuntimeDepsInstallIdle.mockReturnValueOnce(
-      new Promise((resolve) => {
-        releaseRuntimeDeps = () => resolve({ drained: true, active: 0 });
-      }),
-    );
-
-    await withIsolatedSignals(async ({ captureSignal }) => {
-      const { close, start } = await createSignaledLoopHarness();
-      const sigusr1 = captureSignal("SIGUSR1");
-
-      sigusr1();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      expect(markGatewayDraining).toHaveBeenCalledOnce();
-      expect(waitForBundledRuntimeDepsInstallIdle).toHaveBeenCalledWith(90_000);
-      expect(close).not.toHaveBeenCalled();
-
-      releaseRuntimeDeps();
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
-
-      expect(close).toHaveBeenCalledWith({
-        reason: "gateway restarting",
-        restartExpectedMs: 1500,
-      });
-      expect(start).toHaveBeenCalledTimes(2);
-    });
-  });
-
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
