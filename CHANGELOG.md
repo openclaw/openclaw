@@ -145,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/providers: make bundled provider discovery honor restrictive `plugins.allow` by default for new configs, while doctor migrates legacy restrictive allowlist configs to `plugins.bundledDiscovery: "compat"` to preserve upgrade behavior. Thanks @dougbtv.
 - Control UI/Talk: make failed Talk startup errors dismissable and clear the stale Talk error state when dismissed, so missing realtime voice provider configuration does not leave a permanent chat banner. Fixes #77071. Thanks @ijoshdavis.
 - Control UI/Talk: stop and clear failed realtime Talk sessions when dismissing runtime error banners, so the next Talk click starts a fresh session instead of only stopping the stale one. Thanks @vincentkoc.
+- Auto-reply: clear stale runtime model cache fields when `/new` or `/reset` creates a fresh channel session, so changed model defaults apply after reset unless the user kept an explicit override. Fixes #77322. Thanks @mjamiv.
 - Control UI/Talk: retry from a failed realtime Talk session on the next Talk click instead of requiring a separate stale-session stop click first. Thanks @vincentkoc.
 - Canvas host: preserve the Gateway TLS scheme in browser canvas host URLs and startup mount logs, so direct HTTPS gateways do not advertise insecure canvas links. Thanks @vincentkoc.
 - WhatsApp/login: route login success and failure messages through the injected runtime, so setup/onboarding surfaces capture all login output instead of only the QR. Thanks @vincentkoc.
