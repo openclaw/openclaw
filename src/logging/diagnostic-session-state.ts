@@ -79,11 +79,36 @@ function findStateBySessionId(sessionId: string): SessionState | undefined {
   return undefined;
 }
 
+function findExistingDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
+  const key = resolveSessionKey(ref);
+  return (
+    diagnosticSessionStates.get(key) ??
+    (ref.sessionId ? findStateBySessionId(ref.sessionId) : undefined)
+  );
+}
+
+function findMatchingDiagnosticSessionStates(ref: SessionRef): SessionState[] {
+  const matches = new Set<SessionState>();
+  const key = resolveSessionKey(ref);
+  const direct = diagnosticSessionStates.get(key);
+  if (direct) {
+    matches.add(direct);
+  }
+  for (const state of diagnosticSessionStates.values()) {
+    if (ref.sessionId && state.sessionId === ref.sessionId) {
+      matches.add(state);
+    }
+    if (ref.sessionKey && state.sessionKey === ref.sessionKey) {
+      matches.add(state);
+    }
+  }
+  return Array.from(matches);
+}
+
 export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   pruneDiagnosticSessionStates();
   const key = resolveSessionKey(ref);
-  const existing =
-    diagnosticSessionStates.get(key) ?? (ref.sessionId && findStateBySessionId(ref.sessionId));
+  const existing = findExistingDiagnosticSessionState(ref);
   if (existing) {
     if (ref.sessionId) {
       existing.sessionId = ref.sessionId;
@@ -103,6 +128,31 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   diagnosticSessionStates.set(key, created);
   pruneDiagnosticSessionStates(Date.now(), true);
   return created;
+}
+
+export function markDiagnosticSessionRecovered(ref: SessionRef, now = Date.now()): boolean {
+  pruneDiagnosticSessionStates(now);
+  const matches = findMatchingDiagnosticSessionStates(ref);
+  if (matches.length === 0) {
+    return false;
+  }
+  let hadOpenDiagnosticWork = false;
+  for (const state of matches) {
+    if (ref.sessionId) {
+      state.sessionId = ref.sessionId;
+    }
+    if (ref.sessionKey) {
+      state.sessionKey = ref.sessionKey;
+    }
+    hadOpenDiagnosticWork ||= state.state !== "idle";
+    hadOpenDiagnosticWork ||= state.queueDepth > 0;
+    hadOpenDiagnosticWork ||= state.lastStuckWarnAgeMs !== undefined;
+    state.state = "idle";
+    state.queueDepth = 0;
+    state.lastActivity = now;
+    state.lastStuckWarnAgeMs = undefined;
+  }
+  return hadOpenDiagnosticWork;
 }
 
 export function getDiagnosticSessionStateCountForTest(): number {

@@ -58,12 +58,18 @@ vi.mock("./diagnostic-runtime.js", () => ({
 }));
 
 import {
+  diagnosticSessionStates,
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "./diagnostic-session-state.js";
+import {
   __testing,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 function resetMocks() {
   __testing.resetRecoveriesInFlight();
+  resetDiagnosticSessionStateForTest();
   mocks.abortEmbeddedPiRun.mockReset();
   mocks.forceClearEmbeddedPiRun.mockReset();
   mocks.isEmbeddedPiRunActive.mockReset();
@@ -253,6 +259,87 @@ describe("stuck session recovery", () => {
 
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
     expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("reason=no_active_work"));
+  });
+
+  it("clears stale diagnostic work when recovery finds no active run to release", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 0,
+      activeCount: 0,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.resetCommandLane.mockReturnValue(0);
+    const state = getDiagnosticSessionState({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+    });
+    state.state = "processing";
+    state.queueDepth = 1;
+    state.lastStuckWarnAgeMs = 120_000;
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+    expect(state.lastStuckWarnAgeMs).toBeUndefined();
+    expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("diagnosticCleared=true"));
+    expect(mocks.diag.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("reason=no_active_work"),
+    );
+  });
+
+  it("clears duplicate stale diagnostic records for the same session key", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 0,
+      activeCount: 0,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+    mocks.resetCommandLane.mockReturnValue(0);
+    diagnosticSessionStates.set("stale-session", {
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      state: "processing",
+      queueDepth: 1,
+      lastActivity: Date.now() - 180_000,
+      lastStuckWarnAgeMs: 120_000,
+    });
+    diagnosticSessionStates.set("agent:main:main", {
+      sessionId: "current-session",
+      sessionKey: "agent:main:main",
+      state: "processing",
+      queueDepth: 1,
+      lastActivity: Date.now() - 30_000,
+    });
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    for (const state of diagnosticSessionStates.values()) {
+      expect(state.state).toBe("idle");
+      expect(state.queueDepth).toBe(0);
+      expect(state.lastStuckWarnAgeMs).toBeUndefined();
+    }
   });
 
   it("releases a stale session-id lane when no session key is available", async () => {

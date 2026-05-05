@@ -11,6 +11,10 @@ import {
   resetCommandQueueStateForTest,
 } from "../process/command-queue.js";
 import {
+  getDiagnosticSessionState,
+  resetDiagnosticSessionStateForTest,
+} from "./diagnostic-session-state.js";
+import {
   __testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
@@ -24,6 +28,7 @@ describe("stuck session recovery integration", () => {
     recoveryTesting.resetRecoveriesInFlight();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
+    resetDiagnosticSessionStateForTest();
   });
 
   it("does not reset a blocked lane while a reply operation is still active", async () => {
@@ -86,5 +91,27 @@ describe("stuck session recovery integration", () => {
 
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
+  });
+
+  it("clears stale diagnostic processing state when no lane work remains", async () => {
+    const sessionKey = "agent:main:diagnostic-only";
+    const sessionId = "diagnostic-only-session";
+    const lane = resolveEmbeddedSessionLane(sessionKey);
+    const state = getDiagnosticSessionState({ sessionId, sessionKey });
+    state.state = "processing";
+    state.queueDepth = 1;
+    state.lastStuckWarnAgeMs = 120_000;
+
+    await recoverStuckDiagnosticSession({
+      sessionId,
+      sessionKey,
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(getQueueSize(lane)).toBe(0);
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+    expect(state.lastStuckWarnAgeMs).toBeUndefined();
   });
 });
