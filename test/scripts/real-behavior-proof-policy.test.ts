@@ -45,6 +45,7 @@ function proofBody(evidence: string, overrides: Record<string, string> = {}) {
 describe("real-behavior-proof-policy", () => {
   it.each([
     "![after](https://github.com/user-attachments/assets/abc123)",
+    "Linked artifact: https://github.com/openclaw/openclaw/actions/runs/123456789/artifacts/987654321",
     "Redacted runtime log: gateway connected Discord channel and delivered the reply.",
     ["Terminal transcript:", "```text", "$ openclaw gateway status", "discord ready", "```"].join(
       "\n",
@@ -80,6 +81,20 @@ describe("real-behavior-proof-policy", () => {
     const evaluation = evaluateRealBehaviorProof({
       pullRequest: externalPr(
         proofBody("pnpm test passed and Vitest mocks cover the branch.", {
+          steps: "pnpm test",
+          observedResult: "CI passes.",
+        }),
+      ),
+    });
+
+    expect(evaluation.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
+  it("fails external PRs whose only copied output is a fenced test or CI transcript", () => {
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        proofBody(["```text", "$ pnpm test", "CI passed with Vitest mocks", "```"].join("\n"), {
           steps: "pnpm test",
           observedResult: "CI passes.",
         }),

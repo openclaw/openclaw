@@ -57,7 +57,7 @@ const mockOnlyEvidenceRegex =
   /\b(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|vitest|lint|typecheck|tsgo|build|check)\b|\b(?:vitest|unit tests?|mock(?:ed|s)?|snapshots?|lint|typechecks?|tsgo|ci(?:\s+passes?)?)\b/i;
 
 const realEvidenceRegex =
-  /!\[[^\]]*\]\([^)]+\)|github\.com\/user-attachments\/assets\/|https?:\/\/\S+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)\b|\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt)\b|```[\s\S]*\n[\s\S]*\n```/i;
+  /!\[[^\]]*\]\([^)]+\)|github\.com\/user-attachments\/assets\/|github\.com\/[^/\s]+\/[^/\s]+\/actions\/runs\/\d+\/artifacts\/\d+|https?:\/\/\S+\.(?:png|jpe?g|gif|webp|mp4|mov|webm)\b|\b(?:screenshot|screen\s*recording|recording|terminal\s+(?:capture|screenshot|transcript|output)|console\s+(?:output|log)|runtime\s+logs?|redacted\s+logs?|live\s+output|actual\s+output|observed\s+output|stdout|stderr|stack trace|trace excerpt|log excerpt|linked\s+artifacts?|artifact\s+links?)\b/i;
 
 const liveCommandRegex =
   /\b(?:openclaw|node|docker|curl|gh|ssh|adb|xcrun|xcodebuild|open|npm\s+run|pnpm\s+openclaw)\b/i;
