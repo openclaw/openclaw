@@ -34,6 +34,11 @@ const STREAM_TOKEN_TTL_MS = 30_000;
 const DEFAULT_HOST = "localhost:8443";
 const MAX_REALTIME_MESSAGE_BYTES = 256 * 1024;
 const MAX_REALTIME_WS_BUFFERED_BYTES = 1024 * 1024;
+const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
+const FORCED_CONSULT_RESULT_MAX_CHARS = 1800;
+const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
+const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
+const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -62,6 +67,138 @@ function buildGreetingInstructions(
     : `${intro} "${trimmedGreeting}"`;
 }
 
+function readSpeakableToolResultText(result: unknown): string | undefined {
+  if (typeof result === "string") {
+    return result.trim() || undefined;
+  }
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    return undefined;
+  }
+  const text = (result as { text?: unknown }).text;
+  if (typeof text === "string" && text.trim()) {
+    return text.trim();
+  }
+  const output = (result as { output?: unknown }).output;
+  return typeof output === "string" && output.trim() ? output.trim() : undefined;
+}
+
+function readConsultArgText(args: unknown, key: string): string | undefined {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const value = (args as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readConsultQuestionText(args: unknown): string | undefined {
+  return (
+    readConsultArgText(args, "question") ??
+    readConsultArgText(args, "prompt") ??
+    readConsultArgText(args, "query") ??
+    readConsultArgText(args, "task")
+  );
+}
+
+function normalizeTranscriptText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function findTextOverlap(base: string, next: string): number {
+  const max = Math.min(base.length, next.length);
+  for (let size = max; size > 0; size -= 1) {
+    if (base.slice(-size) === next.slice(0, size)) {
+      return size;
+    }
+  }
+  return 0;
+}
+
+function shouldInsertTranscriptSpace(base: string, next: string): boolean {
+  if (!base || !next) {
+    return false;
+  }
+  if (/[\s(\[{"']$/.test(base) || /^[\s,.;:!?)]/.test(next)) {
+    return false;
+  }
+  return true;
+}
+
+function appendTranscriptText(base: string | undefined, fragment: string): string {
+  const next = normalizeTranscriptText(fragment);
+  if (!next) {
+    return base ?? "";
+  }
+  const current = normalizeTranscriptText(base ?? "");
+  if (!current) {
+    return next;
+  }
+  const currentLower = current.toLowerCase();
+  const nextLower = next.toLowerCase();
+  if (currentLower === nextLower || currentLower.endsWith(nextLower)) {
+    return current;
+  }
+  if (nextLower.startsWith(currentLower)) {
+    return next;
+  }
+  const overlap = findTextOverlap(currentLower, nextLower);
+  if (overlap >= 6 || (overlap >= 3 && next.length <= 12)) {
+    return `${current}${next.slice(overlap)}`.trim();
+  }
+  const separator = shouldInsertTranscriptSpace(current, next) ? " " : "";
+  return `${current}${separator}${next}`.trim();
+}
+
+function limitPartialUserTranscript(text: string): string {
+  if (text.length <= MAX_PARTIAL_USER_TRANSCRIPT_CHARS) {
+    return text;
+  }
+  const tail = text.slice(-MAX_PARTIAL_USER_TRANSCRIPT_CHARS);
+  return tail.replace(/^\S+\s+/, "").trimStart() || tail.trimStart();
+}
+
+function withFallbackConsultQuestion(args: unknown, fallback: string | undefined): unknown {
+  const providerQuestion = readConsultQuestionText(args);
+  const question = fallback?.trim();
+  if (providerQuestion) {
+    if (
+      question &&
+      providerQuestion.length <= 40 &&
+      question.length >= providerQuestion.length + 8
+    ) {
+      const context = readConsultArgText(args, "context");
+      const fallbackContext = `Realtime provider supplied a shorter consult question: ${providerQuestion}`;
+      return args && typeof args === "object" && !Array.isArray(args)
+        ? {
+            ...args,
+            question,
+            context: context ? `${context}\n\n${fallbackContext}` : fallbackContext,
+          }
+        : { question, context: fallbackContext };
+    }
+    return args;
+  }
+  if (!question) {
+    return args;
+  }
+  return args && typeof args === "object" && !Array.isArray(args)
+    ? { ...args, question }
+    : { question };
+}
+
+function buildForcedConsultSpeechPrompt(result: string): string {
+  const trimmed = result.trim();
+  const bounded =
+    trimmed.length <= FORCED_CONSULT_RESULT_MAX_CHARS
+      ? trimmed
+      : `${trimmed.slice(0, FORCED_CONSULT_RESULT_MAX_CHARS - 16).trimEnd()} [truncated]`;
+  return [
+    "Internal OpenClaw consult result is ready.",
+    "Do not call tools for this internal result.",
+    "Speak the following answer to the caller now, briefly and naturally:",
+    bounded,
+  ].join("\n");
+}
+
 type PendingStreamToken = {
   expiry: number;
   from?: string;
@@ -86,6 +223,10 @@ export class RealtimeCallHandler {
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
   private readonly partialUserTranscriptsByCallId = new Map<string, string>();
+  private readonly partialUserTranscriptUpdatedAtByCallId = new Map<string, number>();
+  private readonly forcedConsultTimersByCallId = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly forcedConsultInFlightByCallId = new Set<string>();
+  private readonly lastProviderConsultAtByCallId = new Map<string, number>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
 
@@ -362,22 +503,40 @@ export class RealtimeCallHandler {
       onTranscript: (role, text, isFinal) => {
         if (!isFinal) {
           if (role === "user" && text.trim()) {
-            this.partialUserTranscriptsByCallId.set(callId, text);
+            const transcript = this.recordPartialUserTranscript(callId, text);
+            console.log(
+              `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=false chars=${text.trim().length} aggregateChars=${transcript.length}`,
+            );
           }
           return;
         }
         if (role === "user") {
-          this.partialUserTranscriptsByCallId.delete(callId);
+          const transcript = this.recordPartialUserTranscript(callId, text);
+          console.log(
+            `[voice-call] realtime input transcript callId=${callId} providerCallId=${callSid} final=true chars=${text.trim().length} aggregateChars=${transcript.length}`,
+          );
           const event: NormalizedEvent = {
             id: `realtime-speech-${callSid}-${Date.now()}`,
             type: "call.speech",
             callId,
             providerCallId: callSid,
             timestamp: Date.now(),
-            transcript: text,
+            transcript,
             isFinal: true,
           };
           this.manager.processEvent(event);
+          this.scheduleForcedAgentConsult({
+            session,
+            callId,
+            callSid,
+            transcript,
+            clearAudio: () => {
+              const clearedBytes = audioPacer.clearAudio();
+              console.log(
+                `[voice-call] realtime forced consult cleared outbound audio callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
+              );
+            },
+          });
           return;
         }
         this.manager.processEvent({
@@ -390,6 +549,9 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent, session) => {
+        console.log(
+          `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
+        );
         void this.executeToolCall(
           session,
           callId,
@@ -439,7 +601,8 @@ export class RealtimeCallHandler {
     session.close = () => {
       this.activeBridgesByCallId.delete(callId);
       this.activeBridgesByCallId.delete(callSid);
-      this.partialUserTranscriptsByCallId.delete(callId);
+      this.clearPartialUserTranscript(callId);
+      this.clearForcedConsultState(callId);
       audioPacer.close();
       closeSession();
     };
@@ -452,6 +615,156 @@ export class RealtimeCallHandler {
     });
 
     return session;
+  }
+
+  private recordPartialUserTranscript(callId: string, text: string): string {
+    const current = this.partialUserTranscriptsByCallId.get(callId);
+    const next = limitPartialUserTranscript(appendTranscriptText(current, text));
+    this.partialUserTranscriptsByCallId.set(callId, next);
+    this.partialUserTranscriptUpdatedAtByCallId.set(callId, Date.now());
+    return next;
+  }
+
+  private clearPartialUserTranscript(callId: string): void {
+    this.partialUserTranscriptsByCallId.delete(callId);
+    this.partialUserTranscriptUpdatedAtByCallId.delete(callId);
+  }
+
+  private consumePartialUserTranscript(callId: string, consumed: string | undefined): void {
+    const text = consumed?.trim();
+    if (!text) {
+      return;
+    }
+    const current = this.partialUserTranscriptsByCallId.get(callId);
+    if (!current) {
+      return;
+    }
+    if (current === text) {
+      this.clearPartialUserTranscript(callId);
+      return;
+    }
+    if (current.toLowerCase().startsWith(text.toLowerCase())) {
+      const remaining = current.slice(text.length).trimStart();
+      if (remaining) {
+        this.partialUserTranscriptsByCallId.set(callId, remaining);
+      } else {
+        this.clearPartialUserTranscript(callId);
+      }
+    }
+  }
+
+  private async waitForConsultTranscriptSettle(callId: string, startedAt: number): Promise<void> {
+    const deadline = startedAt + CONSULT_TRANSCRIPT_SETTLE_MAX_MS;
+    while (true) {
+      const updatedAt = this.partialUserTranscriptUpdatedAtByCallId.get(callId);
+      if (!updatedAt) {
+        return;
+      }
+      const now = Date.now();
+      const quietFor = now - updatedAt;
+      if (quietFor >= CONSULT_TRANSCRIPT_SETTLE_MS || now >= deadline) {
+        return;
+      }
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(CONSULT_TRANSCRIPT_SETTLE_MS - quietFor, deadline - now)),
+      );
+    }
+  }
+
+  private clearForcedConsultState(callId: string): void {
+    const timer = this.forcedConsultTimersByCallId.get(callId);
+    if (timer) {
+      clearTimeout(timer);
+      this.forcedConsultTimersByCallId.delete(callId);
+    }
+    this.forcedConsultInFlightByCallId.delete(callId);
+    this.lastProviderConsultAtByCallId.delete(callId);
+  }
+
+  private scheduleForcedAgentConsult(params: {
+    session: ActiveRealtimeVoiceBridge;
+    callId: string;
+    callSid: string;
+    transcript: string;
+    clearAudio: () => void;
+  }): void {
+    if (this.config.consultPolicy !== "always") {
+      return;
+    }
+    const question = params.transcript.trim();
+    if (!question) {
+      return;
+    }
+    const handler = this.toolHandlers.get(REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME);
+    if (!handler) {
+      return;
+    }
+    const existingTimer = this.forcedConsultTimersByCallId.get(params.callId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+    const timer = setTimeout(() => {
+      this.forcedConsultTimersByCallId.delete(params.callId);
+      if (this.forcedConsultInFlightByCallId.has(params.callId)) {
+        return;
+      }
+      const lastProviderConsultAt = this.lastProviderConsultAtByCallId.get(params.callId) ?? 0;
+      if (Date.now() - lastProviderConsultAt < 2_000) {
+        return;
+      }
+      void this.runForcedAgentConsult({
+        ...params,
+        question,
+        handler,
+      });
+    }, FORCED_CONSULT_FALLBACK_DELAY_MS);
+    this.forcedConsultTimersByCallId.set(params.callId, timer);
+  }
+
+  private async runForcedAgentConsult(params: {
+    session: ActiveRealtimeVoiceBridge;
+    callId: string;
+    callSid: string;
+    question: string;
+    clearAudio: () => void;
+    handler: ToolHandlerFn;
+  }): Promise<void> {
+    this.forcedConsultInFlightByCallId.add(params.callId);
+    const startedAt = Date.now();
+    console.log(
+      `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.question.length}`,
+    );
+    params.clearAudio();
+    try {
+      const result = await params.handler(
+        {
+          question: params.question,
+          context:
+            "The realtime provider produced a final user transcript without invoking openclaw_agent_consult, so OpenClaw is forcing the consult because consultPolicy is always.",
+        },
+        params.callId,
+        {},
+      );
+      const text = readSpeakableToolResultText(result);
+      if (!text) {
+        console.warn(
+          `[voice-call] realtime forced agent consult returned no speakable text callId=${params.callId} providerCallId=${params.callSid}`,
+        );
+        return;
+      }
+      params.clearAudio();
+      params.session.sendUserMessage(buildForcedConsultSpeechPrompt(text));
+      console.log(
+        `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
+      );
+      this.consumePartialUserTranscript(params.callId, params.question);
+    } catch (error) {
+      console.warn(
+        `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
+      );
+    } finally {
+      this.forcedConsultInFlightByCallId.delete(params.callId);
+    }
   }
 
   private registerCallInManager(
@@ -528,6 +841,26 @@ export class RealtimeCallHandler {
     args: unknown,
   ): Promise<void> {
     const handler = this.toolHandlers.get(name);
+    const startedAt = Date.now();
+    if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
+      this.lastProviderConsultAtByCallId.set(callId, Date.now());
+      const timer = this.forcedConsultTimersByCallId.get(callId);
+      if (timer) {
+        clearTimeout(timer);
+        this.forcedConsultTimersByCallId.delete(callId);
+      }
+      await this.waitForConsultTranscriptSettle(callId, startedAt);
+    }
+    console.log(
+      `[voice-call] realtime tool call executing callId=${callId} tool=${name} hasHandler=${Boolean(handler)}`,
+    );
+    const context = {
+      partialUserTranscript: this.partialUserTranscriptsByCallId.get(callId),
+    };
+    const handlerArgs =
+      name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME
+        ? withFallbackConsultQuestion(args, context.partialUserTranscript)
+        : args;
     if (
       handler &&
       name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
@@ -542,11 +875,23 @@ export class RealtimeCallHandler {
     }
     const result = !handler
       ? { error: `Tool "${name}" not available` }
-      : await handler(args, callId, {
-          partialUserTranscript: this.partialUserTranscriptsByCallId.get(callId),
-        }).catch((error: unknown) => ({
+      : await handler(handlerArgs, callId, context).catch((error: unknown) => ({
           error: formatErrorMessage(error),
         }));
+    const status =
+      result && typeof result === "object" && !Array.isArray(result) && "error" in result
+        ? "error"
+        : "ok";
+    const error =
+      status === "error" && result && typeof result === "object" && !Array.isArray(result)
+        ? String((result as { error?: unknown }).error ?? "unknown")
+        : undefined;
+    console.log(
+      `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
+    );
     bridge.submitToolResult(bridgeCallId, result);
+    if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME && status === "ok") {
+      this.consumePartialUserTranscript(callId, context.partialUserTranscript);
+    }
   }
 }

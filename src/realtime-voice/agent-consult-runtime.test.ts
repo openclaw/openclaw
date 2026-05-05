@@ -114,6 +114,7 @@ describe("realtime voice agent consult runtime", () => {
         thinkLevel: "high",
         timeoutMs: 10_000,
         prompt: expect.stringContaining("Caller: Can you check this?"),
+        extraSystemPrompt: expect.stringContaining("delegated requests"),
       }),
     );
   });
