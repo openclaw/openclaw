@@ -19,6 +19,27 @@ reference for **what to import** and **what you can register**.
   instead.
 </Note>
 
+## Where Plugin SDK Code Runs
+
+Plugin SDK code runs inside OpenClaw's trusted plugin runtime. Use it when the
+code must extend OpenClaw by registering providers, channels, tools, hooks,
+services, Gateway plugin methods, or trusted runtime helpers.
+
+Do not use the Plugin SDK for an external app that only needs to control or
+observe OpenClaw. OpenMeow/OpenCoven-style desktop apps, dashboards, IDE
+extensions, CI automation, and standalone scripts should import
+`@openclaw/sdk`, connect to the Gateway, and use the public App SDK contract
+documented in [OpenClaw App SDK](/concepts/openclaw-sdk).
+
+Boundary summary:
+
+| Code location                              | Correct SDK             | Why                                                        |
+| ------------------------------------------ | ----------------------- | ---------------------------------------------------------- |
+| Outside OpenClaw: app, script, dashboard   | `@openclaw/sdk`         | Talks to Gateway RPCs and normalized events                |
+| Inside OpenClaw: plugin runtime            | `openclaw/plugin-sdk/*` | Registers trusted capabilities with the host               |
+| Docs or examples for OpenMeow/OpenCoven UI | `@openclaw/sdk`         | These are external app clients, not in-process plugins     |
+| Provider, channel, tool, hook, or harness  | `openclaw/plugin-sdk/*` | These extend OpenClaw from inside the trusted plugin layer |
+
 <Tip>
 Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
 </Tip>

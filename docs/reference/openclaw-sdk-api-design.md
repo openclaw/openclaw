@@ -24,6 +24,12 @@ The public app SDK should be built in two layers:
 2. A high-level ergonomic wrapper with `OpenClaw`, `Agent`, `Session`, `Run`,
    `Task`, `Artifact`, `Approval`, and `Environment` objects.
 
+All App SDK examples should preserve the external-client boundary:
+`@openclaw/sdk` calls Gateway RPCs, and Gateway owns access to the OpenClaw
+runtime. OpenMeow/OpenCoven examples belong on this side of the boundary. They
+should not import `openclaw/plugin-sdk/*`, `src/**`, plugin runtime APIs, or
+other in-process implementation seams.
+
 ## Namespace design
 
 The low-level namespaces should closely follow Gateway resources:
