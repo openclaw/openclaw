@@ -163,10 +163,10 @@ export async function searchMemoryCorpusSupplements(params: {
     return [];
   }
   const results = (
-    await Promise.all(
-      supplements.map(async (registration) => await registration.supplement.search(params)),
+    await Promise.allSettled(
+      supplements.map((registration) => registration.supplement.search(params)),
     )
-  ).flat();
+  ).flatMap((r) => (r.status === "fulfilled" ? r.value : []));
   return results
     .toSorted((left, right) => {
       if (left.score !== right.score) {
