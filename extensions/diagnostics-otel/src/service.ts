@@ -2377,6 +2377,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "payload.large":
               return;
+            case "session.recovery.requested":
+            case "session.recovery.completed":
+              // Stuck-session recovery telemetry is consumed by other diagnostic
+              // pipelines; no metrics or logs are emitted here for now.
+              return;
           }
         } catch (err) {
           ctx.logger.error(
