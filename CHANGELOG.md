@@ -124,6 +124,7 @@ Docs: https://docs.openclaw.ai
 - Media/Windows: open saved attachment temp files read/write before fsync so Windows WebChat and `chat.send` media offloads no longer fail with EPERM during durability flush. (#76593) Thanks @qq230849622-a11y.
 - Plugins/Windows: show a Git install hint when npm plugin installation fails with `spawn git ENOENT`, and document the WhatsApp plugin's Git-on-PATH requirement for Baileys/libsignal installs.
 - Media/images: keep HEIC/HEIF attachments fail-closed when optional Sharp conversion is unavailable instead of sending originals that still need conversion. Thanks @vincentkoc.
+- Media/images: allow Bedrock image understanding with `aws-sdk` auth to use the AWS credential chain instead of requiring a static API key. Thanks @Beandon13.
 - Control UI/chat: suppress `HEARTBEAT_OK` acknowledgement history, streams, deltas, and final events before they enter the transcript view, so repeated heartbeat no-op turns do not stack noisy bubbles. Thanks @BunsDev.
 - Control UI/Talk: make failed Talk startup errors dismissable and clear the stale Talk error state when dismissed, so missing realtime voice provider configuration does not leave a permanent chat banner. Fixes #77071. Thanks @ijoshdavis.
 - Control UI/Talk: stop and clear failed realtime Talk sessions when dismissing runtime error banners, so the next Talk click starts a fresh session instead of only stopping the stale one. Thanks @vincentkoc.

@@ -391,9 +391,7 @@ async function describeImagesWithModelInternal(
 
   if (isMinimaxVlmModel(model.provider, model.id)) {
     if (!apiKey) {
-      throw new Error(
-        `No API key resolved for provider "${model.provider}" (auth mode: aws-sdk).`,
-      );
+      throw new Error(`No API key resolved for provider "${model.provider}" (auth mode: aws-sdk).`);
     }
     return await describeImagesWithMinimax({
       apiKey,
