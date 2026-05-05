@@ -32,7 +32,7 @@ import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
-import { resolveSlackUserAllowlist } from "../resolve-users.js";
+import { resolveSlackUserAllowlist, type SlackUserResolution } from "../resolve-users.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "../token.js";
 import { normalizeAllowList } from "./allow-list.js";
 import { resolveSlackSlashCommandConfig } from "./commands.js";
@@ -84,6 +84,31 @@ async function getSlackBoltInterop(): Promise<SlackBoltResolvedExports> {
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+
+function resolveStableSlackUserIdEntry(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const mention = /^<@([A-Z][A-Z0-9]+)>$/i.exec(trimmed);
+  if (mention) {
+    return mention[1]?.toUpperCase();
+  }
+  const prefixed = /^(?:slack:|user:)([A-Z][A-Z0-9]+)$/i.exec(trimmed);
+  if (prefixed) {
+    return prefixed[1]?.toUpperCase();
+  }
+  return /^[UW][A-Z0-9]+$/i.test(trimmed) ? trimmed.toUpperCase() : undefined;
+}
+
+function resolveStableSlackUserAllowlistEntries(entries: string[]): SlackUserResolution[] {
+  return entries
+    .map((input) => {
+      const id = resolveStableSlackUserIdEntry(input);
+      return id ? { input, resolved: true, id } : undefined;
+    })
+    .filter((entry): entry is SlackUserResolution => Boolean(entry));
+}
 
 export function formatSlackSocketReconnectMessage(params: {
   event: string;
@@ -397,9 +422,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         }
       }
 
-      if (allowNameMatching) {
-        const allowEntries = normalizeStringEntries(allowFrom).filter((entry) => entry !== "*");
-        if (allowEntries.length > 0) {
+      const allowEntries = normalizeStringEntries(allowFrom).filter((entry) => entry !== "*");
+      if (allowEntries.length > 0) {
+        const stableResolvedUsers = resolveStableSlackUserAllowlistEntries(allowEntries);
+        if (stableResolvedUsers.length > 0) {
+          const { mapping, additions } = buildAllowlistResolutionSummary(stableResolvedUsers, {
+            formatResolved: formatSlackUserResolved,
+          });
+          allowFrom = mergeAllowlist({ existing: allowFrom, additions });
+          ctx.allowFrom = normalizeAllowList(allowFrom);
+          summarizeMapping("slack users", mapping, [], runtime);
+        }
+
+        if (allowNameMatching) {
           try {
             const resolvedUsers = await resolveSlackUserAllowlist({
               token: resolveToken,
@@ -420,14 +455,32 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             );
           }
         }
+      }
 
-        if (channelsConfig && Object.keys(channelsConfig).length > 0) {
-          const userEntries = new Set<string>();
-          for (const channel of Object.values(channelsConfig)) {
-            addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
+      if (channelsConfig && Object.keys(channelsConfig).length > 0) {
+        const userEntries = new Set<string>();
+        for (const channel of Object.values(channelsConfig)) {
+          addAllowlistUserEntriesFromConfigEntry(userEntries, channel);
+        }
+
+        if (userEntries.size > 0) {
+          const stableResolvedUsers = resolveStableSlackUserAllowlistEntries(
+            Array.from(userEntries),
+          );
+          if (stableResolvedUsers.length > 0) {
+            const { resolvedMap, mapping } = buildAllowlistResolutionSummary(stableResolvedUsers, {
+              formatResolved: formatSlackUserResolved,
+            });
+            const nextChannels = patchAllowlistUsersInConfigEntries({
+              entries: channelsConfig,
+              resolvedMap,
+            });
+            channelsConfig = nextChannels;
+            ctx.channelsConfig = nextChannels;
+            summarizeMapping("slack channel users", mapping, [], runtime);
           }
 
-          if (userEntries.size > 0) {
+          if (allowNameMatching) {
             try {
               const resolvedUsers = await resolveSlackUserAllowlist({
                 token: resolveToken,

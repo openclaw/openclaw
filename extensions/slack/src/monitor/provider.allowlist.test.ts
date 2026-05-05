@@ -43,25 +43,58 @@ describe("slack allowlist log formatting", () => {
 describe("slack startup user allowlist resolution", () => {
   it("skips user entry resolution when name matching is not enabled", async () => {
     resetSlackTestState({
+      messages: {
+        responsePrefix: "PFX",
+      },
       channels: {
         slack: {
           enabled: true,
           dmPolicy: "allowlist",
-          allowFrom: ["@global-user"],
+          allowFrom: ["<@U123GLOBAL>", "@global-user"],
           channels: {
-            C123: { users: ["@channel-user"] },
+            C123: {
+              enabled: true,
+              requireMention: false,
+              users: ["<@U123CHANNEL>", "@channel-user"],
+            },
           },
         },
       },
     });
+    slackTestState.replyMock.mockResolvedValue({ text: "ok" });
 
     const monitor = startSlackMonitor(monitorSlackProvider);
     try {
-      await getSlackHandlerOrThrow("message");
+      const handler = await getSlackHandlerOrThrow("message");
       await flush();
       await flush();
 
       expect(slackTestState.resolveSlackUserAllowlistMock).not.toHaveBeenCalled();
+
+      await handler({
+        event: {
+          type: "message",
+          user: "U123GLOBAL",
+          text: "hello",
+          ts: "100.000",
+          channel: "D123",
+          channel_type: "im",
+        },
+      });
+      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
+
+      slackTestState.replyMock.mockClear();
+      await handler({
+        event: {
+          type: "message",
+          user: "U123CHANNEL",
+          text: "hello",
+          ts: "101.000",
+          channel: "C123",
+          channel_type: "channel",
+        },
+      });
+      expect(slackTestState.replyMock).toHaveBeenCalledTimes(1);
     } finally {
       await stopSlackMonitor(monitor);
     }
