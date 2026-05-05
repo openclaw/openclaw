@@ -11,6 +11,7 @@ import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
 import {
   resetBedrockAppProfileCacheEligibilityForTest,
+  resetBedrockAwsSdkRuntimeAuthEpochForTest,
   setBedrockAppProfileControlPlaneForTest,
 } from "./register.sync.runtime.js";
 
@@ -92,6 +93,9 @@ vi.mock("@aws-sdk/client-bedrock", () => {
 });
 
 type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
+type BedrockRuntimeAuthContext = Parameters<
+  NonNullable<RegisteredProviderPlugin["prepareRuntimeAuth"]>
+>[0];
 
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
 async function registerWithConfig(
@@ -141,6 +145,8 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
   provider: "amazon-bedrock",
   id: ANTHROPIC_MODEL,
 } as never;
+
+const BEDROCK_RUNTIME_AUTH_SENTINEL = "__aws_sdk_auth__";
 
 const APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
@@ -207,6 +213,38 @@ function runtimePluginConfig(config?: Record<string, unknown>): OpenClawConfig {
   } as OpenClawConfig;
 }
 
+function buildBedrockRuntimeAuthContext(
+  overrides: Partial<BedrockRuntimeAuthContext> = {},
+): BedrockRuntimeAuthContext {
+  const modelId = overrides.modelId ?? "us.anthropic.claude-sonnet-4-6-v1:0";
+  return {
+    provider: "amazon-bedrock",
+    modelId,
+    model:
+      overrides.model ??
+      ({
+        id: modelId,
+        name: "Claude Sonnet 4.6",
+        provider: "amazon-bedrock",
+        api: "bedrock-converse-stream",
+        baseUrl: "https://bedrock-runtime.us-west-2.amazonaws.com",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 8_192,
+      } as BedrockRuntimeAuthContext["model"]),
+    apiKey: BEDROCK_RUNTIME_AUTH_SENTINEL,
+    authMode: "aws-sdk",
+    profileId: "amazon-bedrock:default",
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
+    env: process.env,
+    config: runtimePluginConfig(),
+    ...overrides,
+  };
+}
+
 describe("amazon-bedrock provider plugin", () => {
   beforeEach(() => {
     foundationModelResults.length = 0;
@@ -216,6 +254,7 @@ describe("amazon-bedrock provider plugin", () => {
     sendBedrockCommand.mockClear();
     resetBedrockDiscoveryCacheForTest();
     resetBedrockAppProfileCacheEligibilityForTest();
+    resetBedrockAwsSdkRuntimeAuthEpochForTest();
     setBedrockAppProfileControlPlaneForTest((region) => ({
       async getInferenceProfile(input) {
         class GetInferenceProfileCommand {
@@ -475,6 +514,45 @@ describe("amazon-bedrock provider plugin", () => {
           'ValidationException: The model returned the following errors: {"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}',
       } as never),
     ).toBe("format");
+  });
+
+  it("returns a fresh runtime auth token for Bedrock aws-sdk auth refreshes", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    const first = await provider.prepareRuntimeAuth?.(buildBedrockRuntimeAuthContext());
+    const second = await provider.prepareRuntimeAuth?.(buildBedrockRuntimeAuthContext());
+
+    expect(first).toMatchObject({
+      apiKey: `${BEDROCK_RUNTIME_AUTH_SENTINEL}:1`,
+    });
+    expect(second).toMatchObject({
+      apiKey: `${BEDROCK_RUNTIME_AUTH_SENTINEL}:2`,
+    });
+  });
+
+  it("skips Bedrock runtime auth token synthesis for non aws-sdk auth modes", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    await expect(
+      provider.prepareRuntimeAuth?.(
+        buildBedrockRuntimeAuthContext({ apiKey: "literal-key", authMode: "api-key" }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("preserves the caller-provided apiKey when authMode is api-key", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const context = buildBedrockRuntimeAuthContext({
+      apiKey: "literal-key",
+      authMode: "api-key",
+    });
+
+    const result = await provider.prepareRuntimeAuth?.(context);
+
+    // No synthetic runtime token is returned for api-key mode; the auth
+    // controller therefore keeps using the original apiKey unchanged.
+    expect(result).toBeUndefined();
+    expect(context.apiKey).toBe("literal-key");
   });
 
   describe("guardrail config schema", () => {

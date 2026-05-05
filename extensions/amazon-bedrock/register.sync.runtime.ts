@@ -33,6 +33,18 @@ type AmazonBedrockPluginConfig = {
   guardrail?: GuardrailConfig;
 };
 
+const BEDROCK_AWS_SDK_RUNTIME_AUTH_SENTINEL = "__aws_sdk_auth__";
+let bedrockAwsSdkRuntimeAuthEpoch = 0;
+
+function nextBedrockAwsSdkRuntimeAuthToken(): string {
+  bedrockAwsSdkRuntimeAuthEpoch += 1;
+  return `${BEDROCK_AWS_SDK_RUNTIME_AUTH_SENTINEL}:${bedrockAwsSdkRuntimeAuthEpoch}`;
+}
+
+export function resetBedrockAwsSdkRuntimeAuthEpochForTest(): void {
+  bedrockAwsSdkRuntimeAuthEpoch = 0;
+}
+
 function createGuardrailWrapStreamFn(
   innerWrapStreamFn: (ctx: { modelId: string; streamFn?: StreamFn }) => StreamFn | null | undefined,
   guardrailConfig: GuardrailConfig,
@@ -456,6 +468,19 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       },
     },
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
+    prepareRuntimeAuth: async ({ authMode }) => {
+      if (authMode !== "aws-sdk") {
+        return undefined;
+      }
+      // Shared credentials written by Midway/STS helpers often omit expiration,
+      // so the AWS SDK can memoize a stale provider instance until the process
+      // rebuilds the Bedrock client. Returning a fresh runtime auth token on each
+      // auth negotiation forces pi-ai/OpenClaw to recreate the authenticated
+      // client after auth failures without changing the public AWS SDK contract.
+      return {
+        apiKey: nextBedrockAwsSdkRuntimeAuthToken(),
+      };
+    },
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel }) => {
       const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
