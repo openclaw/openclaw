@@ -5,6 +5,7 @@ import net from "node:net";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -1117,11 +1118,20 @@ export async function probeChromeJsonVersion(port: number): Promise<ChromeJsonVe
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), CHROME_REMOTE_DEBUGGING_HTTP_PROBE_TIMEOUT_MS);
   timer.unref?.();
+  let release: (() => Promise<void>) | undefined;
   try {
-    const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
+    // SSRF guard: 127.0.0.1 is private/loopback so we must explicitly allow private-network
+    // targets via fetchWithSsrFGuard. The boundary lint forbids raw fetch() for channel/plugin
+    // runtime code. See `extensions/browser/src/browser/cdp.helpers.ts` for the same pattern.
+    const guarded = await fetchWithSsrFGuard({
+      url: `http://127.0.0.1:${port}/json/version`,
+      init: { headers: { Host: "localhost" } },
       signal: controller.signal,
-      headers: { Host: "localhost" },
+      policy: { allowPrivateNetwork: true },
+      auditContext: "browser-chrome-remote-debugging-probe",
     });
+    release = guarded.release;
+    const res = guarded.response;
     if (!res.ok) {
       return { ok: false, reason: `http-${res.status}` };
     }
@@ -1139,6 +1149,7 @@ export async function probeChromeJsonVersion(port: number): Promise<ChromeJsonVe
     return { ok: false, reason: "http-error" };
   } finally {
     clearTimeout(timer);
+    await release?.();
   }
 }
 
