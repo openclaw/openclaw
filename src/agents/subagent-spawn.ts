@@ -116,9 +116,18 @@ const SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS = 60_000;
 const DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 60_000;
 const MAX_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS = 300_000;
 const SUBAGENT_GATEWAY_READINESS_TIMEOUT_MS = 20_000;
-const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS = process.env.OPENCLAW_TEST_FAST === "1"
-  ? ([8, 16, 32] as const)
-  : ([1_000, 3_000, 10_000] as const);
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_DEFAULT = [1_000, 3_000, 10_000] as const;
+const SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_FAST = [8, 16, 32] as const;
+let _subagentGatewayReadinessRetryDelaysMs: readonly number[] | null = null;
+
+function getSubagentGatewayReadinessRetryDelaysMs(): readonly number[] {
+  if (_subagentGatewayReadinessRetryDelaysMs !== null) {
+    return _subagentGatewayReadinessRetryDelaysMs;
+  }
+  return process.env.OPENCLAW_TEST_FAST === "1"
+    ? SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_FAST
+    : SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS_DEFAULT;
+}
 
 export type SpawnSubagentParams = {
   task: string;
@@ -619,7 +628,7 @@ async function ensureGatewayReadyForSubagentSpawn(): Promise<void> {
       });
       return;
     } catch (err) {
-      const delayMs = SUBAGENT_GATEWAY_READINESS_RETRY_DELAYS_MS[attempt];
+      const delayMs = getSubagentGatewayReadinessRetryDelaysMs()[attempt];
       if (delayMs == null || !isGatewayLifecycleReadinessError(err)) {
         throw err;
       }
@@ -1379,5 +1388,8 @@ export const __testing = {
           ...overrides,
         }
       : defaultSubagentSpawnDeps;
+  },
+  setReadinessRetryDelaysForTest(delays: readonly number[] | null) {
+    _subagentGatewayReadinessRetryDelaysMs = delays;
   },
 };
