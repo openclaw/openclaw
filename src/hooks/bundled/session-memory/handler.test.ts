@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
+import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import {
   findPreviousSessionFile,
   getRecentSessionContent,
@@ -235,6 +236,71 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
+  });
+
+  it("does not call the model provider for a filename slug by default", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Hello there" },
+      { role: "assistant", content: "Hi! How can I help?" },
+    ]);
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const { files } = await runNewWithPreviousSession({ sessionContent });
+        expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+      },
+    );
+
+    expect(generateSlug).not.toHaveBeenCalled();
+  });
+
+  it("uses a model-generated filename slug only when explicitly enabled", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "What is 2+2?" },
+      { role: "assistant", content: "2+2 equals 4" },
+    ]);
+
+    const generateSlug = vi.mocked(generateSlugViaLLM);
+    generateSlug.mockClear();
+    generateSlug.mockResolvedValueOnce("simple-math");
+
+    await withEnvAsync(
+      {
+        NODE_ENV: "production",
+        OPENCLAW_TEST_FAST: undefined,
+        VITEST: undefined,
+      },
+      async () => {
+        const { files } = await runNewWithPreviousSession({
+          sessionContent,
+          cfg: (tempDir) =>
+            ({
+              agents: { defaults: { workspace: tempDir } },
+              hooks: {
+                internal: {
+                  entries: {
+                    "session-memory": {
+                      enabled: true,
+                      llmSlug: true,
+                    },
+                  },
+                },
+              },
+            }) satisfies OpenClawConfig,
+        });
+        expect(files).toEqual([expect.stringMatching(/^\d{4}-\d{2}-\d{2}-simple-math\.md$/)]);
+      },
+    );
+
+    expect(generateSlug).toHaveBeenCalledTimes(1);
   });
 
   it("creates memory file with session content on /reset command", async () => {

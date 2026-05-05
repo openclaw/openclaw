@@ -2,7 +2,7 @@
  * Session memory hook handler
  *
  * Saves session context to memory when /new or /reset command is triggered
- * Creates a new dated memory file with LLM-generated slug
+ * Creates a new dated memory file with a timestamp slug by default
  */
 
 import fs from "node:fs/promises";
@@ -142,7 +142,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
     const localTimestamp = formatLocalSessionTimestamp(now);
     const dateStr = localTimestamp.date;
 
-    // Generate descriptive slug from session using LLM
+    // Generate descriptive slug from session when explicitly enabled
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
     const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
       string,
@@ -206,7 +206,7 @@ const saveSessionToMemory: HookHandler = async (event) => {
         process.env.VITEST === "true" ||
         process.env.VITEST === "1" ||
         process.env.NODE_ENV === "test";
-      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug !== false;
+      const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
