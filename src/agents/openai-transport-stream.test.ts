@@ -1351,6 +1351,39 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("adds minimal user input for empty Codex responses payloads", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
+      instructions?: string;
+    };
+
+    expect(params.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: " " }],
+      },
+    ]);
+  });
+
   it("does not infer high reasoning when Pi passes thinking off", () => {
     const params = buildOpenAIResponsesParams(
       {

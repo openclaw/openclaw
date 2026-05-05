@@ -61,12 +61,13 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
   const enqueueSanitized = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ) => {
+  ): boolean => {
+    let enqueued = false;
     buffer += text;
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
-        return;
+        return enqueued;
       }
       const block = buffer.slice(0, boundary.index);
       const separator = buffer.slice(boundary.index, boundary.index + boundary.length);
@@ -75,6 +76,7 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
       // messages. Drop those malformed keepalive-style blocks before it parses.
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
+        enqueued = true;
       }
     }
   };
@@ -85,20 +87,24 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
     },
     async pull(controller) {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          const tail = decoder.decode();
-          if (tail) {
-            enqueueSanitized(controller, tail);
+        for (;;) {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            const tail = decoder.decode();
+            if (tail) {
+              enqueueSanitized(controller, tail);
+            }
+            if (buffer && hasReadableSseData(buffer)) {
+              controller.enqueue(encoder.encode(buffer));
+            }
+            buffer = "";
+            controller.close();
+            return;
           }
-          if (buffer && hasReadableSseData(buffer)) {
-            controller.enqueue(encoder.encode(buffer));
+          if (enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }))) {
+            return;
           }
-          buffer = "";
-          controller.close();
-          return;
         }
-        enqueueSanitized(controller, decoder.decode(chunk.value, { stream: true }));
       } catch (error) {
         controller.error(error);
       }

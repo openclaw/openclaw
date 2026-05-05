@@ -341,6 +341,43 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("keeps reading until a split SSE frame can be emitted", async () => {
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode("event: response.output_text.delta\n"));
+            controller.enqueue(encoder.encode('data: {"delta": "he'));
+            controller.enqueue(encoder.encode('llo"}\n\n'));
+            controller.close();
+          },
+        }),
+        { headers: { "content-type": "text/event-stream" } },
+      ),
+      finalUrl: "https://api.openai.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+
+    const { buildGuardedModelFetch } = await import("./provider-transport-fetch.js");
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)("https://api.openai.com/v1/responses", {
+      method: "POST",
+    });
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ delta: "hello" }]);
+  });
+
   it("refreshes the guarded timeout while consuming streaming response chunks", async () => {
     const encoder = new TextEncoder();
     const refreshTimeout = vi.fn();
