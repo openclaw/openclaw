@@ -172,11 +172,27 @@ const formatKindCell = (kind: SessionRow["kind"], rich: boolean) => {
 function resolveSessionRuntimeLabel(params: {
   cfg: OpenClawConfig;
   entry: SessionEntry;
+  agentRuntime: ReturnType<typeof resolveAgentRuntimeMetadata>;
   modelProvider: string;
   model: string;
   agentId: string;
   sessionKey: string;
 }): string {
+  const explicitRuntime =
+    normalizeOptionalLowercaseString(params.entry.agentRuntimeOverride) ??
+    normalizeOptionalLowercaseString(params.entry.agentHarnessId) ??
+    (params.agentRuntime.source === "implicit"
+      ? undefined
+      : normalizeOptionalLowercaseString(params.agentRuntime.id));
+  if (explicitRuntime && explicitRuntime !== "auto" && explicitRuntime !== "default") {
+    return resolveAgentRuntimeLabel({
+      config: params.cfg,
+      sessionEntry: params.entry,
+      resolvedHarness: explicitRuntime,
+      fallbackProvider: params.modelProvider,
+    });
+  }
+
   let resolvedHarness: string | undefined;
   try {
     const selected = selectAgentHarness({
@@ -275,13 +291,15 @@ export async function sessionsCommand(
         const row = toSessionDisplayRow(key, entry);
         const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
         const modelRef = resolveSessionDisplayModelRef(cfg, row);
+        const agentRuntime = resolveAgentRuntimeMetadata(cfg, agentId);
         return Object.assign({}, row, {
           agentId,
-          agentRuntime: resolveAgentRuntimeMetadata(cfg, agentId),
+          agentRuntime,
           kind: classifySessionKey(row.key, store[row.key]),
           runtimeLabel: resolveSessionRuntimeLabel({
             cfg,
             entry,
+            agentRuntime,
             modelProvider: modelRef.provider,
             model: modelRef.model,
             agentId,

@@ -90,6 +90,39 @@ describe("sessionsCommand", () => {
     expect(row).toContain("Claude CLI");
   });
 
+  it("renders configured CLI runtime when the session stores a canonical provider", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: { "anthropic/claude-opus-4-7": {} },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-canonical-provider",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    fs.rmSync(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toContain("claude-opus-4-7");
+    expect(row).toContain("Claude CLI");
+  });
+
   it("shows placeholder rows when tokens are missing", async () => {
     const store = writeStore({
       "quietchat:group:demo": {
