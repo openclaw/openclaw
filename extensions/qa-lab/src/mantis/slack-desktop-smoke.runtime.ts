@@ -113,7 +113,7 @@ type MantisPhaseTiming = {
   finishedAt: string;
   name: string;
   startedAt: string;
-  status: "fail" | "pass";
+  status: "accepted" | "fail" | "pass";
 };
 
 type MantisPhaseTimings = {
@@ -203,7 +203,13 @@ function createPhaseTimer(startedAt: Date) {
       totalMs: now.getTime() - origin,
     };
   }
-  return { recordPhase, snapshot, timePhase };
+  function updatePhaseStatus(name: string, status: MantisPhaseTiming["status"]) {
+    const phase = phases.findLast((entry) => entry.name === name);
+    if (phase) {
+      phase.status = status;
+    }
+  }
+  return { recordPhase, snapshot, timePhase, updatePhaseStatus };
 }
 
 function defaultOutputDir(repoRoot: string, startedAt: Date) {
@@ -1034,6 +1040,9 @@ export async function runMantisSlackDesktopSmoke(
     }
     const gatewaySetupCompleted =
       gatewaySetup && remoteMetadata?.qaExitCode === 0 && remoteMetadata.gatewayAlive === true;
+    if (remoteRunError && gatewaySetupCompleted) {
+      timer.updatePhaseStatus("crabbox.remote_run", "accepted");
+    }
     if (remoteRunError && !gatewaySetupCompleted) {
       throw remoteRunError;
     }

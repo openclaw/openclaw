@@ -472,10 +472,16 @@ describe("mantis Slack desktop smoke runtime", () => {
     expect(result.status).toBe("pass");
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       status: string;
+      timings: { phases: { name: string; status: string }[] };
       warning?: string;
     };
     expect(summary.status).toBe("pass");
     expect(summary.warning).toBeUndefined();
+    expect(summary.timings.phases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "crabbox.remote_run", status: "accepted" }),
+      ]),
+    );
   });
 
   it("copies the screenshot before reporting a failed remote Slack QA run", async () => {
@@ -526,9 +532,18 @@ describe("mantis Slack desktop smoke runtime", () => {
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       artifacts: { screenshotPath?: string; videoPath?: string };
       error?: string;
+      hydrateMode: string;
       status: string;
+      timings: { phases: { name: string; status: string }[]; totalMs: number };
     };
     expect(summary.status).toBe("fail");
+    expect(summary.hydrateMode).toBe("source");
+    expect(summary.timings.totalMs).toBeGreaterThanOrEqual(0);
+    expect(summary.timings.phases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "crabbox.remote_run", status: "fail" }),
+      ]),
+    );
     expect(summary.error).toContain("remote Slack QA failed");
     expect(summary.artifacts.screenshotPath).toContain("slack-desktop-smoke.png");
     expect(summary.artifacts.videoPath).toContain("slack-desktop-smoke.mp4");
