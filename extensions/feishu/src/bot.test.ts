@@ -1960,6 +1960,74 @@ describe("handleFeishuMessage command authorization", () => {
     );
   });
 
+  it("formats interactive card sub-messages as [Interactive Card] in merge_forward", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    const mockGetMerged = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        items: [
+          {
+            message_id: "container",
+            msg_type: "merge_forward",
+            body: { content: JSON.stringify({ text: "Merged and Forwarded Message" }) },
+          },
+          {
+            message_id: "sub-interactive",
+            upper_message_id: "container",
+            msg_type: "interactive",
+            body: { content: JSON.stringify({ header: { title: { content: "Approval" } } }) },
+            create_time: "1000",
+          },
+        ],
+      },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+      im: {
+        message: {
+          get: mockGetMerged,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-interactive",
+        },
+      },
+      message: {
+        message_id: "msg-interactive-forward",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "merge_forward",
+        content: JSON.stringify({ text: "Merged and Forwarded Message" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining(
+          "[Merged and Forwarded Messages]\n- [Interactive Card]",
+        ),
+      }),
+    );
+  });
+
   it("falls back when merge_forward API returns no sub-messages", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
     mockCreateFeishuClient.mockReturnValue({

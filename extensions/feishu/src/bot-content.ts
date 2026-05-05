@@ -196,6 +196,8 @@ function formatSubMessageContent(content: string, contentType: string): string {
         return "[Sticker]";
       case "merge_forward":
         return "[Nested Merged Forward]";
+      case "interactive":
+        return "[Interactive Card]";
       default:
         return `[${contentType}]`;
     }
