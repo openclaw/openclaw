@@ -211,7 +211,7 @@ export function createDiscordDraftPreviewController(params: {
       if (!draftStream || discordStreamMode !== "progress" || !text) {
         return;
       }
-      reasoningProgressRawText += text;
+      reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text);
       const normalized = normalizeReasoningProgressLine(reasoningProgressRawText);
       if (!normalized) {
         return;
@@ -372,4 +372,23 @@ function normalizeReasoningProgressLine(text: string): string {
     .replace(/^\s*(?:>\s*)?Reasoning:\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function mergeReasoningProgressText(current: string, incoming: string): string {
+  if (!current) {
+    return incoming;
+  }
+  const normalizedCurrent = normalizeReasoningProgressLine(current);
+  const normalizedIncoming = normalizeReasoningProgressLine(incoming);
+  if (!normalizedIncoming || normalizedIncoming === normalizedCurrent) {
+    return current;
+  }
+  if (isReasoningSnapshotText(incoming) || normalizedIncoming.startsWith(normalizedCurrent)) {
+    return incoming;
+  }
+  return `${current}${incoming}`;
+}
+
+function isReasoningSnapshotText(text: string): boolean {
+  return /^\s*(?:>\s*)?Reasoning:\s*/i.test(text);
 }
