@@ -138,7 +138,7 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  name: string;
   path: string;
   content?: string;
   missing: boolean;
@@ -720,6 +720,7 @@ export async function loadExtraBootstrapFiles(
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  options: { allowArbitraryBasenames?: boolean } = {},
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -729,21 +730,39 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   const resolvedDir = resolveUserPath(dir);
 
-  // Resolve glob patterns into concrete file paths
-  const resolvedPaths = new Set<string>();
+  // Resolve glob patterns into concrete file paths. Keep configured pattern order
+  // while sorting each glob expansion for deterministic results.
+  const resolvedPaths: string[] = [];
+  const seenPaths = new Set<string>();
+  const addResolvedPath = (candidate: string) => {
+    if (seenPaths.has(candidate)) {
+      return;
+    }
+    seenPaths.add(candidate);
+    resolvedPaths.push(candidate);
+  };
   for (const pattern of extraPatterns) {
-    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+    if (
+      pattern.includes("*") ||
+      pattern.includes("?") ||
+      pattern.includes("{") ||
+      pattern.includes("[")
+    ) {
       try {
-        const matches = fs.glob(pattern, { cwd: resolvedDir });
-        for await (const m of matches) {
-          resolvedPaths.add(m);
+        const matches: string[] = [];
+        const globMatches = fs.glob(pattern, { cwd: resolvedDir });
+        for await (const m of globMatches) {
+          matches.push(m);
+        }
+        for (const match of matches.toSorted((a, b) => a.localeCompare(b))) {
+          addResolvedPath(match);
         }
       } catch {
         // glob not available or pattern error — fall back to literal
-        resolvedPaths.add(pattern);
+        addResolvedPath(pattern);
       }
     } else {
-      resolvedPaths.add(pattern);
+      addResolvedPath(pattern);
     }
   }
 
@@ -751,9 +770,8 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+    if (!options.allowArbitraryBasenames && !VALID_BOOTSTRAP_NAMES.has(baseName)) {
       diagnostics.push({
         path: filePath,
         reason: "invalid-bootstrap-filename",
@@ -767,7 +785,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     });
     if (loaded.ok) {
       files.push({
-        name: baseName as WorkspaceBootstrapFileName,
+        name: baseName,
         path: filePath,
         content: loaded.content,
         missing: false,
