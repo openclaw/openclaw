@@ -369,11 +369,17 @@ function logicalMarkdownLines(lines: string[]): { line: number; text: string }[]
 }
 
 function stripMarkdownCommandPrefix(segment: string): string {
-  return segment
-    .trim()
-    .replace(/^(?:[-*]\s+|\$\s*|>\s*)/, "")
-    .replace(/^(?:run|install|setup)\s*:\s*/i, "")
-    .trim();
+  let stripped = segment.trim();
+  for (;;) {
+    const next = stripped
+      .replace(/^(?:[-*]\s+|\d+[.)]\s+|\$\s*|>\s*)/, "")
+      .replace(/^(?:run|install|setup)\s*:\s*/i, "")
+      .trim();
+    if (next === stripped) {
+      return stripped;
+    }
+    stripped = next;
+  }
 }
 
 function splitShellPipeline(command: string): string[] {
