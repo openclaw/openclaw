@@ -79,7 +79,7 @@ function writeTranscript(tmpDir: string, sessionId: string, lines: unknown[]): s
 
 function appendBlockedUserMessageWithSessionManager(params: {
   sessionFile: string;
-  originalText: string;
+  originalText?: string;
   redactedText: string;
   pluginId: string;
   reason: string;
@@ -93,7 +93,6 @@ function appendBlockedUserMessageWithSessionManager(params: {
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     __openclaw: {
       beforeAgentRunBlocked: {
-        content: params.originalText ? [{ type: "text", text: params.originalText }] : [],
         blockedBy: params.pluginId,
         reason: params.reason,
         blockedAt: Date.now(),
@@ -1305,7 +1304,7 @@ describe("readSessionMessages", () => {
     });
 
     expect(messageId).toBeTruthy();
-    const out = readSessionMessages(sessionId, storePath, sessionFile, {});
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
     expect(
       out.map((message) => ({
         role: (message as { role?: string }).role,
@@ -1316,10 +1315,7 @@ describe("readSessionMessages", () => {
       { role: "assistant", text: "hi" },
       { role: "user", text: [{ type: "text", text: "Blocked by HITL test hook." }] },
     ]);
-    expect(
-      (out[2] as { __openclaw?: { beforeAgentRunBlocked?: { content?: unknown } } }).__openclaw
-        ?.beforeAgentRunBlocked?.content,
-    ).toEqual([{ type: "text", text: "[hitl:block] hello" }]);
+    expect(JSON.stringify(out)).not.toContain("[hitl:block] hello");
   });
 
   test("keeps repeated blocked hook messages together in a new session", async () => {
@@ -1352,25 +1348,23 @@ describe("readSessionMessages", () => {
     appendBlockedUserMessageWithSessionManager({
       sessionFile,
       originalText: "[hitl:block] second",
-      redactedText: "Blocked by HITL test hook.",
+      redactedText: "Blocked again by HITL test hook.",
       pluginId: "hitl-test-hooks",
       reason: "blocked by test policy",
     });
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile, {});
+    const out = readSessionMessages(sessionId, storePath, sessionFile);
     expect(
       out.map((message) => ({
         role: (message as { role?: string }).role,
-        original: (
-          message as {
-            __openclaw?: { beforeAgentRunBlocked?: { content?: Array<{ text?: string }> } };
-          }
-        ).__openclaw?.beforeAgentRunBlocked?.content?.[0]?.text,
+        text: (message as { content?: Array<{ text?: string }> }).content?.[0]?.text,
       })),
     ).toEqual([
-      { role: "user", original: "[hitl:block] first" },
-      { role: "user", original: "[hitl:block] second" },
+      { role: "user", text: "Blocked by HITL test hook." },
+      { role: "user", text: "Blocked again by HITL test hook." },
     ]);
+    expect(JSON.stringify(out)).not.toContain("[hitl:block] first");
+    expect(JSON.stringify(out)).not.toContain("[hitl:block] second");
   });
 });
 
