@@ -1037,7 +1037,7 @@ function splitMockStreamingText(text: string, parts = 3) {
 
 function buildTelegramLongFinalText() {
   const body = Array.from(
-    { length: 96 },
+    { length: 54 },
     (_, index) =>
       `telegram-long-final-segment-${String(index + 1).padStart(3, "0")} ${"x".repeat(54)}`,
   ).join("\n");
