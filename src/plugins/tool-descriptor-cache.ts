@@ -91,6 +91,7 @@ function buildDescriptorContextCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  factoryDelegatedAuth?: boolean;
 }): string {
   const { ctx } = params;
   return JSON.stringify({
@@ -108,6 +109,7 @@ function buildDescriptorContextCacheKey(params: {
     messageChannel: ctx.messageChannel ?? null,
     messageChatType: ctx.messageChatType ?? null,
     agentAccountId: ctx.agentAccountId ?? null,
+    factoryDelegatedAuth: params.factoryDelegatedAuth === true ? true : null,
     deliveryContext: ctx.deliveryContext ?? null,
     requesterSenderId: ctx.requesterSenderId ?? null,
     senderIsOwner: ctx.senderIsOwner ?? null,
@@ -123,6 +125,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
+  factoryDelegatedAuth?: boolean;
 }): string {
   return JSON.stringify({
     version: PLUGIN_TOOL_DESCRIPTOR_CACHE_VERSION,
@@ -135,6 +138,7 @@ export function buildPluginToolDescriptorCacheKey(params: {
       ctx: params.ctx,
       currentRuntimeConfig: params.currentRuntimeConfig,
       configCacheKeyMemo: params.configCacheKeyMemo,
+      factoryDelegatedAuth: params.factoryDelegatedAuth,
     }),
   });
 }

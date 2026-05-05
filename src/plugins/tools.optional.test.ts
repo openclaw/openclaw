@@ -1991,6 +1991,93 @@ describe("resolvePluginTools optional tools", () => {
     expect(delegatedAuth.getDelegatedAccessToken).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps mixed plugin descriptor caches auth-sensitive when any entry receives factory auth", () => {
+    const delegatedAuth: OpenClawPluginAuthContext = {
+      getDelegatedAccessToken: vi.fn(async () => ({
+        ok: true as const,
+        token: "delegated-token",
+      })),
+    };
+    const authFactory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { auth?: OpenClawPluginAuthContext };
+      if (!ctx.auth) {
+        return undefined;
+      }
+      return makeTool("auth_sensitive_tool");
+    });
+    const passiveFactory = vi.fn(() => makeTool("passive_tool"));
+    const registry = createToolRegistry([
+      {
+        pluginId: "mixed-auth",
+        optional: false,
+        source: "/tmp/mixed-auth.js",
+        names: ["auth_sensitive_tool"],
+        factory: authFactory,
+      },
+      {
+        pluginId: "mixed-auth",
+        optional: true,
+        source: "/tmp/mixed-auth.js",
+        names: [],
+        factory: passiveFactory,
+      },
+    ]);
+    setActivePluginRegistry(registry as never, "test-tool-registry", "gateway-bindable", "/tmp");
+    const base = createContext();
+    const config = {
+      ...base.config,
+      plugins: {
+        ...base.config.plugins,
+        enabled: true,
+        allow: ["mixed-auth"],
+        entries: {
+          "mixed-auth": {
+            auth: { delegatedAccess: { enabled: true } },
+          },
+        },
+      },
+    };
+    installToolManifestSnapshot({
+      config: config as never,
+      plugin: {
+        id: "mixed-auth",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["auth_sensitive_tool", "passive_tool"] },
+        toolMetadata: {
+          passive_tool: {
+            optional: true,
+          },
+        },
+      },
+    });
+    const toolAllowlist = [DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, "passive_tool"];
+
+    const authTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+      toolAllowlist,
+    });
+    const secondAuthTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        auth: delegatedAuth,
+        config,
+      } as never,
+      toolAllowlist,
+    });
+
+    expectResolvedToolNames(authTools, ["auth_sensitive_tool", "passive_tool"]);
+    expectResolvedToolNames(secondAuthTools, ["auth_sensitive_tool", "passive_tool"]);
+    expect(authFactory).toHaveBeenCalledTimes(1);
+    expect(passiveFactory).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves delegated auth for implicit optional tools declared by manifest", async () => {
     const delegatedAuth: OpenClawPluginAuthContext = {
       getDelegatedAccessToken: vi.fn(async () => ({

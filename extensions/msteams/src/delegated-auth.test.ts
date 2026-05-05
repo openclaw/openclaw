@@ -248,11 +248,19 @@ describe("msteams delegated auth context", () => {
     });
 
     expect(calls).toHaveLength(3);
-    expect(calls[2]?.url).toContain("/api/botsignin/GetSignInResource");
-    expect(calls[2]?.url).toMatch(/^https:\/\/token\.botframework\.com\//);
-    const signInState = new URL(calls[2]!.url).searchParams.get("state");
+    const signInResourceCall = calls[2];
+    expect(signInResourceCall).toBeDefined();
+    if (!signInResourceCall) {
+      throw new Error("missing sign-in resource call");
+    }
+    expect(signInResourceCall.url).toContain("/api/botsignin/GetSignInResource");
+    expect(signInResourceCall.url).toMatch(/^https:\/\/token\.botframework\.com\//);
+    const signInState = new URL(signInResourceCall.url).searchParams.get("state");
     expect(signInState).toBeTruthy();
-    expect(JSON.parse(Buffer.from(signInState!, "base64").toString("utf8"))).toEqual({
+    if (!signInState) {
+      throw new Error("missing sign-in state");
+    }
+    expect(JSON.parse(Buffer.from(signInState, "base64").toString("utf8"))).toEqual({
       connectionName: "ToolsConnection",
       conversation: {
         activityId: "msg-1",
