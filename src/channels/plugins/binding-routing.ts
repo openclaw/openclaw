@@ -1,4 +1,12 @@
+import fs from "node:fs";
+import { getRuntimeConfig } from "../../config/config.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+} from "../../config/sessions/paths.js";
+import { loadSessionStore } from "../../config/sessions/store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveGatewaySessionStoreTarget } from "../../gateway/session-utils.js";
 import { logVerbose } from "../../globals.js";
 import {
   getSessionBindingService,
@@ -28,6 +36,11 @@ export type RuntimeConversationBindingRouteResult = {
   boundAgentId?: string;
 };
 
+type RuntimeBindingTargetValidator = (params: {
+  targetSessionKey: string;
+  bindingRecord: SessionBindingRecord;
+}) => boolean;
+
 type ConfiguredBindingRouteConversationInput =
   | {
       conversation: ConversationRef;
@@ -51,6 +64,58 @@ function resolveConfiguredBindingConversationRef(
     conversationId: params.conversationId,
     parentConversationId: params.parentConversationId,
   };
+}
+
+function isRuntimeBindingTargetPresent(params: {
+  targetSessionKey: string;
+  cfg?: OpenClawConfig;
+}): boolean {
+  try {
+    const cfg = params.cfg ?? getRuntimeConfig();
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: params.targetSessionKey });
+    const store = loadSessionStore(target.storePath, { skipCache: true });
+    for (const storeKey of target.storeKeys) {
+      const entry = store[storeKey];
+      if (!entry?.sessionId) {
+        continue;
+      }
+      const transcriptPath = resolveSessionFilePath(
+        entry.sessionId,
+        entry,
+        resolveSessionFilePathOptions({ storePath: target.storePath }),
+      );
+      if (fs.existsSync(transcriptPath)) {
+        return true;
+      }
+    }
+  } catch (err) {
+    logVerbose(
+      `runtime conversation binding target validation failed for ${params.targetSessionKey}: ${String(
+        err,
+      )}`,
+    );
+  }
+  return false;
+}
+
+function unbindStaleRuntimeBinding(params: {
+  bindingRecord: SessionBindingRecord;
+  targetSessionKey: string;
+}): void {
+  const service = getSessionBindingService();
+  service
+    .unbind({
+      bindingId: params.bindingRecord.bindingId,
+      targetSessionKey: params.targetSessionKey,
+      reason: "stale-session-target",
+    })
+    .catch((err) =>
+      logVerbose(
+        `runtime conversation binding stale-target unbind failed for ${params.bindingRecord.bindingId}: ${String(
+          err,
+        )}`,
+      ),
+    );
 }
 
 function isPluginOwnedRuntimeBindingRecord(record: SessionBindingRecord | null): boolean {
@@ -112,9 +177,11 @@ export function resolveConfiguredBindingRoute(
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
+    validateBindingTarget?: RuntimeBindingTargetValidator;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
-  const bindingRecord = getSessionBindingService().resolveByConversation(
+  const service = getSessionBindingService();
+  const bindingRecord = service.resolveByConversation(
     resolveConfiguredBindingConversationRef(params),
   );
   const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
@@ -125,13 +192,30 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
-  getSessionBindingService().touch(bindingRecord.bindingId);
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    service.touch(bindingRecord.bindingId);
     return {
       bindingRecord,
       route: params.route,
     };
   }
+
+  const isTargetPresent = (params.validateBindingTarget ?? isRuntimeBindingTargetPresent)({
+    targetSessionKey: boundSessionKey,
+    bindingRecord,
+  });
+  if (!isTargetPresent) {
+    logVerbose(
+      `runtime conversation binding target missing; unbinding ${bindingRecord.bindingId} -> ${boundSessionKey}`,
+    );
+    unbindStaleRuntimeBinding({ bindingRecord, targetSessionKey: boundSessionKey });
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
+  service.touch(bindingRecord.bindingId);
 
   const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
   return {

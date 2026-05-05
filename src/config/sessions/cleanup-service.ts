@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
+import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -148,6 +149,24 @@ function pruneMissingTranscriptEntries(params: {
     }
   }
   return removed;
+}
+
+async function unbindRemovedSessionKeys(params: { keys: Iterable<string> }): Promise<void> {
+  const service = getSessionBindingService();
+  for (const key of params.keys) {
+    try {
+      await service.unbind({ targetSessionKey: key, reason: "session-cleanup" });
+    } catch (err) {
+      getLogger().debug("session cleanup binding unbind skipped", { key, err });
+    }
+  }
+}
+
+function resolveRemovedSessionKeys(params: {
+  beforeStore: Record<string, SessionEntry>;
+  afterStore: Record<string, SessionEntry>;
+}): string[] {
+  return Object.keys(params.beforeStore).filter((key) => !Object.hasOwn(params.afterStore, key));
 }
 
 function addEntryArtifactPathsToSet(params: {
@@ -337,6 +356,14 @@ export async function runSessionsCleanup(params: {
         },
       );
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
+      const beforeStore = previewResults.find(
+        (result) => result.summary.storePath === target.storePath,
+      )?.beforeStore;
+      if (beforeStore) {
+        await unbindRemovedSessionKeys({
+          keys: resolveRemovedSessionKeys({ beforeStore, afterStore }),
+        });
+      }
       const unreferencedArtifacts =
         mode === "warn"
           ? {
