@@ -221,6 +221,26 @@ describe("qa mock openai server", () => {
     expect(partialBody).toContain('"type":"response.output_text.delta"');
     expect(partialBody).toContain("QA_PARTIAL_OK");
 
+    const telegramLongResponse = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          makeUserInput("Telegram long final QA check. Use the scripted long final response."),
+        ],
+      }),
+    });
+    expect(telegramLongResponse.status).toBe(200);
+    const telegramLongBody = await telegramLongResponse.text();
+    expect(telegramLongBody).toContain('"type":"response.output_text.delta"');
+    expect(telegramLongBody).toContain('"phase":"final_answer"');
+    expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-BEGIN");
+    expect(telegramLongBody).toContain("TELEGRAM-LONG-FINAL-END");
+    expect(telegramLongBody.length).toBeGreaterThan(4_500);
+
     const blockResponse = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {
