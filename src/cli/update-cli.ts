@@ -4,6 +4,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
+import { type UpdateHintOptions, updateHintCommand } from "./update-cli/hint.js";
 import {
   type UpdateCommandOptions,
   type UpdateStatusOptions,
@@ -13,8 +14,8 @@ import { updateStatusCommand } from "./update-cli/status.js";
 import { updateCommand } from "./update-cli/update-command.js";
 import { updateWizardCommand } from "./update-cli/wizard.js";
 
-export { updateCommand, updateStatusCommand, updateWizardCommand };
-export type { UpdateCommandOptions, UpdateStatusOptions, UpdateWizardOptions };
+export { updateCommand, updateHintCommand, updateStatusCommand, updateWizardCommand };
+export type { UpdateCommandOptions, UpdateHintOptions, UpdateStatusOptions, UpdateWizardOptions };
 
 function inheritedUpdateJson(command?: Command): boolean {
   return Boolean(inheritOptionFromParent<boolean>(command, "json"));
@@ -152,6 +153,20 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
+      }
+    });
+
+  update
+    .command("hint")
+    .description("Print a one-liner if an update is available (for agent/skill preambles)")
+    .option("--json", "Output result as JSON", false)
+    .action(async (opts, command) => {
+      try {
+        await updateHintCommand({
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+        });
+      } catch {
+        // Hint is best-effort — never fail loudly in a preamble context.
       }
     });
 }
