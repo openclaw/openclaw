@@ -140,7 +140,10 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
     if (typeof updateId === "number") {
       pendingUpdateIds.add(updateId);
-      acceptUpdateId(updateId);
+      // Do NOT call acceptUpdateId here. That would advance the Telegram offset
+      // before the reply is delivered, so a restart between begin and finish
+      // would permanently lose this update's reply. Instead, accept (and persist)
+      // the update id only after finishUpdate confirms the handler completed.
     }
     return {
       accepted: true,
@@ -166,6 +169,12 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         if (highestCompletedUpdateId === null || update.updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = update.updateId;
         }
+        // Accept (and persist) the update id so Telegram advances the offset past
+        // it on the next getUpdates call. This is deferred from beginUpdate so
+        // that the offset is only advanced after the handler has run — if the
+        // gateway restarts between begin and finish the update will be
+        // re-delivered and reprocessed rather than silently dropped.
+        acceptUpdateId(update.updateId);
       } else {
         failedUpdateIds.add(update.updateId);
       }
