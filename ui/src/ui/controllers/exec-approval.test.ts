@@ -29,6 +29,7 @@ describe("parsePluginApprovalRequested", () => {
       pluginId: "sage",
       agentId: "agent-1",
       sessionKey: "sess-1",
+      allowedDecisions: ["allow-once", "deny"],
     },
   };
 
@@ -41,10 +42,31 @@ describe("parsePluginApprovalRequested", () => {
     expect(result!.pluginSeverity).toBe("high");
     expect(result!.pluginId).toBe("sage");
     expect(result!.request.command).toBe("Dangerous command detected");
+    expect(result!.request.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(result!.request.agentId).toBe("agent-1");
     expect(result!.request.sessionKey).toBe("sess-1");
     expect(result!.createdAtMs).toBe(1000);
     expect(result!.expiresAtMs).toBe(120_000);
+  });
+
+  it("preserves an explicitly empty allowedDecisions list", () => {
+    const result = parsePluginApprovalRequested({
+      ...validPayload,
+      request: { ...validPayload.request, allowedDecisions: [] },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.request.allowedDecisions).toEqual([]);
+  });
+
+  it("drops invalid allowedDecisions without falling back to all actions", () => {
+    const result = parsePluginApprovalRequested({
+      ...validPayload,
+      request: { ...validPayload.request, allowedDecisions: ["bad-decision"] },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.request.allowedDecisions).toEqual([]);
   });
 
   it("returns null when title is missing from request", () => {

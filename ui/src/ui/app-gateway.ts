@@ -112,6 +112,7 @@ type GatewayHost = {
 
 type GatewayHostWithDeferredSessionMessageReload = GatewayHost & {
   pendingSessionMessageReloadSessionKey?: string | null;
+  pendingSessionMessageReloadNeedsHistory?: boolean;
 };
 
 type SessionDefaultsSnapshot = {
@@ -653,9 +654,12 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
   );
   const shouldReplayDeferredSessionMessageReload =
     shouldResolveDeferredSessionMessageReload &&
-    (state !== "final" || finalEventNeedsHistoryReload);
+    (state !== "final" ||
+      finalEventNeedsHistoryReload ||
+      deferredReloadHost.pendingSessionMessageReloadNeedsHistory === true);
   if (shouldResolveDeferredSessionMessageReload) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+    deferredReloadHost.pendingSessionMessageReloadNeedsHistory = false;
   }
   if (finalEventNeedsHistoryReload && !historyReloaded && !terminalEventIsForDifferentActiveRun) {
     void loadChatHistory(host as unknown as ChatState);
@@ -668,7 +672,7 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
 
 function handleSessionMessageGatewayEvent(
   host: GatewayHost,
-  payload: { sessionKey?: string } | undefined,
+  payload: { sessionKey?: string; message?: unknown; messageId?: string } | undefined,
 ) {
   applySessionsChangedEvent(host as unknown as SessionsState, payload);
   const deferredReloadHost = host as GatewayHostWithDeferredSessionMessageReload;
@@ -683,9 +687,20 @@ function handleSessionMessageGatewayEvent(
   // first LLM delta arrives.
   if (host.chatRunId) {
     deferredReloadHost.pendingSessionMessageReloadSessionKey = sessionKey;
+    const messageRecord =
+      payload?.message && typeof payload.message === "object"
+        ? (payload.message as { role?: unknown })
+        : undefined;
+    if (
+      messageRecord?.role === "user" ||
+      (typeof payload?.messageId === "string" && payload.messageId.startsWith("blocked-"))
+    ) {
+      deferredReloadHost.pendingSessionMessageReloadNeedsHistory = true;
+    }
     return;
   }
   deferredReloadHost.pendingSessionMessageReloadSessionKey = null;
+  deferredReloadHost.pendingSessionMessageReloadNeedsHistory = false;
   void loadChatHistory(host as unknown as ChatState);
 }
 

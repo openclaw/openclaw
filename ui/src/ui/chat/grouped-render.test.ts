@@ -657,6 +657,28 @@ describe("grouped chat rendering", () => {
     expect(avatar?.tagName).toBe("DIV");
   });
 
+  it("renders blocked user originals with an agent-readable notice", () => {
+    const container = document.createElement("div");
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: [{ type: "text", text: "The agent cannot read this message." }],
+        __openclaw: {
+          originalBlockedContent: {
+            content: [{ type: "text", text: "secret blocked prompt" }],
+          },
+        },
+        timestamp: 1000,
+      },
+      "user",
+    );
+
+    expect(container.textContent).toContain("secret blocked prompt");
+    expect(container.textContent).toContain("The agent cannot read this message.");
+    expect(container.querySelector(".chat-blocked-user-note")).not.toBeNull();
+  });
+
   it("keeps inline tool cards collapsed by default and renders expanded state", () => {
     const container = document.createElement("div");
     const message = {

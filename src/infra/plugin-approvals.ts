@@ -1,4 +1,7 @@
-import type { ExecApprovalDecision } from "./exec-approvals.js";
+import {
+  resolveExecApprovalRequestAllowedDecisions,
+  type ExecApprovalDecision,
+} from "./exec-approvals.js";
 
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
@@ -13,6 +16,7 @@ export type PluginApprovalRequestPayload = {
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
 export type PluginApprovalRequest = {
@@ -67,7 +71,8 @@ export function buildPluginApprovalRequestMessage(
   lines.push(`ID: ${request.id}`);
   const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMsValue) / 1000));
   lines.push(`Expires in: ${expiresIn}s`);
-  lines.push("Reply with: /approve <id> allow-once|allow-always|deny");
+  const decisions = resolveExecApprovalRequestAllowedDecisions(request.request);
+  lines.push(`Reply with: /approve <id> ${decisions.join("|")}`);
   return lines.join("\n");
 }
 

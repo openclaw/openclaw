@@ -22,6 +22,30 @@ function processMessageText(text: string, role: string): string {
 export function extractText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "";
+  // Sidecar `__openclaw.originalBlockedContent` is set on user messages
+  // that were blocked by `before_agent_run` (or any pre-LLM hook). The
+  // agent transcript only ever sees the redacted stub in `message.content`,
+  // but the SPA renders the human's original input from this sidecar so
+  // the user can see what they typed. NOTE: this is for HUMAN display only;
+  // never inject this back into agent context.
+  if (role === "user") {
+    const meta = m.__openclaw as Record<string, unknown> | undefined;
+    const originalBlocked = meta?.originalBlockedContent as { content?: unknown } | undefined;
+    if (originalBlocked && Array.isArray(originalBlocked.content)) {
+      const parts = originalBlocked.content
+        .map((p) => {
+          const item = p as Record<string, unknown>;
+          if (item.type === "text" && typeof item.text === "string") {
+            return item.text;
+          }
+          return null;
+        })
+        .filter((v): v is string => typeof v === "string");
+      if (parts.length > 0) {
+        return processMessageText(parts.join("\n"), role);
+      }
+    }
+  }
   const raw =
     role === "assistant" ? extractSharedAssistantVisibleText(message) : extractRawText(message);
   if (!raw) {

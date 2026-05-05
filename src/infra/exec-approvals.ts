@@ -1246,13 +1246,13 @@ export function resolveExecApprovalRequestAllowedDecisions(params?: {
   ask?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
-  const explicit = Array.isArray(params?.allowedDecisions)
-    ? params.allowedDecisions.filter(
-        (decision): decision is ExecApprovalDecision =>
-          decision === "allow-once" || decision === "allow-always" || decision === "deny",
-      )
-    : [];
-  return explicit.length > 0 ? explicit : resolveExecApprovalAllowedDecisions({ ask: params?.ask });
+  if (Array.isArray(params?.allowedDecisions)) {
+    return params.allowedDecisions.filter(
+      (decision): decision is ExecApprovalDecision =>
+        decision === "allow-once" || decision === "allow-always" || decision === "deny",
+    );
+  }
+  return resolveExecApprovalAllowedDecisions({ ask: params?.ask });
 }
 
 export function isExecApprovalDecisionAllowed(params: {

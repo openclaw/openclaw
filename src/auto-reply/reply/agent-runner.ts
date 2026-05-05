@@ -38,7 +38,10 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -92,6 +95,12 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
+  return payloads.map((payload) =>
+    setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
+  );
+}
 
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
@@ -1837,6 +1846,9 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+    if (runResult.meta?.error?.kind === "hook_block") {
+      finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
     }
 
     // Capture only policy-visible final payloads in session store to support

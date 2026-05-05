@@ -461,6 +461,7 @@ function buildPluginPendingPayload(params: {
         request: params.request,
         nowMs: params.nowMs,
         text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
       }),
   });
 }

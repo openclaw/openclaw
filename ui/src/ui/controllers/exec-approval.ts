@@ -1,11 +1,14 @@
 import { normalizeOptionalString } from "../string-coerce.ts";
 
+export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+
 export type ExecApprovalRequestPayload = {
   command: string;
   cwd?: string | null;
   host?: string | null;
   security?: string | null;
   ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
@@ -32,6 +35,17 @@ export type ExecApprovalResolved = {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const decisions = value.filter(
+    (decision): decision is ExecApprovalDecision =>
+      decision === "allow-once" || decision === "allow-always" || decision === "deny",
+  );
+  return decisions;
 }
 
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
@@ -61,6 +75,7 @@ export function parseExecApprovalRequested(payload: unknown): ExecApprovalReques
       host: typeof request.host === "string" ? request.host : null,
       security: typeof request.security === "string" ? request.security : null,
       ask: typeof request.ask === "string" ? request.ask : null,
+      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       resolvedPath: typeof request.resolvedPath === "string" ? request.resolvedPath : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
@@ -114,6 +129,7 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
     kind: "plugin",
     request: {
       command: title,
+      allowedDecisions: parseAllowedDecisions(request.allowedDecisions),
       agentId: typeof request.agentId === "string" ? request.agentId : null,
       sessionKey: typeof request.sessionKey === "string" ? request.sessionKey : null,
     },

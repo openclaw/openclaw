@@ -11,6 +11,19 @@ private func chatTextMessage(role: String, text: String, timestamp: Double) -> A
     ])
 }
 
+private func chatBlockedUserMessage(redactedText: String, originalText: String, timestamp: Double) -> AnyCodable {
+    AnyCodable([
+        "role": "user",
+        "content": [["type": "text", "text": redactedText]],
+        "__openclaw": [
+            "originalBlockedContent": [
+                "content": [["type": "text", "text": originalText]],
+            ],
+        ],
+        "timestamp": timestamp,
+    ])
+}
+
 private func historyPayload(
     sessionKey: String = "main",
     sessionId: String? = "sess-main",
@@ -577,6 +590,48 @@ extension TestChatTransportState {
                 let userMessages = vm.messages.filter { message in
                     message.role == "user" &&
                         message.content.compactMap(\.text).joined(separator: "\n") == "hello from mac webchat"
+                }
+                let hasAssistant = vm.messages.contains { message in
+                    message.role == "assistant" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") == "final answer"
+                }
+                return hasAssistant && userMessages.count == 1
+            }
+        }
+    }
+
+    @Test func doesNotDuplicateUserMessageWhenRefreshReturnsBlockedCanonicalMessage() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload(sessionId: sessionId)
+        let history2 = historyPayload(
+            sessionId: sessionId,
+            messages: [
+                chatBlockedUserMessage(
+                    redactedText: "The agent cannot read this message.",
+                    originalText: "hello from mac webchat",
+                    timestamp: now + 5_000),
+                chatTextMessage(
+                    role: "assistant",
+                    text: "final answer",
+                    timestamp: now + 6_000),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+        try await sendMessageAndEmitFinal(
+            transport: transport,
+            vm: vm,
+            text: "hello from mac webchat")
+
+        try await waitUntil("blocked canonical refresh keeps one visible user message") {
+            await MainActor.run {
+                let userMessages = vm.messages.filter { message in
+                    message.role == "user" &&
+                        message.content.compactMap(\.text).joined(separator: "\n") ==
+                        "The agent cannot read this message." &&
+                        message.originalBlockedContent?.compactMap(\.text).joined(separator: "\n") ==
+                        "hello from mac webchat"
                 }
                 let hasAssistant = vm.messages.contains { message in
                     message.role == "assistant" &&

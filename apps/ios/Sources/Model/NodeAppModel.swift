@@ -71,8 +71,16 @@ final class NodeAppModel {
         let agentId: String?
         let expiresAtMs: Int?
 
+        var allowsAllowOnce: Bool {
+            self.allowedDecisions.contains("allow-once")
+        }
+
         var allowsAllowAlways: Bool {
             self.allowedDecisions.contains("allow-always")
+        }
+
+        var allowsDeny: Bool {
+            self.allowedDecisions.contains("deny")
         }
     }
 

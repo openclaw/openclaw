@@ -35,6 +35,7 @@ import {
 } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-message.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -78,7 +79,7 @@ import {
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
+import { ADMIN_SCOPE, TALK_SECRETS_SCOPE } from "../method-scopes.js";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -758,6 +759,11 @@ function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]): bool
 function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function canIncludeBlockedOriginalContent(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE) || scopes.includes(TALK_SECRETS_SCOPE);
 }
 
 async function persistChatSendImages(params: {
@@ -1713,7 +1719,7 @@ function broadcastChatError(params: {
 }
 
 export const chatHandlers: GatewayRequestHandlers = {
-  "chat.history": async ({ params, respond, context }) => {
+  "chat.history": async ({ params, respond, context, client }) => {
     if (!validateChatHistoryParams(params)) {
       respond(
         false,
@@ -1725,10 +1731,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const { sessionKey, limit, maxChars, includeBlockedOriginalContent } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
+      includeBlockedOriginalContent?: boolean;
     };
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
@@ -1744,6 +1751,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            includeBlockedOriginalContent:
+              includeBlockedOriginalContent === true && canIncludeBlockedOriginalContent(client),
           })
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
@@ -2258,6 +2267,30 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
+      let agentRunStarted = false;
+      let beforeAgentRunBlocked = false;
+      const hasBeforeAgentRunGate = getGlobalHookRunner()?.hasHooks("before_agent_run") === true;
+      const beforeAgentRunBlockIdempotencyKey = `hook-block:before_agent_run:user:${clientRunId}`;
+      const hasPersistedBeforeAgentRunBlock = async () => {
+        if (!hasBeforeAgentRunGate) {
+          return false;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
+        if (!resolvedSessionId) {
+          return false;
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: resolvedSessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+        });
+        if (!transcriptPath) {
+          return false;
+        }
+        return await transcriptHasIdempotencyKey(transcriptPath, beforeAgentRunBlockIdempotencyKey);
+      };
       const emitUserTranscriptUpdate = async () => {
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
@@ -2290,6 +2323,12 @@ export const chatHandlers: GatewayRequestHandlers = {
           });
         })();
         await userTranscriptUpdatePromise;
+      };
+      const emitUserTranscriptUpdateUnlessBeforeAgentRunBlocked = async () => {
+        if (beforeAgentRunBlocked || (await hasPersistedBeforeAgentRunBlock())) {
+          return;
+        }
+        await emitUserTranscriptUpdate();
       };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
@@ -2432,16 +2471,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       });
 
-      // Surface accepted inbound turns immediately so transcript subscribers
-      // (gateway watchers, MCP bridges, external channel backends) do not wait
-      // on model startup, completion, or failure paths before seeing the user turn.
-      void emitUserTranscriptUpdate().catch((transcriptErr) => {
-        context.logGateway.warn(
-          `webchat eager user transcript update failed: ${formatForLog(transcriptErr)}`,
-        );
-      });
-
-      let agentRunStarted = false;
       void dispatchInboundMessage({
         ctx,
         cfg,
@@ -2453,7 +2482,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
-            void emitUserTranscriptUpdate();
+            if (!hasBeforeAgentRunGate) {
+              void emitUserTranscriptUpdate();
+            }
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
@@ -2474,7 +2505,8 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(async () => {
+        .then(async (dispatchResult) => {
+          beforeAgentRunBlocked = dispatchResult.beforeAgentRunBlocked === true;
           await rewriteUserTranscriptMedia();
           // WebChat persistence has two owners. Agent runs persist model-visible turns
           // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
@@ -2655,7 +2687,11 @@ export const chatHandlers: GatewayRequestHandlers = {
               });
             }
           } else {
-            void emitUserTranscriptUpdate();
+            await emitUserTranscriptUpdateUnlessBeforeAgentRunBlocked().catch((transcriptErr) => {
+              context.logGateway.warn(
+                `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+              );
+            });
           }
           if (!context.chatAbortedRuns.has(clientRunId)) {
             setGatewayDedupeEntry({
@@ -2669,13 +2705,18 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           }
         })
-        .catch((err) => {
+        .catch(async (err) => {
           void rewriteUserTranscriptMedia().catch((rewriteErr) => {
             context.logGateway.warn(
               `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
             );
           });
-          void emitUserTranscriptUpdate().catch((transcriptErr) => {
+          const emitAfterError = !agentRunStarted
+            ? emitUserTranscriptUpdate()
+            : hasBeforeAgentRunGate
+              ? emitUserTranscriptUpdateUnlessBeforeAgentRunBlocked()
+              : emitUserTranscriptUpdate();
+          await emitAfterError.catch((transcriptErr) => {
             context.logGateway.warn(
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );

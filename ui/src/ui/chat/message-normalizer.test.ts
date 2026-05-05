@@ -42,6 +42,29 @@ describe("message-normalizer", () => {
       expect(result.audioAsVoice).toBeUndefined();
     });
 
+    it("renders blocked originals without mutating the raw redacted message", () => {
+      const rawMessage = {
+        role: "user",
+        content: [{ type: "text", text: "The agent cannot read this message." }],
+        __openclaw: {
+          originalBlockedContent: {
+            content: [{ type: "text", text: "secret blocked prompt" }],
+          },
+        },
+      };
+
+      const result = normalizeMessage(rawMessage);
+
+      expect(result).toMatchObject({
+        role: "user",
+        content: [{ type: "text", text: "secret blocked prompt" }],
+        isBlockedOriginalContent: true,
+      });
+      expect(rawMessage.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+    });
+
     it("normalizes message with array content", () => {
       const result = normalizeMessage({
         role: "assistant",

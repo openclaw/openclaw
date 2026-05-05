@@ -202,6 +202,13 @@ private struct ChatMessageBody: View {
                     variant: self.markdownVariant,
                     font: .system(size: 14),
                     textColor: textColor)
+                if self.isBlockedUserMessage {
+                    Divider()
+                        .overlay(OpenClawChatTheme.userText.opacity(0.18))
+                    Text("The agent cannot read this message.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(OpenClawChatTheme.userText.opacity(0.68))
+                }
             } else {
                 ChatAssistantTextBody(
                     text: text,
@@ -248,7 +255,7 @@ private struct ChatMessageBody: View {
     }
 
     private var primaryText: String {
-        let parts = self.message.content.compactMap { content -> String? in
+        let parts = self.displayContent.compactMap { content -> String? in
             let kind = (content.type ?? "text").lowercased()
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
@@ -257,7 +264,7 @@ private struct ChatMessageBody: View {
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {
-        self.message.content.filter { content in
+        self.displayContent.filter { content in
             switch content.type ?? "text" {
             case "file", "attachment":
                 true
@@ -265,6 +272,17 @@ private struct ChatMessageBody: View {
                 false
             }
         }
+    }
+
+    private var displayContent: [OpenClawChatMessageContent] {
+        if self.isBlockedUserMessage, let original = self.message.originalBlockedContent {
+            return original
+        }
+        return self.message.content
+    }
+
+    private var isBlockedUserMessage: Bool {
+        self.isUser && !(self.message.originalBlockedContent?.isEmpty ?? true)
     }
 
     private var toolCalls: [OpenClawChatMessageContent] {

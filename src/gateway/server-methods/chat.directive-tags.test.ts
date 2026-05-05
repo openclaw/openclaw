@@ -47,7 +47,9 @@ const mockState = vi.hoisted(() => ({
     };
   }>,
   dispatchError: null as Error | null,
+  dispatchErrorAfterAgentRunStart: null as Error | null,
   triggerAgentRunStart: false,
+  onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
   lastDispatchCtx: undefined as MsgContext | undefined,
@@ -69,6 +71,8 @@ const mockState = vi.hoisted(() => ({
   sandboxWorkspace: null as { workspaceDir: string; containerWorkdir?: string } | null,
   stageSandboxMediaError: null as Error | null,
   stagedRelativePaths: null as string[] | null,
+  hasBeforeAgentRunHooks: false,
+  dispatchBlockedByBeforeAgentRun: false,
   // `unstagedSources` lets tests simulate partial staging failure: absolute
   // source paths listed here are excluded from the returned `staged` map even
   // though ctx still carries their rewritten paths. This mirrors how the real
@@ -176,6 +180,10 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
+        mockState.onAfterAgentRunStart?.();
+      }
+      if (mockState.dispatchErrorAfterAgentRunStart) {
+        throw mockState.dispatchErrorAfterAgentRunStart;
       }
       if (mockState.dispatchedReplies.length > 0) {
         for (const reply of mockState.dispatchedReplies) {
@@ -194,7 +202,12 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       }
       params.dispatcher.markComplete();
       await params.dispatcher.waitForIdle();
-      return { ok: true };
+      return {
+        ok: true,
+        queuedFinal: true,
+        counts: { tool: 0, block: 0, final: 1 },
+        ...(mockState.dispatchBlockedByBeforeAgentRun ? { beforeAgentRunBlocked: true } : {}),
+      };
     },
   ),
 }));
@@ -211,6 +224,13 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
     }),
   };
 });
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: () => ({
+    hasHooks: (hookName: string) =>
+      hookName === "before_agent_run" && mockState.hasBeforeAgentRunHooks,
+  }),
+}));
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
@@ -369,6 +389,27 @@ function createScopedCliClient(
   };
 }
 
+async function runChatHistory(params: {
+  client?: unknown;
+  requestParams?: Record<string, unknown>;
+}) {
+  const respond = vi.fn();
+  await chatHandlers["chat.history"]({
+    params: {
+      sessionKey: "main",
+      limit: 200,
+      ...params.requestParams,
+    },
+    respond: respond as unknown as Parameters<(typeof chatHandlers)["chat.history"]>[0]["respond"],
+    req: {} as never,
+    client: (params.client ?? null) as never,
+    isWebchatConnect: () => false,
+    context: createChatContext() as GatewayRequestContext,
+  });
+  expect(respond).toHaveBeenCalledWith(true, expect.anything());
+  return respond.mock.calls[0]?.[1] as { messages?: unknown[] };
+}
+
 function createChatContext(): Pick<
   GatewayRequestContext,
   | "broadcast"
@@ -501,8 +542,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalPayload = null;
     mockState.dispatchedReplies = [];
     mockState.dispatchError = null;
+    mockState.dispatchErrorAfterAgentRunStart = null;
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
+    mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
     mockState.lastDispatchCtx = undefined;
@@ -523,6 +566,139 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.stagedRelativePaths = null;
     mockState.unstagedSources = null;
     mockState.deleteMediaBufferCalls = [];
+    mockState.hasBeforeAgentRunHooks = false;
+    mockState.dispatchBlockedByBeforeAgentRun = false;
+  });
+
+  it("includes blocked original content for scoped chat history callers", async () => {
+    createTranscriptFixture("openclaw-chat-history-blocked-original-");
+    fs.writeFileSync(
+      mockState.transcriptPath,
+      [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: mockState.sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: "/tmp",
+        },
+        {
+          type: "message",
+          id: "blocked-1",
+          parentId: null,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "The agent cannot read this message." }],
+            timestamp: 1,
+          },
+          originalBlockedContent: {
+            content: [{ type: "text", text: "secret blocked prompt" }],
+            blockedBy: "policy-plugin",
+            reason: "blocked by policy",
+            blockedAt: 1,
+          },
+        },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const scoped = await runChatHistory({
+      client: createScopedCliClient(["operator.admin"]),
+      requestParams: { includeBlockedOriginalContent: true },
+    });
+    expect(
+      (
+        scoped.messages?.[0] as {
+          __openclaw?: { originalBlockedContent?: { content?: Array<{ text?: string }> } };
+        }
+      )?.__openclaw?.originalBlockedContent?.content?.[0]?.text,
+    ).toBe("secret blocked prompt");
+
+    const sensitiveScoped = await runChatHistory({
+      client: createScopedCliClient(["operator.talk.secrets"]),
+      requestParams: { includeBlockedOriginalContent: true },
+    });
+    expect(
+      (
+        sensitiveScoped.messages?.[0] as {
+          __openclaw?: { originalBlockedContent?: { content?: Array<{ text?: string }> } };
+        }
+      )?.__openclaw?.originalBlockedContent?.content?.[0]?.text,
+    ).toBe("secret blocked prompt");
+
+    const writeScoped = await runChatHistory({
+      client: createScopedCliClient(["operator.write"]),
+      requestParams: { includeBlockedOriginalContent: true },
+    });
+    expect(
+      (
+        writeScoped.messages?.[0] as {
+          __openclaw?: { originalBlockedContent?: unknown };
+        }
+      )?.__openclaw?.originalBlockedContent,
+    ).toBeUndefined();
+
+    const unscoped = await runChatHistory({
+      client: createScopedCliClient(["operator.read"]),
+      requestParams: { includeBlockedOriginalContent: true },
+    });
+    expect(
+      (
+        unscoped.messages?.[0] as {
+          __openclaw?: { originalBlockedContent?: unknown };
+        }
+      )?.__openclaw?.originalBlockedContent,
+    ).toBeUndefined();
+  });
+
+  it("applies chat history text caps to blocked original content", async () => {
+    createTranscriptFixture("openclaw-chat-history-blocked-original-maxchars-");
+    fs.writeFileSync(
+      mockState.transcriptPath,
+      [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: mockState.sessionId,
+          timestamp: new Date(0).toISOString(),
+          cwd: "/tmp",
+        },
+        {
+          type: "message",
+          id: "blocked-1",
+          parentId: null,
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "The agent cannot read this message." }],
+            timestamp: 1,
+          },
+          originalBlockedContent: {
+            content: [{ type: "text", text: "secret ".repeat(20) }],
+            blockedBy: "policy-plugin",
+            reason: "blocked by policy",
+            blockedAt: 1,
+          },
+        },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+
+    const scoped = await runChatHistory({
+      client: createScopedCliClient(["operator.admin"]),
+      requestParams: { includeBlockedOriginalContent: true, maxChars: 24 },
+    });
+
+    expect(
+      (
+        scoped.messages?.[0] as {
+          __openclaw?: { originalBlockedContent?: { content?: Array<{ text?: string }> } };
+        }
+      )?.__openclaw?.originalBlockedContent?.content?.[0]?.text,
+    ).toBe("secret secret secret sec\n...(truncated)...");
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -2056,6 +2232,155 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.find((call) => call[0] === "chat" && call[1]?.state === "final")?.[1];
     expect(finalBroadcast).toBeUndefined();
+  });
+
+  it("does not emit pre-gate user transcript content when before_agent_run hooks are registered", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-before-run-gate-");
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    let userUpdateCountAtAgentStart = 0;
+    mockState.onAfterAgentRunStart = () => {
+      userUpdateCountAtAgentStart = mockState.emittedTranscriptUpdates.filter(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      ).length;
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-before-run-gate",
+      message: "secret prompt that may be blocked",
+      expectBroadcast: false,
+    });
+
+    expect(userUpdateCountAtAgentStart).toBe(0);
+    const userUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdate).toMatchObject({
+      sessionFile: expect.stringMatching(/sess\.jsonl$/),
+      sessionKey: "main",
+      message: {
+        role: "user",
+        content: "secret prompt that may be blocked",
+        timestamp: expect.any(Number),
+      },
+    });
+  });
+
+  it("does not emit raw user transcript content after before_agent_run blocks", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-blocked-gate-");
+    mockState.finalText = "The agent cannot read this message.";
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.onAfterAgentRunStart = () => {
+      fs.appendFileSync(
+        mockState.transcriptPath,
+        `${JSON.stringify({
+          type: "message",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "The agent cannot read this message." }],
+            idempotencyKey: "hook-block:before_agent_run:user:idem-user-transcript-blocked-gate",
+          },
+          originalBlockedContent: {
+            content: [{ type: "text", text: "secret prompt that was blocked" }],
+            blockedBy: "policy-plugin",
+            reason: "contains protected content",
+            blockedAt: 1,
+          },
+        })}\n`,
+        "utf-8",
+      );
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-blocked-gate",
+      message: "secret prompt that was blocked",
+      expectBroadcast: false,
+    });
+
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdates).toHaveLength(0);
+  });
+
+  it("does not emit raw user transcript content when before_agent_run blocks without a persisted marker", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-blocked-live-signal-");
+    mockState.finalText = "The agent cannot read this message.";
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.dispatchBlockedByBeforeAgentRun = true;
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-blocked-live-signal",
+      message: "secret prompt blocked before persistence",
+      expectBroadcast: false,
+    });
+
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "user",
+    );
+    expect(userUpdates).toHaveLength(0);
+  });
+
+  it("emits raw user transcript content when before_agent_run passes but the agent fails", async () => {
+    createTranscriptFixture("openclaw-chat-send-user-transcript-gate-pass-error-");
+    mockState.triggerAgentRunStart = true;
+    mockState.hasBeforeAgentRunHooks = true;
+    mockState.dispatchErrorAfterAgentRunStart = new Error("model unavailable");
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-user-transcript-gate-pass-error",
+      message: "prompt allowed before model error",
+      expectBroadcast: false,
+    });
+
+    await waitForAssertion(() => {
+      const userUpdate = mockState.emittedTranscriptUpdates.find(
+        (update) =>
+          typeof update.message === "object" &&
+          update.message !== null &&
+          (update.message as { role?: unknown }).role === "user",
+      );
+      expect(userUpdate).toMatchObject({
+        sessionFile: expect.stringMatching(/sess\.jsonl$/),
+        sessionKey: "main",
+        message: {
+          role: "user",
+          content: "prompt allowed before model error",
+          timestamp: expect.any(Number),
+        },
+      });
+    });
   });
 
   it("adds persisted media paths to the user transcript update", async () => {

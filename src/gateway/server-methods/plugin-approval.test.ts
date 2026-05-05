@@ -125,6 +125,145 @@ describe("createPluginApprovalHandlers", () => {
       );
     });
 
+    it("preserves explicit allowed decisions on plugin approval requests", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "This tool modifies production data",
+          severity: "warning",
+          allowedDecisions: ["allow-once", "deny"],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+
+      await vi.waitFor(() => {
+        expect(opts.context.broadcast).toHaveBeenCalledWith(
+          "plugin.approval.requested",
+          expect.objectContaining({
+            request: expect.objectContaining({
+              allowedDecisions: ["allow-once", "deny"],
+            }),
+          }),
+          { dropIfSlow: true },
+        );
+      });
+
+      const acceptedCall = respond.mock.calls.find(
+        (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+      );
+      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      manager.resolve(approvalId, "allow-once");
+
+      await handlerPromise;
+    });
+
+    it("keeps deny available on restricted plugin approval requests", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "This tool modifies production data",
+          severity: "warning",
+          allowedDecisions: ["allow-once"],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+
+      await vi.waitFor(() => {
+        expect(opts.context.broadcast).toHaveBeenCalledWith(
+          "plugin.approval.requested",
+          expect.objectContaining({
+            request: expect.objectContaining({
+              allowedDecisions: ["allow-once", "deny"],
+            }),
+          }),
+          { dropIfSlow: true },
+        );
+      });
+
+      const acceptedCall = respond.mock.calls.find(
+        (c) => (c[1] as Record<string, unknown>)?.status === "accepted",
+      );
+      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      manager.resolve(approvalId, "deny");
+
+      await handlerPromise;
+      expect(respond).toHaveBeenLastCalledWith(
+        true,
+        expect.objectContaining({ id: approvalId, decision: "deny" }),
+        undefined,
+      );
+    });
+
+    it("rejects explicit empty allowed decisions on plugin approval requests", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "This tool modifies production data",
+          severity: "warning",
+          allowedDecisions: [],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "allowedDecisions must include at least one supported decision",
+        }),
+      );
+      expect(opts.context.broadcast).not.toHaveBeenCalledWith(
+        "plugin.approval.requested",
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it("rejects invalid-only allowed decisions on plugin approval requests", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "This tool modifies production data",
+          severity: "warning",
+          allowedDecisions: ["forever"],
+        },
+        { respond },
+      );
+
+      await handlers["plugin.approval.request"](opts);
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("invalid plugin.approval.request params"),
+        }),
+      );
+    });
+
     it("expires immediately when no approval route", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions(
@@ -460,6 +599,61 @@ describe("createPluginApprovalHandlers", () => {
         "plugin.approval.resolved",
         expect.objectContaining({ id: record.id, decision: "deny" }),
         { dropIfSlow: true },
+      );
+    });
+
+    it("rejects decisions excluded by plugin approval allowedDecisions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        { title: "T", description: "D", allowedDecisions: ["allow-once", "deny"] },
+        60_000,
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolve", {
+        id: record.id,
+        decision: "allow-always",
+      });
+      await handlers["plugin.approval.resolve"](opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "decision is not allowed for this plugin approval request",
+        }),
+      );
+      expect(opts.context.broadcast).not.toHaveBeenCalledWith(
+        "plugin.approval.resolved",
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it("rejects decisions when plugin approval allowedDecisions is explicit empty", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create({ title: "T", description: "D", allowedDecisions: [] }, 60_000);
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolve", {
+        id: record.id,
+        decision: "allow-once",
+      });
+      await handlers["plugin.approval.resolve"](opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "decision is not allowed for this plugin approval request",
+        }),
+      );
+      expect(opts.context.broadcast).not.toHaveBeenCalledWith(
+        "plugin.approval.resolved",
+        expect.anything(),
+        expect.anything(),
       );
     });
 

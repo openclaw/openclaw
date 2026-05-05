@@ -28,6 +28,26 @@ type HistoryEntry = {
   summary?: unknown;
 };
 
+function stripBlockedOriginalContentMeta(message: unknown): unknown {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return message;
+  }
+  const record = message as Record<string, unknown>;
+  const openclaw =
+    record.__openclaw && typeof record.__openclaw === "object" && !Array.isArray(record.__openclaw)
+      ? (record.__openclaw as Record<string, unknown>)
+      : undefined;
+  if (!openclaw || !Object.hasOwn(openclaw, "originalBlockedContent")) {
+    return message;
+  }
+  const { originalBlockedContent: _originalBlockedContent, ...remainingOpenClaw } = openclaw;
+  const { __openclaw: _openclaw, ...remainingMessage } = record;
+  if (Object.keys(remainingOpenClaw).length === 0) {
+    return remainingMessage;
+  }
+  return { ...remainingMessage, __openclaw: remainingOpenClaw };
+}
+
 function coerceHistoryText(content: unknown): string {
   if (typeof content === "string") {
     return content.trim();
@@ -179,7 +199,7 @@ export async function loadCliSessionHistoryMessages(params: {
 }): Promise<unknown[]> {
   const history = (await loadCliSessionEntries(params)).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
+    return candidate.type === "message" ? [stripBlockedOriginalContentMeta(candidate.message)] : [];
   });
   return limitAgentHookHistoryMessages(history, MAX_CLI_SESSION_HISTORY_MESSAGES);
 }
@@ -208,7 +228,7 @@ export async function loadCliSessionReseedMessages(params: {
 
   const tailMessages = entries.slice(latestCompactionIndex + 1).flatMap((entry) => {
     const candidate = entry as HistoryEntry;
-    return candidate.type === "message" ? [candidate.message] : [];
+    return candidate.type === "message" ? [stripBlockedOriginalContentMeta(candidate.message)] : [];
   });
   return [
     {

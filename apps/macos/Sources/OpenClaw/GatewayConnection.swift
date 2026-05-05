@@ -628,14 +628,32 @@ extension GatewayConnection {
         timeoutMs: Int? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
+        var params: [String: AnyCodable] = [
+            "sessionKey": AnyCodable(resolvedKey),
+            "includeBlockedOriginalContent": AnyCodable(true),
+        ]
         if let limit { params["limit"] = AnyCodable(limit) }
         if let maxChars { params["maxChars"] = AnyCodable(maxChars) }
         let timeout = timeoutMs.map { Double($0) }
-        return try await self.requestDecoded(
-            method: .chatHistory,
-            params: params,
-            timeoutMs: timeout)
+        do {
+            return try await self.requestDecoded(
+                method: .chatHistory,
+                params: params,
+                timeoutMs: timeout)
+        } catch {
+            guard Self.isUnsupportedBlockedOriginalHistoryParam(error) else { throw error }
+            params.removeValue(forKey: "includeBlockedOriginalContent")
+            return try await self.requestDecoded(
+                method: .chatHistory,
+                params: params,
+                timeoutMs: timeout)
+        }
+    }
+
+    private static func isUnsupportedBlockedOriginalHistoryParam(_ error: Error) -> Bool {
+        guard let response = error as? GatewayResponseError else { return false }
+        guard response.code == ErrorCode.invalidRequest.rawValue else { return false }
+        return response.message.contains("includeBlockedOriginalContent")
     }
 
     func chatSend(

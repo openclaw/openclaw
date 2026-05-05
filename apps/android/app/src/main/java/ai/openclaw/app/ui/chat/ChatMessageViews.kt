@@ -56,10 +56,16 @@ private data class ChatBubbleStyle(
 fun ChatMessageBubble(message: ChatMessage) {
   val role = message.role.trim().lowercase(Locale.US)
   val style = bubbleStyle(role)
+  val displayContent =
+    if (role == "user" && message.originalBlockedContent.isNotEmpty()) {
+      message.originalBlockedContent
+    } else {
+      message.content
+    }
 
   // Filter to only displayable content parts (text with content, or base64 images).
   val displayableContent =
-    message.content.filter { part ->
+    displayContent.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
         else -> part.base64 != null
@@ -70,6 +76,25 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
+    if (role == "user" && message.originalBlockedContent.isNotEmpty()) {
+      Surface(
+        color = Color.Transparent,
+        border = BorderStroke(0.dp, Color.Transparent),
+        modifier = Modifier.fillMaxWidth(),
+      ) {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+          androidx.compose.material3.HorizontalDivider(
+            color = mobileText.copy(alpha = 0.18f),
+            thickness = 1.dp,
+          )
+          Text(
+            text = "The agent cannot read this message.",
+            style = mobileCaption1.copy(fontWeight = FontWeight.Medium),
+            color = mobileText.copy(alpha = 0.68f),
+          )
+        }
+      }
+    }
   }
 }
 

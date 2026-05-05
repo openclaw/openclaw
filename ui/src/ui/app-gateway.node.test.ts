@@ -925,6 +925,40 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("replays deferred blocked user reloads after renderable final assistant payloads", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-blocked";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        messageId: "blocked-1",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+        },
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-blocked",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
   it("replays deferred session.message reloads after legacy silent final payload", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-silent";

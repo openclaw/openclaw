@@ -12,6 +12,7 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   readSessionMessageCountAsync,
+  stripBlockedOriginalContentMeta,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -126,7 +127,7 @@ async function handleTranscriptUpdateBroadcast(
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
     includeSession: true,
   });
-  const rawMessage = attachOpenClawTranscriptMeta(update.message, {
+  const rawMessage = attachOpenClawTranscriptMeta(stripBlockedOriginalContentMeta(update.message), {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
     ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
   });

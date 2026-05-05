@@ -58,7 +58,19 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", dir);
   const sessionFile = path.join(dir, "agents", "main", "sessions", "s1.jsonl");
+  const storePath = path.join(path.dirname(sessionFile), "sessions.json");
   fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+  fs.writeFileSync(
+    storePath,
+    JSON.stringify({
+      "agent:main:main": {
+        sessionId: "s1",
+        sessionFile,
+        updatedAt: Date.now(),
+      },
+    }),
+    "utf-8",
+  );
   fs.writeFileSync(
     sessionFile,
     `${JSON.stringify({
@@ -87,7 +99,7 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
       "utf-8",
     );
   }
-  return { dir, sessionFile };
+  return { dir, sessionFile, storePath };
 }
 
 function buildPreparedContext(params?: {
@@ -614,6 +626,89 @@ describe("runCliAgent reliability", () => {
           ],
         }),
         expect.any(Object),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
+    supervisorSpawnMock.mockClear();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) =>
+        ["before_agent_run", "llm_input", "agent_end"].includes(hookName),
+      ),
+      runBeforeAgentRun: vi.fn(async () => ({
+        pluginId: "policy-plugin",
+        decision: {
+          outcome: "block" as const,
+          reason: "contains protected content",
+          message: "The agent cannot read this message.",
+        },
+      })),
+      runLlmInput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    const { dir, sessionFile } = createSessionFile({
+      history: [{ role: "user", content: "earlier context" }],
+    });
+
+    try {
+      const result = await runPreparedCliAgent({
+        ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
+        params: {
+          ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
+            .params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "secret prompt",
+        },
+      });
+
+      expect(result.payloads).toEqual([
+        { text: "The agent cannot read this message.", isError: true },
+      ]);
+      expect(result.meta.livenessState).toBe("blocked");
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      expect(hookRunner.runBeforeAgentRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt: "secret prompt",
+          messages: expect.arrayContaining([
+            expect.objectContaining({ role: "user", content: "earlier context" }),
+          ]),
+        }),
+        expect.objectContaining({
+          runId: "run-blocked-cli",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+      });
+      expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: false,
+          error: "The agent cannot read this message.",
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: "user",
+              content: "The agent cannot read this message.",
+            }),
+          ]),
+        }),
+        expect.any(Object),
+      );
+      expect(JSON.stringify(hookRunner.runAgentEnd.mock.calls)).not.toContain("secret prompt");
+
+      const lines = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+      const blockedLine = JSON.parse(lines[lines.length - 1]);
+      expect(blockedLine.message.content[0].text).toBe("The agent cannot read this message.");
+      expect(blockedLine.message.__openclaw.originalBlockedContent.content[0].text).toBe(
+        "secret prompt",
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

@@ -20,6 +20,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolveEmbeddedAgentStreamFn,
   resolveUnknownToolGuardThreshold,
+  shouldRunLlmOutputHooksForAttempt,
   resolveAttemptToolPolicyMessageProvider,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -149,6 +150,35 @@ describe("normalizeMessagesForLlmBoundary", () => {
       expect.arrayContaining([expect.objectContaining({ customType: "other-extension-context" })]),
     );
   });
+
+  it("strips blocked original content metadata from the LLM boundary", () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "The agent cannot read this message." }],
+        timestamp: 1,
+        __openclaw: {
+          originalBlockedContent: {
+            content: [{ type: "text", text: "secret prompt" }],
+            blockedBy: "policy-plugin",
+            reason: "contains protected content",
+            blockedAt: 1,
+          },
+        },
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as Array<Record<string, unknown>>;
+
+    expect(output[0]?.content).toEqual([
+      { type: "text", text: "The agent cannot read this message." },
+    ]);
+    expect(output[0]).not.toHaveProperty("__openclaw");
+    expect(JSON.stringify(output)).not.toContain("secret prompt");
+    expect(input[0]).toHaveProperty("__openclaw");
+  });
 });
 
 describe("resolveAttemptToolPolicyMessageProvider", () => {
@@ -163,6 +193,16 @@ describe("resolveAttemptToolPolicyMessageProvider", () => {
 
   it("falls back to message channel when provider is omitted", () => {
     expect(resolveAttemptToolPolicyMessageProvider({ messageChannel: "discord" })).toBe("discord");
+  });
+});
+
+describe("shouldRunLlmOutputHooksForAttempt", () => {
+  it("skips llm_output after before_agent_run blocks before model submission", () => {
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "hook:before_agent_run" })).toBe(
+      false,
+    );
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: "prompt" })).toBe(true);
+    expect(shouldRunLlmOutputHooksForAttempt({ promptErrorSource: null })).toBe(true);
   });
 });
 

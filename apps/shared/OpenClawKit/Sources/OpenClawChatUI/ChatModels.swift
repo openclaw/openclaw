@@ -139,15 +139,25 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
     public var id: UUID = .init()
     public let role: String
     public let content: [OpenClawChatMessageContent]
+    public let originalBlockedContent: [OpenClawChatMessageContent]?
     public let timestamp: Double?
     public let toolCallId: String?
     public let toolName: String?
     public let usage: OpenClawChatUsage?
     public let stopReason: String?
 
+    private struct OpenClawMetadata: Codable, Sendable {
+        let originalBlockedContent: OriginalBlockedContent?
+    }
+
+    private struct OriginalBlockedContent: Codable, Sendable {
+        let content: [OpenClawChatMessageContent]?
+    }
+
     enum CodingKeys: String, CodingKey {
         case role
         case content
+        case openclawMetadata = "__openclaw"
         case timestamp
         case toolCallId
         case tool_call_id
@@ -161,6 +171,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         id: UUID = .init(),
         role: String,
         content: [OpenClawChatMessageContent],
+        originalBlockedContent: [OpenClawChatMessageContent]? = nil,
         timestamp: Double?,
         toolCallId: String? = nil,
         toolName: String? = nil,
@@ -170,6 +181,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         self.id = id
         self.role = role
         self.content = content
+        self.originalBlockedContent = originalBlockedContent
         self.timestamp = timestamp
         self.toolCallId = toolCallId
         self.toolName = toolName
@@ -189,6 +201,8 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
             container.decodeIfPresent(String.self, forKey: .tool_name)
         self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        let metadata = try container.decodeIfPresent(OpenClawMetadata.self, forKey: .openclawMetadata)
+        self.originalBlockedContent = metadata?.originalBlockedContent?.content
 
         if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
             self.content = decoded
@@ -225,6 +239,12 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(self.usage, forKey: .usage)
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
         try container.encode(self.content, forKey: .content)
+        if let originalBlockedContent = self.originalBlockedContent {
+            try container.encode(
+                OpenClawMetadata(
+                    originalBlockedContent: OriginalBlockedContent(content: originalBlockedContent)),
+                forKey: .openclawMetadata)
+        }
     }
 }
 

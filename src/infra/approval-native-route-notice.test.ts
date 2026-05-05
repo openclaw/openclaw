@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   describeApprovalDeliveryDestination,
+  resolveApprovalDeliveryFailedNoticeText,
   resolveApprovalRoutedElsewhereNoticeText,
 } from "./approval-native-route-notice.js";
 
@@ -47,5 +48,17 @@ describe("resolveApprovalRoutedElsewhereNoticeText", () => {
 
   it("suppresses the notice when there are no destinations", () => {
     expect(resolveApprovalRoutedElsewhereNoticeText([])).toBeNull();
+  });
+});
+
+describe("resolveApprovalDeliveryFailedNoticeText", () => {
+  it("does not invent fallback decisions for explicit empty restrictions", () => {
+    expect(
+      resolveApprovalDeliveryFailedNoticeText({
+        approvalId: "approval-1",
+        approvalKind: "plugin",
+        allowedDecisions: [],
+      }),
+    ).toContain("No reply decisions are currently available");
   });
 });

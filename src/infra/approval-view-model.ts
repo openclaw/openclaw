@@ -105,6 +105,7 @@ export function buildPendingApprovalView(request: ApprovalRequest): PendingAppro
       ...buildPluginViewBase(pluginRequest, "pending"),
       actions: buildExecApprovalActionDescriptors({
         approvalCommandId: pluginRequest.id,
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(pluginRequest.request),
       }),
       expiresAtMs: pluginRequest.expiresAtMs,
     };

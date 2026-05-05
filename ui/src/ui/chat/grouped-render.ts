@@ -1433,6 +1433,8 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
+  const isBlockedUserMessage =
+    normalizedRole === "user" && normalizedMessage.isBlockedOriginalContent === true;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
 
@@ -1608,6 +1610,9 @@ function renderGroupedMessage(
                     ${unsafeHTML(toSanitizedMarkdownHtml(markdown))}
                   </div>`
                 : nothing}
+            ${isBlockedUserMessage
+              ? html`<div class="chat-blocked-user-note">The agent cannot read this message.</div>`
+              : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
                   messageKey,
