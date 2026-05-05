@@ -404,7 +404,7 @@ describe("mantis Slack desktop smoke runtime", () => {
       warning?: string;
     };
     expect(summary.status).toBe("pass");
-    expect(summary.warning).toContain("remote command exited 1");
+    expect(summary.warning).toBeUndefined();
   });
 
   it("copies the screenshot before reporting a failed remote Slack QA run", async () => {

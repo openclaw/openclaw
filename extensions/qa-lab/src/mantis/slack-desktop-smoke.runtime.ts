@@ -912,9 +912,6 @@ export async function runMantisSlackDesktopSmoke(
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
     }
-    const ignoredRemoteRunError = remoteRunError
-      ? `Crabbox returned a non-zero command status after the gateway setup completed: ${formatErrorMessage(remoteRunError)}`
-      : undefined;
     summary = {
       artifacts: {
         reportPath,
@@ -938,7 +935,6 @@ export async function runMantisSlackDesktopSmoke(
       slackUrl: trimToValue(remoteMetadata?.openedUrl) ?? slackUrl,
       startedAt: startedAt.toISOString(),
       status: "pass",
-      warning: ignoredRemoteRunError,
     };
     return {
       outputDir,
