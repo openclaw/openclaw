@@ -2880,6 +2880,9 @@ export async function runEmbeddedAttempt(
                     sessionId: params.sessionId,
                     assembledMessages: activeSession.messages,
                     sessionFile: params.sessionFile,
+                    systemPrompt: systemPromptText || undefined,
+                    prompt: promptSubmission.prompt || undefined,
+                    imagesCount: imageResult.images.length,
                   },
                   {
                     runId: params.runId,

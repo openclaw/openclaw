@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins: add `before_assemble` and `after_assemble` hooks allowing extensions to intercept context assembly — `before_assemble` runs sequentially and can mutate the message list before it is sent to the LLM, while `after_assemble` runs in parallel for fire-and-forget observation of the final assembled context. (#75162) Thanks @FineStructureConstant07.
 - Messages/docs: clarify that `BodyForAgent` is the primary inbound model text while `Body` is the legacy envelope fallback, and add Signal coverage so channel hardening patches target the real prompt path. Refs #66198. Thanks @defonota3box.
 - Control UI/Usage: add UTC quarter-hour token buckets for the Usage Mosaic and reuse them for hour filtering, keeping the legacy session-span fallback for older summaries. (#74337) Thanks @konanok.
 

@@ -160,6 +160,7 @@ export const PROMPT_INJECTION_HOOK_NAMES = [
   "agent_turn_prepare",
   "before_prompt_build",
   "before_agent_start",
+  "before_assemble",
   "heartbeat_prompt_contribution",
 ] as const satisfies readonly PluginHookName[];
 
@@ -174,6 +175,7 @@ export const CONVERSATION_HOOK_NAMES = [
   "llm_input",
   "llm_output",
   "before_agent_finalize",
+  "after_assemble",
   "agent_end",
 ] as const satisfies readonly PluginHookName[];
 
@@ -972,6 +974,12 @@ export type PluginHookAfterAssembleEvent = {
   assembledMessages: unknown[];
   /** Path to the session JSONL transcript file. */
   sessionFile?: string;
+  /** System prompt text included in the model request. */
+  systemPrompt?: string;
+  /** Final user-facing prompt text submitted to the model. */
+  prompt?: string;
+  /** Number of images included in the model request. */
+  imagesCount?: number;
 };
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {

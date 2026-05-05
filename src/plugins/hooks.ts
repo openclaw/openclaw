@@ -194,6 +194,13 @@ type ModifyingHookPolicy<K extends PluginHookName, TResult> = {
     next: TResult,
     registration: PluginHookRegistration<K>,
   ) => TResult;
+  /**
+   * Called after a handler result is merged, to evolve the event
+   * for the next handler in the chain. This enables true sequential
+   * composition where later handlers see accumulated state from
+   * earlier ones.
+   */
+  evolveEvent?: (event: Record<string, unknown>, accumulated: TResult | undefined) => void;
   shouldStop?: (result: TResult) => boolean;
   terminalLabel?: string;
   onTerminal?: (params: { hookName: K; pluginId: string; result: TResult }) => void;
@@ -516,12 +523,13 @@ export function createHookRunner(
 
     logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, sequential)`);
 
+    let currentEvent = event as Record<string, unknown>;
     let result: TResult | undefined;
 
     for (const hook of hooks) {
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
-        const promise = Promise.resolve(handler(event, ctx));
+        const promise = Promise.resolve(handler(currentEvent, ctx));
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
 
@@ -531,6 +539,7 @@ export function createHookRunner(
           } else {
             result = handlerResult;
           }
+          policy.evolveEvent?.(currentEvent, result);
           if (result && policy.shouldStop?.(result)) {
             const terminalLabel = policy.terminalLabel ? ` ${policy.terminalLabel}` : "";
             const priority = hook.priority ?? 0;
@@ -1326,6 +1335,11 @@ export function createHookRunner(
         mergeResults: (acc, next) => ({
           messages: next.messages ?? acc?.messages,
         }),
+        evolveEvent: (evt, accumulated) => {
+          if (accumulated?.messages) {
+            evt.messages = accumulated.messages;
+          }
+        },
       },
     );
   }
