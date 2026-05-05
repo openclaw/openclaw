@@ -1,6 +1,5 @@
 export {
   JsonFileReadError,
-  createAsyncLock,
   readJson,
   readJson as readJsonFileStrict,
   readJsonIfExists,
@@ -11,6 +10,6 @@ export {
   tryReadJsonSync as readJsonFileSync,
   writeJson,
   writeJson as writeJsonAtomic,
-  writeText,
-  writeText as writeTextAtomic,
 } from "@openclaw/fs-safe/json";
+export { writeTextAtomic } from "@openclaw/fs-safe/atomic";
+export { createAsyncLock } from "@openclaw/fs-safe/advanced";
