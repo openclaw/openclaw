@@ -27,9 +27,14 @@ The patch does not:
 
 - restart the gateway
 - retry or replay interrupted requests
+- automatically generate, load, or attach a handoff when `/new` is used
 - cancel or clean tasks
 - change models, bindings, config, secrets, or sessions
 - call heavy task audit/show paths from Telegram hot code
+
+Handoff is explicit. `/new` alone starts a fresh Telegram session without carrying
+the previous task forward. Operators use `/handoff` in the old session and
+`/resume latest` in the new session only when they want to continue the same task.
 
 ## Review Checklist
 
@@ -40,9 +45,10 @@ Before building a package, reviewers should confirm:
 - Startup interrupted notifications are bounded and do not rerun any action.
 - High-context input protection still allows short commands such as `/new`, `/handoff`,
   `/resume`, `/compact`, `/status`, `/stop`, and `/abort`.
+- `/new` remains a clean break and does not implicitly generate or load a handoff.
 - Failure notices are short and do not expose provider secrets or stack traces.
-- Tests cover completion, failure notification, long-input guard, and startup
-  interrupted notice.
+- Tests cover completion, failure notification, long-input guard, startup interrupted
+  notice, and the explicit handoff boundary.
 
 ## Local Validation
 
@@ -137,6 +143,7 @@ Users should see fewer silent Telegram failures:
 - A high-context long input should produce a handoff/new-session suggestion.
 - A gateway restart should produce an interrupted-request notice after Telegram
   runtime startup.
+- `/new` should remain available as a true fresh-start command; handoff context is
+  loaded only after an explicit `/resume latest`.
 
 Users should not see automatic duplicate task execution.
-
