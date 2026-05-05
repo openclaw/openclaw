@@ -273,6 +273,7 @@ export function registerMantisCli(qa: Command) {
     .option("--idle-timeout <duration>", "Crabbox idle timeout")
     .option("--ttl <duration>", "Crabbox maximum lease lifetime")
     .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
+    .option("--no-keep-lease", "Stop a lease created by this run after a passing smoke")
     .option("--gateway-setup", "Start a persistent OpenClaw Slack gateway inside the VNC VM")
     .option("--slack-url <url>", "Slack web URL to open in the visible browser")
     .option("--slack-channel-id <id>", "Slack channel id for gateway setup allowlist")
