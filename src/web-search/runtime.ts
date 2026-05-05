@@ -359,6 +359,7 @@ function resolveWebSearchCandidates(
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   }).filter(Boolean);
+  const explicitProviderId = options?.providerId?.trim();
   if (providers.length === 0) {
     return [];
   }
@@ -377,7 +378,6 @@ function resolveWebSearchCandidates(
     ].filter((value): value is string => Boolean(value)),
   );
 
-  const explicitProviderId = options?.providerId?.trim();
   if (explicitProviderId && !providers.some((entry) => entry.id === explicitProviderId)) {
     throw new Error(`Unknown web_search provider "${explicitProviderId}".`);
   }
