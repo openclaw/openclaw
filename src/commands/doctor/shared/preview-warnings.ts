@@ -83,7 +83,7 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
 
 type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
 
-function resolveMessageToolAvailability(params: {
+export function resolveMessageToolAvailability(params: {
   globalTools?: ToolsConfig;
   agentTools?: AgentToolsConfig;
 }): boolean {
