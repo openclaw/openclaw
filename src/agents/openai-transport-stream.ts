@@ -491,6 +491,18 @@ async function processResponsesStream(
           partial: output,
         });
       }
+    } else if (type === "response.reasoning_text.done") {
+      // Some OpenAI-compatible providers (e.g. LM Studio) deliver reasoning as a
+      // single completed event instead of the standard output_item.added →
+      // reasoning_summary_text.delta → output_item.done sequence.
+      const text = stringifyUnknown(event.text);
+      if (text) {
+        const thinkingBlock: Record<string, unknown> = { type: "thinking", thinking: text };
+        output.content.unshift(thinkingBlock);
+        stream.push({ type: "thinking_start", contentIndex: 0, partial: output });
+        stream.push({ type: "thinking_delta", contentIndex: 0, delta: text, partial: output });
+        stream.push({ type: "thinking_end", contentIndex: 0, content: text, partial: output });
+      }
     } else if (type === "response.output_text.delta" || type === "response.refusal.delta") {
       if (currentItem?.type === "message" && currentBlock?.type === "text") {
         currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
