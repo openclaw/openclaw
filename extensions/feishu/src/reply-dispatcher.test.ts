@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
@@ -20,6 +23,8 @@ const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
 const removeTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => {}));
 const streamingInstances = vi.hoisted((): StreamingSessionStub[] => []);
+const getAgentScopedMediaLocalRootsMock = vi.hoisted(() => vi.fn(() => []));
+const getAgentScopedMediaLocalRootsForSourcesMock = vi.hoisted(() => vi.fn(() => []));
 const shouldSuppressFeishuTextForVoiceMediaMock = vi.hoisted(
   () => (params: { mediaUrl?: string; audioAsVoice?: boolean }) =>
     params.audioAsVoice === true || /\.(?:ogg|opus)(?:[?#]|$)/i.test(params.mediaUrl ?? ""),
@@ -72,6 +77,14 @@ vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,
   removeTypingIndicator: removeTypingIndicatorMock,
 }));
+vi.mock("./reply-dispatcher-runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./reply-dispatcher-runtime-api.js")>();
+  return {
+    ...original,
+    getAgentScopedMediaLocalRoots: getAgentScopedMediaLocalRootsMock,
+    getAgentScopedMediaLocalRootsForSources: getAgentScopedMediaLocalRootsForSourcesMock,
+  };
+});
 vi.mock("./streaming-card.js", () => {
   return {
     mergeStreamingText,
@@ -657,6 +670,124 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("uploads pure local document path replies as attachments", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-reply-"));
+    const file = path.join(dir, "report.pdf");
+    await fs.writeFile(file, "pdf-data");
+    getAgentScopedMediaLocalRootsForSourcesMock.mockReturnValue([dir]);
+    try {
+      const { options } = createDispatcherHarness();
+      await options.deliver({ text: file }, { kind: "final" });
+
+      expect(getAgentScopedMediaLocalRootsForSourcesMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mediaSources: [file],
+        }),
+      );
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "oc_chat",
+          mediaUrl: file,
+          mediaLocalRoots: [dir],
+        }),
+      );
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts embedded local document path replies and sends attachments", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-reply-"));
+    const file = path.join(dir, "report.pdf");
+    await fs.writeFile(file, "pdf-data");
+    getAgentScopedMediaLocalRootsForSourcesMock.mockReturnValue([dir]);
+    try {
+      const { options } = createDispatcherHarness();
+      await options.deliver({ text: `文件已生成：${file}` }, { kind: "final" });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "oc_chat",
+          text: "文件已生成",
+        }),
+      );
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "oc_chat",
+          mediaUrl: file,
+          mediaLocalRoots: [dir],
+        }),
+      );
+      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not close streaming cards with embedded local file paths", async () => {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: true,
+      },
+    });
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-reply-"));
+    const file = path.join(dir, "report.pdf");
+    await fs.writeFile(file, "pdf-data");
+    getAgentScopedMediaLocalRootsForSourcesMock.mockReturnValue([dir]);
+    try {
+      const { result, options } = createDispatcherHarness({
+        runtime: createRuntimeLogger(),
+      });
+
+      await options.onReplyStart?.();
+      result.replyOptions.onPartialReply?.({ text: `文件已生成：${file}` });
+      await options.deliver({ text: `文件已生成：${file}` }, { kind: "final" });
+      await options.onIdle?.();
+
+      expect(streamingInstances).toHaveLength(1);
+      expect(streamingInstances[0].close).toHaveBeenCalledWith("文件已生成", {
+        note: "Agent: agent",
+      });
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "oc_chat",
+          mediaUrl: file,
+          mediaLocalRoots: [dir],
+        }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses agent-scoped mediaLocalRoots with source expansion for media attachments", async () => {
+    getAgentScopedMediaLocalRootsForSourcesMock.mockReturnValue(["/local/path"]);
+    const { options } = createDispatcherHarness();
+    await options.deliver({ mediaUrl: "file:///local/path/a.png" }, { kind: "final" });
+
+    expect(getAgentScopedMediaLocalRootsForSourcesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaSources: ["file:///local/path/a.png"],
+      }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaUrl: "file:///local/path/a.png",
+        mediaLocalRoots: ["/local/path"],
+      }),
+    );
   });
 
   it("passes audioAsVoice to media attachments", async () => {

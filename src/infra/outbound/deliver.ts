@@ -145,6 +145,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
+  agentId?: string | null;
   gatewayClientScopes?: readonly string[];
 };
 
@@ -344,6 +345,7 @@ function createChannelOutboundContextBase(
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
+    agentId: params.agentId,
     gatewayClientScopes: params.gatewayClientScopes,
   };
 }
@@ -957,6 +959,7 @@ async function deliverOutboundPayloadsCore(
     forceDocument: params.forceDocument,
     silent: params.silent,
     mediaAccess,
+    agentId: params.session?.agentId ?? params.mirror?.agentId,
     gatewayClientScopes: params.gatewayClientScopes,
   });
   const configuredTextLimit = handler.chunker

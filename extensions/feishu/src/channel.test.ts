@@ -431,6 +431,7 @@ describe("feishuPlugin actions", () => {
       details: { messageId: "om_media", chatId: "oc_group_1" },
     });
 
+    const mediaReadFile = vi.fn();
     const result = await feishuPlugin.actions?.handleAction?.({
       action: "send",
       params: {
@@ -442,6 +443,7 @@ describe("feishuPlugin actions", () => {
       accountId: undefined,
       toolContext: {},
       mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
     } as never);
 
     expect(feishuOutboundSendMediaMock).toHaveBeenCalledWith({
@@ -451,6 +453,7 @@ describe("feishuPlugin actions", () => {
       mediaUrl: "/tmp/image.png",
       accountId: undefined,
       mediaLocalRoots: ["/tmp"],
+      mediaReadFile,
       replyToId: undefined,
     });
     expect(result?.details).toMatchObject({ messageId: "om_media" });

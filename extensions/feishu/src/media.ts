@@ -821,6 +821,7 @@ export async function sendMediaFeishu(params: {
   accountId?: string;
   /** Allowed roots for local path reads; required for local filePath to work. */
   mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
   /** When true, transcode compatible audio to Feishu native Ogg/Opus voice bubbles. */
   audioAsVoice?: boolean;
 }): Promise<SendMediaResult> {
@@ -834,6 +835,7 @@ export async function sendMediaFeishu(params: {
     replyInThread,
     accountId,
     mediaLocalRoots,
+    mediaReadFile,
     audioAsVoice,
   } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
@@ -854,6 +856,7 @@ export async function sendMediaFeishu(params: {
       maxBytes: mediaMaxBytes,
       optimizeImages: false,
       localRoots: mediaLocalRoots?.length ? mediaLocalRoots : undefined,
+      ...(mediaReadFile ? { readFile: mediaReadFile } : {}),
     });
     buffer = loaded.buffer;
     name = fileName ?? loaded.fileName ?? "file";

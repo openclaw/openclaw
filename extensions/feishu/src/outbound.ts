@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
@@ -18,15 +16,22 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
+import {
+  normalizePossibleLocalFilePath,
+  resolvePossibleLocalFileReplyParts,
+} from "./local-file-reply.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
-import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
+import {
+  chunkTextForOutbound,
+  getAgentScopedMediaLocalRootsForSources,
+  type ChannelOutboundAdapter,
+} from "./outbound-runtime-api.js";
 import {
   resolveFeishuCardTemplate,
   sendCardFeishu,
@@ -36,53 +41,6 @@ import {
 } from "./send.js";
 
 const RENDERED_FEISHU_CARD = Symbol("openclaw.renderedFeishuCard");
-
-function normalizePossibleLocalImagePath(text: string | undefined): string | null {
-  const raw = text?.trim();
-  if (!raw) {
-    return null;
-  }
-
-  // Only auto-convert when the message is a pure path-like payload.
-  // Avoid converting regular sentences that merely contain a path.
-  const hasWhitespace = /\s/.test(raw);
-  if (hasWhitespace) {
-    return null;
-  }
-
-  // Ignore links/data URLs; those should stay in normal mediaUrl/text paths.
-  if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) {
-    return null;
-  }
-
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(raw));
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
-  if (!isImageExt) {
-    return null;
-  }
-
-  if (!path.isAbsolute(raw)) {
-    return null;
-  }
-  if (!fs.existsSync(raw)) {
-    return null;
-  }
-
-  // Fix race condition: wrap statSync in try-catch to handle file deletion
-  // between existsSync and statSync
-  try {
-    if (!fs.statSync(raw).isFile()) {
-      return null;
-    }
-  } catch {
-    // File may have been deleted or became inaccessible between checks
-    return null;
-  }
-
-  return raw;
-}
 
 function shouldUseCard(text: string): boolean {
   return /```[\s\S]*?```/.test(text) || /\|.+\|[\r\n]+\|[-:| ]+\|/.test(text);
@@ -126,6 +84,33 @@ function markRenderedFeishuCard(card: Record<string, unknown>): Record<string, u
     enumerable: false,
   });
   return card;
+}
+
+function mergeMediaLocalRoots(
+  current: readonly string[] | undefined,
+  next: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (!current?.length) {
+    return next?.length ? next : current;
+  }
+  if (!next?.length) {
+    return current;
+  }
+  return Array.from(new Set([...current, ...next]));
+}
+
+function resolveLocalReplyMediaRoots(params: {
+  cfg: Parameters<typeof getAgentScopedMediaLocalRootsForSources>[0]["cfg"];
+  agentId?: string | null;
+  mediaLocalRoots?: readonly string[];
+  filePath: string;
+}): readonly string[] | undefined {
+  const expandedRoots = getAgentScopedMediaLocalRootsForSources({
+    cfg: params.cfg,
+    agentId: params.agentId ?? undefined,
+    mediaSources: [params.filePath],
+  });
+  return mergeMediaLocalRoots(params.mediaLocalRoots, expandedRoots);
 }
 
 function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown> | undefined {
@@ -500,37 +485,56 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   },
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {
+    const payloadMediaUrls = resolvePayloadMediaUrls(ctx.payload)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    const ctxWithPayloadMediaRoots =
+      payloadMediaUrls.length > 0
+        ? {
+            ...ctx,
+            mediaLocalRoots: mergeMediaLocalRoots(
+              ctx.mediaLocalRoots,
+              getAgentScopedMediaLocalRootsForSources({
+                cfg: ctx.cfg,
+                agentId: ctx.agentId ?? undefined,
+                mediaSources: payloadMediaUrls,
+              }),
+            ),
+          }
+        : ctx;
     const card = buildFeishuPayloadCard({
-      payload: ctx.payload,
-      text: ctx.text,
-      identity: ctx.identity,
+      payload: ctxWithPayloadMediaRoots.payload,
+      text: ctxWithPayloadMediaRoots.text,
+      identity: ctxWithPayloadMediaRoots.identity,
     });
     if (!card) {
       return await sendTextMediaPayload({
         channel: "feishu",
-        ctx,
+        ctx: ctxWithPayloadMediaRoots,
         adapter: feishuOutbound,
       });
     }
 
     const replyToMessageId = resolveReplyToMessageId({
-      replyToId: ctx.replyToId,
-      threadId: ctx.threadId,
+      replyToId: ctxWithPayloadMediaRoots.replyToId,
+      threadId: ctxWithPayloadMediaRoots.threadId,
     });
-    const commentTarget = parseFeishuCommentTarget(ctx.to);
+    const commentTarget = parseFeishuCommentTarget(ctxWithPayloadMediaRoots.to);
     if (commentTarget) {
       return await sendTextMediaPayload({
         channel: "feishu",
         ctx: {
-          ...ctx,
+          ...ctxWithPayloadMediaRoots,
           payload: {
-            ...ctx.payload,
+            ...ctxWithPayloadMediaRoots.payload,
             text: renderMessagePresentationFallbackText({
-              text: ctx.payload.text,
+              text: ctxWithPayloadMediaRoots.payload.text,
               presentation:
-                normalizeMessagePresentation(ctx.payload.presentation) ??
+                normalizeMessagePresentation(ctxWithPayloadMediaRoots.payload.presentation) ??
                 (() => {
-                  const interactive = normalizeInteractiveReply(ctx.payload.interactive);
+                  const interactive = normalizeInteractiveReply(
+                    ctxWithPayloadMediaRoots.payload.interactive,
+                  );
                   return interactive ? interactiveReplyToPresentation(interactive) : undefined;
                 })(),
             }),
@@ -543,34 +547,34 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       });
     }
 
-    const mediaUrls = resolvePayloadMediaUrls(ctx.payload)
-      .map((entry) => entry.trim())
-      .filter(Boolean);
     return attachChannelToResult(
       "feishu",
       await sendPayloadMediaSequenceAndFinalize({
-        text: ctx.payload.text ?? "",
-        mediaUrls,
+        text: ctxWithPayloadMediaRoots.payload.text ?? "",
+        mediaUrls: payloadMediaUrls,
         send: async ({ mediaUrl }) =>
           await sendMediaFeishu({
-            cfg: ctx.cfg,
-            to: ctx.to,
+            cfg: ctxWithPayloadMediaRoots.cfg,
+            to: ctxWithPayloadMediaRoots.to,
             mediaUrl,
-            accountId: ctx.accountId ?? undefined,
-            mediaLocalRoots: ctx.mediaLocalRoots,
+            accountId: ctxWithPayloadMediaRoots.accountId ?? undefined,
+            mediaLocalRoots: ctxWithPayloadMediaRoots.mediaLocalRoots,
+            mediaReadFile: ctxWithPayloadMediaRoots.mediaReadFile,
             replyToMessageId,
-            ...(ctx.payload.audioAsVoice === true || ctx.audioAsVoice === true
+            ...(ctxWithPayloadMediaRoots.payload.audioAsVoice === true ||
+            ctxWithPayloadMediaRoots.audioAsVoice === true
               ? { audioAsVoice: true }
               : {}),
           }),
         finalize: async () =>
           await sendCardFeishu({
-            cfg: ctx.cfg,
-            to: ctx.to,
+            cfg: ctxWithPayloadMediaRoots.cfg,
+            to: ctxWithPayloadMediaRoots.to,
             card,
             replyToMessageId,
-            replyInThread: ctx.threadId != null && !ctx.replyToId,
-            accountId: ctx.accountId ?? undefined,
+            replyInThread:
+              ctxWithPayloadMediaRoots.threadId != null && !ctxWithPayloadMediaRoots.replyToId,
+            accountId: ctxWithPayloadMediaRoots.accountId ?? undefined,
           }),
       }),
     );
@@ -585,25 +589,65 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       mediaLocalRoots,
+      mediaReadFile,
       identity,
+      agentId,
     }) => {
       const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
-      // Scheme A compatibility shim:
-      // when upstream accidentally returns a local image path as plain text,
-      // auto-upload and send as Feishu image message instead of leaking path text.
-      const localImagePath = normalizePossibleLocalImagePath(text);
-      if (localImagePath) {
+      // Scheme A compatibility shim: when upstream accidentally returns a local
+      // file path as plain text, upload it instead of leaking path text.
+      const localFilePath = normalizePossibleLocalFilePath(text);
+      if (localFilePath) {
         try {
+          const effectiveMediaLocalRoots = resolveLocalReplyMediaRoots({
+            cfg,
+            agentId,
+            mediaLocalRoots,
+            filePath: localFilePath,
+          });
           return await sendMediaFeishu({
             cfg,
             to,
-            mediaUrl: localImagePath,
+            mediaUrl: localFilePath,
             accountId: accountId ?? undefined,
             replyToMessageId,
-            mediaLocalRoots,
+            mediaLocalRoots: effectiveMediaLocalRoots,
+            mediaReadFile,
           });
         } catch (err) {
-          console.error(`[feishu] local image path auto-send failed:`, err);
+          console.error(`[feishu] local file path auto-send failed:`, err);
+          // fall through to plain text as last resort
+        }
+      }
+      const localFileReply = resolvePossibleLocalFileReplyParts(text);
+      if (localFileReply) {
+        try {
+          const effectiveMediaLocalRoots = resolveLocalReplyMediaRoots({
+            cfg,
+            agentId,
+            mediaLocalRoots,
+            filePath: localFileReply.filePath,
+          });
+          if (localFileReply.text) {
+            await sendOutboundText({
+              cfg,
+              to,
+              text: localFileReply.text,
+              accountId: accountId ?? undefined,
+              replyToMessageId,
+            });
+          }
+          return await sendMediaFeishu({
+            cfg,
+            to,
+            mediaUrl: localFileReply.filePath,
+            accountId: accountId ?? undefined,
+            replyToMessageId,
+            mediaLocalRoots: effectiveMediaLocalRoots,
+            mediaReadFile,
+          });
+        } catch (err) {
+          console.error(`[feishu] embedded local file path auto-send failed:`, err);
           // fall through to plain text as last resort
         }
       }
@@ -656,6 +700,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       audioAsVoice,
       accountId,
       mediaLocalRoots,
+      mediaReadFile,
       replyToId,
       threadId,
     }) => {
@@ -680,6 +725,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
 
       // Send text first if provided, except for Feishu native voice bubbles.
+      let sentTextBeforeMedia = false;
       if (text?.trim() && !suppressTextForVoiceMedia) {
         await sendOutboundText({
           cfg,
@@ -688,6 +734,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           accountId: accountId ?? undefined,
           replyToMessageId,
         });
+        sentTextBeforeMedia = true;
       }
 
       // Upload and send media if URL or local path provided
@@ -699,6 +746,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
             mediaUrl,
             accountId: accountId ?? undefined,
             mediaLocalRoots,
+            mediaReadFile,
             replyToMessageId,
             ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
           });
@@ -716,7 +764,9 @@ export const feishuOutbound: ChannelOutboundAdapter = {
           // Log the error for debugging
           console.error(`[feishu] sendMediaFeishu failed:`, err);
           // Fallback to URL link if upload fails
-          const fallbackText = [text?.trim(), `📎 ${mediaUrl}`].filter(Boolean).join("\n\n");
+          const fallbackText = [sentTextBeforeMedia ? undefined : text?.trim(), `📎 ${mediaUrl}`]
+            .filter(Boolean)
+            .join("\n\n");
           return await sendOutboundText({
             cfg,
             to,

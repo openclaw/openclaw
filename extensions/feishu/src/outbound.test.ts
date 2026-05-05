@@ -94,7 +94,7 @@ function resetOutboundMocks() {
   cleanupAmbientCommentTypingReactionMock.mockResolvedValue(false);
 }
 
-describe("feishuOutbound.sendText local-image auto-convert", () => {
+describe("feishuOutbound.sendText local-file auto-convert", () => {
   beforeEach(() => {
     resetOutboundMocks();
   });
@@ -109,15 +109,18 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
-  async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
+  async function createTmpFile(
+    ext = ".png",
+    content = "file-data",
+  ): Promise<{ dir: string; file: string }> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
     const file = path.join(dir, `sample${ext}`);
-    await fs.writeFile(file, "image-data");
+    await fs.writeFile(file, content);
     return { dir, file };
   }
 
   it("sends an absolute existing local image path as media", async () => {
-    const { dir, file } = await createTmpImage();
+    const { dir, file } = await createTmpFile(".png", "image-data");
     try {
       const result = await sendText({
         cfg: emptyConfig,
@@ -132,12 +135,98 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
           to: "chat_1",
           mediaUrl: file,
           accountId: "main",
-          mediaLocalRoots: [dir],
+          mediaLocalRoots: expect.arrayContaining([dir]),
         }),
       );
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       expect(result).toEqual(
         expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sends an absolute existing local document path as media", async () => {
+    const { dir, file } = await createTmpFile(".pdf", "pdf-data");
+    try {
+      const result = await sendText({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: file,
+        accountId: "main",
+        mediaLocalRoots: [dir],
+      });
+
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          accountId: "main",
+          mediaLocalRoots: expect.arrayContaining([dir]),
+        }),
+      );
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts an embedded local document path and sends it as media", async () => {
+    const { dir, file } = await createTmpFile(".pdf", "pdf-data");
+    try {
+      const result = await sendText({
+        cfg: emptyConfig,
+        to: "chat_1",
+        text: `文件已生成：${file}`,
+        accountId: "main",
+        mediaLocalRoots: [dir],
+      });
+
+      expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          text: "文件已生成",
+          accountId: "main",
+        }),
+      );
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          accountId: "main",
+          mediaLocalRoots: expect.arrayContaining([dir]),
+        }),
+      );
+      expect(result).toEqual(
+        expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands media roots for local file paths discovered in text replies", async () => {
+    const { dir, file } = await createTmpFile(".md", "chapter text");
+    try {
+      await sendText({
+        cfg: { tools: { profile: "coding" } } as ClawdbotConfig,
+        to: "chat_1",
+        text: `小说文本已生成好了。\n📎 ${file}`,
+        accountId: "main",
+        agentId: "main",
+        mediaLocalRoots: ["/already-allowed"],
+      });
+
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          mediaLocalRoots: expect.arrayContaining(["/already-allowed", dir]),
+        }),
       );
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -163,7 +252,7 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
   });
 
   it("falls back to plain text if local-image media send fails", async () => {
-    const { dir, file } = await createTmpImage();
+    const { dir, file } = await createTmpFile(".png", "image-data");
     sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
     try {
       await sendText({
@@ -534,7 +623,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
       expect.objectContaining({
         to: "chat_1",
         mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp"],
+        mediaLocalRoots: expect.arrayContaining(["/tmp"]),
         accountId: "main",
       }),
     );
@@ -566,13 +655,40 @@ describe("feishuOutbound.sendPayload native cards", () => {
         expect.objectContaining({
           to: "chat_1",
           mediaUrl: file,
-          mediaLocalRoots: [dir],
+          mediaLocalRoots: expect.arrayContaining([dir]),
           accountId: "main",
         }),
       );
       expect(sendMessageFeishuMock).not.toHaveBeenCalled();
       expect(result).toEqual(
         expect.objectContaining({ channel: "feishu", messageId: "media_msg" }),
+      );
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("expands media roots for non-card payload media urls", async () => {
+    const { dir, file } = await createTmpImage(".md");
+    try {
+      await feishuOutbound.sendPayload?.({
+        cfg: { tools: { profile: "coding" } } as ClawdbotConfig,
+        to: "chat_1",
+        text: "小说文本已生成好了。",
+        mediaUrl: file,
+        accountId: "main",
+        agentId: "main",
+        payload: { text: "小说文本已生成好了。", mediaUrl: file },
+      });
+
+      expect(sendCardFeishuMock).not.toHaveBeenCalled();
+      expect(sendMediaFeishuMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to: "chat_1",
+          mediaUrl: file,
+          mediaLocalRoots: expect.arrayContaining([dir]),
+          accountId: "main",
+        }),
       );
     } finally {
       await fs.rm(dir, { recursive: true, force: true });
@@ -963,6 +1079,32 @@ describe("feishuOutbound.sendMedia replyToId forwarding", () => {
     expect(sendMessageFeishuMock).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "spoken reply\n\n📎 https://example.com/reply.mp3",
+      }),
+    );
+  });
+
+  it("does not repeat a caption that was already sent before upload fallback", async () => {
+    sendMediaFeishuMock.mockRejectedValueOnce(new Error("upload failed"));
+
+    await feishuOutbound.sendMedia?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: "视频已生成好了。",
+      mediaUrl: "/tmp/generated.mp4",
+      accountId: "main",
+    });
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        text: "视频已生成好了。",
+      }),
+    );
+    expect(sendMessageFeishuMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "📎 /tmp/generated.mp4",
       }),
     );
   });
