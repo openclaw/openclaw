@@ -852,12 +852,14 @@ function buildChatSendTranscriptMessage(params: {
   message: string;
   savedImages: SavedMedia[];
   timestamp: number;
+  clientRunId?: string;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
   return {
     role: "user" as const,
     content: params.message,
     timestamp: params.timestamp,
+    ...(params.clientRunId ? { idempotencyKey: params.clientRunId } : {}),
     ...mediaFields,
   };
 }
@@ -1024,14 +1026,41 @@ function normalizePendingComparableUserText(text: string | undefined): string | 
   return stripInboundMetadata(text).replace(/\s+/g, " ").trim();
 }
 
+function normalizePendingRunIdentity(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function extractPendingRunIdentity(message: Record<string, unknown>): string | undefined {
+  const openclawMeta =
+    message.__openclaw &&
+    typeof message.__openclaw === "object" &&
+    !Array.isArray(message.__openclaw)
+      ? (message.__openclaw as Record<string, unknown>)
+      : undefined;
+  return (
+    normalizePendingRunIdentity(message.idempotencyKey) ??
+    normalizePendingRunIdentity(message.clientRunId) ??
+    normalizePendingRunIdentity(message.messageId) ??
+    normalizePendingRunIdentity(message.runId) ??
+    normalizePendingRunIdentity(openclawMeta?.id)
+  );
+}
+
 function chatHistoryMessageMatchesPending(
   message: unknown,
-  pendingMessage: Record<string, unknown>,
+  pendingEntry: { clientRunId?: string; message: Record<string, unknown> },
 ): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
   const entry = message as Record<string, unknown>;
+  const pendingMessage = pendingEntry.message;
+  const pendingRunId =
+    normalizePendingRunIdentity(pendingEntry.clientRunId) ??
+    extractPendingRunIdentity(pendingMessage);
+  if (pendingRunId) {
+    return extractPendingRunIdentity(entry) === pendingRunId;
+  }
   if (entry.role !== pendingMessage.role) {
     return false;
   }
@@ -1064,9 +1093,7 @@ function appendPendingChatHistoryMessages(params: {
     if (entry.sessionKey !== params.sessionKey) {
       continue;
     }
-    if (
-      params.rawMessages.some((message) => chatHistoryMessageMatchesPending(message, entry.message))
-    ) {
+    if (params.rawMessages.some((message) => chatHistoryMessageMatchesPending(message, entry))) {
       continue;
     }
     pendingMessages.push(entry.message);
@@ -1860,12 +1887,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const { sessionKey, limit, maxChars } = params as {
+    const {
+      sessionKey: rawSessionKey,
+      limit,
+      maxChars,
+    } = params as {
       sessionKey: string;
       limit?: number;
       maxChars?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
@@ -1932,7 +1963,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
     respond(true, {
-      sessionKey,
+      sessionKey: rawSessionKey,
       sessionId,
       messages: bounded.messages,
       thinkingLevel,
@@ -2351,6 +2382,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           message: parsedMessage,
           savedImages: [],
           timestamp: now,
+          clientRunId,
         }),
         ts: now,
       });
@@ -2481,6 +2513,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 message: parsedMessage,
                 savedImages: persistedImages,
                 timestamp: now,
+                clientRunId,
               });
               context.chatPendingUserMessages?.set(clientRunId, {
                 sessionKey,
