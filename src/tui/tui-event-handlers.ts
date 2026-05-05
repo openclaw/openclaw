@@ -1,4 +1,10 @@
 import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+import {
+  normalizeLiveAssistantEventText,
+  projectLiveAssistantBufferedText,
+  resolveMergedAssistantText,
+  shouldSuppressAssistantEventForLiveChat,
+} from "../gateway/live-chat-projector.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -73,6 +79,7 @@ export function createEventHandlers(context: EventHandlerContext) {
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
   let streamAssembler = new TuiStreamAssembler();
+  let assistantProgressBuffers = new Map<string, string>();
   let lastSessionKey = state.currentSessionKey;
   let pendingHistoryRefresh = false;
   let reconnectPendingRunId: string | null = null;
@@ -171,6 +178,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.clear();
     sessionRuns.clear();
     streamAssembler = new TuiStreamAssembler();
+    assistantProgressBuffers = new Map<string, string>();
     pendingHistoryRefresh = false;
     state.pendingOptimisticUserMessage = false;
     state.pendingChatRunId = null;
@@ -200,6 +208,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizedRuns.set(runId, Date.now());
     sessionRuns.delete(runId);
     streamAssembler.drop(runId);
+    assistantProgressBuffers.delete(runId);
     pruneRunMap(finalizedRuns);
   };
 
@@ -270,6 +279,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     status: "aborted" | "error";
   }) => {
     streamAssembler.drop(params.runId);
+    assistantProgressBuffers.delete(params.runId);
     sessionRuns.delete(params.runId);
     clearActiveRunIfMatch(params.runId);
     flushPendingHistoryRefreshIfIdle();
@@ -340,6 +350,65 @@ export function createEventHandlers(context: EventHandlerContext) {
     return false;
   };
 
+  const noteRunActivity = (runId: string) => {
+    noteSessionRun(runId);
+    if (!state.activeChatRunId && !isLocalBtwRunId?.(runId)) {
+      state.activeChatRunId = runId;
+      if (state.pendingOptimisticUserMessage) {
+        noteLocalRunId?.(runId);
+        state.pendingOptimisticUserMessage = false;
+      }
+    }
+    if (state.pendingChatRunId === runId) {
+      state.pendingChatRunId = null;
+    }
+  };
+
+  const renderAssistantProgressEvent = (evt: AgentEvent) => {
+    if (evt.stream !== "assistant" || typeof evt.data?.text !== "string") {
+      return false;
+    }
+    if (!shouldSuppressAssistantEventForLiveChat(evt.data)) {
+      return false;
+    }
+    const cleaned = normalizeLiveAssistantEventText({
+      text: evt.data.text,
+      delta: evt.data.delta,
+    });
+    const mergedRawText = resolveMergedAssistantText({
+      previousText: assistantProgressBuffers.get(evt.runId) ?? "",
+      nextText: cleaned.text,
+      nextDelta: cleaned.delta,
+    });
+    if (!mergedRawText) {
+      return true;
+    }
+    assistantProgressBuffers.set(evt.runId, mergedRawText);
+    const projected = projectLiveAssistantBufferedText(mergedRawText, {
+      suppressLeadFragments: true,
+    });
+    const text = projected.text.trim();
+    if (!text || projected.suppress) {
+      return true;
+    }
+    noteRunActivity(evt.runId);
+    setActivityStatus("streaming");
+    armStreamingWatchdog(evt.runId);
+    const displayText = streamAssembler.ingestDelta(
+      evt.runId,
+      {
+        role: "assistant",
+        content: [{ type: "text", text }],
+      },
+      state.showThinking,
+    );
+    if (displayText) {
+      chatLog.updateAssistant(displayText, evt.runId);
+    }
+    tui.requestRender();
+    return true;
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {
       return;
@@ -361,17 +430,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
-    noteSessionRun(evt.runId);
-    if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
-      state.activeChatRunId = evt.runId;
-      if (state.pendingOptimisticUserMessage) {
-        noteLocalRunId?.(evt.runId);
-        state.pendingOptimisticUserMessage = false;
-      }
-    }
-    if (state.pendingChatRunId === evt.runId) {
-      state.pendingChatRunId = null;
-    }
+    noteRunActivity(evt.runId);
     if (evt.state === "delta") {
       // Arm watchdog and mark streaming on every delta, even when the visible
       // text hasn't changed yet (e.g. first commentary-only or tool-call delta).
@@ -471,8 +530,13 @@ export function createEventHandlers(context: EventHandlerContext) {
     // active chat run id, not the session id. Tool results can arrive after the chat
     // final event, so accept finalized runs for tool updates.
     const isActiveRun = evt.runId === state.activeChatRunId;
-    const isKnownRun = isActiveRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
+    const isPendingRun = evt.runId === state.pendingChatRunId;
+    const isKnownRun =
+      isActiveRun || isPendingRun || sessionRuns.has(evt.runId) || finalizedRuns.has(evt.runId);
     if (!isKnownRun) {
+      return;
+    }
+    if (renderAssistantProgressEvent(evt)) {
       return;
     }
     if (evt.stream === "tool") {
