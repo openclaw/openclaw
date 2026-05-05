@@ -834,10 +834,13 @@ async function readPhaseSignalStore(
     return normalizePhaseSignalStore(JSON.parse(raw) as unknown, nowIso);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
+    if (code === "ENOENT") {
       return emptyPhaseSignalStore(nowIso);
     }
-    return emptyPhaseSignalStore(nowIso);
+    if (err instanceof SyntaxError) {
+      return emptyPhaseSignalStore(nowIso);
+    }
+    throw err;
   }
 }
 
