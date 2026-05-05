@@ -139,6 +139,17 @@ function resolveTsxImportSpecifier(): string {
   }
 }
 
+// Shell-quote a single argument so it survives command-line parsing as one token.
+// Wraps in single quotes and escapes embedded single quotes by ending the quoted
+// segment, inserting an escaped quote, and resuming the quoted segment.
+function shellQuote(arg: string): string {
+  if (!/[\s'"\\$|&;<>{}()*?\[\]~`]/.test(arg)) {
+    return arg;
+  }
+  const escaped = arg.replace(/'/g, "'\"'\"'");
+  return `'${escaped}'`;
+}
+
 function resolvePluginToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
@@ -241,7 +252,7 @@ export function resolveAcpxPluginConfig(params: {
     Object.entries(normalized.agents ?? {}).map(([name, entry]) => {
       const cmd = entry.command.trim();
       const cmdArgs = entry.args ?? [];
-      const fullCommand = cmdArgs.length > 0 ? `${cmd} ${cmdArgs.join(" ")}` : cmd;
+      const fullCommand = cmdArgs.length > 0 ? `${cmd} ${cmdArgs.map(shellQuote).join(" ")}` : cmd;
       return [normalizeLowercaseStringOrEmpty(name), fullCommand];
     }),
   );
