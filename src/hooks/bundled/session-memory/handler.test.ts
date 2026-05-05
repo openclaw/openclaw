@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { SESSION_SUMMARY_DAILY_MEMORY_SENTINEL } from "../../../memory-host-sdk/runtime-files.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import {
@@ -268,7 +269,7 @@ describe("session-memory hook", () => {
       },
       async () => {
         const { files } = await runNewWithPreviousSession({ sessionContent });
-        expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
+        expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{6}(?:-u\d{6})?\.md$/);
       },
     );
 
@@ -424,9 +425,18 @@ describe("session-memory hook", () => {
     await withEnvAsync({ TZ: "UTC" }, async () => {
       const tempDir = await createCaseWorkspace("workspace");
       const timestamp = new Date("2026-01-01T04:30:15.000Z");
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: tempDir,
+            userTimezone: "UTC",
+          },
+        },
+      } satisfies OpenClawConfig;
 
       await runNewWithPreviousSessionEntry({
         tempDir,
+        cfg,
         timestamp,
         previousSessionEntry: {
           sessionId: "first-session",
@@ -434,6 +444,7 @@ describe("session-memory hook", () => {
       });
       await runNewWithPreviousSessionEntry({
         tempDir,
+        cfg,
         timestamp,
         previousSessionEntry: {
           sessionId: "second-session",
@@ -443,14 +454,14 @@ describe("session-memory hook", () => {
       const memoryDir = path.join(tempDir, "memory");
       const files = await fs.readdir(memoryDir);
       expect(files).toHaveLength(2);
-      expect(files).toContain("2026-01-01-0430.md");
-      expect(files).toContain("2026-01-01-0430-2.md");
+      expect(files).toContain("2026-01-01-043015.md");
+      expect(files).toContain("2026-01-01-043015-2.md");
 
       await expect(
-        fs.readFile(path.join(memoryDir, "2026-01-01-0430.md"), "utf-8"),
+        fs.readFile(path.join(memoryDir, "2026-01-01-043015.md"), "utf-8"),
       ).resolves.toContain("- **Session ID**: first-session");
       await expect(
-        fs.readFile(path.join(memoryDir, "2026-01-01-0430-2.md"), "utf-8"),
+        fs.readFile(path.join(memoryDir, "2026-01-01-043015-2.md"), "utf-8"),
       ).resolves.toContain("- **Session ID**: second-session");
     });
   });
