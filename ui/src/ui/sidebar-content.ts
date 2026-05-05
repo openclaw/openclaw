@@ -13,4 +13,16 @@ export type CanvasSidebarContent = {
   rawText?: string | null;
 };
 
-export type SidebarContent = MarkdownSidebarContent | CanvasSidebarContent;
+export type ToolSidebarContent = {
+  kind: "tool";
+  toolName: string;
+  toolLabel: string;
+  detail?: string;
+  inputText?: string;
+  inputIsJson?: boolean;
+  outputText?: string;
+  outputIsJson?: boolean;
+  rawText?: string | null;
+};
+
+export type SidebarContent = MarkdownSidebarContent | CanvasSidebarContent | ToolSidebarContent;
