@@ -1499,6 +1499,7 @@
                     "pages": [
                       "gateway/security/index",
                       "gateway/security/audit-checks",
+                      "gateway/security/exposure-runbook",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
