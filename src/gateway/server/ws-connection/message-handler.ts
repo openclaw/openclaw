@@ -54,7 +54,10 @@ import {
   isWebchatClient,
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+  type AuthRateLimiter,
+} from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
 import {
@@ -743,6 +746,47 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
             close(1008, message);
           };
+          // Per-IP gate on the pre-auth crypto path. deriveDeviceIdFromPublicKey
+          // and resolveDeviceSignaturePayloadVersion both call createPublicKey
+          // and crypto.verify, which an unauthenticated attacker can otherwise
+          // trigger on every handshake. The check runs *before* any crypto so
+          // a locked-out IP cannot pay the key-parse cost via PEM input. The
+          // attempt is recorded as a failure pessimistically before crypto
+          // runs; reset only fires after resolveConnectAuthDecision confirms
+          // the full handshake is authorized, so an attacker with their own
+          // keypair producing valid self-signatures still consumes the bucket.
+          if (authRateLimiter) {
+            const signatureRateCheck = authRateLimiter.check(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+            );
+            if (!signatureRateCheck.allowed) {
+              setHandshakeState("failed");
+              setCloseCause("device-auth-invalid", {
+                reason: "device-signature-rate-limited",
+                client: connectParams.client.id,
+                deviceId: device.id,
+              });
+              send({
+                type: "res",
+                id: frame.id,
+                ok: false,
+                error: errorShape(ErrorCodes.INVALID_REQUEST, "device signature rate-limited", {
+                  details: {
+                    code: resolveDeviceAuthConnectErrorDetailCode("device-signature"),
+                    reason: "device-signature-rate-limited",
+                    retryAfterMs: signatureRateCheck.retryAfterMs,
+                  },
+                }),
+              });
+              close(1008, "device signature rate-limited");
+              return;
+            }
+            authRateLimiter.recordFailure(
+              browserRateLimitClientIp,
+              AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE,
+            );
+          }
           const derivedId = deriveDeviceIdFromPublicKey(device.publicKey);
           if (!derivedId || derivedId !== device.id) {
             rejectDeviceAuthInvalid("device-id-mismatch", "device identity mismatch");
@@ -836,6 +880,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (!authOk) {
           rejectUnauthorized(authResult);
           return;
+        }
+        if (device) {
+          authRateLimiter?.reset(browserRateLimitClientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_SIGNATURE);
         }
         if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
           const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
