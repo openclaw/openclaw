@@ -241,10 +241,10 @@ to stop the run before the model can read the prompt. `reason` is internal;
 `message` is the user-facing replacement. The only supported outcomes are
 `pass` and `block`; unsupported decision shapes fail closed.
 
-When a run is blocked, OpenClaw stores only the replacement in model-visible
-`message.content`. The human's original text is kept in blocked-content
-metadata for authorized admin or transcript-secret history viewers so clients can show what
-the user typed with an "agent cannot read" notice.
+When a run is blocked, OpenClaw stores only the replacement text in
+`message.content` plus non-sensitive block metadata such as the blocking plugin,
+reason, and timestamp. The original user text is not retained in transcript or
+history metadata.
 
 `before_agent_start` and `agent_end` include `event.runId` when OpenClaw can
 identify the active run. The same value is also available on `ctx.runId`.

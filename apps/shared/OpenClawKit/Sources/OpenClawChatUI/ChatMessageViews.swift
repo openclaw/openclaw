@@ -202,13 +202,6 @@ private struct ChatMessageBody: View {
                     variant: self.markdownVariant,
                     font: .system(size: 14),
                     textColor: textColor)
-                if self.isBlockedUserMessage {
-                    Divider()
-                        .overlay(OpenClawChatTheme.userText.opacity(0.18))
-                    Text("The agent cannot read this message.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(OpenClawChatTheme.userText.opacity(0.68))
-                }
             } else {
                 ChatAssistantTextBody(
                     text: text,

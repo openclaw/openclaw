@@ -56,7 +56,20 @@ private data class ChatBubbleStyle(
 fun ChatMessageBubble(message: ChatMessage) {
   val role = message.role.trim().lowercase(Locale.US)
   val style = bubbleStyle(role)
-  val displayContent =
+
+  // Filter to only displayable content parts (text with content, or base64 images).
+  val displayableContent =
+    message.content.filter { part ->
+      when (part.type) {
+        "text" -> !part.text.isNullOrBlank()
+        else -> part.base64 != null
+      }
+    }
+
+  if (displayableContent.isEmpty()) return
+
+  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+    ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
 }
 

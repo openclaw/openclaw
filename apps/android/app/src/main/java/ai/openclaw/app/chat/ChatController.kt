@@ -650,7 +650,7 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
       ).joinToString(separator = "\u001F")
     }
   if (timestamp.isEmpty() && contentFingerprint.isEmpty()) return null
-  return listOf(role, timestamp, contentFingerprint, blockedFingerprint).joinToString(separator = "|")
+  return listOf(role, timestamp, contentFingerprint).joinToString(separator = "|")
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject

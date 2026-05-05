@@ -11,12 +11,15 @@ private func chatTextMessage(role: String, text: String, timestamp: Double) -> A
     ])
 }
 
-private func chatBlockedUserMessage(redactedText: String, originalText: String, timestamp: Double) -> AnyCodable {
+private func chatBlockedUserMessage(redactedText: String, originalText _: String, timestamp: Double) -> AnyCodable {
     AnyCodable([
         "role": "user",
         "content": [["type": "text", "text": redactedText]],
         "__openclaw": [
-                "content": [["type": "text", "text": originalText]],
+            "beforeAgentRunBlocked": [
+                "blockedBy": "hitl-test",
+                "reason": "blocked",
+                "blockedAt": timestamp,
             ],
         ],
         "timestamp": timestamp,
@@ -628,8 +631,7 @@ extension TestChatTransportState {
                 let userMessages = vm.messages.filter { message in
                     message.role == "user" &&
                         message.content.compactMap(\.text).joined(separator: "\n") ==
-                        "The agent cannot read this message." &&
-                        "hello from mac webchat"
+                        "The agent cannot read this message."
                 }
                 let hasAssistant = vm.messages.contains { message in
                     message.role == "assistant" &&
