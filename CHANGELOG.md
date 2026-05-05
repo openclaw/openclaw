@@ -1144,6 +1144,49 @@ Docs: https://docs.openclaw.ai
 - Mattermost: refresh current native slash command registrations before accepting callbacks so stale tokens from deleted or regenerated commands stop being accepted without a gateway restart while failed validations stay briefly cached and lookup starts are rate-limited per command, gate each callback against the resolved command's own startup token so a token leaked for one slash command cannot poison another command's failure cache, redact slash validation lookup errors, and add a body read timeout to the multi-account routing path so slow callback senders cannot tie up the dispatcher. Thanks @feynman-hou and @eleqtrizit.
 - Security/dotenv: block `COMSPEC` in workspace `.env` so a malicious repo cannot redirect Windows `cmd.exe` resolution, and lock in case-insensitive workspace-`.env` regression coverage for the full Windows shell trust-root family (`COMSPEC`, `PROGRAMFILES`, `PROGRAMW6432`, `SYSTEMROOT`, `WINDIR`). (#74460) Thanks @mmaps.
 - Gateway/install: drop stale version-manager and package-manager PATH entries preserved from old service files during `gateway install --force` and doctor repair, so the repair path no longer recreates `gateway-path-nonminimal` warnings. Fixes #75220. (#75440) Thanks @leonaIee, @renaudcerrato, and @aaajiao.
+
+## 2026.4.29
+
+### Highlights
+
+- Messaging and automation get active-run steering by default, visible-reply enforcement, spawned subagent routing metadata, and opt-in follow-up commitments for heartbeat-delivered reminders. Thanks @vincentkoc, @scoootscooob, @samzong, and @vignesh07.
+- Memory grows into a people-aware wiki with provenance views, per-conversation Active Memory filters, partial recall on timeout, and bounded REM preview diagnostics. Thanks @vincentkoc, @quengh, @joeykrug, and @samzong.
+- Provider/model coverage expands with NVIDIA onboarding/catalogs plus faster manifest-backed model/auth paths, Bedrock Opus 4.7 thinking parity, and safer Codex/OpenAI-compatible replay and streaming behavior. Thanks @eleqtrizit, @shakkernerd, @prasad-yashdeep, @woodhouse-bot, and @LyHug.
+- Gateway and packaged-plugin reliability focuses on slow-host startup, reusable model catalogs, event-loop readiness diagnostics, runtime-dependency repair, stale-session recovery, and version-scoped update caches. Thanks @lpendeavors, @DerFlash, @vincentkoc, @pashpashpash, and @jhsmith409.
+- Channel fixes cluster around Slack Block Kit limits, Telegram proxy/webhook/polling/send resilience, Discord startup/rate-limit handling, WhatsApp delivery/liveness, and Microsoft Teams/Matrix/Feishu edge cases. Thanks @slackapi, @SymbolStar, @djgeorg3, @TinyTb, @dseravalli, @nklock, and @alex-xuweilong.
+- Security and operations add OpenGrep scanning, sharper GHSA triage policy, safer exec/pairing/owner-scope handling, Docker/onboarding automation, and web-fetch IPv6 ULA opt-in for trusted proxy stacks. Thanks @jesse-merhi, @pgondhi987, @mmaps, @jinjimz, and @jeffrey701.
+
+### Changes
+
+- Security/tools: configured tool sections (`tools.exec`, `tools.fs`) no longer implicitly widen restrictive profiles (`messaging`, `minimal`). Users who need those tools under a restricted profile must add explicit `alsoAllow` entries; a startup warning identifies affected configs. Fixes #47487. Thanks @amknight.
+- Gateway/SDK: add SDK-facing artifact list/get/download RPCs and App SDK helpers with transcript provenance and download-source guardrails. Refs #74706. Thanks @tmimmanuel.
+- Agents/commitments: add opt-in inferred follow-up commitments with hidden batched extraction, per-agent/per-channel scoping, heartbeat delivery, CLI management, a simple `commitments.enabled`/`commitments.maxPerDay` config, and heartbeat-interval due-time clamping so magical check-ins do not echo immediately. (#74189) Thanks @vignesh07.
+- Messages/queue: make `steer` drain all pending Pi steering messages at the next model boundary, keep legacy one-at-a-time steering as `queue`, and add a dedicated steering queue docs page. Thanks @vincentkoc.
+- Messages/queue: default active-run queueing to `steer` with a 500ms followup fallback debounce, and document the queue modes, precedence, and drop policies on the command queue page. Thanks @vincentkoc.
+- Messages: add global `messages.visibleReplies` so operators can require visible output to go through `message(action=send)` for any source chat, while `messages.groupChat.visibleReplies` stays available as the group/channel override. Thanks @scoootscooob.
+- Gateway/events: surface `spawnedBy` on subagent chat and agent broadcast payloads so clients can route child session events without an extra session lookup. (#63244) Thanks @samzong.
+- Gateway/SDK: add read-only `environments.list` and `environments.status` RPCs so app clients can discover Gateway-local and node environment candidates without enabling provisioning. (#74708) Thanks @BunsDev.
+- Memory/wiki: add agent-facing people wiki metadata, canonical aliases, person cards, relationship graphs, privacy/provenance reports, evidence-kind drilldown, and search modes for person lookup, question routing, source evidence, and raw claims. Thanks @vincentkoc.
+- Active Memory: add optional per-conversation `allowedChatIds` and `deniedChatIds` filters so operators can enable recall only for selected direct, group, or channel conversations while keeping broad sessions skipped. (#67977) Thanks @quengh.
+- Active Memory: return bounded partial recall summaries when the hidden memory sub-agent times out, including the default temporary-transcript path, so useful recovered context is not discarded. (#73219) Thanks @joeykrug.
+- Gateway/memory: add a read-only `doctor.memory.remHarness` RPC so operator clients can preview bounded REM dreaming output without running mutation paths. (#66673) Thanks @samzong.
+- Providers/NVIDIA: add the NVIDIA provider with API-key onboarding, setup docs, static catalog metadata, and literal model-ref picker support so NVIDIA hosted models can be selected with their provider prefix intact. (#71204) Thanks @eleqtrizit.
+- Models: suppress explicitly configured openai-codex/gpt-5.4-mini inline entries so a stale models config written by `openclaw doctor --fix` cannot bypass the manifest capability block and cause repeated assistant-turn failures when the runtime switches to that model on ChatGPT-backed Codex accounts. Conditional suppressions (e.g. qwen Coding Plan endpoint guards) remain bypassable by explicit user configuration. (#74451) Thanks @0xCyda, @hclsys, and @Marvae.
+- Added SQLite-backed plugin state store (`api.runtime.state.openKeyedStore`) for restart-safe keyed registries with TTL, eviction, and automatic plugin isolation. Thanks @amknight.
+- Plugin SDK: mark remaining legacy alias exports and diffs tool/config aliases with deprecation metadata, and add a guard so future legacy alias comments require `@deprecated` tags. Thanks @vincentkoc.
+- CLI/QR/dependencies: internalize small terminal progress and QR wrapper helpers while keeping the real QR encoder dependency direct, reducing the default runtime dependency graph without changing QR output behavior. Thanks @vincentkoc.
+- Dependencies: refresh workspace runtime, plugin, and tooling packages, including ACP, Pi, AWS SDK, TypeBox, pnpm, oxlint, oxfmt, jsdom, pdfjs, ciao, and tokenjuice, while keeping patched ACP behavior and lint gates current. Thanks @mariozechner.
+- Gateway/dev: run `pnpm gateway:watch` through a named tmux session by default, with `gateway:watch:raw` and `OPENCLAW_GATEWAY_WATCH_TMUX=0` for foreground mode, so repeated starts respawn an inspectable watcher without trapping the invoking agent shell. Thanks @vincentkoc.
+- Gateway/diagnostics: emit an opt-in startup diagnostics timeline that records gateway lifecycle and plugin-load phases behind a config flag, so slow-start diagnosis no longer requires bespoke instrumentation. Thanks @shakkernerd.
+- Control UI/i18n: extend the locale registry with new Persian (fa), Dutch (nl), Vietnamese (vi), Italian (it), Arabic (ar), and Thai (th) entries and ship `fa`, `nl`, `vi`, and `zh-TW` docs glossaries, so the docs translation pipeline and the Control UI language picker stay aligned across surfaces. Thanks @vincentkoc.
+- Channels: add Yuanbao channel docs entrance so the Tencent Yuanbao bot appears in the channel listing and sidebar navigation. (#73443) Thanks @loongfay.
+- Channels/Yuanbao: update plugin GitHub location to YuanbaoTeam/yuanbao-openclaw-plugin and add "yuanbao" alias to channel catalog. (#74253) Thanks @loongfay.
+- Docker setup: add `OPENCLAW_SKIP_ONBOARDING` so automated Docker installs can skip the interactive onboarding step while still applying gateway defaults. (#55518) Thanks @jinjimz.
+- Security policy: classify media/base64 decode and format-conversion overhead after configured acceptance limits as performance-only for GHSA triage unless a report demonstrates a limit bypass, crash, exhaustion, data exposure, or another boundary bypass. (#74311)
+- Security/OpenGrep: add a precise OpenGrep rulepack, source-rule compiler, provenance metadata check, and PR/full scan workflows that validate first-party code and rulepack-only changes while uploading SARIF to GitHub Code Scanning. (#69483) Thanks @jesse-merhi.
+
+### Fixes
+
 - Voice Call: resolve SecretRef-backed Twilio auth tokens and realtime/streaming provider API keys before initializing call providers, so SecretRef-backed voice-call credentials reach runtime as strings. (#73632) Thanks @VACInc.
 - Security/outbound: strip re-formed HTML tags during plain-text sanitization so nested tag fragments cannot leave a CodeQL-detected `<script>` sequence behind. Thanks @vincentkoc.
 - Security/secrets: compare credential bytes with padded timing-safe buffers instead of hashing candidate passwords before equality checks. Thanks @vincentkoc.

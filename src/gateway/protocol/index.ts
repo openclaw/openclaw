@@ -171,6 +171,18 @@ import {
   type PluginsUiDescriptorsParams,
   PluginsUiDescriptorsParamsSchema,
   ErrorCodes,
+  type EnvironmentSummary,
+  EnvironmentSummarySchema,
+  type EnvironmentsListParams,
+  EnvironmentsListParamsSchema,
+  type EnvironmentsListResult,
+  EnvironmentsListResultSchema,
+  type EnvironmentsStatusParams,
+  EnvironmentsStatusParamsSchema,
+  type EnvironmentsStatusResult,
+  EnvironmentsStatusResultSchema,
+  type EnvironmentStatus,
+  EnvironmentStatusSchema,
   type ErrorShape,
   ErrorShapeSchema,
   type EventFrame,
@@ -425,6 +437,12 @@ export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
 );
 export const validateNodeRenameParams = ajv.compile<NodeRenameParams>(NodeRenameParamsSchema);
 export const validateNodeListParams = ajv.compile<NodeListParams>(NodeListParamsSchema);
+export const validateEnvironmentsListParams = ajv.compile<EnvironmentsListParams>(
+  EnvironmentsListParamsSchema,
+);
+export const validateEnvironmentsStatusParams = ajv.compile<EnvironmentsStatusParams>(
+  EnvironmentsStatusParamsSchema,
+);
 export const validateNodePendingAckParams = ajv.compile<NodePendingAckParams>(
   NodePendingAckParamsSchema,
 );
@@ -687,6 +705,12 @@ export {
   PresenceEntrySchema,
   SnapshotSchema,
   ErrorShapeSchema,
+  EnvironmentStatusSchema,
+  EnvironmentSummarySchema,
+  EnvironmentsListParamsSchema,
+  EnvironmentsListResultSchema,
+  EnvironmentsStatusParamsSchema,
+  EnvironmentsStatusResultSchema,
   StateVersionSchema,
   AgentEventSchema,
   MessageActionParamsSchema,
@@ -939,6 +963,12 @@ export type {
   SkillsDetailResult,
   SkillsInstallParams,
   SkillsUpdateParams,
+  EnvironmentStatus,
+  EnvironmentSummary,
+  EnvironmentsListParams,
+  EnvironmentsListResult,
+  EnvironmentsStatusParams,
+  EnvironmentsStatusResult,
   NodePairRejectParams,
   NodePairRemoveParams,
   NodePairVerifyParams,

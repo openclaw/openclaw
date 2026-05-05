@@ -73,6 +73,8 @@ const BASE_METHODS = [
   "tasks.list",
   "tasks.get",
   "tasks.cancel",
+  "environments.list",
+  "environments.status",
   "agents.list",
   "agents.create",
   "agents.update",

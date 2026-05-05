@@ -13,6 +13,14 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
+public enum EnvironmentStatus: String, Codable, Sendable {
+    case available = "available"
+    case unavailable = "unavailable"
+    case starting = "starting"
+    case stopping = "stopping"
+    case error = "error"
+}
+
 public enum NodePresenceAliveReason: String, Codable, Sendable {
     case background = "background"
     case silentPush = "silent_push"
@@ -377,6 +385,96 @@ public struct ErrorShape: Codable, Sendable {
         case details
         case retryable
         case retryafterms = "retryAfterMs"
+    }
+}
+
+public struct EnvironmentSummary: Codable, Sendable {
+    public let id: String
+    public let type: String
+    public let label: String?
+    public let status: EnvironmentStatus
+    public let capabilities: [String]?
+
+    public init(
+        id: String,
+        type: String,
+        label: String?,
+        status: EnvironmentStatus,
+        capabilities: [String]?)
+    {
+        self.id = id
+        self.type = type
+        self.label = label
+        self.status = status
+        self.capabilities = capabilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case status
+        case capabilities
+    }
+}
+
+public struct EnvironmentsListParams: Codable, Sendable {}
+
+public struct EnvironmentsListResult: Codable, Sendable {
+    public let environments: [EnvironmentSummary]
+
+    public init(
+        environments: [EnvironmentSummary])
+    {
+        self.environments = environments
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environments
+    }
+}
+
+public struct EnvironmentsStatusParams: Codable, Sendable {
+    public let environmentid: String
+
+    public init(
+        environmentid: String)
+    {
+        self.environmentid = environmentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case environmentid = "environmentId"
+    }
+}
+
+public struct EnvironmentsStatusResult: Codable, Sendable {
+    public let id: String
+    public let type: String
+    public let label: String?
+    public let status: EnvironmentStatus
+    public let capabilities: [String]?
+
+    public init(
+        id: String,
+        type: String,
+        label: String?,
+        status: EnvironmentStatus,
+        capabilities: [String]?)
+    {
+        self.id = id
+        self.type = type
+        self.label = label
+        self.status = status
+        self.capabilities = capabilities
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case label
+        case status
+        case capabilities
     }
 }
 
