@@ -125,4 +125,24 @@ describe("ensureSkillsWatcher", () => {
       ]);
     },
   );
+
+  it("clears the per-workspace snapshot version when the watcher is disabled", async () => {
+    vi.useFakeTimers();
+    const workspaceDir = "/tmp/workspace-version-leak";
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watchDebounceMs: 10 } } },
+    });
+
+    createdWatchers[0]?.emit("change", `${workspaceDir}/skills/demo/SKILL.md`);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(refreshModule.getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(0);
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir,
+      config: { skills: { load: { watch: false } } },
+    });
+
+    expect(refreshModule.getSkillsSnapshotVersion(workspaceDir)).toBe(0);
+  });
 });

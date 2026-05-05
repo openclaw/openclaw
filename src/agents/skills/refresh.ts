@@ -9,6 +9,7 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import {
   type SkillsChangeEvent,
   bumpSkillsSnapshotVersion,
+  clearSkillsSnapshotVersionForWorkspace,
   getSkillsSnapshotVersion,
   registerSkillsChangeListener,
   resetSkillsRefreshStateForTest,
@@ -122,6 +123,7 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
         clearTimeout(existing.timer);
       }
       void existing.watcher.close().catch(() => {});
+      clearSkillsSnapshotVersionForWorkspace(workspaceDir);
     }
     return;
   }
