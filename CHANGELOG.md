@@ -69,7 +69,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/sessions: after embedded Pi runs, append assistant-visible reply text to session JSONL only when Pi did not already persist an equivalent tail assistant entry (embedded assistant gap-fill), without re-mirroring the user prompt Pi owns. Fixes #77823.
 - TUI/sessions: bound the session picker to recent rows and use exact lookup-style refreshes for the active session, so dusty stores no longer make TUI hydrate weeks-old transcripts before becoming responsive. Thanks @vincentkoc.
 - Doctor/gateway: report recent supervisor restart handoffs in `openclaw doctor --deep`, using the installed service environment when available so service-managed clean exits are visible in guided diagnostics. Thanks @shakkernerd.
 - Gateway/status: show recent supervisor restart handoffs in `openclaw gateway status --deep`, including JSON details, so clean service-managed restarts are reported as restart handoffs instead of opaque stopped-service diagnostics. Thanks @shakkernerd.
@@ -331,6 +330,7 @@ Docs: https://docs.openclaw.ai
 - Agents/embed: keep message_end safety delivery armed when a silent text_end chunk produces no block reply, fixing dropped Telegram/forum replies. Fixes #77833. (#77840) Thanks @neeravmakwana.
 - Install/postinstall: skip noisy compile-cache prune warnings when `EACCES`/`EPERM` prevent removing shared `/tmp/node-compile-cache` entries owned by another user. Fixes #76353. (#76362) Thanks @RayWoo and @neeravmakwana.
 - Agents/messaging: surface CLI subprocess watchdog/turn timeout messages to chat users when verbose failures are off, instead of collapsing them into generic external-run failure copy. Fixes #77007. (#77015) Thanks @neeravmakwana.
+- Agents/sessions: after embedded Pi runs, append assistant-visible reply text to session JSONL only when Pi did not already persist an equivalent tail assistant entry, without re-mirroring the user prompt Pi owns. Fixes #77823. (#77839) Thanks @neeravmakwana.
 
 ## 2026.5.3-1
 
