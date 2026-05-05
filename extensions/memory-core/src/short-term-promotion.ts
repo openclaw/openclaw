@@ -848,16 +848,24 @@ async function writePhaseSignalStore(
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${phaseSignalPath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, phaseSignalPath);
+  try {
+    await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+    await fs.rename(tmpPath, phaseSignalPath);
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
+  }
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
   const tmpPath = `${storePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, storePath);
+  try {
+    await fs.writeFile(tmpPath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+    await fs.rename(tmpPath, storePath);
+  } finally {
+    await fs.unlink(tmpPath).catch(() => {});
+  }
 }
 
 export function isShortTermMemoryPath(filePath: string): boolean {
