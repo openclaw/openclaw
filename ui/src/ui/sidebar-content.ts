@@ -1,7 +1,7 @@
-export type MarkdownSidebarContent = {
+﻿export type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
-  rawText?: string | null;
+  title?: string;
 };
 
 export type CanvasSidebarContent = {
@@ -14,3 +14,4 @@ export type CanvasSidebarContent = {
 };
 
 export type SidebarContent = MarkdownSidebarContent | CanvasSidebarContent;
+

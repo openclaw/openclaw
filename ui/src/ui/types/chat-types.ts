@@ -1,18 +1,11 @@
-/**
+﻿/**
  * Chat message types for the UI layer.
  */
 
 /** Union type for items in the chat thread */
 export type ChatItem =
-  | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
-  | {
-      kind: "divider";
-      key: string;
-      label: string;
-      description?: string;
-      action?: { kind: "session-checkpoints"; label: string };
-      timestamp: number;
-    }
+  | { kind: "message"; key: string; message: unknown }
+  | { kind: "divider"; key: string; label: string; timestamp: number }
   | { kind: "stream"; key: string; text: string; startedAt: number }
   | { kind: "reading-indicator"; key: string };
 
@@ -22,7 +15,7 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
-  messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  messages: Array<{ message: unknown; key: string }>;
   timestamp: number;
   isStreaming: boolean;
 };
@@ -77,6 +70,14 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  status?: "running" | "complete" | "failed";
+  startedAt?: number;
+  finishedAt?: number | null;
+  timeline?: Array<{
+    kind: "start" | "update" | "complete" | "failed";
+    label: string;
+    at: number;
+  }>;
   preview?: {
     kind: "canvas";
     surface: "assistant_message";
@@ -89,3 +90,4 @@ export type ToolCard = {
     style?: string;
   };
 };
+

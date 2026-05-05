@@ -1,4 +1,4 @@
-import { formatUnknownText, truncateText } from "./format.ts";
+﻿import { formatUnknownText, truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
 const TOOL_STREAM_LIMIT = 50;
@@ -21,6 +21,13 @@ export type ToolStreamEntry = {
   name: string;
   args?: unknown;
   output?: string;
+  status: "running" | "complete" | "failed";
+  finishedAt?: number | null;
+  timeline: Array<{
+    kind: "start" | "update" | "complete" | "failed";
+    label: string;
+    at: number;
+  }>;
   startedAt: number;
   updatedAt: number;
   message: Record<string, unknown>;
@@ -175,6 +182,51 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
+function toSingleLinePreview(text: string | null | undefined, fallback: string): string {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return fallback;
+  }
+  const line = trimmed.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!line) {
+    return fallback;
+  }
+  return truncateText(line.replace(/\s+/g, " "), 72).text;
+}
+
+function buildToolTimelineLabel(params: {
+  phase: string;
+  output?: string | null;
+  isError?: boolean;
+}): string {
+  if (params.phase === "start") {
+    return "Started";
+  }
+  if (params.phase === "update") {
+    return toSingleLinePreview(params.output, "Updated output");
+  }
+  if (params.phase === "result" && params.isError) {
+    return toSingleLinePreview(params.output, "Failed");
+  }
+  if (params.phase === "result") {
+    return toSingleLinePreview(params.output, "Completed");
+  }
+  return "Updated";
+}
+
+function pushTimelineStep(
+  entry: ToolStreamEntry,
+  step: { kind: "start" | "update" | "complete" | "failed"; label: string; at: number },
+) {
+  const previous = entry.timeline[entry.timeline.length - 1];
+  if (previous && previous.kind === step.kind) {
+    previous.label = step.label;
+    previous.at = step.at;
+    return;
+  }
+  entry.timeline = [...entry.timeline.slice(-3), step];
+}
+
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
   const content: Array<Record<string, unknown>> = [];
   content.push({
@@ -193,6 +245,10 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     role: "assistant",
     toolCallId: entry.toolCallId,
     runId: entry.runId,
+    toolStatus: entry.status,
+    toolStartedAt: entry.startedAt,
+    toolFinishedAt: entry.finishedAt ?? null,
+    toolTimeline: entry.timeline,
     content,
     timestamp: entry.startedAt,
   };
@@ -488,6 +544,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
   const name = typeof data.name === "string" ? data.name : "tool";
   const phase = typeof data.phase === "string" ? data.phase : "";
+  const isError = data.isError === true;
   const args = phase === "start" ? data.args : undefined;
   const output =
     phase === "update"
@@ -501,12 +558,7 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   if (!entry) {
     // Commit any in-progress streaming text as a segment so it renders
     // above the tool card instead of below it.
-    if (
-      host.chatRunId &&
-      payload.runId === host.chatRunId &&
-      host.chatStream &&
-      host.chatStream.trim().length > 0
-    ) {
+    if (host.chatStream && host.chatStream.trim().length > 0) {
       host.chatStreamSegments = [...host.chatStreamSegments, { text: host.chatStream, ts: now }];
       host.chatStream = null;
       host.chatStreamStartedAt = null;
@@ -518,10 +570,18 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       name,
       args,
       output: output || undefined,
+      status: phase === "result" && isError ? "failed" : "running",
+      finishedAt: phase === "result" ? now : null,
+      timeline: [],
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       updatedAt: now,
       message: {},
     };
+    pushTimelineStep(entry, {
+      kind: "start",
+      label: buildToolTimelineLabel({ phase: "start" }),
+      at: entry.startedAt,
+    });
     host.toolStreamById.set(toolCallId, entry);
     host.toolStreamOrder.push(toolCallId);
   } else {
@@ -532,10 +592,31 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     if (output !== undefined) {
       entry.output = output || undefined;
     }
+    if (phase === "result") {
+      entry.status = isError ? "failed" : "complete";
+      entry.finishedAt = now;
+    } else {
+      entry.status = "running";
+    }
     entry.updatedAt = now;
+  }
+
+  if (phase === "update") {
+    pushTimelineStep(entry, {
+      kind: "update",
+      label: buildToolTimelineLabel({ phase, output }),
+      at: now,
+    });
+  } else if (phase === "result") {
+    pushTimelineStep(entry, {
+      kind: isError ? "failed" : "complete",
+      label: buildToolTimelineLabel({ phase, output, isError }),
+      at: now,
+    });
   }
 
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
   scheduleToolStreamSync(host, phase === "result");
 }
+
