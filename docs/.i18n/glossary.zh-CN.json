@@ -216,6 +216,38 @@
     "target": "能力扩展手册"
   },
   {
+    "source": "WhatsApp group messages",
+    "target": "WhatsApp 群组消息"
+  },
+  {
+    "source": "Oracle Cloud",
+    "target": "Oracle Cloud"
+  },
+  {
+    "source": "Install overview",
+    "target": "安装概览"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "VPS 托管"
+  },
+  {
+    "source": "Linux server",
+    "target": "Linux 服务器"
+  },
+  {
+    "source": "Platforms",
+    "target": "平台"
+  },
+  {
+    "source": "Adding capabilities (redirect)",
+    "target": "添加能力（重定向）"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "插件内部机制"
+  },
+  {
     "source": "Setup Wizard Reference",
     "target": "设置向导参考"
   },

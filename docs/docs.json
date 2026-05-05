@@ -102,7 +102,7 @@
     },
     {
       "source": "/tools/capability-cookbook",
-      "destination": "/plugins/architecture"
+      "destination": "/plugins/adding-capabilities"
     },
     {
       "source": "/brave-search",
@@ -1206,6 +1206,7 @@
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
                       "plugins/sdk-provider-plugins",
+                      "plugins/adding-capabilities",
                       "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
@@ -1519,13 +1520,7 @@
                   },
                   {
                     "group": "Networking and discovery",
-                    "pages": [
-                      "network",
-                      "gateway/network-model",
-                      "gateway/pairing",
-                      "gateway/discovery",
-                      "gateway/bonjour"
-                    ]
+                    "pages": ["network", "gateway/pairing", "gateway/discovery", "gateway/bonjour"]
                   }
                 ]
               },
