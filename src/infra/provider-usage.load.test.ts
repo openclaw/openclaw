@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import {
   getProviderUsageSnapshotWithPluginMock,
@@ -13,6 +14,20 @@ import {
 } from "./provider-usage.test-support.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
+const resolveProviderAuthsMock = vi.hoisted(() =>
+  vi.fn<typeof import("./provider-usage.auth.js").resolveProviderAuths>(),
+);
+
+vi.mock("./provider-usage.auth.js", async () => {
+  const actual = await vi.importActual<typeof import("./provider-usage.auth.js")>(
+    "./provider-usage.auth.js",
+  );
+  return {
+    ...actual,
+    resolveProviderAuths: resolveProviderAuthsMock,
+  };
+});
+
 type ProviderAuth = ProviderUsageAuth<typeof loadProviderUsageSummary>;
 const googleGeminiCliProvider = "google-gemini-cli" as unknown as ProviderAuth["provider"];
 const resolveProviderUsageSnapshotWithPluginMock = getProviderUsageSnapshotWithPluginMock();
@@ -21,6 +36,8 @@ describe("provider-usage.load", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     resetProviderUsageSnapshotWithPluginMock();
+    // Default: pass through auth as provided (existing tests pass auth directly)
+    resolveProviderAuthsMock.mockImplementation(async (params) => params.auth ?? []);
   });
 
   it("loads snapshots for copilot gemini codex and xiaomi", async () => {
@@ -189,5 +206,44 @@ describe("provider-usage.load", () => {
     } finally {
       vi.stubGlobal("fetch", previousFetch);
     }
+  });
+
+  it("returns empty providers when auth resolution exceeds timeout", async () => {
+    // Simulate auth resolution that never settles (e.g. OAuth plugin hangs in non-TTY)
+    resolveProviderAuthsMock.mockImplementation(() => new Promise<never>(() => {}));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const summary = await loadProviderUsageSummary({
+      now: usageNow,
+      timeoutMs: 50,
+      providers: ["anthropic"],
+      config: {} as OpenClawConfig,
+      env: {},
+    });
+
+    // Should resolve with empty providers instead of hanging
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+    // Should warn that a timeout occurred (not silent)
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("provider auth resolution timed out"),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn when auth resolution returns no providers", async () => {
+    resolveProviderAuthsMock.mockResolvedValueOnce([]);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const summary = await loadProviderUsageSummary({
+      now: usageNow,
+      timeoutMs: 50,
+      providers: ["anthropic"],
+      config: {} as OpenClawConfig,
+      env: {},
+    });
+
+    expect(summary).toEqual({ updatedAt: usageNow, providers: [] });
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });
