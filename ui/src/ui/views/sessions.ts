@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
@@ -570,7 +571,11 @@ export function renderSessions(props: SessionsProps) {
                       </td>
                     </tr>
                   `
-                : paginated.flatMap((row) => renderRows(row, props))}
+                : repeat(
+                    paginated,
+                    (row) => row.key,
+                    (row) => renderRows(row, props),
+                  )}
             </tbody>
           </table>
         </div>
