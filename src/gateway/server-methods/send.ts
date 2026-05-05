@@ -2,7 +2,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import { applyPluginAutoEnableAsync } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -127,10 +127,12 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const cfg = applyPluginAutoEnable({
-    config: params.context.getRuntimeConfig(),
-    env: process.env,
-  }).config;
+  const cfg = (
+    await applyPluginAutoEnableAsync({
+      config: params.context.getRuntimeConfig(),
+      env: process.env,
+    })
+  ).config;
   let channel = normalizedChannel;
   if (!channel) {
     try {
