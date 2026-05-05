@@ -423,6 +423,11 @@ export type AgentToolsConfig = {
   loopDetection?: ToolLoopDetectionConfig;
   /** Message tool configuration for this agent. */
   message?: MessageToolsConfig;
+  /** Outbound agent-to-agent access restrictions for this requester agent. */
+  agentToAgent?: {
+    /** Target agent ids or patterns this agent may contact. Empty array denies all outbound A2A. */
+    allow?: string[];
+  };
   sandbox?: {
     tools?: {
       allow?: string[];

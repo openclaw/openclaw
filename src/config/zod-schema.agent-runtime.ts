@@ -813,6 +813,12 @@ const AgentToolsSchema = z
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
     message: MessageToolConfigSchema,
+    agentToAgent: z
+      .object({
+        allow: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     sandbox: z
       .object({
         tools: ToolPolicySchema,
