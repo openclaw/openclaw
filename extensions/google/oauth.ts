@@ -8,7 +8,7 @@ import {
   waitForLocalCallback,
 } from "./oauth.flow.js";
 import type { GeminiCliOAuthContext, GeminiCliOAuthCredentials } from "./oauth.shared.js";
-import { exchangeCodeForTokens } from "./oauth.token.js";
+import { exchangeCodeForTokens, refreshTokensForGeminiCli } from "./oauth.token.js";
 
 export { clearCredentialsCache, extractGeminiCliCredentials };
 export type { GeminiCliOAuthContext, GeminiCliOAuthCredentials };
@@ -89,4 +89,10 @@ async function manualFlow(
   }
   ctx.progress.update("Exchanging authorization code for tokens...");
   return exchangeCodeForTokens(parsed.code, verifier);
+}
+
+export async function refreshGeminiCliOAuthToken(
+  credentials: Pick<GeminiCliOAuthCredentials, "refresh" | "email" | "projectId">,
+): Promise<GeminiCliOAuthCredentials> {
+  return await refreshTokensForGeminiCli(credentials);
 }

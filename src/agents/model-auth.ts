@@ -670,7 +670,7 @@ export async function resolveApiKeyForProvider(params: {
         return result;
       }
     } catch (err) {
-      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+      log.warn(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
 
@@ -865,7 +865,7 @@ export async function hasAvailableAuthForProvider(params: {
         return true;
       }
     } catch (err) {
-      log.debug?.(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
+      log.warn(`auth profile "${candidate}" failed for provider "${provider}": ${String(err)}`);
     }
   }
   return false;
