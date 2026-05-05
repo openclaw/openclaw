@@ -161,6 +161,7 @@ export function resolveNextcloudTalkGroupAllow(params: {
 export function resolveNextcloudTalkMentionGate(params: {
   isGroup: boolean;
   requireMention: boolean;
+  canDetectMention: boolean;
   wasMentioned: boolean;
   allowTextCommands: boolean;
   hasControlCommand: boolean;
@@ -169,12 +170,17 @@ export function resolveNextcloudTalkMentionGate(params: {
   const shouldBypassMention =
     params.isGroup &&
     params.requireMention &&
+    params.canDetectMention &&
     !params.wasMentioned &&
     params.allowTextCommands &&
     params.commandAuthorized &&
     params.hasControlCommand;
   return {
     shouldBypassMention,
-    shouldSkip: params.requireMention && !params.wasMentioned && !shouldBypassMention,
+    shouldSkip:
+      params.requireMention &&
+      params.canDetectMention &&
+      !params.wasMentioned &&
+      !shouldBypassMention,
   };
 }

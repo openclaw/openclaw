@@ -224,7 +224,8 @@ export async function handleNextcloudTalkInbound(params: {
   })
     ? core.channel.mentions.buildMentionRegexes(config as OpenClawConfig, route.agentId)
     : [];
-  const wasMentioned = mentionRegexes.length
+  const canDetectMention = mentionRegexes.length > 0;
+  const wasMentioned = canDetectMention
     ? core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes)
     : false;
   const shouldRequireMention = isGroup
@@ -236,6 +237,7 @@ export async function handleNextcloudTalkInbound(params: {
   const mentionGate = resolveNextcloudTalkMentionGate({
     isGroup,
     requireMention: shouldRequireMention,
+    canDetectMention,
     wasMentioned,
     allowTextCommands,
     hasControlCommand,
