@@ -25,6 +25,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadNodeHostConfig } from "../../node-host/config.js";
 import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
@@ -606,10 +607,29 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
     "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
   );
 }
+
+function isLoopbackHost(host: string | undefined): boolean {
+  const normalized = normalizeOptionalString(host)?.toLowerCase();
+  return (
+    !normalized || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1"
+  );
+}
+
+async function assertCanWriteOAuthProfileLocally(): Promise<void> {
+  const nodeHostConfig = await loadNodeHostConfig();
+  if (!nodeHostConfig?.token || isLoopbackHost(nodeHostConfig.gateway?.host)) {
+    return;
+  }
+  throw new Error(
+    "This machine is configured as a remote node host. `openclaw models auth login` would write OAuth credentials to this node, not the gateway. Run this command on the gateway host instead.",
+  );
+}
+
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error("models auth login requires an interactive TTY.");
   }
+  await assertCanWriteOAuthProfileLocally();
 
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     requestedProvider: opts.provider,

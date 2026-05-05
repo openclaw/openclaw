@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Models/auth: block OAuth login on remote node hosts before writing credentials to the local node store, so gateway-backed installs do not consume refresh tokens without syncing them to the gateway. Fixes #42291. (#42381) Thanks @MaheshBhushan and @vincentkoc.
 - Codex plugin: mirror the experimental upstream app-server protocol and format generated TypeScript before drift checks, keeping OpenClaw's `experimentalApi` bridge compatible with latest Codex while preserving formatter gates.
 - Telegram/media: derive no-caption inbound media placeholders from saved MIME metadata instead of the Telegram `photo` shape, so non-image and mixed attachments no longer reach the model as `<media:image>`. Fixes #69793. Thanks @aspalagin.
 - Agents/cache: keep per-turn runtime context out of ordinary chat system prompts while still delivering hidden current-turn context, restoring prompt-cache reuse on chat continuations. Fixes #77431. Thanks @Udjin79.
