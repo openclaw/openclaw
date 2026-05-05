@@ -1385,6 +1385,50 @@ export async function runReplyAgent(params: {
         });
       }
     }
+
+    // Auto-revert session model override after image/PDF analysis when configured.
+    // If the session has an auto model override (from fallback) and revertAfterImageModel
+    // is enabled, revert the session model back to the default primary model.
+    if (
+      activeSessionEntry &&
+      activeSessionStore &&
+      sessionKey &&
+      cfg.agents?.defaults?.revertAfterImageModel === true &&
+      activeSessionEntry.modelOverrideSource === "auto" &&
+      normalizeOptionalString(activeSessionEntry.modelOverride)
+    ) {
+      const revertEntry = activeSessionEntry;
+      const previousProvider = revertEntry.providerOverride;
+      const previousModel = revertEntry.modelOverride;
+      const { applyModelOverrideToSessionEntry } =
+        await import("../../sessions/model-overrides.js");
+      const { updated } = applyModelOverrideToSessionEntry({
+        entry: revertEntry,
+        selection: {
+          provider: followupRun.run.provider,
+          model: followupRun.run.model,
+          isDefault: true,
+        },
+      });
+      if (updated) {
+        activeSessionStore[sessionKey] = revertEntry;
+        if (storePath) {
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              providerOverride: revertEntry.providerOverride,
+              modelOverride: revertEntry.modelOverride,
+              modelOverrideSource: revertEntry.modelOverrideSource,
+              updatedAt: Date.now(),
+            }),
+          });
+        }
+        logVerbose(
+          `revertAfterImageModel: reverted session model from ${previousProvider}/${previousModel} back to ${followupRun.run.provider}/${followupRun.run.model}`,
+        );
+      }
+    }
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? normalizeOptionalString(runResult.meta?.agentMeta?.sessionId)
       : undefined;
