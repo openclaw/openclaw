@@ -184,6 +184,7 @@ describe("thread-level session keys", () => {
     });
 
     expect(routing.sessionKey).toBe("agent:main:slack:channel:c123");
+    expect(routing.threadContext.messageThreadId).toBeUndefined();
   });
 
   it("does not seed top-level group DM mentions into thread sessions", () => {
@@ -348,5 +349,47 @@ describe("thread-level session keys", () => {
 
     expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("preserves distinct MessageThreadIds for concurrent assistant DM roots", () => {
+    const ctx = buildCtx({ replyToMode: "off", dmScope: "per-channel-peer" });
+    const account = buildAccount("off");
+
+    const first = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "channel",
+        user: "U3",
+        text: "first assistant root",
+        ts: "1770408530.000000",
+        thread_ts: "1770408530.000000",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+    const second = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        user: "U3",
+        text: "second assistant root",
+        ts: "1770408531.000000",
+        thread_ts: "1770408531.000000",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+
+    expect(first.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(second.sessionKey).toBe(first.sessionKey);
+    expect(first.threadContext.messageThreadId).toBe("1770408530.000000");
+    expect(second.threadContext.messageThreadId).toBe("1770408531.000000");
   });
 });
