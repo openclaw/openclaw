@@ -87,6 +87,7 @@ Optional request headers:
 - `x-openclaw-model: <provider/model-or-bare-id>` overrides the backend model for the selected agent.
 - `x-openclaw-agent-id: <agentId>` remains supported as a compatibility override.
 - `x-openclaw-session-key: <sessionKey>` fully controls session routing.
+- `x-openclaw-session: <hint>` provides a stable, agent-scoped session identifier for voice/realtime callers (e.g. LiveKit, Twilio) that cannot set the OpenAI `user` field. See [Session behavior](#session-behavior) below.
 - `x-openclaw-message-channel: <channel>` sets the synthetic ingress channel context for channel-aware prompts and policies.
 
 Compatibility aliases still accepted:
@@ -130,7 +131,33 @@ Set `gateway.http.endpoints.chatCompletions.enabled` to `false`:
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).
 
+Session key priority (highest first):
+
+| Priority | Source                         | Scope                              |
+| -------- | ------------------------------ | ---------------------------------- |
+| 1        | `x-openclaw-session-key`       | Explicit full override             |
+| 2        | OpenAI `user` request field    | Agent-scoped stable key            |
+| 3        | `x-openclaw-session` header    | Agent-scoped stable hint (new)     |
+| 4        | Random UUID                    | Per-call fallback (stateless)      |
+
 If the request includes an OpenAI `user` string, the Gateway derives a stable session key from it, so repeated calls can share an agent session.
+
+### `x-openclaw-session` — stable hint for voice/realtime callers
+
+Voice and realtime stacks (LiveKit, Twilio, etc.) often cannot inject the OpenAI `user` field per-request. Use `x-openclaw-session` to pass a stable, call-scoped identifier instead:
+
+```
+POST /v1/chat/completions
+x-openclaw-session: livekit-room-abc123
+```
+
+The Gateway resolves this to an agent-scoped key (`{prefix}-session:{hint}`), so warm-session cache hits apply and QMD sync is skipped on subsequent requests within the same call, significantly reducing TTFB.
+
+Constraints on the hint value:
+
+- Must match `[a-z0-9][a-z0-9_-]{0,127}` (case-insensitive, max 128 chars).
+- Colons, spaces, and other special characters are rejected — the header is silently ignored and the request falls back to a random UUID session.
+- Two different agents with the same hint value receive **different** session keys (the hint is agent-scoped).
 
 ## Why this surface matters
 

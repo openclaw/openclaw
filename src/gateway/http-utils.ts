@@ -149,7 +149,11 @@ function resolveSessionKey(params: {
   // voice/realtime callers (e.g. LiveKit, Twilio) that cannot set the OpenAI
   // `user` field. Reusing the same session key across calls avoids a full QMD
   // re-index on every stateless HTTP request, cutting TTFB significantly.
-  const sessionHint = getHeader(params.req, "x-openclaw-session")?.trim();
+  // Only alphanumeric, underscore, and hyphen characters are accepted (max 128
+  // chars) to prevent embedded colons or spaces from producing malformed keys.
+  const rawHint = getHeader(params.req, "x-openclaw-session")?.trim();
+  const sessionHint =
+    rawHint && /^[a-z0-9][a-z0-9_-]{0,127}$/i.test(rawHint) ? rawHint : undefined;
   if (sessionHint) {
     return buildAgentMainSessionKey({
       agentId: params.agentId,

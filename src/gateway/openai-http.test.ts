@@ -246,6 +246,95 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
+      // x-openclaw-session: valid hint produces a stable agent-scoped session key
+      {
+        await expectAgentSessionKeyMatch({
+          body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          headers: { "x-openclaw-session": "call-abc123" },
+          matcher: /openai-session:call-abc123/,
+        });
+      }
+
+      // x-openclaw-session: user field takes priority over x-openclaw-session header
+      {
+        await expectAgentSessionKeyMatch({
+          body: {
+            user: "alice",
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          headers: { "x-openclaw-session": "call-abc123" },
+          matcher: /openai-user:alice/,
+        });
+      }
+
+      // x-openclaw-session: x-openclaw-session-key takes priority over x-openclaw-session
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          {
+            "x-openclaw-session": "call-abc123",
+            "x-openclaw-session-key": "agent:main:openai:explicit-override",
+          },
+        );
+        expect(res.status).toBe(200);
+        const opts2 = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+        expect((opts2 as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+          "agent:main:openai:explicit-override",
+        );
+        await res.text();
+      }
+
+      // x-openclaw-session: same hint on different agents produces different session keys
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const resMain = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-session": "shared-hint" },
+        );
+        expect(resMain.status).toBe(200);
+        const mainKey =
+          ((agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+            | { sessionKey?: string }
+            | undefined)?.sessionKey ?? "";
+        await resMain.text();
+
+        mockAgentOnce([{ text: "hello" }]);
+        const resBeta = await postChatCompletions(
+          port,
+          { model: "openclaw/beta", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-session": "shared-hint" },
+        );
+        expect(resBeta.status).toBe(200);
+        const betaKey =
+          ((agentCommand.mock.calls[0] as unknown[] | undefined)?.[0] as
+            | { sessionKey?: string }
+            | undefined)?.sessionKey ?? "";
+        await resBeta.text();
+
+        expect(mainKey).not.toBe(betaKey);
+        expect(mainKey).toContain("shared-hint");
+        expect(betaKey).toContain("shared-hint");
+      }
+
+      // x-openclaw-session: invalid hint (contains colon) falls back to random UUID
+      {
+        mockAgentOnce([{ text: "hello" }]);
+        const res = await postChatCompletions(
+          port,
+          { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+          { "x-openclaw-session": "bad:hint" },
+        );
+        expect(res.status).toBe(200);
+        const opts3 = (agentCommand.mock.calls[0] as unknown[] | undefined)?.[0];
+        const key = (opts3 as { sessionKey?: string } | undefined)?.sessionKey ?? "";
+        expect(key).not.toContain("bad:hint");
+        await res.text();
+      }
+
       {
         mockAgentOnce([{ text: "hello" }]);
         const res = await postChatCompletions(
