@@ -799,12 +799,15 @@ export async function runEmbeddedPiAgent(
         resolvedLoopDetectionConfig?.postCompactionGuard,
         { enabled: resolvedLoopDetectionConfig?.enabled !== false },
       );
+      let postCompactionAbortController: AbortController | undefined;
+      let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
       const observePostCompactionToolOutcome = (
         observation: PostCompactionGuardObservation,
       ): void => {
         const verdict = postCompactionGuard.observe(observation);
         if (verdict.shouldAbort) {
-          throw PostCompactionLoopPersistedError.fromVerdict(verdict);
+          postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
+          postCompactionAbortController?.abort(postCompactionAbortError);
         }
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
@@ -1099,6 +1102,17 @@ export async function runEmbeddedPiAgent(
             startupStagesEmitted = true;
           }
 
+          const attemptAbortController = new AbortController();
+          postCompactionAbortController = attemptAbortController;
+          const parentAbortSignal = params.abortSignal;
+          const relayParentAbort = (): void => {
+            attemptAbortController.abort(parentAbortSignal?.reason);
+          };
+          if (parentAbortSignal?.aborted) {
+            relayParentAbort();
+          } else {
+            parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
+          }
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1177,7 +1191,7 @@ export async function runEmbeddedPiAgent(
             bashElevated: params.bashElevated,
             timeoutMs: params.timeoutMs,
             runId: params.runId,
-            abortSignal: params.abortSignal,
+            abortSignal: attemptAbortController.signal,
             replyOperation: params.replyOperation,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
@@ -1216,7 +1230,19 @@ export async function runEmbeddedPiAgent(
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
             onUserMessagePersisted,
-          });
+          })
+            .catch((err: unknown): never => {
+              throw postCompactionAbortError ?? err;
+            })
+            .finally(() => {
+              parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
+              if (postCompactionAbortController === attemptAbortController) {
+                postCompactionAbortController = undefined;
+              }
+            });
+          if (postCompactionAbortError) {
+            throw postCompactionAbortError;
+          }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
 
           const {

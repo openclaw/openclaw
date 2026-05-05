@@ -153,20 +153,26 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
     });
   });
 
-  it("aborts the run with PostCompactionLoopPersistedError when identical (tool, args, result) repeats windowSize times after compaction", async () => {
+  it("aborts the attempt out-of-band when identical (tool, args, result) repeats windowSize times after compaction", async () => {
     const overflowError = makeOverflowError();
     let attemptReturned = false;
+    let attemptSignalAborted = false;
+    let attemptSignalReason: unknown;
 
     // Attempt 1: overflow → triggers compaction.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async () =>
       makeAttemptResult({ promptError: overflowError }),
     );
     // Attempt 2: post-compaction. The live wrapped-tool path records each
-    // outcome while the prompt is still running; the third identical result
-    // aborts before the attempt can return.
+    // outcome while the prompt is still running. The third identical result
+    // must not rely on throwing out of tool execution (the dependency converts
+    // tool errors into tool results); instead it aborts the attempt signal and
+    // the runner raises the persisted-loop error after the attempt unwinds.
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams: unknown) => {
-      const onToolOutcome = (attemptParams as { onToolOutcome?: ToolOutcomeObserver })
-        .onToolOutcome;
+      const { abortSignal, onToolOutcome } = attemptParams as {
+        abortSignal?: AbortSignal;
+        onToolOutcome?: ToolOutcomeObserver;
+      };
       for (let i = 0; i < 3; i += 1) {
         await executeWrappedToolOutcome(
           "gateway",
@@ -175,6 +181,8 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
           onToolOutcome,
         );
       }
+      attemptSignalAborted = abortSignal?.aborted ?? false;
+      attemptSignalReason = abortSignal?.reason;
       attemptReturned = true;
       return makeAttemptResult({
         promptError: null,
@@ -196,7 +204,9 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(attemptReturned).toBe(false);
+    expect(attemptReturned).toBe(true);
+    expect(attemptSignalAborted).toBe(true);
+    expect(attemptSignalReason).toBeInstanceOf(PostCompactionLoopPersistedError);
   });
 
   it("does not abort when the result hash changes across post-compaction attempts (progress was made)", async () => {
