@@ -771,6 +771,11 @@ export async function sendStructuredCardFeishu(params: {
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
+  // NOTE(#27717): When replyToMessageId is set, interactive cards cause older Feishu
+  // clients to show "请升级至最新版本客户端". This should fall back to post format via
+  // sendMessageFeishu (passing original `text` and `mentions`, not `cardText`) similar
+  // to sendMarkdownCardFeishu. Structured header/note would be lost in that path, so
+  // a proper solution needs to flatten the card content to markdown first.
   const card = buildStructuredCard(cardText, { header, note });
   return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
 }
@@ -778,6 +783,9 @@ export async function sendStructuredCardFeishu(params: {
 /**
  * Send a message as a markdown card (interactive message).
  * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
+ *
+ * When replying to a message, falls back to post format with md tag to avoid
+ * older clients showing "请升级至最新版本客户端" for interactive cards in reply context.
  */
 export async function sendMarkdownCardFeishu(params: {
   cfg: ClawdbotConfig;
@@ -795,6 +803,22 @@ export async function sendMarkdownCardFeishu(params: {
   if (mentions && mentions.length > 0) {
     cardText = buildMentionedCardContent(mentions, text);
   }
+
+  // When replying, use post format instead of interactive cards.
+  // Interactive cards in reply context cause older Feishu clients to show
+  // "请升级至最新版本客户端" instead of the actual content.
+  if (replyToMessageId) {
+    return sendMessageFeishu({
+      cfg,
+      to,
+      text,
+      replyToMessageId,
+      replyInThread,
+      mentions,
+      accountId,
+    });
+  }
+
   const card = buildMarkdownCard(cardText);
-  return sendCardFeishu({ cfg, to, card, replyToMessageId, replyInThread, accountId });
+  return sendCardFeishu({ cfg, to, card, replyInThread, accountId });
 }
