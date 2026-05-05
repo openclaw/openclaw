@@ -62,6 +62,15 @@ openclaw config get meta.lastTouchedVersion
 For intentional downgrade or emergency recovery only, set `OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1` for the single command. Leave it unset for normal operation.
 </Warning>
 
+## Gateway works locally but not from LAN, VM, WSL2, or Tailscale
+
+If `openclaw gateway status` is healthy on the Gateway host but another machine
+or node cannot connect, follow the [Gateway reachability checklist](/gateway/remote#gateway-reachability-checklist).
+
+Common causes are loopback-only binds, VM/container NAT boundaries, WSL2 `172.x`
+addresses that are not LAN-routable, host firewalls, or using LAN exposure when
+Tailscale Serve/SSH forwarding would be safer.
+
 ## Anthropic 429 extra usage required for long context
 
 Use this when logs/errors include: `HTTP 429: rate_limit_error: Extra usage is required for long context requests`.
