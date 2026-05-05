@@ -710,7 +710,7 @@ describe("modelsAuthLoginCommand", () => {
     expect(runCliAuth).toHaveBeenCalledOnce();
   });
 
-  it("blocks OAuth login on a remote node host before writing local credentials", async () => {
+  it("blocks auth login on a remote node host before writing local credentials", async () => {
     const runtime = createRuntime();
     mocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,

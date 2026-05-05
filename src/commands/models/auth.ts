@@ -712,13 +712,13 @@ function isLoopbackHost(host: string | undefined): boolean {
   );
 }
 
-async function assertCanWriteOAuthProfileLocally(): Promise<void> {
+async function assertCanWriteAuthProfileLocally(): Promise<void> {
   const nodeHostConfig = await loadNodeHostConfig();
   if (!nodeHostConfig?.token || isLoopbackHost(nodeHostConfig.gateway?.host)) {
     return;
   }
   throw new Error(
-    "This machine is configured as a remote node host. `openclaw models auth login` would write OAuth credentials to this node, not the gateway. Run this command on the gateway host instead.",
+    "This machine is configured as a remote node host. `openclaw models auth login` would write auth credentials to this node, not the gateway. Run this command on the gateway host instead.",
   );
 }
 
@@ -728,7 +728,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
     );
   }
-  await assertCanWriteOAuthProfileLocally();
+  await assertCanWriteAuthProfileLocally();
 
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
     requestedProvider: opts.provider,
