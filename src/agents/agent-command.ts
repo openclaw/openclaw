@@ -1197,7 +1197,7 @@ async function agentCommandInternal(
     }
 
     const runner = result.meta.executionTrace?.runner;
-    if (runner === "cli" || runner === "embedded") {
+    if (runner === "cli") {
       try {
         sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
@@ -1213,32 +1213,49 @@ async function agentCommandInternal(
           sessionCwd: workspaceDir,
           config: cfg,
         });
-        if (runner === "cli") {
-          sessionEntry = await (
-            await loadCliCompactionRuntime()
-          ).runCliTurnCompactionLifecycle({
-            cfg,
-            sessionId,
-            sessionKey: sessionKey ?? sessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            agentDir,
-            provider: result.meta.agentMeta?.provider ?? provider,
-            model: result.meta.agentMeta?.model ?? model,
-            skillsSnapshot,
-            messageChannel,
-            agentAccountId: runContext.accountId,
-            senderIsOwner: opts.senderIsOwner,
-            thinkLevel: resolvedThinkLevel,
-            extraSystemPrompt: opts.extraSystemPrompt,
-          });
-        }
+        sessionEntry = await (
+          await loadCliCompactionRuntime()
+        ).runCliTurnCompactionLifecycle({
+          cfg,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          workspaceDir,
+          agentDir,
+          provider: result.meta.agentMeta?.provider ?? provider,
+          model: result.meta.agentMeta?.model ?? model,
+          skillsSnapshot,
+          messageChannel,
+          agentAccountId: runContext.accountId,
+          senderIsOwner: opts.senderIsOwner,
+          thinkLevel: resolvedThinkLevel,
+          extraSystemPrompt: opts.extraSystemPrompt,
+        });
       } catch (error) {
         log.warn(
-          `Transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+          `CLI transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    } else if (runner === "embedded") {
+      try {
+        sessionEntry = await attemptExecutionRuntime.persistEmbeddedTurnTranscript({
+          result,
+          sessionId,
+          sessionKey: sessionKey ?? sessionId,
+          sessionEntry,
+          sessionStore,
+          storePath,
+          sessionAgentId,
+          threadId: opts.threadId,
+          sessionCwd: workspaceDir,
+          config: cfg,
+        });
+      } catch (error) {
+        log.warn(
+          `Embedded transcript repair failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
         );
       }
     }
