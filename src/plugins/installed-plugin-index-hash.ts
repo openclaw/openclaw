@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
 export type InstalledPluginFileSignature = {
@@ -66,6 +67,69 @@ export function fileSignatureMatches(
     return undefined;
   }
   const current = safeFileSignature(filePath);
+  if (!current) {
+    return false;
+  }
+  return (
+    current.size === signature.size &&
+    current.mtimeMs === signature.mtimeMs &&
+    current.ctimeMs === signature.ctimeMs
+  );
+}
+
+export async function safeHashFileAsync(params: {
+  filePath: string;
+  pluginId?: string;
+  diagnostics: PluginDiagnostic[];
+  required: boolean;
+}): Promise<string | undefined> {
+  try {
+    const data = await fsPromises.readFile(params.filePath);
+    return crypto.createHash("sha256").update(data).digest("hex");
+  } catch (err) {
+    if (params.required) {
+      params.diagnostics.push({
+        level: "warn",
+        ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+        source: params.filePath,
+        message: `installed plugin index could not hash ${params.filePath}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      });
+    }
+    return undefined;
+  }
+}
+
+export async function safeFileSignatureAsync(
+  filePath: string,
+): Promise<InstalledPluginFileSignature | undefined> {
+  try {
+    const stat = await fsPromises.stat(filePath);
+    if (!stat.isFile()) {
+      return undefined;
+    }
+    return {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function fileSignatureMatchesAsync(
+  filePath: string,
+  signature: InstalledPluginFileSignature | undefined,
+): Promise<boolean | undefined> {
+  if (!signature) {
+    return undefined;
+  }
+  if (typeof signature.ctimeMs !== "number") {
+    return undefined;
+  }
+  const current = await safeFileSignatureAsync(filePath);
   if (!current) {
     return false;
   }

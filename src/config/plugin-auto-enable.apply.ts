@@ -3,6 +3,7 @@ import { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js
 import {
   materializePluginAutoEnableCandidatesInternal,
   resolvePluginAutoEnableManifestRegistry,
+  resolvePluginAutoEnableManifestRegistryAsync,
 } from "./plugin-auto-enable.shared.js";
 import type {
   PluginAutoEnableCandidate,
@@ -40,6 +41,27 @@ export function materializePluginAutoEnableCandidates(params: {
   });
 }
 
+export async function materializePluginAutoEnableCandidatesAsync(params: {
+  config?: OpenClawConfig;
+  candidates: readonly PluginAutoEnableCandidate[];
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+}): Promise<PluginAutoEnableResult> {
+  const env = params.env ?? process.env;
+  const config = params.config ?? {};
+  const manifestRegistry = await resolvePluginAutoEnableManifestRegistryAsync({
+    config,
+    env,
+    manifestRegistry: params.manifestRegistry,
+  });
+  return materializePluginAutoEnableCandidatesInternal({
+    config,
+    candidates: params.candidates,
+    env,
+    manifestRegistry,
+  });
+}
+
 export function applyPluginAutoEnable(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -47,6 +69,20 @@ export function applyPluginAutoEnable(params: {
 }): PluginAutoEnableResult {
   const candidates = detectPluginAutoEnableCandidates(params);
   return materializePluginAutoEnableCandidates({
+    config: params.config,
+    candidates,
+    env: params.env,
+    manifestRegistry: params.manifestRegistry,
+  });
+}
+
+export function applyPluginAutoEnableAsync(params: {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  manifestRegistry?: PluginManifestRegistry;
+}): Promise<PluginAutoEnableResult> {
+  const candidates = detectPluginAutoEnableCandidates(params);
+  return materializePluginAutoEnableCandidatesAsync({
     config: params.config,
     candidates,
     env: params.env,

@@ -1,6 +1,8 @@
 export {
   applyPluginAutoEnable,
+  applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates,
+  materializePluginAutoEnableCandidatesAsync,
 } from "./plugin-auto-enable.apply.js";
 export { detectPluginAutoEnableCandidates } from "./plugin-auto-enable.detect.js";
 export type {
