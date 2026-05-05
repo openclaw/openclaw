@@ -960,15 +960,9 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
-function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
-  if (messages.length > 0 || !context.systemPrompt) {
+function ensureOpenAICodexResponsesInput(messages: ResponseInput): void {
+  if (messages.length > 0) {
     return;
-  }
-  const text = buildOpenAICodexResponsesInstructions(context);
-  if (!text) {
-    throw new Error(
-      "OpenAI Codex Responses requires non-empty input when only systemPrompt is provided.",
-    );
   }
   messages.push({
     role: "user",
@@ -999,7 +993,7 @@ export function buildOpenAIResponsesParams(
     },
   );
   if (isCodexResponses) {
-    ensureOpenAICodexResponsesInput(messages, context);
+    ensureOpenAICodexResponsesInput(messages);
   }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
