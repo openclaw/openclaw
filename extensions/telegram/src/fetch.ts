@@ -41,6 +41,7 @@ const TELEGRAM_DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 30_000;
 const TELEGRAM_DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 600_000;
 const TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN = 10;
 const TELEGRAM_DISPATCHER_PIPELINING = 1;
+const TELEGRAM_STICKY_ATTEMPT_RESET_SUCCESS_THRESHOLD = 5;
 
 type TelegramAgentPoolOptions = {
   allowH2: false;
@@ -639,6 +640,28 @@ export function resolveTelegramTransport(
   });
 
   let stickyAttemptIndex = 0;
+  let consecutiveStickyAttemptSuccesses = 0;
+
+  const recordStickyAttemptSuccess = (attemptIndex: number): void => {
+    if (attemptIndex === 0 || attemptIndex !== stickyAttemptIndex) {
+      consecutiveStickyAttemptSuccesses = 0;
+      return;
+    }
+    consecutiveStickyAttemptSuccesses += 1;
+    if (consecutiveStickyAttemptSuccesses < TELEGRAM_STICKY_ATTEMPT_RESET_SUCCESS_THRESHOLD) {
+      return;
+    }
+    log.debug(
+      `telegram fetch fallback: resetting sticky dispatcher after ${consecutiveStickyAttemptSuccesses} successful fallback requests`,
+    );
+    stickyAttemptIndex = 0;
+    consecutiveStickyAttemptSuccesses = 0;
+  };
+
+  const resetStickyAttemptSuccesses = (): void => {
+    consecutiveStickyAttemptSuccesses = 0;
+  };
+
   const promoteStickyAttempt = (nextIndex: number, err: unknown, reason?: string): boolean => {
     if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
       return false;
@@ -654,6 +677,7 @@ export function resolveTelegramTransport(
       }
     }
     stickyAttemptIndex = nextIndex;
+    resetStickyAttemptSuccesses();
     return true;
   };
 
@@ -669,6 +693,7 @@ export function resolveTelegramTransport(
         input,
         withDispatcherIfMissing(init, transportAttempts[startIndex].createDispatcher()),
       );
+      recordStickyAttemptSuccess(startIndex);
       captureHttpExchange({
         url: resolveRequestUrl(input),
         method: init?.method ?? "GET",
@@ -681,6 +706,7 @@ export function resolveTelegramTransport(
       return response;
     } catch (caught) {
       err = caught;
+      resetStickyAttemptSuccesses();
     }
 
     if (!shouldUseTelegramTransportFallback(err)) {
@@ -698,6 +724,7 @@ export function resolveTelegramTransport(
           input,
           withDispatcherIfMissing(init, nextAttempt.createDispatcher()),
         );
+        resetStickyAttemptSuccesses();
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -710,6 +737,7 @@ export function resolveTelegramTransport(
         return response;
       } catch (caught) {
         err = caught;
+        resetStickyAttemptSuccesses();
         if (!shouldUseTelegramTransportFallback(err)) {
           throw err;
         }

@@ -827,6 +827,37 @@ describe("resolveTelegramFetch", () => {
     );
   });
 
+  it("returns to the default dispatcher after repeated sticky fallback successes", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
+      .mockResolvedValueOnce({ ok: true } as Response);
+    for (let i = 0; i < 5; i += 1) {
+      undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+    }
+    undiciFetch.mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/sendMessage");
+    for (let i = 0; i < 5; i += 1) {
+      await resolved("https://api.telegram.org/botx/sendChatAction");
+    }
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(8);
+    const defaultDispatcher = getDispatcherFromUndiciCall(1);
+    const stickyDispatcher = getDispatcherFromUndiciCall(2);
+    expect(stickyDispatcher).toBe(getDispatcherFromUndiciCall(7));
+    expect(getDispatcherFromUndiciCall(8)).toBe(defaultDispatcher);
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("resetting sticky dispatcher after 5 successful fallback requests"),
+    );
+  });
+
   it("escalates from IPv4 fallback to pinned Telegram IP and keeps it sticky", async () => {
     undiciFetch
       .mockRejectedValueOnce(buildFetchFallbackError("ETIMEDOUT"))
