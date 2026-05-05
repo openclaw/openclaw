@@ -4037,6 +4037,40 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
+  it("destroys bounded qmd read streams before closing their file handles", async () => {
+    const text = Array.from({ length: 50 }, (_, index) => `line-${index + 1}`).join("\n");
+    const relPath = path.join("memory", "window-close.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, relPath), text, "utf-8");
+
+    const realOpen = fs.open;
+    const streamDestroySpies: Mock[] = [];
+    const createReadStreamOptions: unknown[] = [];
+    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await realOpen(...args);
+      const realCreateReadStream = handle.createReadStream.bind(handle);
+      vi.spyOn(handle, "createReadStream").mockImplementation((options) => {
+        createReadStreamOptions.push(options);
+        const stream = realCreateReadStream(options);
+        streamDestroySpies.push(vi.spyOn(stream, "destroy"));
+        return stream;
+      });
+      return handle;
+    });
+
+    const { manager } = await createManager();
+    try {
+      await manager.readFile({ relPath, from: 10, lines: 3 });
+    } finally {
+      await manager.close();
+      openSpy.mockRestore();
+    }
+
+    expect(createReadStreamOptions).toContainEqual(expect.objectContaining({ autoClose: false }));
+    expect(streamDestroySpies).toHaveLength(1);
+    expect(streamDestroySpies[0]).toHaveBeenCalled();
+  });
+
   it("returns a bounded default excerpt for qmd memory reads without explicit lines", async () => {
     const relPath = path.join("memory", "default-window.md");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
