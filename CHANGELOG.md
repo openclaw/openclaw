@@ -448,6 +448,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: disable Pi auto-compaction whenever OpenClaw effectively owns safeguard compaction, including provider-backed safeguard mode, so Pi and OpenClaw no longer fight over long-session compaction. Fixes #73003. (#73839) Thanks @bradhallett.
 - Telegram/streaming: finalize text replies by stopping the edited stream message instead of sending a second answer bubble, so Telegram turns cannot duplicate the streamed final response. (#77947) Thanks @obviyus.
 - web_search/Brave: fix provider selection when Brave is installed as an external plugin and `tools.web.search.provider: "brave"` is explicitly configured — a redundant provider re-resolution at startup could race and return an empty list, causing a spurious `WEB_SEARCH_PROVIDER_INVALID_AUTODETECT` warning and treating the explicitly configured provider as absent. Fixes #77676. Thanks @openperf.
+- Plugins/channel setup: fix `setChannelRuntime` being silently dropped from non-bundled external plugin setup entries — external channel plugins that export `{ plugin, setChannelRuntime }` from their setup entry now have the runtime setter invoked, so the runtime initializer the provider polls for is set before the channel starts, preventing a poll timeout and gateway crash loop when the plugin opts into deferred startup loading. Fixes #77779. (#77799) Thanks @openperf.
 
 ## 2026.5.3-1
 
