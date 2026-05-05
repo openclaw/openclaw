@@ -1,8 +1,8 @@
 import { normalizeToolName } from "../../../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -147,11 +147,10 @@ export function collectPluginToolAllowlistWarnings(params: {
 
   const registry =
     params.manifestRegistry ??
-    loadPluginManifestRegistryForPluginRegistry({
+    loadManifestMetadataSnapshot({
       config: params.cfg,
-      env: params.env,
-      includeDisabled: true,
-    });
+      env: params.env ?? process.env,
+    }).manifestRegistry;
   const knownPluginIds = collectKnownPluginIds(registry);
   const toolOwners = collectToolOwners(registry);
   const missingPluginIssues = new Map<string, Set<string>>();
@@ -193,4 +192,22 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   return warnings;
+}
+
+export function collectBundledProviderAllowlistPolicyWarnings(params: {
+  cfg: OpenClawConfig;
+}): string[] {
+  if (params.cfg.plugins?.enabled === false) {
+    return [];
+  }
+  const allow = params.cfg.plugins?.allow;
+  if (!Array.isArray(allow) || allow.length === 0) {
+    return [];
+  }
+  if (params.cfg.plugins?.bundledDiscovery !== "compat") {
+    return [];
+  }
+  return [
+    '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
+  ];
 }

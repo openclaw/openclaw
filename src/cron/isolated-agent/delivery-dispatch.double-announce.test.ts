@@ -135,8 +135,12 @@ function makeBaseParams(overrides: {
   sessionTarget?: string;
   deliveryBestEffort?: boolean;
   runSessionKey?: string;
+  resolvedDeliveryMode?: "explicit" | "implicit";
 }): Parameters<typeof dispatchCronDelivery>[0] {
-  const resolvedDelivery = makeResolvedDelivery();
+  const resolvedDelivery = {
+    ...makeResolvedDelivery(),
+    mode: overrides.resolvedDeliveryMode ?? "explicit",
+  } satisfies Extract<DeliveryTargetResolution, { ok: true }>;
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
     cfg: {} as never,
@@ -422,7 +426,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("queues main-session awareness for isolated cron jobs after delivery", async () => {
+  it("queues main-session awareness for isolated cron jobs with explicit delivery targets", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
 
@@ -441,6 +445,23 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
       trusted: false,
     });
+  });
+
+  it("skips main-session awareness for isolated cron jobs with implicit delivery targets", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({
+      synthesizedText: "Implicit cron update.",
+      resolvedDeliveryMode: "implicit",
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it("skips awareness text when direct delivery strips a silent caption", async () => {

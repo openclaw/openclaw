@@ -80,6 +80,6 @@ export function resolvePluginControlPlaneFingerprint(
   return fingerprintPluginControlPlaneContext(resolvePluginControlPlaneContext(params));
 }
 
-export function fingerprintPluginControlPlaneContext(context: PluginControlPlaneContext): string {
+function fingerprintPluginControlPlaneContext(context: PluginControlPlaneContext): string {
   return hashJson(context);
 }

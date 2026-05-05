@@ -28,7 +28,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import type { TelegramInlineButtons } from "../button-types.js";
+import { resolveTelegramInlineButtons, type TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
@@ -36,6 +36,7 @@ import {
   renderTelegramHtmlText,
   wrapFileReferencesInHtml,
 } from "../format.js";
+import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -751,7 +752,17 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
-    if (!reply?.text && !hasMedia) {
+    const resolvedReplyText =
+      resolveTelegramInteractiveTextFallback({
+        text: reply?.text,
+        interactive: reply?.interactive,
+      }) ??
+      reply?.text ??
+      "";
+    if (reply && resolvedReplyText !== (reply.text ?? "")) {
+      reply = { ...reply, text: resolvedReplyText };
+    }
+    if (!resolvedReplyText && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
         continue;
@@ -760,13 +771,11 @@ export async function deliverReplies(params: {
       continue;
     }
 
-    const rawContent = reply.text || "";
-    const hookReplyToId =
-      params.replyToMode === "off"
-        ? undefined
-        : resolveTelegramReplyId(reply.replyToId ?? undefined);
+    const rawContent = resolvedReplyText;
+    const replyToId =
+      params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
-      replyToId: hookReplyToId,
+      replyToId,
       replyQuoteByMessageId: params.replyQuoteByMessageId,
       replyQuoteMessageId: params.replyQuoteMessageId,
       replyQuoteText: params.replyQuoteText,
@@ -778,7 +787,7 @@ export async function deliverReplies(params: {
         {
           to: params.chatId,
           content: rawContent,
-          replyToId: hookReplyToId,
+          replyToId,
           threadId: params.thread?.id,
           metadata: {
             channel: "telegram",
@@ -804,12 +813,13 @@ export async function deliverReplies(params: {
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
-      const replyToId =
-        params.replyToMode === "off"
-          ? undefined
-          : resolveTelegramReplyId(reply.replyToId ?? undefined);
       const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
-      const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
+      const replyMarkup = buildInlineKeyboard(
+        resolveTelegramInlineButtons({
+          buttons: telegramData?.buttons,
+          interactive: reply.interactive,
+        }),
+      );
       let firstDeliveredMessageId: number | undefined;
       if (mediaList.length === 0) {
         firstDeliveredMessageId = await deliverTextReply({

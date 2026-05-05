@@ -134,7 +134,7 @@ export function ensureObject(
   return next;
 }
 
-export function normalizeKnownProvider(
+function normalizeKnownProvider(
   value: unknown,
   providers: Array<{ id: string }>,
 ): string | undefined {

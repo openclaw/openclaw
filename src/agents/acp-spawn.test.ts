@@ -36,7 +36,7 @@ function createDefaultSpawnConfig(): OpenClawConfig {
       discord: {
         threadBindings: {
           enabled: true,
-          spawnAcpSessions: true,
+          spawnSessions: true,
         },
       },
     },
@@ -358,7 +358,7 @@ function enableMatrixAcpThreadBindings(): void {
       matrix: {
         threadBindings: {
           enabled: true,
-          spawnAcpSessions: true,
+          spawnSessions: true,
         },
       },
     },
@@ -418,7 +418,7 @@ function enableLineCurrentConversationBindings(): void {
       line: {
         threadBindings: {
           enabled: true,
-          spawnAcpSessions: true,
+          spawnSessions: true,
         },
       },
     },
@@ -1566,13 +1566,13 @@ describe("spawnAcpDirect", () => {
           defaultAccount: "work",
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
+            spawnSessions: true,
           },
           accounts: {
             work: {
               threadBindings: {
                 enabled: true,
-                spawnAcpSessions: true,
+                spawnSessions: true,
               },
             },
           },
@@ -1661,13 +1661,13 @@ describe("spawnAcpDirect", () => {
         matrix: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: true,
+            spawnSessions: true,
           },
           accounts: {
             "bot-alpha": {
               threadBindings: {
                 enabled: true,
-                spawnAcpSessions: true,
+                spawnSessions: true,
               },
             },
           },
@@ -2028,7 +2028,7 @@ describe("spawnAcpDirect", () => {
         discord: {
           threadBindings: {
             enabled: true,
-            spawnAcpSessions: false,
+            spawnSessions: false,
           },
         },
       },
@@ -2048,7 +2048,7 @@ describe("spawnAcpDirect", () => {
       },
     );
 
-    expect(expectFailedSpawn(result, "error").error).toContain("spawnAcpSessions=true");
+    expect(expectFailedSpawn(result, "error").error).toContain("spawnSessions=true");
   });
 
   it("forbids ACP spawn from sandboxed requester sessions", async () => {

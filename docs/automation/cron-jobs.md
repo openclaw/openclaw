@@ -164,6 +164,8 @@ For isolated jobs, chat delivery is shared. If a chat route is available, the ag
 
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
+Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
 Failure notifications follow a separate destination path:
 
 - `cron.failureDestination` sets a global default for failure notifications.

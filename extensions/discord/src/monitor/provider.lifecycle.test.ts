@@ -175,12 +175,13 @@ describe("runDiscordGatewayLifecycle", () => {
     threadStop: ReturnType<typeof vi.fn>;
     waitCalls: number;
     gatewaySupervisor: { detachLifecycle: ReturnType<typeof vi.fn> };
+    detachCalls?: number;
   }) {
     expect(waitForDiscordGatewayStopMock).toHaveBeenCalledTimes(params.waitCalls);
     expect(unregisterGatewayMock).toHaveBeenCalledWith("default");
     expect(stopGatewayLoggingMock).toHaveBeenCalledTimes(1);
     expect(params.threadStop).toHaveBeenCalledTimes(1);
-    expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(1);
+    expect(params.gatewaySupervisor.detachLifecycle).toHaveBeenCalledTimes(params.detachCalls ?? 1);
   }
 
   it("resolves gateway READY timeouts from config, env, then defaults", () => {
@@ -332,7 +333,7 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(statusSink).toHaveBeenCalledTimes(callCountAfterCleanup);
   });
 
-  it("restarts the gateway once when startup never reaches READY, then recovers", async () => {
+  it("reconnects with backoff when startup never reaches READY, then recovers", async () => {
     vi.useFakeTimers();
     try {
       const { emitter, gateway } = createGatewayHarness();
@@ -346,10 +347,13 @@ describe("runDiscordGatewayLifecycle", () => {
       const { lifecycleParams, runtimeError, statusSink } = createLifecycleHarness({ gateway });
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
 
-      await vi.advanceTimersByTimeAsync(16_500);
+      await vi.advanceTimersByTimeAsync(18_500);
       await expect(lifecyclePromise).resolves.toBeUndefined();
 
       expect(runtimeError).toHaveBeenCalledWith(
+        expect.stringContaining("gateway READY wait timed out after 15000ms"),
+      );
+      expect(runtimeError).not.toHaveBeenCalledWith(
         expect.stringContaining("gateway was not ready after 15000ms; restarting gateway"),
       );
       expect(gateway.disconnect).toHaveBeenCalledTimes(1);
@@ -395,14 +399,14 @@ describe("runDiscordGatewayLifecycle", () => {
       expect(gateway.connect).toHaveBeenCalledTimes(1);
       expect(gateway.connect).toHaveBeenCalledWith(false);
 
-      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(3_000);
       await expect(lifecyclePromise).resolves.toBeUndefined();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("fails when startup still is not ready after a restart", async () => {
+  it("keeps retrying when startup still is not ready after a reconnect", async () => {
     vi.useFakeTimers();
     try {
       const { emitter, gateway } = createGatewayHarness();
@@ -413,19 +417,17 @@ describe("runDiscordGatewayLifecycle", () => {
 
       const lifecyclePromise = runDiscordGatewayLifecycle(lifecycleParams);
       lifecyclePromise.catch(() => {});
-      await vi.advanceTimersByTimeAsync(31_000);
+      await vi.advanceTimersByTimeAsync(34_000);
 
-      await expect(lifecyclePromise).rejects.toThrow(
-        "discord gateway did not reach READY within 15000ms after restart",
-      );
-      expect(gateway.disconnect).toHaveBeenCalledTimes(1);
-      expect(gateway.connect).toHaveBeenCalledTimes(1);
+      expect(gateway.disconnect).toHaveBeenCalledTimes(2);
+      expect(gateway.connect).toHaveBeenCalledTimes(2);
       expect(gateway.connect).toHaveBeenCalledWith(false);
-      expectLifecycleCleanup({
-        threadStop,
-        waitCalls: 0,
-        gatewaySupervisor,
-      });
+      expect(waitForDiscordGatewayStopMock).not.toHaveBeenCalled();
+
+      gateway.isConnected = true;
+      await vi.advanceTimersByTimeAsync(2_500);
+      await expect(lifecyclePromise).resolves.toBeUndefined();
+      expectLifecycleCleanup({ threadStop, waitCalls: 1, gatewaySupervisor });
     } finally {
       vi.useRealTimers();
     }
@@ -506,6 +508,60 @@ describe("runDiscordGatewayLifecycle", () => {
       threadStop,
       waitCalls: 0,
       gatewaySupervisor,
+    });
+  });
+
+  it("treats abort-time live reconnect exhaustion as expected shutdown", async () => {
+    const abortController = new AbortController();
+    let liveGatewayHandler: ((event: DiscordGatewayEvent) => void) | undefined;
+    const { lifecycleParams, threadStop, runtimeLog, runtimeError, gatewaySupervisor } =
+      createLifecycleHarness();
+    lifecycleParams.abortSignal = abortController.signal;
+    gatewaySupervisor.attachLifecycle.mockImplementation(
+      (handler: (event: DiscordGatewayEvent) => void) => {
+        liveGatewayHandler = handler;
+      },
+    );
+    abortController.signal.addEventListener(
+      "abort",
+      () => {
+        if (!liveGatewayHandler) {
+          throw new Error("discord gateway lifecycle handler was not attached");
+        }
+        liveGatewayHandler(
+          createGatewayEvent(
+            "reconnect-exhausted",
+            "Max reconnect attempts (50) reached after close code 1005",
+          ),
+        );
+      },
+      { once: true },
+    );
+    waitForDiscordGatewayStopMock.mockImplementationOnce(async (waitParams) => {
+      const actual =
+        await vi.importActual<typeof import("../monitor.gateway.js")>("../monitor.gateway.js");
+      const waitPromise = actual.waitForDiscordGatewayStop(waitParams);
+      abortController.abort(new Error("shutdown"));
+      return await waitPromise;
+    });
+
+    await expect(runDiscordGatewayLifecycle(lifecycleParams)).resolves.toBeUndefined();
+
+    expect(gatewaySupervisor.attachLifecycle).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("treating reconnect-exhausted during expected shutdown as clean"),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("Max reconnect attempts (50) reached after close code 1005"),
+    );
+    expect(runtimeError).not.toHaveBeenCalledWith(
+      expect.stringContaining("discord gateway reconnect-exhausted"),
+    );
+    expectLifecycleCleanup({
+      threadStop,
+      waitCalls: 1,
+      gatewaySupervisor,
+      detachCalls: 2,
     });
   });
 

@@ -78,14 +78,14 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         Array.isArray(rawComponents) || typeof rawComponents === "function"
           ? (rawComponents as DiscordSendComponents)
           : undefined;
-      const content = readStringParam(ctx.params, "content", {
-        required: !asVoice && !componentSpec && !components,
-        allowEmpty: true,
-      });
       const mediaUrl =
         readStringParam(ctx.params, "mediaUrl", { trim: false }) ??
         readStringParam(ctx.params, "path", { trim: false }) ??
         readStringParam(ctx.params, "filePath", { trim: false });
+      const content = readStringParam(ctx.params, "content", {
+        required: !asVoice && !componentSpec && !components && !mediaUrl,
+        allowEmpty: true,
+      });
       const filename = readStringParam(ctx.params, "filename");
       const replyTo = readStringParam(ctx.params, "replyTo");
       const rawEmbeds = ctx.params.embeds;
@@ -117,6 +117,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
             agentId: agentId ?? undefined,
             mediaUrl: mediaUrl ?? undefined,
             filename: filename ?? undefined,
+            mediaAccess: ctx.options?.mediaAccess,
+            mediaLocalRoots: ctx.options?.mediaLocalRoots,
+            mediaReadFile: ctx.options?.mediaReadFile,
           },
         );
         return jsonResult({ ok: true, result, components: true });
@@ -144,6 +147,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
 
       const result = await discordMessagingActionRuntime.sendMessageDiscord(to, content ?? "", {
         ...ctx.withOpts(),
+        mediaAccess: ctx.options?.mediaAccess,
         mediaUrl,
         filename: filename ?? undefined,
         mediaLocalRoots: ctx.options?.mediaLocalRoots,

@@ -44,6 +44,8 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
   "ComSpec",
   "COMSPEC",
+  "LocalAppData",
+  "LOCALAPPDATA",
   "ProgramFiles",
   "PROGRAMFILES",
   "ProgramW6432",
@@ -228,8 +230,10 @@ describe("loadDotEnv", () => {
             "HTTP_PROXY=http://evil-proxy:8080",
             "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
             "HOMEBREW_PREFIX=./evil-brew",
+            "SystemRoot=.\\fake-root",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
+            "WINDIR=.\\fake-windir",
           ].join("\n"),
         );
         await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
@@ -245,8 +249,10 @@ describe("loadDotEnv", () => {
         delete process.env.HTTP_PROXY;
         delete process.env.HOMEBREW_BREW_FILE;
         delete process.env.HOMEBREW_PREFIX;
+        delete process.env.SystemRoot;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
+        delete process.env.WINDIR;
 
         loadDotEnv({ quiet: true });
 
@@ -262,8 +268,10 @@ describe("loadDotEnv", () => {
         expect(process.env.HTTP_PROXY).toBeUndefined();
         expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
         expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
+        expect(process.env.SystemRoot).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
+        expect(process.env.WINDIR).toBeUndefined();
       });
     });
   });
@@ -299,20 +307,26 @@ describe("loadDotEnv", () => {
     });
   });
 
-  it("blocks OPENCLAW_STATE_DIR from workspace .env even when unset in process env", async () => {
+  it("blocks state-directory controls from workspace .env even when unset in process env", async () => {
     await withIsolatedEnvAndCwd(async () => {
       await withDotEnvFixture(async ({ cwdDir }) => {
         await writeEnvFile(
           path.join(cwdDir, ".env"),
-          "OPENCLAW_STATE_DIR=./evil-state\nOPENCLAW_CONFIG_PATH=./evil-config.json\n",
+          [
+            "OPENCLAW_STATE_DIR=./evil-state",
+            "STATE_DIRECTORY=./evil-systemd-state",
+            "OPENCLAW_CONFIG_PATH=./evil-config.json",
+          ].join("\n"),
         );
 
         delete process.env.OPENCLAW_STATE_DIR;
+        delete process.env.STATE_DIRECTORY;
         delete process.env.OPENCLAW_CONFIG_PATH;
 
         loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+        expect(process.env.STATE_DIRECTORY).toBeUndefined();
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
       });
     });
@@ -326,6 +340,8 @@ describe("loadDotEnv", () => {
           [
             "ComSpec=.\\evil-comspec",
             "COMSPEC=.\\evil-comspec-upper",
+            "LocalAppData=.\\evil-local-app-data",
+            "LOCALAPPDATA=.\\evil-local-app-data-upper",
             "ProgramFiles=.\\evil-pfiles",
             "PROGRAMFILES=.\\evil-pfiles-upper",
             "ProgramW6432=.\\evil-pw6432",
@@ -703,6 +719,7 @@ describe("workspace .env blocklist completeness", () => {
           "HOMEBREW_BREW_FILE",
           "HOMEBREW_PREFIX",
           "IRC_HOST",
+          "LOCALAPPDATA",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
           "MINIMAX_API_HOST",
@@ -732,6 +749,7 @@ describe("workspace .env blocklist completeness", () => {
           "ProgramFiles",
           "ProgramFiles(x86)",
           "ProgramW6432",
+          "STATE_DIRECTORY",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
         ];

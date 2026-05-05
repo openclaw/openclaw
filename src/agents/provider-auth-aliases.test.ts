@@ -6,6 +6,20 @@ const pluginRegistryMocks = vi.hoisted(() => {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
+      const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
+      return {
+        index: {
+          plugins: registry.plugins.map((plugin: { id: string; origin?: string }) => ({
+            pluginId: plugin.id,
+            origin: plugin.origin ?? "global",
+            enabled: true,
+            enabledByDefault: true,
+          })),
+        },
+        plugins: registry.plugins,
+      };
+    }),
   };
 });
 
@@ -20,6 +34,10 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+}));
+
 import {
   resetProviderAuthAliasMapCacheForTest,
   resolveProviderIdForAuth,
@@ -32,6 +50,7 @@ describe("provider auth aliases", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
   it("treats deprecated auth choice ids as provider auth aliases", () => {

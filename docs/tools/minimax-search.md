@@ -29,9 +29,10 @@ snippets, and related queries.
   </Step>
 </Steps>
 
-OpenClaw also accepts `MINIMAX_CODING_API_KEY` and `MINIMAX_OAUTH_TOKEN` as env
-aliases. `MINIMAX_API_KEY` is still read as a compatibility fallback when it
-already points at a token-plan credential.
+OpenClaw also accepts `MINIMAX_CODING_API_KEY`, `MINIMAX_OAUTH_TOKEN`, and
+`MINIMAX_API_KEY` as env aliases. `MINIMAX_API_KEY` should point at a
+search-enabled Token Plan credential; ordinary MiniMax model API keys may not
+be accepted by the Token Plan search endpoint.
 
 ## Config
 
@@ -59,8 +60,8 @@ already points at a token-plan credential.
 }
 ```
 
-**Environment alternative:** set `MINIMAX_CODE_PLAN_KEY` or `MINIMAX_OAUTH_TOKEN`
-in the Gateway environment.
+**Environment alternative:** set `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`,
+`MINIMAX_OAUTH_TOKEN`, or `MINIMAX_API_KEY` in the Gateway environment.
 For a gateway install, put it in `~/.openclaw/.env`.
 
 ## Region selection

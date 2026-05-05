@@ -160,8 +160,18 @@ export const id: TranslationMap = {
     store: "Penyimpanan: {path}",
     active: "Aktif",
     limit: "Batas",
+    filters: "Filter",
+    showFilters: "Tampilkan filter",
+    hideFilters: "Sembunyikan filter",
+    sourceFilters: "Filter sumber sesi",
     global: "Global",
     unknown: "Tidak diketahui",
+    showArchived: "Tampilkan yang diarsipkan",
+    activeTooltip: "Diperbarui dalam {count} menit terakhir.",
+    limitTooltip: "Jumlah sesi maksimum untuk dimuat.",
+    globalTooltip: "Sertakan sesi global.",
+    unknownTooltip: "Sertakan sesi tidak dikenal.",
+    showArchivedTooltip: "Sertakan sesi yang diarsipkan.",
     minutesPlaceholder: "mnt",
     searchPlaceholder: "Filter menurut kunci, agen, label, jenis…",
     selected: "{count} dipilih",
@@ -180,6 +190,8 @@ export const id: TranslationMap = {
     verbose: "Verbose",
     reasoning: "Penalaran",
     noSessions: "Tidak ada sesi yang ditemukan.",
+    noSessionsMatchFilters: "Tidak ada sesi yang cocok dengan filter Anda.",
+    showAll: "Tampilkan semua",
     inherit: "warisi",
     defaultOption: "Default ({value})",
     offExplicit: "nonaktif (eksplisit)",
@@ -723,6 +735,16 @@ export const id: TranslationMap = {
       dailyCsv: "CSV Harian",
       json: "JSON",
     },
+    cacheStatus: {
+      warning:
+        "Cache penggunaan sedang dibangun ulang di latar belakang. Total yang ditampilkan mungkin sudah kedaluwarsa.",
+      title: "{status}: {pending} tertunda, {stale} kedaluwarsa, {cached} tersimpan dalam cache",
+      status: {
+        refreshing: "menyegarkan",
+        stale: "kedaluwarsa",
+        partial: "sebagian",
+      },
+    },
     empty: {
       title: "Mulai dengan rentang tanggal",
       subtitle:
@@ -913,6 +935,7 @@ export const id: TranslationMap = {
     updating: "Memperbarui…",
     updateNow: "Perbarui sekarang",
     dismissUpdateBanner: "Tutup banner pembaruan",
+    switchedSession: "Beralih ke {session}",
   },
   languages: {
     en: "Inggris",

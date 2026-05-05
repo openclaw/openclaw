@@ -2,18 +2,24 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   hasExplicitChannelConfig,
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
+import {
+  channelPluginIdBelongsToManifest,
+  resolveSetupChannelRegistration,
+} from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { getBundledChannelSetupPlugin } from "./bundled.js";
@@ -35,6 +41,7 @@ const BUILT_PLUGIN_LOADER_MODULE_CANDIDATES = [
   "plugins/build-smoke-entry.js",
 ] as const;
 const moduleLoaders: PluginModuleLoaderCache = new Map();
+const log = createSubsystemLogger("channels");
 
 type PluginLoaderModule = {
   loadOpenClawPlugins: (params: {
@@ -366,6 +373,44 @@ function canUseManifestChannelPlugin(record: PluginManifestRecord, channelId: st
 
 export { resolveReadOnlyChannelCommandDefaults };
 
+function loadSetupChannelPluginFromManifestRecord(params: {
+  record: PluginManifestRecord;
+  channelId: string;
+}): ChannelPlugin | undefined {
+  if (!params.record.setupSource || !params.record.channels.includes(params.channelId)) {
+    return undefined;
+  }
+  try {
+    const moduleLoader = getCachedPluginModuleLoader({
+      cache: moduleLoaders,
+      modulePath: params.record.setupSource,
+      importerUrl: import.meta.url,
+      preferBuiltDist: true,
+      loaderFilename: import.meta.url,
+      tryNative: true,
+      cacheScopeKey: "read-only-setup-entry",
+    });
+    const registration = resolveSetupChannelRegistration(moduleLoader(params.record.setupSource));
+    if (!registration.plugin) {
+      return undefined;
+    }
+    if (
+      !channelPluginIdBelongsToManifest({
+        channelId: registration.plugin.id,
+        pluginId: params.record.id,
+        manifestChannels: params.record.channels,
+      })
+    ) {
+      return undefined;
+    }
+    return cloneChannelPluginForChannelId(registration.plugin, params.channelId);
+  } catch (error) {
+    const detail = formatErrorMessage(error);
+    log.warn(`[channels] failed to load channel setup ${params.record.id}: ${detail}`);
+    return undefined;
+  }
+}
+
 function rebindChannelPluginConfig(
   config: ChannelPlugin["config"],
   sourceChannelId: string,
@@ -652,12 +697,11 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
-  const manifestRecords = loadPluginManifestRegistryForPluginRegistry({
+  const manifestRecords = loadPluginMetadataSnapshot({
     config: cfg,
     stateDir: options.stateDir,
     workspaceDir,
     env,
-    includeDisabled: true,
   }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
@@ -682,7 +726,17 @@ export function resolveReadOnlyChannelPluginsForConfig(
       if (byId.has(channelId)) {
         continue;
       }
-      addChannelPlugins(byId, [getBundledChannelSetupPlugin(channelId)]);
+      const bundledSetupPlugin =
+        bundledManifestRecords
+          .filter((record) => record.channels.includes(channelId))
+          .map((record) =>
+            loadSetupChannelPluginFromManifestRecord({
+              record,
+              channelId,
+            }),
+          )
+          .find((plugin) => plugin) ?? getBundledChannelSetupPlugin(channelId, env);
+      addChannelPlugins(byId, [bundledSetupPlugin]);
     }
   }
 

@@ -123,6 +123,8 @@ export type TtsSynthesisResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -139,6 +141,8 @@ export type TtsTelephonyResult = {
   error?: string;
   latencyMs?: number;
   provider?: string;
+  providerModel?: string;
+  providerVoice?: string;
   persona?: string;
   fallbackFrom?: string;
   attemptedProviders?: string[];
@@ -1064,6 +1068,36 @@ function resolveTtsRequestSetup(params: {
   };
 }
 
+function readTtsResultString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveTtsResultModel(
+  providerConfig: SpeechProviderConfig,
+  providerOverrides?: SpeechProviderOverrides,
+): string | undefined {
+  return (
+    readTtsResultString(providerOverrides?.modelId) ??
+    readTtsResultString(providerOverrides?.model) ??
+    readTtsResultString(providerConfig.modelId) ??
+    readTtsResultString(providerConfig.model)
+  );
+}
+
+function resolveTtsResultVoice(
+  providerConfig: SpeechProviderConfig,
+  providerOverrides?: SpeechProviderOverrides,
+): string | undefined {
+  return (
+    readTtsResultString(providerOverrides?.voiceId) ??
+    readTtsResultString(providerOverrides?.voiceName) ??
+    readTtsResultString(providerOverrides?.voice) ??
+    readTtsResultString(providerConfig.voiceId) ??
+    readTtsResultString(providerConfig.voiceName) ??
+    readTtsResultString(providerConfig.voice)
+  );
+}
+
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
@@ -1271,6 +1305,8 @@ export async function synthesizeSpeech(params: {
         audioBuffer: synthesis.audioBuffer,
         latencyMs,
         provider,
+        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
+        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
         persona: persona?.id,
         fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
         attemptedProviders,
@@ -1401,6 +1437,8 @@ export async function textToSpeechTelephony(params: {
         audioBuffer: synthesis.audioBuffer,
         latencyMs,
         provider,
+        providerModel: resolveTtsResultModel(prepared.providerConfig, prepared.providerOverrides),
+        providerVoice: resolveTtsResultVoice(prepared.providerConfig, prepared.providerOverrides),
         persona: persona?.id,
         fallbackFrom: provider !== primaryProvider ? primaryProvider : undefined,
         attemptedProviders,
@@ -1527,7 +1565,8 @@ export async function maybeApplyTtsToPayload(params: {
   const cleanedText = directives.cleanedText;
   const trimmedCleaned = cleanedText.trim();
   const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
-  const ttsText = directives.ttsText?.trim() || visibleText;
+  const explicitTtsText = directives.ttsText?.trim() || "";
+  const ttsText = explicitTtsText || visibleText;
 
   const nextPayload =
     visibleText === text.trim()
@@ -1558,7 +1597,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  if (ttsText.trim().length < 10) {
+  if (!explicitTtsText && ttsText.trim().length < 10) {
     return nextPayload;
   }
 
@@ -1598,7 +1637,10 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim();
-  if (textForAudio.length < 10) {
+  if (!textForAudio) {
+    return nextPayload;
+  }
+  if (!explicitTtsText && textForAudio.length < 10) {
     return nextPayload;
   }
 

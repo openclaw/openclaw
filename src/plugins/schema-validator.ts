@@ -49,11 +49,31 @@ function getAjv(mode: "default" | "defaults"): AjvLike {
 }
 
 type CachedValidator = {
+  hasDefaults: boolean;
   validate: ValidateFunction;
   schema: JsonSchemaObject;
+  schemaFingerprint: string;
 };
 
 const schemaCache = new PluginLruCache<CachedValidator>(512);
+
+function fingerprintSchema(schema: JsonSchemaObject): string {
+  return JSON.stringify(schema);
+}
+
+function schemaHasDefaults(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object") {
+    return false;
+  }
+  if (Array.isArray(schema)) {
+    return schema.some((item) => schemaHasDefaults(item));
+  }
+  const record = schema as Record<string, unknown>;
+  if (Object.prototype.hasOwnProperty.call(record, "default")) {
+    return true;
+  }
+  return Object.values(record).some((value) => schemaHasDefaults(value));
+}
 
 function cloneValidationValue<T>(value: T): T {
   if (value === undefined || value === null) {
@@ -66,6 +86,7 @@ export type JsonSchemaValidationError = {
   path: string;
   message: string;
   text: string;
+  additionalProperty?: string;
   allowedValues?: string[];
   allowedValuesHiddenCount?: number;
 };
@@ -132,6 +153,16 @@ function getAjvAllowedValuesSummary(error: ErrorObject): ReturnType<typeof summa
   return summarizeAllowedValues(allowedValues);
 }
 
+function resolveAdditionalProperty(error: ErrorObject): string | undefined {
+  if (error.keyword !== "additionalProperties") {
+    return undefined;
+  }
+  const additionalProperty = (error.params as { additionalProperty?: unknown }).additionalProperty;
+  return typeof additionalProperty === "string" && additionalProperty.trim()
+    ? additionalProperty
+    : undefined;
+}
+
 function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaValidationError[] {
   if (!errors || errors.length === 0) {
     return [{ path: "<root>", message: "invalid config", text: "<root>: invalid config" }];
@@ -140,6 +171,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
     const path = resolveAjvErrorPath(error);
     const baseMessage = error.message ?? "invalid";
     const allowedValuesSummary = getAjvAllowedValuesSummary(error);
+    const additionalProperty = resolveAdditionalProperty(error);
     const message = allowedValuesSummary
       ? appendAllowedValuesHint(baseMessage, allowedValuesSummary)
       : baseMessage;
@@ -149,6 +181,7 @@ function formatAjvErrors(errors: ErrorObject[] | null | undefined): JsonSchemaVa
       path,
       message,
       text: `${safePath}: ${safeMessage}`,
+      ...(additionalProperty ? { additionalProperty } : {}),
       ...(allowedValuesSummary
         ? {
             allowedValues: allowedValuesSummary.values,
@@ -167,13 +200,26 @@ export function validateJsonSchemaValue(params: {
 }): { ok: true; value: unknown } | { ok: false; errors: JsonSchemaValidationError[] } {
   const cacheKey = params.applyDefaults ? `${params.cacheKey}::defaults` : params.cacheKey;
   let cached = schemaCache.get(cacheKey);
-  if (!cached || cached.schema !== params.schema) {
+  const schemaFingerprint =
+    !cached || cached.schema !== params.schema ? fingerprintSchema(params.schema) : undefined;
+  if (
+    !cached ||
+    (cached.schema !== params.schema && cached.schemaFingerprint !== schemaFingerprint)
+  ) {
     const validate = getAjv(params.applyDefaults ? "defaults" : "default").compile(params.schema);
-    cached = { validate, schema: params.schema };
+    cached = {
+      hasDefaults: params.applyDefaults ? schemaHasDefaults(params.schema) : false,
+      validate,
+      schema: params.schema,
+      schemaFingerprint: schemaFingerprint ?? fingerprintSchema(params.schema),
+    };
     schemaCache.set(cacheKey, cached);
+  } else if (cached.schema !== params.schema) {
+    cached.schema = params.schema;
   }
 
-  const value = params.applyDefaults ? cloneValidationValue(params.value) : params.value;
+  const value =
+    params.applyDefaults && cached.hasDefaults ? cloneValidationValue(params.value) : params.value;
   const ok = cached.validate(value);
   if (ok) {
     return { ok: true, value };

@@ -973,8 +973,9 @@ describe("deliverOutboundPayloads", () => {
       "fmt:hello **boss**:2",
     ]);
 
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
     await deliverOutboundPayloads({
-      cfg: { channels: { line: {} } } as OpenClawConfig,
+      cfg,
       channel: "line",
       to: "U123",
       payloads: [{ text: "photo", mediaUrl: "file:///tmp/f.png" }],
@@ -1883,8 +1884,9 @@ describe("deliverOutboundPayloads", () => {
     );
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
 
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
     await deliverOutboundPayloads({
-      cfg: { channels: { line: {} } } as OpenClawConfig,
+      cfg,
       channel: "line",
       to: "U123",
       payloads: [{ text: "caption", mediaUrl: "https://example.com/files/report.pdf?sig=1" }],
@@ -1900,6 +1902,7 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({
         text: "report.pdf",
         idempotencyKey: "idem-deliver-1",
+        config: cfg,
       }),
     );
   });

@@ -12,7 +12,7 @@ import { runGatewayUpdate } from "./update-runner.js";
 
 type CommandResponse = { stdout?: string; stderr?: string; code?: number | null };
 type CommandResult = { stdout: string; stderr: string; code: number | null };
-const WHATSAPP_LIGHT_RUNTIME_API = bundledDistPluginFile("whatsapp", "light-runtime-api.js");
+const MATRIX_HELPER_API = bundledDistPluginFile("matrix", "helper-api.js");
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-" });
 
 function toCommandResult(response?: CommandResponse): CommandResult {
@@ -263,6 +263,14 @@ describe("runGatewayUpdate", () => {
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
       await fs.writeFile(absolutePath, "export {};\n", "utf-8");
     }
+  }
+
+  async function writeGatewayEntrypoint(pkgRoot: string) {
+    const entrypoint = path.join(pkgRoot, "dist", "index.js");
+    await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+    await fs.writeFile(entrypoint, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    return entrypoint;
   }
 
   async function createGlobalPackageFixture(rootDir: string) {
@@ -1357,6 +1365,7 @@ describe("runGatewayUpdate", () => {
   const createGlobalInstallHarness = (params: {
     pkgRoot: string;
     npmRootOutput?: string;
+    pnpmRootOutput?: string;
     installCommand: string;
     gitRootMode?: "not-git" | "missing";
     onInstall?: (options?: {
@@ -1382,6 +1391,9 @@ describe("runGatewayUpdate", () => {
         return { stdout: "", stderr: "", code: 1 };
       }
       if (key === "pnpm root -g") {
+        if (params.pnpmRootOutput) {
+          return { stdout: params.pnpmRootOutput, stderr: "", code: 0 };
+        }
         return { stdout: "", stderr: "", code: 1 };
       }
       if (key === params.installCommand) {
@@ -1454,6 +1466,87 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(
       "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
     );
+  });
+
+  it("runs doctor after global npm updates before reporting success", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    let doctorEnv: NodeJS.ProcessEnv | undefined;
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        doctorEnv = options?.env;
+        return { stdout: "doctor repaired config", stderr: "", code: 0 };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(doctorCommand);
+    expect(result.steps.map((step) => step.name)).toContain("openclaw doctor");
+    expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
+  });
+
+  it("fails global npm updates when post-update doctor fails", async () => {
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    await seedGlobalPackageRoot(pkgRoot);
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      npmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async () => {
+        await writeGlobalPackageVersion(pkgRoot);
+        await writeGatewayEntrypoint(pkgRoot);
+      },
+    });
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(
+      pkgRoot,
+      "dist",
+      "index.js",
+    )} doctor --non-interactive --fix`;
+    const runCommandWithDoctor = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
+      const key = argv.join(" ");
+      if (key === doctorCommand) {
+        calls.push(key);
+        return { stdout: "", stderr: "doctor refused migration", code: 1 };
+      }
+      return runCommand(argv, options);
+    };
+
+    const result = await runWithCommand(runCommandWithDoctor, { cwd: pkgRoot });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("doctor-failed");
+    expect(calls).toContain(doctorCommand);
+    expect(result.steps.at(-1)).toMatchObject({
+      name: "openclaw doctor",
+      exitCode: 1,
+      stderrTail: "doctor refused migration",
+    });
   });
 
   it("falls back to global npm update when git is missing from PATH", async () => {
@@ -1556,8 +1649,11 @@ describe("runGatewayUpdate", () => {
           "utf-8",
         );
         await writeBundledRuntimeSidecars(pkgRoot);
-        await writePackageDistInventory(pkgRoot);
-        await fs.rm(path.join(pkgRoot, WHATSAPP_LIGHT_RUNTIME_API), { force: true });
+        const inventory = await writePackageDistInventory(pkgRoot);
+        expect(inventory).toContain(MATRIX_HELPER_API);
+        const matrixHelperApiPath = path.join(pkgRoot, MATRIX_HELPER_API);
+        await expect(pathExists(matrixHelperApiPath)).resolves.toBe(true);
+        await fs.rm(matrixHelperApiPath);
       },
     });
 
@@ -1566,7 +1662,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("global-install-failed");
     expect(result.steps.at(-1)?.stderrTail).toContain(
-      `missing packaged dist file ${WHATSAPP_LIGHT_RUNTIME_API}`,
+      `missing packaged dist file ${MATRIX_HELPER_API}`,
     );
   });
 
@@ -1653,6 +1749,38 @@ describe("runGatewayUpdate", () => {
     await expect(fs.readFile(path.join(pkgRoot, "package.json"), "utf-8")).resolves.toContain(
       '"version":"1.0.0"',
     );
+  });
+
+  it("uses clean staged npm swaps for pnpm installs that resolve to an npm global root", async () => {
+    const prefix = path.join(tempDir, "npm-prefix");
+    const nodeModules = path.join(prefix, "lib", "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const staleInstallChunk = path.join(pkgRoot, "dist", "install-C_GuuNz6.js");
+    await seedGlobalPackageRoot(pkgRoot);
+    await fs.writeFile(
+      staleInstallChunk,
+      'const pluginRuntime = () => import("./install.runtime-Xom5hOHq.js");\n',
+      "utf-8",
+    );
+
+    const { calls, runCommand } = createGlobalInstallHarness({
+      pkgRoot,
+      pnpmRootOutput: nodeModules,
+      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      onInstall: async (options) => {
+        await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
+      },
+    });
+
+    const result = await runWithCommand(runCommand, { cwd: pkgRoot });
+
+    expect(result.status).toBe("ok");
+    expect(result.mode).toBe("pnpm");
+    expect(result.after?.version).toBe("2.0.0");
+    expect(calls.some((call) => call.startsWith("npm i -g --prefix "))).toBe(true);
+    expect(calls.some((call) => call.startsWith("pnpm add -g"))).toBe(false);
+    expect(result.steps.map((step) => step.name)).toEqual(["global update", "global install swap"]);
+    await expect(fs.access(staleInstallChunk)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
