@@ -300,6 +300,12 @@ function selectSubagentOutputText(
   if (partialProgress) {
     return partialProgress;
   }
+  // Tool results are unstructured implementation detail, not a completion reply.
+  // Successful child runs that exit after only tool calls should announce as
+  // no-output instead of leaking raw grep/build/log output to the requester.
+  if (outcome?.status === "ok") {
+    return undefined;
+  }
   return snapshot.latestRawText;
 }
 
