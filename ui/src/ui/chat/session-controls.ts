@@ -192,6 +192,23 @@ type ChatThinkingSelectState = {
   options: ChatThinkingSelectOption[];
 };
 
+function formatThinkingDefaultLabel(effectiveLevel: string | undefined): string {
+  const normalized = normalizeThinkLevel(effectiveLevel) ?? "off";
+  if (normalized === "off") {
+    return "Off";
+  }
+  return `Inherited: ${normalized}`;
+}
+
+function formatThinkingOverrideLabel(value: string, label?: string): string {
+  const normalized = normalizeThinkLevel(value) ?? normalizeLowercaseStringOrEmpty(value);
+  if (!normalized || normalized === "off") {
+    return "Off";
+  }
+  const displayLabel = label?.trim() || normalized;
+  return `Override: ${displayLabel}`;
+}
+
 function resolveThinkingTargetModel(state: AppViewState): {
   provider: string | null;
   model: string | null;
@@ -211,13 +228,9 @@ function buildThinkingOptions(
   const options: ChatThinkingSelectOption[] = [];
 
   const addOption = (value: string, label?: string) => {
-    const resolvedLabel =
-      label ??
-      value
-        .split(/[-_]/g)
-        .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-        .join(" ");
-    pushUniqueTrimmedSelectOption(options, seen, value, () => resolvedLabel);
+    const normalizedValue = normalizeThinkLevel(value) ?? normalizeLowercaseStringOrEmpty(value);
+    const resolvedLabel = formatThinkingOverrideLabel(normalizedValue, label);
+    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () => resolvedLabel);
   };
 
   for (const level of levels) {
@@ -257,7 +270,7 @@ function resolveThinkingLevelOptions(
   }));
 }
 
-function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
+export function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelectState {
   const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
   const persisted = activeRow?.thinkingLevel;
   const currentOverride =
@@ -283,7 +296,7 @@ function resolveChatThinkingSelectState(state: AppViewState): ChatThinkingSelect
       : "off");
   return {
     currentOverride,
-    defaultLabel: `Default (${defaultLevel})`,
+    defaultLabel: formatThinkingDefaultLabel(defaultLevel),
     options: buildThinkingOptions(levels, currentOverride),
   };
 }
