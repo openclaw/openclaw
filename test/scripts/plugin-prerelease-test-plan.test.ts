@@ -100,7 +100,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         stateScenario: "empty",
       }),
     );
-    expect(script).toContain("npm:@openclaw/kitchen-sink@0.1.5");
+    expect(script).toContain("npm:@openclaw/kitchen-sink@0.2.5");
     expect(script).toContain("npm-pinned-conformance");
     expect(script).toContain("npm-pinned-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
