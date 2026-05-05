@@ -305,6 +305,7 @@ Docs: https://docs.openclaw.ai
 - Browser/SSRF: enforce the existing current-tab URL navigation policy before tab-scoped debug, export, and read routes (console, page errors, network requests, trace start/stop, response body, screenshot, snapshot, storage, etc.) collect from an already-selected tab, so blocked tabs return a policy error instead of being read first and redacted only at response time. (#75731) Thanks @eleqtrizit.
 - Security/Windows: route the `.cmd`/`.bat` process wrapper through the shared Windows install-root resolver instead of `process.env.ComSpec`, so workspace dotenv-blocked `SystemRoot`/`WINDIR` overrides and unsafe values like UNC paths or path-lists cannot redirect `cmd.exe` selection on Windows. (#77472) Thanks @drobison00.
 - Agents/bootstrap: honor `BOOTSTRAP.md` content injected by `agent:bootstrap` hooks when deciding whether bootstrap is pending, so hook-provided required setup instructions are included in the system prompt. (#77501) Thanks @ificator.
+- Agents/replay-history: drop trailing assistant turns whose content is empty or carries only the stream-error sentinel before sending the transcript to the provider, so prefill-strict providers (such as github-copilot/claude-opus-4.6) no longer reject the request with `400 The conversation must end with a user message` after a session whose last turn errored before producing content. Refs #77228. (#77287) Thanks @openperf.
 
 ## 2026.5.3-1
 
