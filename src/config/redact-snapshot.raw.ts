@@ -18,9 +18,30 @@ export function replaceSensitiveValuesInRaw(params: {
   return result;
 }
 
+/**
+ * Recursively strip keys with `undefined` values so that objects materialized
+ * with `void 0` assignments compare cleanly against JSON-parsed objects
+ * (which can never contain `undefined`).
+ */
+function stripUndefinedKeys(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stripUndefinedKeys);
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, v]) => v !== undefined)
+        .map(([k, v]) => [k, stripUndefinedKeys(v)]),
+    );
+  }
+  return value;
+}
+
 export function shouldFallbackToStructuredRawRedaction(params: {
   redactedRaw: string;
   originalConfig: unknown;
+  /** Source (pre-materialize) config for comparison; falls back to originalConfig. */
+  sourceConfig?: unknown;
   restoreParsed: (parsed: unknown) => { ok: boolean; result?: unknown };
 }): boolean {
   try {
@@ -29,7 +50,11 @@ export function shouldFallbackToStructuredRawRedaction(params: {
     if (!restored.ok) {
       return true;
     }
-    return !isDeepStrictEqual(restored.result, params.originalConfig);
+    const compareTarget = params.sourceConfig ?? params.originalConfig;
+    return !isDeepStrictEqual(
+      stripUndefinedKeys(restored.result),
+      stripUndefinedKeys(compareTarget),
+    );
   } catch {
     return true;
   }
