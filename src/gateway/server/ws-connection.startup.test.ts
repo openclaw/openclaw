@@ -125,4 +125,94 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       expect(socket.close).toHaveBeenCalledWith(1013, "gateway starting");
     });
   });
+
+  // Regression for #76361: a 1013 ("Try Again Later") close during the startup
+  // sidecars-pending window is exactly what the WebSocket spec says servers
+  // should do, so the corresponding `closed before connect` log must surface
+  // at debug level rather than warn — otherwise every Control UI client adds
+  // a WARN entry per gateway restart.
+  it("logs 1013 'gateway starting' close-before-connect at debug, not warn (#76361)", async () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const wss = {
+      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
+        listeners.set(event, handler);
+      }),
+    } as unknown as WebSocketServer;
+    const socket = Object.assign(new EventEmitter(), {
+      _socket: {
+        remoteAddress: "127.0.0.1",
+        remotePort: 1234,
+        localAddress: "127.0.0.1",
+        localPort: 5678,
+      },
+      send: vi.fn((_data: string, cb?: (err?: Error) => void) => {
+        cb?.();
+      }),
+      close: vi.fn((code?: number, reason?: string) => {
+        socket.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
+      }),
+    });
+    const upgradeReq = {
+      headers: { host: "127.0.0.1:19001" },
+      socket: { localAddress: "127.0.0.1" },
+    };
+    const logWsControl = createLogger();
+
+    attachGatewayWsConnectionHandler({
+      wss,
+      clients: new Set(),
+      preauthConnectionBudget: { release: vi.fn() } as never,
+      port: 19001,
+      canvasHostEnabled: false,
+      resolvedAuth: { mode: "none", allowTailscale: false },
+      isStartupPending: () => true,
+      gatewayMethods: [],
+      events: [],
+      refreshHealthSnapshot: vi.fn(async () => ({}) as never),
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: logWsControl as never,
+      extraHandlers: {},
+      broadcast: vi.fn(),
+      buildRequestContext: () => createRequestContext() as never,
+    });
+
+    const onConnection = listeners.get("connection");
+    onConnection?.(socket, upgradeReq);
+    socket.emit(
+      "message",
+      JSON.stringify({
+        type: "req",
+        id: "connect-1",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.CLI,
+            version: "dev",
+            platform: "test",
+            mode: GATEWAY_CLIENT_MODES.CLI,
+          },
+          role: "operator",
+          scopes: ["operator.read"],
+          caps: [],
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(socket.close).toHaveBeenCalledWith(1013, "gateway starting");
+    });
+    await vi.waitFor(() => {
+      const debugCalls = logWsControl.debug.mock.calls.filter(
+        ([msg]) => typeof msg === "string" && msg.includes("closed before connect"),
+      );
+      expect(debugCalls.length).toBeGreaterThan(0);
+    });
+    const warnCalls = logWsControl.warn.mock.calls.filter(
+      ([msg]) => typeof msg === "string" && msg.includes("closed before connect"),
+    );
+    expect(warnCalls).toHaveLength(0);
+  });
 });
