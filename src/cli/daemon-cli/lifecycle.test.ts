@@ -405,6 +405,7 @@ describe("runDaemonRestart health checks", () => {
         attempts: 360,
         delayMs: 500,
         includeUnknownListenersAsStale: true,
+        requireReachability: true,
         port: 18789,
       }),
     );
