@@ -216,10 +216,17 @@ OpenClaw classifies sessions by the work it can still observe:
   still making progress.
 - `session.stalled`: active work exists, but the active run has not reported
   recent progress. Stalled embedded runs stay observe-only at first, then
-  abort-drain after at least 10 minutes and 5x `diagnostics.stuckSessionWarnMs`
-  with no progress so queued turns behind the lane can resume.
+  abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
+  turns behind the lane can resume. When unset, the abort threshold defaults to
+  the safer extended window of at least 10 minutes and 5x
+  `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work. This releases
   the affected session lane immediately.
+
+Recovery emits structured `session.recovery.requested` and
+`session.recovery.completed` events. Diagnostic session state is marked idle
+only after a mutating recovery outcome (`aborted` or `released`) and only if the
+same processing generation is still current.
 
 Only `session.stuck` emits the `openclaw.session.stuck` counter, the
 `openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
@@ -268,11 +275,11 @@ heartbeat tick. For the config knob and defaults, see
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`
+  - `openclaw.channel`, `openclaw.webhook`
 - `openclaw.webhook.error`
-  - `openclaw.channel`, `openclaw.webhook`, `openclaw.chatId`, `openclaw.error`
+  - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
-  - `openclaw.channel`, `openclaw.outcome`, `openclaw.chatId`, `openclaw.messageId`, `openclaw.reason`
+  - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`

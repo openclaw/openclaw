@@ -130,6 +130,20 @@ function schedulePostAttachUpdateSentinelRefresh(params: {
   handle.unref?.();
 }
 
+function schedulePostReadySidecarTask(params: {
+  startupTrace?: GatewayStartupTrace;
+  name: string;
+  log: { warn: (msg: string) => void };
+  run: () => Awaitable<void>;
+}): void {
+  const handle = setImmediate(() => {
+    void measureStartup(params.startupTrace, params.name, params.run).catch((err) => {
+      params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
+    });
+  });
+  handle.unref?.();
+}
+
 function resolveRestartSentinelPathFast(env: NodeJS.ProcessEnv = process.env): string {
   const normalizePathEnv = (value: string | undefined) => {
     const trimmed = value?.trim();
@@ -369,37 +383,6 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
 }) {
-  await measureStartup(params.startupTrace, "sidecars.session-locks", async () => {
-    try {
-      const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
-        await Promise.all([
-          import("../config/paths.js"),
-          import("../agents/session-dirs.js"),
-          import("../agents/session-write-lock.js"),
-        ]);
-      const stateDir = resolveStateDir(process.env);
-      const sessionDirs = await resolveAgentSessionDirs(stateDir);
-      for (const sessionsDir of sessionDirs) {
-        const result = await cleanStaleLockFiles({
-          sessionsDir,
-          staleMs: SESSION_LOCK_STALE_MS,
-          removeStale: true,
-          log: { warn: (message) => params.log.warn(message) },
-        });
-        if (result.cleaned.length > 0) {
-          const { markRestartAbortedMainSessionsFromLocks } =
-            await import("../agents/main-session-restart-recovery.js");
-          await markRestartAbortedMainSessionsFromLocks({
-            sessionsDir,
-            cleanedLocks: result.cleaned,
-          });
-        }
-      }
-    } catch (err) {
-      params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
-    }
-  });
-
   await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
     if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
       const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
@@ -564,33 +547,84 @@ export async function startGatewaySidecars(params: {
     scheduleGatewayMemoryBackend({ cfg: params.cfg, log: params.log, policy });
   });
 
-  await measureStartup(params.startupTrace, "sidecars.restart-sentinel", async () => {
-    if (!shouldCheckRestartSentinel()) {
-      return;
-    }
-    if (!hasRestartSentinelFileFast()) {
-      return;
-    }
-    setTimeout(() => {
-      void import("./server-restart-sentinel.js")
-        .then(({ scheduleRestartSentinelWake }) =>
-          scheduleRestartSentinelWake({ deps: params.deps }),
-        )
-        .catch((err) => {
-          params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
-        });
-    }, 750);
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.session-locks",
+    log: params.log,
+    run: async () => {
+      try {
+        const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
+          await Promise.all([
+            import("../config/paths.js"),
+            import("../agents/session-dirs.js"),
+            import("../agents/session-write-lock.js"),
+          ]);
+        const stateDir = resolveStateDir(process.env);
+        const sessionDirs = await resolveAgentSessionDirs(stateDir);
+        for (const sessionsDir of sessionDirs) {
+          const result = await cleanStaleLockFiles({
+            sessionsDir,
+            staleMs: SESSION_LOCK_STALE_MS,
+            removeStale: true,
+            log: { warn: (message) => params.log.warn(message) },
+          });
+          if (result.cleaned.length > 0) {
+            const { markRestartAbortedMainSessionsFromLocks } =
+              await import("../agents/main-session-restart-recovery.js");
+            await markRestartAbortedMainSessionsFromLocks({
+              sessionsDir,
+              cleanedLocks: result.cleaned,
+            });
+          }
+        }
+      } catch (err) {
+        params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
+      }
+    },
   });
 
-  await measureStartup(params.startupTrace, "sidecars.subagent-recovery", async () => {
-    const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
-    scheduleSubagentOrphanRecovery();
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.restart-sentinel",
+    log: params.log,
+    run: async () => {
+      if (!shouldCheckRestartSentinel()) {
+        return;
+      }
+      if (!hasRestartSentinelFileFast()) {
+        return;
+      }
+      setTimeout(() => {
+        void import("./server-restart-sentinel.js")
+          .then(({ scheduleRestartSentinelWake }) =>
+            scheduleRestartSentinelWake({ deps: params.deps }),
+          )
+          .catch((err) => {
+            params.log.warn(`restart sentinel wake failed to schedule: ${String(err)}`);
+          });
+      }, 750);
+    },
   });
 
-  await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
-    const { scheduleRestartAbortedMainSessionRecovery } =
-      await import("../agents/main-session-restart-recovery.js");
-    scheduleRestartAbortedMainSessionRecovery();
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.subagent-recovery",
+    log: params.log,
+    run: async () => {
+      const { scheduleSubagentOrphanRecovery } = await import("../agents/subagent-registry.js");
+      scheduleSubagentOrphanRecovery();
+    },
+  });
+
+  schedulePostReadySidecarTask({
+    startupTrace: params.startupTrace,
+    name: "sidecars.main-session-recovery",
+    log: params.log,
+    run: async () => {
+      const { scheduleRestartAbortedMainSessionRecovery } =
+        await import("../agents/main-session-restart-recovery.js");
+      scheduleRestartAbortedMainSessionRecovery();
+    },
   });
 
   return { pluginServices };

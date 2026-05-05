@@ -2,6 +2,7 @@
 summary: "CLI reference for `openclaw update` (safe-ish source update + gateway auto-restart)"
 read_when:
   - You want to update a source checkout safely
+  - You are debugging `openclaw update` output or options
   - You need to understand `--update` shorthand behavior
 title: "Update"
 ---
@@ -41,6 +42,14 @@ openclaw --update
   detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
+
+`openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
+the planned channel/tag/install/restart actions, `--json` for machine-readable
+results, and `openclaw update status --json` when you only need channel and
+availability details. If you are debugging Gateway logs around an update,
+console verbosity and file log level are separate: Gateway `--verbose` affects
+terminal/WebSocket output, while file logs require `logging.level: "debug"` or
+`"trace"` in config. See [Gateway logging](/gateway/logging).
 
 <Warning>
 Downgrades require confirmation because older versions can break configuration.
@@ -107,10 +116,12 @@ service, and verify the restarted Gateway reports the expected version before
 reporting success. On macOS, the post-update check also verifies the LaunchAgent
 is loaded/running for the active profile and the configured loopback port is
 healthy. If the plist is installed but launchd is not supervising it, OpenClaw
-re-bootstraps and kickstarts the LaunchAgent automatically, then reruns the
-health/version/channel readiness checks. If the Gateway still does not become
-healthy, the command exits non-zero and prints the restart log path plus explicit
-restart, reinstall, and package rollback instructions. With `--no-restart`,
+re-bootstraps the LaunchAgent automatically, then reruns the
+health/version/channel readiness checks. A fresh bootstrap loads the RunAtLoad
+job directly, so update recovery does not immediately `kickstart -k` the newly
+spawned Gateway. If the Gateway still does not become healthy, the command exits
+non-zero and prints the restart log path plus explicit restart, reinstall, and
+package rollback instructions. With `--no-restart`,
 package replacement still runs but the managed service is not stopped or
 restarted, so the running Gateway may keep old code until you restart it
 manually.
@@ -157,8 +168,9 @@ manually.
 
 On the beta update channel, tracked npm and ClawHub plugin installs that follow
 the default/latest line try a plugin `@beta` release first. If the plugin has no
-beta release, OpenClaw falls back to the recorded default/latest spec. Exact
-versions and explicit tags are not rewritten.
+beta release, OpenClaw falls back to the recorded default/latest spec. For npm
+plugins, OpenClaw also falls back when the beta package exists but fails install
+validation. Exact versions and explicit tags are not rewritten.
 
 <Warning>
 If an exact pinned npm plugin update resolves to an artifact whose integrity differs from the stored install record, `openclaw update` aborts that plugin artifact update instead of installing it. Reinstall or update the plugin explicitly only after verifying that you trust the new artifact.

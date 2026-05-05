@@ -1,5 +1,13 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
+import {
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  type SsrFPolicy,
+} from "../infra/net/ssrf.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
   buildProviderRequestDispatcherPolicy,
@@ -268,6 +276,44 @@ export function resolveModelRequestTimeoutMs(
     : undefined;
 }
 
+function resolveHttpHostname(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveModelTransportSsrFPolicy(params: {
+  model: Model<Api>;
+  url: string;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
+  const baseHostname = resolveHttpHostname(baseUrl);
+  const requestHostname = resolveHttpHostname(params.url);
+  const fakeIpPolicy =
+    typeof baseUrl === "string" && baseHostname && requestHostname === baseHostname
+      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
+      : undefined;
+
+  if (fakeIpPolicy) {
+    return {
+      ...fakeIpPolicy,
+      ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
+    };
+  }
+
+  return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+}
+
 export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
@@ -283,6 +329,11 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
+    const policy = resolveModelTransportSsrFPolicy({
+      model,
+      url,
+      allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+    });
     const requestInit =
       request &&
       ({
@@ -293,7 +344,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const result = await fetchWithSsrFGuard({
+    const guardedFetchOptions = {
       url,
       init: requestInit ?? init,
       capture: {
@@ -308,8 +359,13 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
-      ...(requestConfig.allowPrivateNetwork ? { policy: { allowPrivateNetwork: true } } : {}),
-    });
+      ...(policy ? { policy } : {}),
+    };
+    const result = await fetchWithSsrFGuard(
+      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
+        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+        : guardedFetchOptions,
+    );
     let response = result.response;
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);

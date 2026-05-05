@@ -151,6 +151,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
           },
+          stuckSessionAbortMs: {
+            type: "integer",
+            exclusiveMinimum: 0,
+            maximum: 9007199254740991,
+            title: "Session Abort Threshold (ms)",
+            description:
+              "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
+          },
           otel: {
             type: "object",
             properties: {
@@ -5336,6 +5344,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   },
                 ],
               },
+              toolProgressDetail: {
+                anyOf: [
+                  {
+                    type: "string",
+                    const: "explain",
+                  },
+                  {
+                    type: "string",
+                    const: "raw",
+                  },
+                ],
+              },
               reasoningDefault: {
                 anyOf: [
                   {
@@ -6338,6 +6358,14 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   title: "Agent Thinking Default",
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+                },
+                verboseDefault: {
+                  type: "string",
+                  enum: ["off", "on", "full"],
+                },
+                toolProgressDetail: {
+                  type: "string",
+                  enum: ["explain", "raw"],
                 },
                 reasoningDefault: {
                   type: "string",
@@ -7388,8 +7416,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       maximum: 9007199254740991,
                     },
                     visibleReplies: {
-                      type: "string",
-                      enum: ["automatic", "message_tool"],
+                      anyOf: [
+                        {
+                          type: "string",
+                          enum: ["automatic", "message_tool"],
+                        },
+                        {
+                          type: "boolean",
+                        },
+                      ],
                     },
                   },
                   additionalProperties: false,
@@ -8304,6 +8339,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           },
                           additionalProperties: false,
                         },
+                        postCompactionGuard: {
+                          type: "object",
+                          properties: {
+                            windowSize: {
+                              type: "integer",
+                              exclusiveMinimum: 0,
+                              maximum: 9007199254740991,
+                            },
+                          },
+                          additionalProperties: false,
+                        },
                       },
                       additionalProperties: false,
                     },
@@ -8751,6 +8797,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     title: "Web Fetch Readability Extraction",
                     description:
                       "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+                  },
+                  useTrustedEnvProxy: {
+                    type: "boolean",
+                    title: "Web Fetch Trusted Env Proxy",
+                    description:
+                      "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
                   },
                   ssrfPolicy: {
                     type: "object",
@@ -10169,7 +10221,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Async Media Completion Direct Send",
                     description:
-                      "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
+                      "Deprecated compatibility flag. Async media generation completions are requester-session mediated so the agent can decide how to tell the user and use the message tool when source delivery requires it.",
                   },
                 },
                 additionalProperties: false,
@@ -18222,6 +18274,20 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 },
                 additionalProperties: false,
               },
+              postCompactionGuard: {
+                type: "object",
+                properties: {
+                  windowSize: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                    title: "Post-compaction Loop Guard Window Size",
+                    description:
+                      "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+                  },
+                },
+                additionalProperties: false,
+              },
             },
             additionalProperties: false,
           },
@@ -19019,8 +19085,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               "Prefix text prepended to inbound user messages before they are handed to the agent runtime. Use this sparingly for channel context markers and keep it stable across sessions.",
           },
           visibleReplies: {
-            type: "string",
-            enum: ["automatic", "message_tool"],
+            anyOf: [
+              {
+                type: "string",
+                enum: ["automatic", "message_tool"],
+              },
+              {
+                type: "boolean",
+              },
+            ],
             title: "Visible Replies",
             description:
               'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
@@ -19052,8 +19125,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   "Maximum number of prior group messages loaded as context per turn for group sessions. Use higher values for richer continuity, or lower values for faster and cheaper responses.",
               },
               visibleReplies: {
-                type: "string",
-                enum: ["automatic", "message_tool"],
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["automatic", "message_tool"],
+                  },
+                  {
+                    type: "boolean",
+                  },
+                ],
                 title: "Group Visible Replies",
                 description:
                   'Overrides visible source replies for group/channel conversations. Defaults to "message_tool" when no global visible reply policy is set. "message_tool" keeps normal final replies private and requires message(action=send) for room output; "automatic" posts normal replies as before.',
@@ -24070,6 +24150,28 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Controls whether this plugin may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`. Non-bundled plugins must opt in explicitly.",
                     },
+                    timeoutMs: {
+                      type: "integer",
+                      exclusiveMinimum: 0,
+                      maximum: 600000,
+                      title: "Plugin Hook Timeout (ms)",
+                      description:
+                        "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+                    },
+                    timeouts: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "integer",
+                        exclusiveMinimum: 0,
+                        maximum: 600000,
+                      },
+                      title: "Plugin Hook Timeout Overrides",
+                      description:
+                        "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+                    },
                   },
                   additionalProperties: false,
                   title: "Plugin Hook Policy",
@@ -24116,6 +24218,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Plugin Entries",
             description:
               "Per-plugin settings keyed by plugin ID including enablement and plugin-specific runtime configuration payloads. Use this for scoped plugin tuning without changing global loader policy.",
+          },
+          bundledDiscovery: {
+            type: "string",
+            enum: ["compat", "allowlist"],
+            title: "Bundled Plugin Discovery",
+            description:
+              'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
           },
         },
         additionalProperties: false,
@@ -24563,6 +24672,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "diagnostics.stuckSessionWarnMs": {
       label: "Session Liveness Threshold (ms)",
       help: "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
+      tags: ["observability", "storage"],
+    },
+    "diagnostics.stuckSessionAbortMs": {
+      label: "Session Abort Threshold (ms)",
+      help: "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
@@ -25274,7 +25388,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.asyncCompletion.directSend": {
       label: "Async Media Completion Direct Send",
-      help: "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
+      help: "Deprecated compatibility flag. Async media generation completions are requester-session mediated so the agent can decide how to tell the user and use the message tool when source delivery requires it.",
       tags: ["storage", "media", "tools"],
     },
     "tools.media.audio.enabled": {
@@ -25538,6 +25652,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Tool-loop Global Circuit Breaker Threshold",
       help: "Global no-progress breaker threshold (default: 30).",
       tags: ["reliability", "tools"],
+    },
+    "tools.loopDetection.postCompactionGuard.windowSize": {
+      label: "Post-compaction Loop Guard Window Size",
+      help: "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+      tags: ["tools"],
     },
     "tools.loopDetection.detectors.genericRepeat": {
       label: "Tool-loop Generic Repeat Detection",
@@ -25942,6 +26061,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "tools.web.fetch.readability": {
       label: "Web Fetch Readability Extraction",
       help: "Use Readability to extract main content from HTML (fallbacks to basic HTML cleanup).",
+      tags: ["tools"],
+    },
+    "tools.web.fetch.useTrustedEnvProxy": {
+      label: "Web Fetch Trusted Env Proxy",
+      help: "Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy is operator-controlled and enforces outbound policy after DNS resolution.",
       tags: ["tools"],
     },
     "tools.web.fetch.ssrfPolicy": {
@@ -28791,6 +28915,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
       tags: ["access"],
     },
+    "plugins.bundledDiscovery": {
+      label: "Bundled Plugin Discovery",
+      help: 'Controls bundled plugin runtime discovery when plugins.allow is configured. "allowlist" (default) gates bundled provider plugins by plugins.allow like third-party plugins. "compat" preserves legacy behavior where bundled provider plugins can be force-loaded on every chat turn.',
+      tags: ["advanced"],
+    },
     "plugins.deny": {
       label: "Plugin Denylist",
       help: "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
@@ -28845,6 +28974,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow Prompt Injection Hooks",
       help: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior.",
       tags: ["access"],
+    },
+    "plugins.entries.*.hooks.timeoutMs": {
+      label: "Plugin Hook Timeout (ms)",
+      help: "Default timeout in milliseconds for this plugin's typed hooks, capped at 600000. Use this to bound slow plugin hooks without changing plugin code; per-hook values in hooks.timeouts take precedence.",
+      tags: ["performance"],
+    },
+    "plugins.entries.*.hooks.timeouts": {
+      label: "Plugin Hook Timeout Overrides",
+      help: "Per-hook timeout overrides in milliseconds keyed by typed hook name, capped at 600000. Use narrow overrides for known slow hooks such as before_prompt_build or agent_end instead of raising every hook timeout.",
+      tags: ["performance"],
     },
     "plugins.entries.*.subagent": {
       label: "Plugin Subagent Policy",
@@ -29296,6 +29435,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["advanced", "url-secret"],
     },
   },
-  version: "2026.5.3",
+  version: "2026.5.4",
   generatedAt: "2026-03-22T21:17:33.302Z",
 };

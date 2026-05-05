@@ -407,6 +407,44 @@ describe("buildQaRuntimeEnv", () => {
     });
   });
 
+  it("stages live env API-key profiles for isolated QA workers", async () => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-live-api-key-state-"));
+    cleanups.push(async () => {
+      await rm(stateDir, { recursive: true, force: true });
+    });
+
+    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+      cfg: {},
+      stateDir,
+      providerIds: ["openai"],
+      env: {
+        OPENAI_API_KEY: "qa-live-not-a-real-key",
+      },
+    });
+
+    expect(cfg.auth?.profiles?.["qa-live-openai-env"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+      displayName: "QA live openai env credential",
+    });
+
+    for (const agentId of ["main", "qa"]) {
+      const storeRaw = await readFile(
+        path.join(stateDir, "agents", agentId, "agent", "auth-profiles.json"),
+        "utf8",
+      );
+      expect(JSON.parse(storeRaw)).toMatchObject({
+        profiles: {
+          "qa-live-openai-env": {
+            type: "api_key",
+            provider: "openai",
+            key: "qa-live-not-a-real-key",
+          },
+        },
+      });
+    }
+  });
+
   it("stages placeholder mock auth profiles per agent dir so mock-openai runs can resolve credentials", async () => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "qa-mock-auth-"));
     cleanups.push(async () => {
@@ -789,6 +827,33 @@ describe("qa bundled plugin dir", () => {
         pluginId: "qa-channel",
       }),
     ).toBe(path.join(repoRoot, "extensions", "qa-channel"));
+  });
+
+  it("resolves bundled plugins by manifest id when the directory name differs", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-manifest-id-root-"));
+    cleanups.push(async () => {
+      await rm(repoRoot, { recursive: true, force: true });
+    });
+    await mkdir(path.join(repoRoot, "dist", "extensions", "kimi-coding"), {
+      recursive: true,
+    });
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "kimi-coding", "openclaw.plugin.json"),
+      JSON.stringify({ id: "kimi", providers: ["kimi"] }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(repoRoot, "dist", "extensions", "kimi-coding", "package.json"),
+      "{}",
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveQaBundledPluginSourceDir({
+        repoRoot,
+        pluginId: "kimi",
+      }),
+    ).toBe(path.join(repoRoot, "dist", "extensions", "kimi-coding"));
   });
 
   it("uses a source bundled plugin when the built copy is missing CLI metadata", async () => {
