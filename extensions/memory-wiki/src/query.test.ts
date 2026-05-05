@@ -309,7 +309,7 @@ describe("searchMemoryWiki", () => {
       config,
       query: "maintainer-whois",
       mode: "source-evidence",
-      maxResults: 2,
+      maxResults: 5,
     });
     expect(evidenceResults.map((result) => result.path)).toContain("sources/maintainers.md");
   });

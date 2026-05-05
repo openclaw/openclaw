@@ -24,6 +24,14 @@ gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hyb
 gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
+## Surface opener identity
+
+- For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
+- Get the login from `gh issue view` / `gh pr view` (`author.login`), then fetch profile metadata once with `gh api users/<login> --jq '{login,name,created_at,type}'`.
+- Report account age as created date plus rough age, for example `Opened by Jane Doe (@jane, account created 2021-04-03, ~5y old)`.
+- If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
+- Use this as triage signal, not proof by itself: new or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
+
 ## Apply close and triage labels correctly
 
 - If an issue or PR matches an auto-close reason, apply the label and let `.github/workflows/auto-response.yml` handle the comment/close/lock flow.

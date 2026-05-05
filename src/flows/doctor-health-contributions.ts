@@ -650,7 +650,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     }),
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
-      label: "Configured plugin installs",
+      label: "Configured plugin repair",
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
