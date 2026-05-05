@@ -1466,7 +1466,7 @@ type DynamicToolBuildParams = {
   sandboxSessionKey: string;
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
-  sessionAgentId: string | undefined;
+  sessionAgentId: string;
   pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };

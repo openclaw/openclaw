@@ -347,6 +347,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       direction: "outbound",
       from: "+15550001234",
       to: "+15550009999",
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
       transcript: [{ speaker: "user", text: "Can you check shipment status?" }],
     });
 
@@ -384,6 +385,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: "voice:15550009999",
+        spawnedBy: "agent:main:discord:channel:general",
         messageProvider: "voice",
         lane: "voice",
         provider: "openai",
