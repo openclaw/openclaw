@@ -19,6 +19,10 @@ type BundledPackageChannelMetadataModule =
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 
+type RegisterChannelsCliOptions = {
+  includeSetupOptions?: boolean;
+};
+
 const channelsCommandsLoader = createLazyImportLoader<ChannelsCommandsModule>(
   () => import("../commands/channels.js"),
 );
@@ -46,7 +50,13 @@ function getOptionNames(command: Command): string[] {
   return command.options.map((option) => option.attributeName());
 }
 
-function shouldRegisterChannelSetupOptions(argv: string[] = process.argv): boolean {
+function shouldRegisterChannelSetupOptions(
+  argv: string[] = process.argv,
+  options: RegisterChannelsCliOptions = {},
+): boolean {
+  if (options.includeSetupOptions) {
+    return true;
+  }
   const { commandPath } = resolveCliArgvInvocation(normalizeWindowsArgv(argv));
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
@@ -77,7 +87,11 @@ async function addChannelSetupOptions(command: Command): Promise<Command> {
   return command;
 }
 
-export async function registerChannelsCli(program: Command, argv: string[] = process.argv) {
+export async function registerChannelsCli(
+  program: Command,
+  argv: string[] = process.argv,
+  options: RegisterChannelsCliOptions = {},
+) {
   const channelNames = formatCliChannelOptions();
   const channels = program
     .command("channels")
@@ -196,7 +210,7 @@ export async function registerChannelsCli(program: Command, argv: string[] = pro
     .option("--auth-dir <path>", "Channel auth directory override")
     .option("--use-env", "Use env-backed credentials when supported", false);
 
-  if (shouldRegisterChannelSetupOptions(argv)) {
+  if (shouldRegisterChannelSetupOptions(argv, options)) {
     await addChannelSetupOptions(addCommand);
   }
 

@@ -55,6 +55,22 @@ describe("registerChannelsCli", () => {
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
   });
 
+  it("can force channel-specific add options for completion generation", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "matrix",
+        cliAddOptions: [{ flags: "--homeserver <url>", description: "Matrix homeserver URL" }],
+      },
+    ]);
+    process.argv = ["node", "openclaw", "completion", "--write-state"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program, process.argv, { includeSetupOptions: true });
+
+    expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
+    expect(getChannelAddOptionFlags(program)).toContain("--homeserver <url>");
+  });
+
   it("normalizes Windows launcher argv before channel-specific add option gating", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
       {
