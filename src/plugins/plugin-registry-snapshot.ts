@@ -48,6 +48,19 @@ export type PluginRegistrySnapshotResult = {
 };
 
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+export const PLUGIN_REGISTRY_SNAPSHOT_CACHE_TTL_MS = 1_000;
+
+type CachedPluginRegistrySnapshotResult = {
+  key: string;
+  result: PluginRegistrySnapshotResult;
+  expiresAt: number;
+};
+
+let cachedPluginRegistrySnapshotResult: CachedPluginRegistrySnapshotResult | null = null;
+
+export function resetPluginRegistrySnapshotCacheForTest(): void {
+  cachedPluginRegistrySnapshotResult = null;
+}
 
 function formatDeprecatedPersistedRegistryDisableWarning(): string {
   return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
@@ -191,6 +204,26 @@ function hasRecoveredInstallRecordsMissingFromPersistedIndex(
   );
 }
 
+function resolvePluginRegistrySnapshotCacheKey(
+  params: LoadPluginRegistryParams,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  if (params.index || params.installRecords) {
+    return null;
+  }
+  return JSON.stringify({
+    stateDir: params.stateDir ?? env.OPENCLAW_STATE_DIR ?? null,
+    filePath: params.filePath ?? null,
+    pluginIndexFilePath: params.pluginIndexFilePath ?? null,
+    preferPersisted: params.preferPersisted ?? null,
+    disabled: hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV),
+    bundledPluginsDir: env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? null,
+    bundledDisabled: env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ?? null,
+    version: env.OPENCLAW_VERSION ?? null,
+    policyHash: params.config ? resolveInstalledPluginIndexPolicyHash(params.config) : null,
+  });
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -203,6 +236,16 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
 
   const env = params.env ?? process.env;
+  const cacheKey = resolvePluginRegistrySnapshotCacheKey(params, env);
+  const now = Date.now();
+  if (
+    cacheKey &&
+    cachedPluginRegistrySnapshotResult &&
+    cachedPluginRegistrySnapshotResult.key === cacheKey &&
+    cachedPluginRegistrySnapshotResult.expiresAt > now
+  ) {
+    return cachedPluginRegistrySnapshotResult.result;
+  }
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
   const disabledByCaller = params.preferPersisted === false;
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
@@ -256,11 +299,19 @@ export function loadPluginRegistrySnapshotWithMetadata(
             "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
-        return {
+        const result = {
           snapshot: persistedIndex,
           source: "persisted",
           diagnostics,
-        };
+        } satisfies PluginRegistrySnapshotResult;
+        if (cacheKey) {
+          cachedPluginRegistrySnapshotResult = {
+            key: cacheKey,
+            result,
+            expiresAt: now + PLUGIN_REGISTRY_SNAPSHOT_CACHE_TTL_MS,
+          };
+        }
+        return result;
       }
     } else if (persistedReadsEnabled) {
       diagnostics.push({
@@ -279,7 +330,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
     });
   }
 
-  return {
+  const result = {
     snapshot: loadInstalledPluginIndex({
       ...params,
       ...(persistedInstallRecordReadsEnabled
@@ -288,7 +339,15 @@ export function loadPluginRegistrySnapshotWithMetadata(
     }),
     source: "derived",
     diagnostics,
-  };
+  } satisfies PluginRegistrySnapshotResult;
+  if (cacheKey) {
+    cachedPluginRegistrySnapshotResult = {
+      key: cacheKey,
+      result,
+      expiresAt: now + PLUGIN_REGISTRY_SNAPSHOT_CACHE_TTL_MS,
+    };
+  }
+  return result;
 }
 
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {
@@ -324,5 +383,6 @@ export function inspectPluginRegistry(
 export function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams & InstalledPluginIndexStoreOptions,
 ): Promise<PluginRegistrySnapshot> {
+  cachedPluginRegistrySnapshotResult = null;
   return refreshPersistedInstalledPluginIndex(params);
 }

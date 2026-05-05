@@ -3,12 +3,18 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
+import {
+  loadPluginRegistrySnapshotWithMetadata,
+  PLUGIN_REGISTRY_SNAPSHOT_CACHE_TTL_MS,
+  resetPluginRegistrySnapshotCacheForTest,
+} from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.useRealTimers();
+  resetPluginRegistrySnapshotCacheForTest();
   vi.restoreAllMocks();
   cleanupTrackedTempDirs(tempDirs);
 });
@@ -231,6 +237,62 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it("coalesces repeated registry snapshot loads for a short TTL", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-05T00:00:00.000Z"));
+    const tempRoot = makeTempDir();
+    const rootDir = path.join(tempRoot, "workspace");
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: [rootDir] },
+      },
+    };
+    writePackagePlugin(rootDir);
+    const index = loadInstalledPluginIndex({ config, env });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const first = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+    expect(first.source).toBe("persisted");
+
+    fs.writeFileSync(
+      path.join(rootDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        name: "Demo",
+        description: "changed within cache ttl",
+        configSchema: { type: "object" },
+      }),
+      "utf8",
+    );
+
+    const cached = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+    expect(cached).toBe(first);
+    expect(cached.source).toBe("persisted");
+
+    vi.advanceTimersByTime(PLUGIN_REGISTRY_SNAPSHOT_CACHE_TTL_MS + 1);
+
+    const refreshed = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      stateDir,
+    });
+    expect(refreshed).not.toBe(first);
+    expect(refreshed.source).toBe("derived");
+    expect(refreshed.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
   });
 
   it("detects same-size same-mtime manifest replacements", () => {
