@@ -169,17 +169,24 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
     return;
   }
   if (gatewayTokenRef) {
-    const resolved = await resolveGatewayAuthToken({
-      cfg: ctx.cfg,
-      env: process.env,
-      envFallback: "never",
-    });
-    if (resolved.token) {
-      // SecretRef resolves successfully — no action needed.
-      return;
+    // Skip exec SecretRef resolution in doctor to avoid running arbitrary
+    // commands during a health check. Env and file refs are safe to resolve.
+    let unresolvedReason: string | undefined;
+    if (gatewayTokenRef.source === "exec") {
+      // Cannot verify without executing — defer to user.
+    } else {
+      const resolved = await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: process.env,
+        envFallback: "never",
+      });
+      if (resolved.token) {
+        return;
+      }
+      unresolvedReason = resolved.unresolvedRefReason;
     }
-    const reason = resolved.unresolvedRefReason
-      ? `Gateway token SecretRef could not be resolved: ${resolved.unresolvedRefReason}`
+    const reason = unresolvedReason
+      ? `Gateway token SecretRef could not be resolved: ${unresolvedReason}`
       : "Gateway token is managed via SecretRef and is currently unavailable.";
     note(
       [
