@@ -821,6 +821,7 @@ final class GatewayConnectionController {
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
+        caps.append(OpenClawCapability.talk.rawValue)
         if WatchMessagingService.isSupportedOnDevice() {
             caps.append(OpenClawCapability.watch.rawValue)
         }
