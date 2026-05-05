@@ -272,4 +272,30 @@ describe("discordMessageActions", () => {
       mediaReadFile,
     });
   });
+
+  // Regression for #75433: discovery must not throw when channels.discord.token
+  // is an unresolved SecretRef. inspectDiscordAccount intentionally treats
+  // SecretRef-backed tokens as configured during discovery so the model can
+  // still see Discord's full action set; the runtime send path surfaces real
+  // auth failures with the resolved snapshot.
+  it("does not throw during discovery when scoped account token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          accounts: {
+            ops: {
+              token: { source: "exec", provider: "default", id: "discord-ops" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() =>
+      discordMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "ops",
+      }),
+    ).not.toThrow();
+  });
 });

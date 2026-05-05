@@ -60,7 +60,25 @@ export function resolveTelegramInlineButtonsScope(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramInlineButtonsScope {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  // Embedded prompt prep calls this from raw config before the active runtime
+  // snapshot has resolved channel credentials. If channels.telegram.botToken is
+  // a non-env SecretRef, `resolveTelegramAccount` throws an unresolved-SecretRef
+  // error (#75433). Treat that as "inline buttons disabled for prompt
+  // discovery" — return "off" rather than the default "allowlist" so the
+  // model never advertises inline-button support when the account hasn't been
+  // resolved yet (the runtime send path uses the resolved snapshot, so a real
+  // configured account still gets the right capability there). Returning
+  // "allowlist" here would prompt the model to generate inline-button payloads
+  // even when capabilities.inlineButtons is configured "off".
+  let account: ReturnType<typeof resolveTelegramAccount>;
+  try {
+    account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  } catch (err) {
+    if (err instanceof Error && /unresolved SecretRef/i.test(err.message)) {
+      return "off";
+    }
+    throw err;
+  }
   return resolveTelegramInlineButtonsScopeFromCapabilities(account.config.capabilities);
 }
 
