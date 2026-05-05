@@ -16,6 +16,7 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import { MODELS_JSON_STATE } from "./models-config-state.js";
+import { buildModelsJsonAuthProfilesFingerprint } from "./models-config.auth-fingerprint.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
@@ -54,8 +55,8 @@ async function buildModelsJsonFingerprint(params: {
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
 }): Promise<string> {
-  const authProfilesMtimeMs = await readFileMtimeMs(
-    path.join(params.agentDir, "auth-profiles.json"),
+  const authProfilesSemanticFingerprint = await buildModelsJsonAuthProfilesFingerprint(
+    params.agentDir,
   );
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));
   const envShape = createConfigRuntimeEnv(params.config, {});
@@ -66,7 +67,7 @@ async function buildModelsJsonFingerprint(params: {
     config: params.config,
     sourceConfigForSecrets: params.sourceConfigForSecrets,
     envShape,
-    authProfilesMtimeMs,
+    authProfilesSemanticFingerprint,
     modelsFileMtimeMs,
     workspaceDir: params.workspaceDir,
     pluginMetadataSnapshotIndexFingerprint,
