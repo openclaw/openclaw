@@ -610,7 +610,7 @@ describe("resolveAgentConfig", () => {
     expect(agentDir).toBe(path.join(stateDir, "agents", "ops", "agent"));
   });
 
-  it("non-default agent uses agents.defaults.workspace as base (#59789)", () => {
+  it("non-default agent with defaults.workspace uses sibling directory, not nested (#78093)", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/shared-ws" },
@@ -618,7 +618,20 @@ describe("resolveAgentConfig", () => {
       },
     };
     const workspace = resolveAgentWorkspaceDir(cfg, "main");
-    expect(workspace).toBe(path.resolve("/shared-ws/main"));
+    // Should be sibling of /shared-ws (i.e. /workspace-main), not nested inside it (/shared-ws/main)
+    expect(workspace).toBe(path.resolve("/workspace-main"));
+  });
+
+  it("non-default agent with nested defaults.workspace path generates sibling directory", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "/home/user/.openclaw/workspace" },
+        list: [{ id: "newbot" }, { id: "main", default: true }],
+      },
+    };
+    const workspace = resolveAgentWorkspaceDir(cfg, "newbot");
+    // Sibling of ~/.openclaw/workspace, not nested inside it
+    expect(workspace).toBe(path.resolve("/home/user/.openclaw/workspace-newbot"));
   });
 
   it("default agent without per-agent workspace uses agents.defaults.workspace directly", () => {
