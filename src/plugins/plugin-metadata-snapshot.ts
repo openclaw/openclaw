@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
+import { registerTransientPluginMetadataSnapshotClearer } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
@@ -24,6 +25,68 @@ export type {
   PluginMetadataSnapshotOwnerMaps,
   PluginMetadataSnapshotRegistryDiagnostic,
 } from "./plugin-metadata-snapshot.types.js";
+
+const PLUGIN_METADATA_SNAPSHOT_CACHE_TTL_MS = 5_000;
+const MAX_PLUGIN_METADATA_SNAPSHOT_CACHE_ENTRIES = 16;
+
+const pluginMetadataSnapshotIndexIds = new WeakMap<InstalledPluginIndex, number>();
+let nextPluginMetadataSnapshotIndexId = 1;
+const pluginMetadataSnapshotCache = new Map<
+  string,
+  { cachedAtMs: number; snapshot: PluginMetadataSnapshot }
+>();
+
+function clearPluginMetadataSnapshotCache(): void {
+  pluginMetadataSnapshotCache.clear();
+}
+
+registerTransientPluginMetadataSnapshotClearer(clearPluginMetadataSnapshotCache);
+
+function resolvePluginMetadataSnapshotIndexCacheKey(
+  index: InstalledPluginIndex | undefined,
+): string {
+  if (!index) {
+    return "none";
+  }
+  const existing = pluginMetadataSnapshotIndexIds.get(index);
+  if (existing !== undefined) {
+    return String(existing);
+  }
+  const id = nextPluginMetadataSnapshotIndexId;
+  nextPluginMetadataSnapshotIndexId += 1;
+  pluginMetadataSnapshotIndexIds.set(index, id);
+  return String(id);
+}
+
+function resolvePluginMetadataSnapshotCacheKey(params: LoadPluginMetadataSnapshotParams): string {
+  return JSON.stringify({
+    configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      index: params.index,
+      policyHash: resolveInstalledPluginIndexPolicyHash(params.config),
+      workspaceDir: params.workspaceDir,
+    }),
+    index: resolvePluginMetadataSnapshotIndexCacheKey(params.index),
+    preferPersisted: params.preferPersisted ?? null,
+    stateDir: params.stateDir ?? "",
+  });
+}
+
+function rememberPluginMetadataSnapshotCacheEntry(
+  key: string,
+  snapshot: PluginMetadataSnapshot,
+  now: number,
+): void {
+  pluginMetadataSnapshotCache.set(key, { cachedAtMs: now, snapshot });
+  if (pluginMetadataSnapshotCache.size <= MAX_PLUGIN_METADATA_SNAPSHOT_CACHE_ENTRIES) {
+    return;
+  }
+  const oldestKey = pluginMetadataSnapshotCache.keys().next().value;
+  if (oldestKey) {
+    pluginMetadataSnapshotCache.delete(oldestKey);
+  }
+}
 
 function resolvePluginMetadataControlPlaneFingerprint(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
@@ -173,7 +236,19 @@ export function listPluginOriginsFromMetadataSnapshot(
 export function loadPluginMetadataSnapshot(
   params: LoadPluginMetadataSnapshotParams,
 ): PluginMetadataSnapshot {
-  return measureDiagnosticsTimelineSpanSync(
+  const cacheKey = resolvePluginMetadataSnapshotCacheKey(params);
+  const now = Date.now();
+  const cached = pluginMetadataSnapshotCache.get(cacheKey);
+  if (cached && now - cached.cachedAtMs < PLUGIN_METADATA_SNAPSHOT_CACHE_TTL_MS) {
+    pluginMetadataSnapshotCache.delete(cacheKey);
+    pluginMetadataSnapshotCache.set(cacheKey, cached);
+    return cached.snapshot;
+  }
+  if (cached) {
+    pluginMetadataSnapshotCache.delete(cacheKey);
+  }
+
+  const snapshot = measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.scan",
     () => loadPluginMetadataSnapshotImpl(params),
     {
@@ -186,6 +261,8 @@ export function loadPluginMetadataSnapshot(
       },
     },
   );
+  rememberPluginMetadataSnapshotCacheEntry(cacheKey, snapshot, now);
+  return snapshot;
 }
 
 function loadPluginMetadataSnapshotImpl(

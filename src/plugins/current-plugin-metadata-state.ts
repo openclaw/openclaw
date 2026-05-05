@@ -1,5 +1,10 @@
 let currentPluginMetadataSnapshot: unknown;
 let currentPluginMetadataSnapshotConfigFingerprint: string | undefined;
+const transientPluginMetadataSnapshotClearers = new Set<() => void>();
+
+export function registerTransientPluginMetadataSnapshotClearer(clearer: () => void): void {
+  transientPluginMetadataSnapshotClearers.add(clearer);
+}
 
 export function setCurrentPluginMetadataSnapshotState(
   snapshot: unknown,
@@ -12,6 +17,9 @@ export function setCurrentPluginMetadataSnapshotState(
 export function clearCurrentPluginMetadataSnapshotState(): void {
   currentPluginMetadataSnapshot = undefined;
   currentPluginMetadataSnapshotConfigFingerprint = undefined;
+  for (const clearer of transientPluginMetadataSnapshotClearers) {
+    clearer();
+  }
 }
 
 export function getCurrentPluginMetadataSnapshotState(): {
