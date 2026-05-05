@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 - Google Meet/Voice Call: make Twilio dial-in joins speak through the realtime Gemini voice bridge with paced audio streaming, backpressure-aware buffering, barge-in queue clearing, and no TwiML fallback during realtime speech, giving Meet participants a much snappier OpenClaw voice agent. (#77064) Thanks @scoootscooob.
 
+### Breaking
+
+- Active Memory: the default blocking recall tool allowlist is now `memory_search` and `memory_get` only. Set `plugins.entries.active-memory.config.toolsAllow: ["memory_recall"]` when using `memory-lancedb`, or set it to the recall tools exposed by a custom memory plugin such as Lossless Claw.
+
 ### Changes
 
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
@@ -17,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.
 - Google Meet: preserve `realtime.introMessage: ""` so realtime Chrome joins can stay silent instead of restoring the default spoken intro. Thanks @vincentkoc.
 - OpenAI/Codex media: advertise Codex audio transcription in runtime and manifest metadata and route active Codex chat models to the OpenAI transcription default instead of sending chat model ids to audio transcription. Thanks @vincentkoc.
+- Plugins/active-memory: add `config.toolsAllow` so the blocking recall subagent can use custom memory-provider tools, make the default prompt list the resolved tools instead of hardcoding memory-core/LanceDB fallback rules, and degrade missing or failed recall tools to empty memory so the main reply continues.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Cron CLI: add `openclaw cron list --agent <id>`, normalize the requested agent id, and include jobs without a stored agent id under the configured default agent while keeping `cron list` unfiltered when no agent is supplied. Fixes #77118. Thanks @zhanggttry.
 - Status: show compact Gateway process uptime and host system uptime in `/status`, making restart and host-lifetime checks visible from chat. Thanks @vincentkoc.
