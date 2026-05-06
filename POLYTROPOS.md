@@ -91,7 +91,7 @@ A plugin migration is considered complete only when:
 
 ## Where to put things
 
-- Long-lived fork docs: `docs/polytropos/`
+- Long-lived fork docs: `docs/polytropos/` (with this overview kept at repo root)
 - Work-in-progress plans: `planning/polytropos/`
 - Plugins: **do not** land in this repo; they live in `polytropos-plugins`
 
