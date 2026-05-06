@@ -273,8 +273,28 @@ blacksmith auth login --non-interactive --organization openclaw
 Use AWS/Hetzner only when Blacksmith is down, quota-limited, missing the needed
 environment, or owned capacity is explicitly the goal.
 
+When AWS capacity is under pressure, do not start with `class=beast`.
+`beast` begins at 48xlarge instances and can burn 192 vCPU quota per request.
+Use `standard` first, then `fast`, and use `large`/`beast` only when the task
+truly needs that many cores or the AWS quota increase has landed.
+
+Preferred AWS pressure-relief flow:
+
 ```sh
-pnpm crabbox:warmup -- --provider aws --class beast --market on-demand --idle-timeout 90m
+CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
+  pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
+pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
+pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
+pnpm crabbox:stop -- <cbx_id-or-slug>
+```
+
+Use `--market spot` only when testing Spot behavior or saving cost matters more
+than launch reliability. Use `--market on-demand` when diagnosing quota/capacity
+because it removes Spot market churn from the failure.
+
+```sh
+CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
+  pnpm crabbox:warmup -- --provider aws --class fast --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
 pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
