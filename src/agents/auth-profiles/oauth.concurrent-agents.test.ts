@@ -122,4 +122,70 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
       expect(result?.provider).toBe(provider);
     }
   }, 10_000);
+
+  it("does not reuse a stale refresh token when a second agent enters after rotation", async () => {
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const accountId = "acct-shared-refresh-reuse";
+    const freshExpiry = Date.now() + 60 * 60 * 1000;
+
+    const subAgents = await Promise.all(
+      ["race-a", "race-b"].map(async (agentId) => {
+        const dir = path.join(tempRoot, "agents", agentId, "agent");
+        await fs.mkdir(dir, { recursive: true });
+        saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), dir);
+        return dir;
+      }),
+    );
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), mainAgentDir);
+
+    let callCount = 0;
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementation(async (params?: unknown) => {
+      callCount += 1;
+      if (callCount > 1) {
+        throw new Error(
+          '401 {"error":{"message":"Your refresh token has already been used to generate a new access token.","code":"refresh_token_reused"}}',
+        );
+      }
+      const context = (params as { context?: { refresh?: string; accountId?: string } } | undefined)
+        ?.context;
+      expect(context?.refresh).toBe("refresh-token");
+      expect(context?.accountId).toBe(accountId);
+      await new Promise((resolve) => setImmediate(resolve));
+      return {
+        type: "oauth",
+        provider,
+        access: "first-rotated-access",
+        refresh: "first-rotated-refresh",
+        expires: freshExpiry,
+        accountId,
+      } as never;
+    });
+
+    const results = await Promise.all(
+      subAgents.map((agentDir) =>
+        resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+          store: ensureAuthProfileStore(agentDir),
+          profileId,
+          agentDir,
+        }),
+      ),
+    );
+
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(callCount).toBe(1);
+    expect(results.map((result) => result?.apiKey)).toEqual([
+      "first-rotated-access",
+      "first-rotated-access",
+    ]);
+
+    const mainRaw = JSON.parse(
+      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
+    ) as { profiles: Record<string, { access?: string; refresh?: string; accountId?: string }> };
+    expect(mainRaw.profiles[profileId]).toMatchObject({
+      access: "first-rotated-access",
+      refresh: "first-rotated-refresh",
+      accountId,
+    });
+  }, 10_000);
 });

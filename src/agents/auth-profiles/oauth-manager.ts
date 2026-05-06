@@ -329,6 +329,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const authPath = resolveAuthStorePath(ownerAgentDir);
     ensureAuthStoreFile(authPath);
     const globalRefreshLockPath = resolveOAuthRefreshLockPath(params.provider, params.profileId);
+    const logContext = {
+      profileId: params.profileId,
+      provider: params.provider,
+      agentDir: params.agentDir,
+      ownerAgentDir,
+    };
 
     try {
       return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
@@ -341,6 +347,15 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           let credentialToRefresh = cred;
 
           if (hasUsableOAuthCredential(cred)) {
+            log.debug(
+              "oauth refresh skipped after coordination because credential is already fresh",
+              {
+                ...logContext,
+                credentialExpires: Number.isFinite(cred.expires)
+                  ? new Date(cred.expires).toISOString()
+                  : undefined,
+              },
+            );
             return {
               apiKey: await adapter.buildApiKey(cred.provider, cred, {
                 cfg: params.cfg,
@@ -435,7 +450,21 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             `refreshOAuthCredential(${cred.provider})`,
             OAUTH_REFRESH_CALL_TIMEOUT_MS,
             async () => {
+              log.debug("oauth refresh attempt starting", {
+                ...logContext,
+                credentialExpires: Number.isFinite(credentialToRefresh.expires)
+                  ? new Date(credentialToRefresh.expires).toISOString()
+                  : undefined,
+              });
               const refreshed = await adapter.refreshCredential(credentialToRefresh);
+              log.debug("oauth refresh attempt completed", {
+                ...logContext,
+                refreshed: Boolean(refreshed),
+                refreshedExpires:
+                  refreshed && Number.isFinite(refreshed.expires)
+                    ? new Date(refreshed.expires).toISOString()
+                    : undefined,
+              });
               return refreshed
                 ? ({
                     ...credentialToRefresh,
@@ -488,6 +517,13 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
   }): Promise<ResolvedOAuthAccess | null> {
     const key = refreshQueueKey(params.provider, params.profileId);
     const prev = refreshQueues.get(key) ?? Promise.resolve();
+    const queueHadPrevious = refreshQueues.has(key);
+    log.debug("oauth refresh requested", {
+      profileId: params.profileId,
+      provider: params.provider,
+      agentDir: params.agentDir,
+      queuedBehindInProcessRefresh: queueHadPrevious,
+    });
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -495,6 +531,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     refreshQueues.set(key, gate);
     try {
       await prev;
+      log.debug("oauth refresh queue entered", {
+        profileId: params.profileId,
+        provider: params.provider,
+        agentDir: params.agentDir,
+        queuedBehindInProcessRefresh: queueHadPrevious,
+      });
       return await doRefreshOAuthTokenWithLock(params);
     } finally {
       release();
