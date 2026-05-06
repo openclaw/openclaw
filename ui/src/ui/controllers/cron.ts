@@ -369,6 +369,9 @@ export function getVisibleCronJobs(
 ): CronJob[] {
   return state.cronJobs.filter((job) => {
     const scheduleKind = resolveCronJobScheduleKind(job);
+    if (!scheduleKind) {
+      return false;
+    }
     if (
       state.cronJobsScheduleKindFilter !== "all" &&
       scheduleKind !== state.cronJobsScheduleKindFilter
