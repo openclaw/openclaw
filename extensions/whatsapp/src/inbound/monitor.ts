@@ -169,18 +169,35 @@ export async function monitorWebInbox(options: {
     if (isLid) {
       // Input is LID, need to look up the phone JID
       lid = phoneOrLid;
-      if (!lidLookup) {
-        return null;
-      }
-      try {
-        const pnJid = await lidLookup.getPNForLID(lid);
-        if (!pnJid) {
+      if (lidLookup) {
+        try {
+          const pnJid = await lidLookup.getPNForLID(lid);
+          if (pnJid) {
+            phoneJid = pnJid;
+          } else {
+            // Baileys cache returned nothing; fall back to authDir file mapping
+            const localPhone = jidToE164(phoneOrLid, { authDir: options.authDir });
+            if (!localPhone) {
+              return null;
+            }
+            phoneJid = `${localPhone.replace(/^\+/, "")}@s.whatsapp.net`;
+          }
+        } catch (err) {
+          logVerbose(`LID lookup failed for ${lid}: ${String(err)}`);
+          // Fall back to authDir reverse mapping on error
+          const localPhone = jidToE164(phoneOrLid, { authDir: options.authDir });
+          if (!localPhone) {
+            return null;
+          }
+          phoneJid = `${localPhone.replace(/^\+/, "")}@s.whatsapp.net`;
+        }
+      } else {
+        // lidLookup unavailable (cold cache / restart); try authDir file mapping
+        const localPhone = jidToE164(phoneOrLid, { authDir: options.authDir });
+        if (!localPhone) {
           return null;
         }
-        phoneJid = pnJid;
-      } catch (err) {
-        logVerbose(`LID lookup failed for ${lid}: ${String(err)}`);
-        return null;
+        phoneJid = `${localPhone.replace(/^\+/, "")}@s.whatsapp.net`;
       }
     } else if (isPhoneJid) {
       // Input is phone JID, need to extract LID and phone
