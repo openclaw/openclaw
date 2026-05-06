@@ -274,6 +274,36 @@ function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boo
   return scopes.includes(ADMIN_SCOPE);
 }
 
+const MEMORY_CORE_PLUGIN_ID = "memory-core";
+const DREAMING_NARRATIVE_SESSION_KEY_PREFIX = "dreaming-narrative-";
+
+function getCanonicalSessionKeySegment(sessionKey: string): string {
+  const firstSeparator = sessionKey.indexOf(":");
+  if (firstSeparator < 0) {
+    return sessionKey;
+  }
+  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
+  if (secondSeparator < 0) {
+    return sessionKey;
+  }
+  // Store keys are namespaced as agent:<id>:<session>; the transient session
+  // marker lives in the canonical session segment.
+  return sessionKey.slice(secondSeparator + 1);
+}
+
+function canUseMemoryCoreDreamingCleanupScope(params: {
+  pluginId?: string;
+  sessionKey: string;
+  deleteTranscript: boolean;
+}): boolean {
+  if (params.pluginId !== MEMORY_CORE_PLUGIN_ID || !params.deleteTranscript) {
+    return false;
+  }
+  return getCanonicalSessionKeySegment(params.sessionKey).startsWith(
+    DREAMING_NARRATIVE_SESSION_KEY_PREFIX,
+  );
+}
+
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
@@ -445,13 +475,21 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         typeof scope?.pluginId === "string" && scope.pluginId.trim()
           ? scope.pluginId.trim()
           : undefined;
+      const deleteTranscript = params.deleteTranscript ?? true;
+      const syntheticScopes = canUseMemoryCoreDreamingCleanupScope({
+        pluginId,
+        sessionKey: params.sessionKey,
+        deleteTranscript,
+      })
+        ? [ADMIN_SCOPE]
+        : undefined;
       const pluginOwnedCleanupOptions = pluginId
         ? {
             pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
+            ...(syntheticScopes && !hasAdminScope(scope?.client)
               ? {
                   forceSyntheticClient: true,
-                  syntheticScopes: [ADMIN_SCOPE],
+                  syntheticScopes,
                 }
               : {}),
           }
@@ -460,7 +498,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         "sessions.delete",
         {
           key: params.sessionKey,
-          deleteTranscript: params.deleteTranscript ?? true,
+          deleteTranscript,
         },
         pluginOwnedCleanupOptions,
       );
