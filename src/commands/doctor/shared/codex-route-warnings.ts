@@ -617,6 +617,10 @@ export function collectCodexRouteWarnings(params: {
   if (hits.length === 0) {
     return [];
   }
+  const runtime = resolveCodexRepairRuntime({ cfg: params.cfg, env: params.env });
+  if (runtime === "codex") {
+    return [];
+  }
   return [
     [
       "- Legacy `openai-codex/*` model refs should be rewritten to `openai/*`.",
@@ -641,6 +645,14 @@ export function maybeRepairCodexRoutes(params: {
   if (hits.length === 0) {
     return { cfg: params.cfg, warnings: [], changes: [] };
   }
+  const runtime = resolveCodexRepairRuntime({
+    cfg: params.cfg,
+    env: params.env,
+    codexRuntimeReady: params.codexRuntimeReady,
+  });
+  if (runtime === "codex") {
+    return { cfg: params.cfg, warnings: [], changes: [] };
+  }
   if (!params.shouldRepair) {
     return {
       cfg: params.cfg,
@@ -648,11 +660,6 @@ export function maybeRepairCodexRoutes(params: {
       changes: [],
     };
   }
-  const runtime = resolveCodexRepairRuntime({
-    cfg: params.cfg,
-    env: params.env,
-    codexRuntimeReady: params.codexRuntimeReady,
-  });
   const repaired = rewriteConfigModelRefs({
     cfg: params.cfg,
     env: params.env,
@@ -728,23 +735,28 @@ export function repairCodexSessionStoreRoutes(params: {
   now?: number;
 }): SessionRouteRepairResult {
   const now = params.now ?? Date.now();
+  const isCodex = params.runtime === "codex";
   const sessionKeys: string[] = [];
   for (const [sessionKey, entry] of Object.entries(params.store)) {
     if (!entry) {
       continue;
     }
-    const changedRuntimeModelRoute = rewriteSessionModelPair({
-      entry,
-      providerKey: "modelProvider",
-      modelKey: "model",
-    });
-    const changedOverrideModelRoute = rewriteSessionModelPair({
-      entry,
-      providerKey: "providerOverride",
-      modelKey: "modelOverride",
-    });
+    const changedRuntimeModelRoute =
+      !isCodex &&
+      rewriteSessionModelPair({
+        entry,
+        providerKey: "modelProvider",
+        modelKey: "model",
+      });
+    const changedOverrideModelRoute =
+      !isCodex &&
+      rewriteSessionModelPair({
+        entry,
+        providerKey: "providerOverride",
+        modelKey: "modelOverride",
+      });
     const changedModelRoute = changedRuntimeModelRoute || changedOverrideModelRoute;
-    const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
+    const changedFallbackNotice = !isCodex && clearStaleCodexFallbackNotice(entry);
     const changedAuthOverride = clearStaleCodexAuthOverride(entry, params.runtime);
     const shouldRepinCodexHarness = entry.agentHarnessId === "codex" && params.runtime !== "codex";
     if (
@@ -772,19 +784,20 @@ function scanCodexSessionStoreRoutes(
   store: Record<string, SessionEntry>,
   runtime: CodexRepairRuntime,
 ): string[] {
+  const isCodex = runtime === "codex";
   return Object.entries(store).flatMap(([sessionKey, entry]) => {
     if (!entry) {
       return [];
     }
     const hasLegacyRoute =
-      normalizeString(entry.modelProvider) === "openai-codex" ||
-      normalizeString(entry.providerOverride) === "openai-codex" ||
-      isOpenAICodexModelRef(entry.model) ||
-      isOpenAICodexModelRef(entry.modelOverride) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel) ||
-      (runtime !== "codex" && entry.authProfileOverride?.startsWith("openai-codex:") === true) ||
-      (runtime !== "codex" && entry.agentHarnessId === "codex");
+      (!isCodex && normalizeString(entry.modelProvider) === "openai-codex") ||
+      (!isCodex && normalizeString(entry.providerOverride) === "openai-codex") ||
+      (!isCodex && isOpenAICodexModelRef(entry.model)) ||
+      (!isCodex && isOpenAICodexModelRef(entry.modelOverride)) ||
+      (!isCodex && isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel)) ||
+      (!isCodex && isOpenAICodexModelRef(entry.fallbackNoticeActiveModel)) ||
+      (!isCodex && entry.authProfileOverride?.startsWith("openai-codex:") === true) ||
+      (!isCodex && entry.agentHarnessId === "codex");
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }
@@ -807,12 +820,21 @@ export async function maybeRepairCodexSessionRoutes(params: {
       changes: [],
     };
   }
+  const runtime = resolveCodexRepairRuntime({
+    cfg: params.cfg,
+    env: params.env,
+    codexRuntimeReady: params.codexRuntimeReady,
+  });
+  if (runtime === "codex") {
+    return {
+      scannedStores: targets.length,
+      repairedStores: 0,
+      repairedSessions: 0,
+      warnings: [],
+      changes: [],
+    };
+  }
   if (!params.shouldRepair) {
-    const runtime = resolveCodexRepairRuntime({
-      cfg: params.cfg,
-      env: params.env,
-      codexRuntimeReady: params.codexRuntimeReady,
-    });
     const stale = targets.flatMap((target) => {
       const sessionKeys = scanCodexSessionStoreRoutes(loadSessionStore(target.storePath), runtime);
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
@@ -834,11 +856,6 @@ export async function maybeRepairCodexSessionRoutes(params: {
       changes: [],
     };
   }
-  const runtime = resolveCodexRepairRuntime({
-    cfg: params.cfg,
-    env: params.env,
-    codexRuntimeReady: params.codexRuntimeReady,
-  });
   let repairedStores = 0;
   let repairedSessions = 0;
   for (const target of targets) {
