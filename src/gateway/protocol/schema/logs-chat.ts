@@ -52,6 +52,18 @@ export const ChatSendParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChatEditUserMessageParamsSchema = Type.Object(
+  {
+    sessionKey: ChatSendSessionKeyString,
+    messageId: NonEmptyString,
+    content: Type.String({ minLength: 1 }),
+    expectedRevision: Type.Optional(Type.Number()),
+    rerun: Type.Optional(Type.Boolean()),
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const ChatAbortParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,

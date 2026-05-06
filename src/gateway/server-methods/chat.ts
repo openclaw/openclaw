@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
@@ -94,6 +95,7 @@ import {
   validateChatHistoryParams,
   validateChatInjectParams,
   validateChatSendParams,
+  validateChatEditUserMessageParams,
 } from "../protocol/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
@@ -1712,6 +1714,158 @@ function broadcastChatError(params: {
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
   params.context.agentRunSeq.delete(params.runId);
 }
+type EditableTranscriptMessage = Record<string, unknown> & {
+  role?: unknown;
+  content?: unknown;
+  text?: unknown;
+  revision?: unknown;
+};
+
+async function editUserMessageAndDeleteLaterTurns(params: {
+  context: GatewayRequestContext;
+  sessionKey: string;
+  messageId: string;
+  content: string;
+  expectedRevision?: number;
+}): Promise<{
+  editedMessageId: string;
+  deletedMessageIds: string[];
+  revision: number;
+}> {
+  const trimmed = params.content.trim();
+
+  if (!trimmed) {
+    throw new Error("Edited message content cannot be empty.");
+  }
+
+  const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(params.sessionKey);
+  const sessionId = entry?.sessionId;
+
+  if (!sessionId) {
+    throw new Error("Session not found.");
+  }
+
+  const agentId = resolveSessionAgentId({
+    sessionKey: canonicalKey,
+    config: cfg,
+  });
+
+  const transcriptPath = resolveTranscriptPath({
+    sessionId,
+    storePath,
+    sessionFile: entry?.sessionFile,
+    agentId,
+  });
+
+  if (!transcriptPath) {
+    throw new Error("Transcript path not resolved.");
+  }
+
+  if (!fs.existsSync(transcriptPath)) {
+    throw new Error("Transcript file not found.");
+  }
+
+  let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+
+  try {
+    sessionLock = await acquireSessionWriteLock({
+      sessionFile: transcriptPath,
+    });
+
+    const sessionManager = SessionManager.open(transcriptPath);
+    const branch = sessionManager.getBranch();
+    type SessionBranchEntry = (typeof branch)[number];
+
+    const editIndex = branch.findIndex(
+      (branchEntry: SessionBranchEntry) =>
+      branchEntry.type === "message" && branchEntry.id === params.messageId,
+    );
+
+    if (editIndex < 0) {
+      throw new Error("Message not found.");
+    }
+
+    const target = branch[editIndex];
+
+    if (!target || target.type !== "message") {
+      throw new Error("Message not found.");
+    }
+
+    const targetMessage = target.message as unknown as EditableTranscriptMessage;
+
+    if (targetMessage.role !== "user") {
+      throw new Error("Only user messages can be edited.");
+    }
+
+    const currentRevision =
+      typeof targetMessage.revision === "number" ? targetMessage.revision : 0;
+
+    if (
+      params.expectedRevision !== undefined &&
+      params.expectedRevision !== currentRevision
+    ) {
+      throw new Error("Message revision conflict.");
+    }
+
+   const deletedMessageIds = branch
+    .slice(editIndex + 1)
+    .filter((branchEntry: SessionBranchEntry) => branchEntry.type === "message")
+    .map((branchEntry: SessionBranchEntry) => branchEntry.id)
+    .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
+
+    const editedMessage = {
+      ...target.message,
+      content: trimmed,
+      text: trimmed,
+      revision: currentRevision + 1,
+      editedAt: new Date().toISOString(),
+    };
+
+    /*
+      This is the important part.
+
+      We do NOT rewrite and replay the suffix. We branch at the parent of the
+      edited message, then append only the edited user message. That makes the
+      active branch end at the edited user message, so all later turns disappear
+      from chat.history.
+    */
+    if (!target.parentId) {
+      sessionManager.resetLeaf();
+    } else {
+      sessionManager.branch(target.parentId);
+    }
+
+    sessionManager.appendMessage(
+      editedMessage as unknown as Parameters<typeof sessionManager.appendMessage>[0],
+    );
+
+    emitSessionTranscriptUpdate(transcriptPath);
+
+    params.context.broadcast("session.message", {
+      sessionKey: canonicalKey,
+      reason: "user_message_edited",
+      editedMessageId: params.messageId,
+      deletedMessageIds,
+      revision: currentRevision + 1,
+    });
+
+    params.context.nodeSendToSession(canonicalKey, "session.message", {
+      sessionKey: canonicalKey,
+      reason: "user_message_edited",
+      editedMessageId: params.messageId,
+      deletedMessageIds,
+      revision: currentRevision + 1,
+    });
+
+    return {
+      editedMessageId: params.messageId,
+      deletedMessageIds,
+      revision: currentRevision + 1,
+    };
+  } finally {
+    await sessionLock?.release();
+  }
+}
 
 export const chatHandlers: GatewayRequestHandlers = {
   "chat.history": async ({ params, respond, context }) => {
@@ -1881,6 +2035,53 @@ export const chatHandlers: GatewayRequestHandlers = {
       aborted: res.aborted,
       runIds: res.aborted ? [runId] : [],
     });
+  },
+  "chat.edit_user_message": async ({ params, respond, context }) => {
+    if (!validateChatEditUserMessageParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid chat.edit_user_message params: ${formatValidationErrors(
+            validateChatEditUserMessageParams.errors,
+          )}`,
+        ),
+      );
+      return;
+    }
+    const p = params;
+
+    try {
+      const result = await editUserMessageAndDeleteLaterTurns({
+        context,
+        sessionKey: p.sessionKey,
+        messageId: p.messageId,
+        content: p.content,
+        ...(typeof p.expectedRevision === "number"
+          ? { expectedRevision: p.expectedRevision }
+          : {}),
+      });
+
+      respond(true, {
+        sessionKey: p.sessionKey,
+        editedMessageId: result.editedMessageId,
+        deletedMessageIds: result.deletedMessageIds,
+        revision: result.revision,
+        rerunStarted: false,
+      });
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          error instanceof Error
+            ? error.message
+            : "failed to edit user message",
+        ),
+      );
+    }
   },
   "chat.send": async ({ params, respond, context, client }) => {
     if (!validateChatSendParams(params)) {
