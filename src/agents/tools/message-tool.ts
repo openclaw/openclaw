@@ -216,6 +216,12 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     locationAddress: Type.Optional(
       Type.String({ description: "Address text shown below the location pin." }),
     ),
+    accuracyInMeters: Type.Optional(
+      Type.Number({
+        minimum: 0,
+        description: "Accuracy in meters for location messages (0 or greater).",
+      }),
+    ),
   };
   if (options.includePresentation) {
     props.presentation = Type.Optional(presentationMessageSchema);

@@ -711,6 +711,7 @@ describe("message tool schema scoping", () => {
       expect(properties.pollId).toBeDefined();
       expect(properties.pollOptionIndex).toBeDefined();
       expect(properties.pollOptionId).toBeDefined();
+      expect(properties.accuracyInMeters).toMatchObject({ type: "number", minimum: 0 });
     },
   );
 
