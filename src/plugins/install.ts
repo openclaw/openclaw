@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
@@ -308,7 +309,22 @@ async function rollbackManagedNpmPluginInstall(params: {
   targetDir: string;
   timeoutMs: number;
   logger: PluginInstallLogger;
+  snapshot?: ManagedNpmPluginInstallRollbackSnapshot;
 }): Promise<void> {
+  if (params.snapshot) {
+    try {
+      await restoreManagedNpmPluginInstallRollbackSnapshot({
+        npmRoot: params.npmRoot,
+        snapshot: params.snapshot,
+      });
+    } catch (error) {
+      params.logger.warn?.(
+        `Failed to restore managed npm plugin root after installing ${params.packageName}: ${String(error)}`,
+      );
+    }
+    return;
+  }
+
   try {
     await runCommandWithTimeout(
       [
@@ -350,6 +366,102 @@ async function rollbackManagedNpmPluginInstall(params: {
       `Failed to remove managed npm dependency ${params.packageName}: ${String(error)}`,
     );
   }
+}
+
+type ManagedNpmPluginInstallRollbackSnapshot = {
+  packageJson?: string;
+  packageLockJson?: string;
+  nodeModulesBackupDir?: string;
+  tempDir: string;
+};
+
+async function readRollbackFileIfPresent(filePath: string): Promise<string | undefined> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function writeOrRemoveRollbackFile(filePath: string, contents: string | undefined) {
+  if (contents === undefined) {
+    await fs.rm(filePath, { force: true });
+    return;
+  }
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, contents, "utf8");
+}
+
+async function createManagedNpmPluginInstallRollbackSnapshot(params: {
+  npmRoot: string;
+}): Promise<ManagedNpmPluginInstallRollbackSnapshot> {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-plugin-rollback-"));
+  let nodeModulesBackupDir: string | undefined;
+  const nodeModulesDir = path.join(params.npmRoot, "node_modules");
+  try {
+    await fs.stat(nodeModulesDir);
+    nodeModulesBackupDir = path.join(tempDir, "node_modules");
+    await fs.cp(nodeModulesDir, nodeModulesBackupDir, {
+      recursive: true,
+      force: true,
+      verbatimSymlinks: true,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      await fs.rm(tempDir, { recursive: true, force: true });
+      throw error;
+    }
+  }
+
+  try {
+    return {
+      packageJson: await readRollbackFileIfPresent(path.join(params.npmRoot, "package.json")),
+      packageLockJson: await readRollbackFileIfPresent(
+        path.join(params.npmRoot, "package-lock.json"),
+      ),
+      ...(nodeModulesBackupDir ? { nodeModulesBackupDir } : {}),
+      tempDir,
+    };
+  } catch (error) {
+    await fs.rm(tempDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function restoreManagedNpmPluginInstallRollbackSnapshot(params: {
+  npmRoot: string;
+  snapshot: ManagedNpmPluginInstallRollbackSnapshot;
+}) {
+  const nodeModulesDir = path.join(params.npmRoot, "node_modules");
+  await fs.rm(nodeModulesDir, { recursive: true, force: true });
+  if (params.snapshot.nodeModulesBackupDir) {
+    await fs.mkdir(params.npmRoot, { recursive: true });
+    await fs.cp(params.snapshot.nodeModulesBackupDir, nodeModulesDir, {
+      recursive: true,
+      force: true,
+      verbatimSymlinks: true,
+    });
+  }
+  await writeOrRemoveRollbackFile(
+    path.join(params.npmRoot, "package.json"),
+    params.snapshot.packageJson,
+  );
+  await writeOrRemoveRollbackFile(
+    path.join(params.npmRoot, "package-lock.json"),
+    params.snapshot.packageLockJson,
+  );
+}
+
+async function cleanupManagedNpmPluginInstallRollbackSnapshot(
+  snapshot: ManagedNpmPluginInstallRollbackSnapshot | undefined,
+) {
+  if (!snapshot) {
+    return;
+  }
+  await fs.rm(snapshot.tempDir, { recursive: true, force: true });
 }
 
 function resolveInstalledNpmResolutionMismatch(params: {
@@ -1334,110 +1446,124 @@ export async function installPluginFromNpmSpec(
     };
   }
 
-  logger.info?.(`Installing ${spec} into ${npmRoot}…`);
-  await upsertManagedNpmRootDependency({
+  const rollbackSnapshot = await createManagedNpmPluginInstallRollbackSnapshot({
     npmRoot,
-    packageName: parsedSpec.name,
-    dependencySpec: resolveManagedNpmRootDependencySpec({
-      parsedSpec,
-      resolution: npmResolution,
-    }),
   });
-  const install = await runCommandWithTimeout(
-    [
-      "npm",
-      ...createSafeNpmInstallArgs({
-        omitDev: true,
-        loglevel: "error",
-        noAudit: true,
-        noFund: true,
-      }),
-      "--prefix",
-      ".",
-    ],
-    {
-      cwd: npmRoot,
-      timeoutMs: Math.max(timeoutMs, 300_000),
-      env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
-    },
-  );
-  if (install.code !== 0) {
-    await removeManagedNpmRootDependency({
-      npmRoot,
-      packageName: parsedSpec.name,
-    });
-    return {
-      ok: false,
-      error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
-    };
-  }
-
-  let installedDependency: ManagedNpmRootInstalledDependency | null;
   try {
-    installedDependency = await readManagedNpmRootInstalledDependency({
+    logger.info?.(`Installing ${spec} into ${npmRoot}…`);
+    await upsertManagedNpmRootDependency({
       npmRoot,
       packageName: parsedSpec.name,
+      dependencySpec: resolveManagedNpmRootDependencySpec({
+        parsedSpec,
+        resolution: npmResolution,
+      }),
     });
-  } catch (error) {
-    await rollbackManagedNpmPluginInstall({
-      npmRoot,
-      packageName: parsedSpec.name,
-      targetDir: installRoot,
-      timeoutMs,
-      logger,
-    });
-    return {
-      ok: false,
-      error: `Failed to verify npm install metadata for ${parsedSpec.name}: ${String(error)}`,
-    };
-  }
-  const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
-    packageName: parsedSpec.name,
-    expected: npmResolution,
-    installed: installedDependency,
-  });
-  if (resolutionMismatch) {
-    await rollbackManagedNpmPluginInstall({
-      npmRoot,
-      packageName: parsedSpec.name,
-      targetDir: installRoot,
-      timeoutMs,
-      logger,
-    });
-    return {
-      ok: false,
-      error: resolutionMismatch,
-    };
-  }
+    const install = await runCommandWithTimeout(
+      [
+        "npm",
+        ...createSafeNpmInstallArgs({
+          omitDev: true,
+          loglevel: "error",
+          noAudit: true,
+          noFund: true,
+        }),
+        "--prefix",
+        ".",
+      ],
+      {
+        cwd: npmRoot,
+        timeoutMs: Math.max(timeoutMs, 300_000),
+        env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+      },
+    );
+    if (install.code !== 0) {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: parsedSpec.name,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        snapshot: rollbackSnapshot,
+      });
+      return {
+        ok: false,
+        error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+      };
+    }
 
-  const result = await installPluginFromInstalledPackageDir({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    packageDir: installRoot,
-    dependencyScanRootDir: npmRoot,
-    logger,
-    expectedPluginId,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    mode: effectiveMode,
-    installPolicyRequest: {
-      kind: "plugin-npm",
-      requestedSpecifier: spec,
-    },
-  });
-  if (!result.ok) {
-    await rollbackManagedNpmPluginInstall({
-      npmRoot,
+    let installedDependency: ManagedNpmRootInstalledDependency | null;
+    try {
+      installedDependency = await readManagedNpmRootInstalledDependency({
+        npmRoot,
+        packageName: parsedSpec.name,
+      });
+    } catch (error) {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: parsedSpec.name,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        snapshot: rollbackSnapshot,
+      });
+      return {
+        ok: false,
+        error: `Failed to verify npm install metadata for ${parsedSpec.name}: ${String(error)}`,
+      };
+    }
+    const resolutionMismatch = resolveInstalledNpmResolutionMismatch({
       packageName: parsedSpec.name,
-      targetDir: installRoot,
-      timeoutMs,
-      logger,
+      expected: npmResolution,
+      installed: installedDependency,
     });
-    return result;
+    if (resolutionMismatch) {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: parsedSpec.name,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        snapshot: rollbackSnapshot,
+      });
+      return {
+        ok: false,
+        error: resolutionMismatch,
+      };
+    }
+
+    const result = await installPluginFromInstalledPackageDir({
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      packageDir: installRoot,
+      dependencyScanRootDir: npmRoot,
+      logger,
+      expectedPluginId,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      mode: effectiveMode,
+      installPolicyRequest: {
+        kind: "plugin-npm",
+        requestedSpecifier: spec,
+      },
+    });
+    if (!result.ok) {
+      await rollbackManagedNpmPluginInstall({
+        npmRoot,
+        packageName: parsedSpec.name,
+        targetDir: installRoot,
+        timeoutMs,
+        logger,
+        snapshot: rollbackSnapshot,
+      });
+      return result;
+    }
+    return {
+      ...result,
+      npmResolution,
+      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
+    };
+  } finally {
+    await cleanupManagedNpmPluginInstallRollbackSnapshot(rollbackSnapshot);
   }
-  return {
-    ...result,
-    npmResolution,
-    ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
-  };
 }
 
 export async function installPluginFromPath(
