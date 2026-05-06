@@ -19,7 +19,7 @@ import { mkdtempSync } from "node:fs";
 import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
+import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
@@ -636,37 +636,58 @@ function isInstallStageDirName(value) {
 }
 
 function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
-  const extensionsDir = join(packageRoot, "dist", "extensions");
-  let extensionEntries = [];
-  try {
-    extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
-  } catch (error) {
-    if (isNotFoundError(error)) {
-      return [];
-    }
-    throw error;
-  }
-
+  const rootEntries = readdirSync(packageRoot, { withFileTypes: true });
   const debris = [];
-  for (const extensionEntry of extensionEntries) {
-    if (!extensionEntry.isDirectory()) {
+  for (const rootEntry of rootEntries) {
+    if (!rootEntry.isDirectory() || rootEntry.name.toLowerCase() !== "dist") {
       continue;
     }
-    const extensionPath = join(extensionsDir, extensionEntry.name);
-    let stagingEntries = [];
+    const distDir = join(packageRoot, rootEntry.name);
+    let distEntries = [];
     try {
-      stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
+      distEntries = readdirSync(distDir, { withFileTypes: true });
     } catch (error) {
       if (isNotFoundError(error)) {
         continue;
       }
       throw error;
     }
-    for (const stagingEntry of stagingEntries) {
-      if (isInstallStageDirName(stagingEntry.name)) {
-        debris.push(
-          normalizeRelativePath(join("dist", "extensions", extensionEntry.name, stagingEntry.name)),
-        );
+    for (const distEntry of distEntries) {
+      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
+        continue;
+      }
+      const extensionsDir = join(distDir, distEntry.name);
+      let extensionEntries = [];
+      try {
+        extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          continue;
+        }
+        throw error;
+      }
+
+      for (const extensionEntry of extensionEntries) {
+        if (!extensionEntry.isDirectory()) {
+          continue;
+        }
+        const extensionPath = join(extensionsDir, extensionEntry.name);
+        let stagingEntries = [];
+        try {
+          stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
+        } catch (error) {
+          if (isNotFoundError(error)) {
+            continue;
+          }
+          throw error;
+        }
+        for (const stagingEntry of stagingEntries) {
+          if (isInstallStageDirName(stagingEntry.name)) {
+            debris.push(
+              normalizeRelativePath(relative(packageRoot, join(extensionPath, stagingEntry.name))),
+            );
+          }
+        }
       }
     }
   }
