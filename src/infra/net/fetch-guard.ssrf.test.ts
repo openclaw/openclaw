@@ -1138,9 +1138,44 @@ describe("fetchWithSsrFGuard hardening", () => {
     await result.release();
   });
 
+  it("rejects timed-out fetches even when dispatcher close stalls", async () => {
+    agentCtor.mockImplementationOnce(function MockAgent(this: { close: () => Promise<void> }) {
+      this.close = () => new Promise(() => {});
+    });
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(init.signal?.reason ?? new Error("aborted"));
+          });
+        }),
+    );
+
+    const fetchPromise = fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      timeoutMs: 1,
+    });
+
+    const outcome = await Promise.race([
+      fetchPromise.then(
+        () => "resolved",
+        (error: unknown) => (error instanceof Error ? error.name : "rejected"),
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 250)),
+    ]);
+
+    expect(outcome).toBe("TimeoutError");
+  });
+
   it("inherits the configured global stream timeout for guarded direct dispatchers", async () => {
-    const { getGlobalDispatcher, setGlobalDispatcher } = await import("undici");
-    const previousDispatcher = getGlobalDispatcher();
     try {
       ensureGlobalUndiciStreamTimeouts({ timeoutMs: 1_900_000 });
       (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -1168,7 +1203,6 @@ describe("fetchWithSsrFGuard hardening", () => {
       });
       await result.release();
     } finally {
-      setGlobalDispatcher(previousDispatcher);
       resetGlobalUndiciStreamTimeoutsForTests();
     }
   });

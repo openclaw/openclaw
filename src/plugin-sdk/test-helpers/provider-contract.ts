@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { ProviderPlugin } from "../provider-model-shared.js";
 import {
   providerContractLoadError,
-  resolveBundledExplicitProviderContractsFromPublicArtifacts,
   resolveProviderContractProvidersForPluginIds,
-} from "../testing.js";
+} from "../../plugins/contracts/registry.js";
+import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../../plugins/provider-contract-public-artifacts.js";
+import type { ProviderPlugin } from "../provider-model-shared.js";
 import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
 
 type ProviderContractEntry = {
@@ -26,15 +26,21 @@ function resolveProviderContractProvidersFromPublicArtifact(
 }
 
 export function describeProviderContracts(pluginId: string) {
+  let providerEntries: ProviderContractEntry[] | undefined;
   const resolveProviderEntries = (): ProviderContractEntry[] => {
+    if (providerEntries) {
+      return providerEntries;
+    }
     const publicArtifactProviders = resolveProviderContractProvidersFromPublicArtifact(pluginId);
     if (publicArtifactProviders) {
-      return publicArtifactProviders;
+      providerEntries = publicArtifactProviders;
+      return providerEntries;
     }
-    return resolveProviderContractProvidersForPluginIds([pluginId]).map((provider) => ({
+    providerEntries = resolveProviderContractProvidersForPluginIds([pluginId]).map((provider) => ({
       pluginId,
       provider,
     }));
+    return providerEntries;
   };
   const resolveProviderIds = (): string[] =>
     resolveProviderEntries().map((entry) => entry.provider.id);

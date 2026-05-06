@@ -292,6 +292,7 @@ function isAudioOnlyModelErrorMessage(raw: string): boolean {
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
+    /invalid reasoning effort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
 }
@@ -312,6 +313,15 @@ function isOpenRouterOpaqueBadRequestErrorMessage(raw: string): boolean {
     msg.includes('"msg":"bad request"')
   );
 }
+
+describe("isUnsupportedReasoningEffortErrorMessage", () => {
+  it("matches provider-native reasoning effort rejections", () => {
+    expect(isUnsupportedReasoningEffortErrorMessage('Error: 400 "Invalid reasoning effort."')).toBe(
+      true,
+    );
+    expect(isUnsupportedReasoningEffortErrorMessage("Error: 400 model not found")).toBe(false);
+  });
+});
 
 describe("isUnsupportedPlanErrorMessage", () => {
   it("matches provider plan-gated models", () => {
