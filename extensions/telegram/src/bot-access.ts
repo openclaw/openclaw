@@ -4,6 +4,7 @@ import {
   mergeDmAllowFromSources,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/command-auth";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 
@@ -48,7 +49,9 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
   const normalized = entries
     .filter((value) => value !== "*")
     .map((value) => value.replace(/^(telegram|tg):/i, ""));
-  const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
+  const invalidEntries = normalized.filter(
+    (value) => !/^\d+$/.test(value) && parseAccessGroupAllowFromEntry(value) == null,
+  );
   if (invalidEntries.length > 0) {
     warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
   }

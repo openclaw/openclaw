@@ -53,7 +53,7 @@ import {
 } from "openclaw/plugin-sdk/text-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
+import { isSenderAllowed } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
@@ -74,6 +74,7 @@ import {
   buildSenderName,
   buildTelegramGroupFrom,
   extractTelegramForumFlag,
+  resolveTelegramEffectiveDmAllow,
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
@@ -489,13 +490,17 @@ async function resolveTelegramCommandAuth(params: {
   } = params;
   const { chatId, isGroup, isForum, messageThreadId, threadParams } =
     await resolveTelegramNativeCommandThreadContext({ msg, bot });
+  const senderId = msg.from?.id ? String(msg.from.id) : "";
+  const senderUsername = msg.from?.username ?? "";
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
+    cfg,
     accountId,
     isGroup,
     isForum,
     messageThreadId,
     groupAllowFrom,
+    senderId,
     readChannelAllowFromStore,
     resolveTelegramGroupConfig,
   });
@@ -522,8 +527,6 @@ async function resolveTelegramCommandAuth(params: {
   }
   // For DMs, prefer per-DM/topic allowFrom (groupAllowOverride) over account-level allowFrom
   const dmAllowFrom = groupAllowOverride ?? allowFrom;
-  const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const senderUsername = msg.from?.username ?? "";
   const commandsAllowFrom = cfg.commands?.allowFrom;
   const commandsAllowFromConfigured =
     commandsAllowFrom != null &&
@@ -626,7 +629,10 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const dmAllow = normalizeDmAllowFromWithStore({
+  const dmAllow = await resolveTelegramEffectiveDmAllow({
+    cfg,
+    accountId,
+    senderId,
     allowFrom: dmAllowFrom,
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,

@@ -1,6 +1,8 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/command-auth";
 import type {
+  OpenClawConfig,
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -10,7 +12,13 @@ import type {
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
+import {
+  firstDefined,
+  isSenderAllowed,
+  normalizeDmAllowFromWithStore,
+  normalizeAllowFrom,
+  type NormalizedAllowFrom,
+} from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
 import {
@@ -169,11 +177,13 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
+  cfg?: OpenClawConfig;
   accountId?: string;
   isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
+  senderId?: string;
   readChannelAllowFromStore?: typeof readChannelAllowFromStore;
   resolveTelegramGroupConfig: (
     chatId: string | number,
@@ -214,7 +224,12 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not a group authorization source.
-  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
+  const effectiveGroupAllow = await resolveTelegramEffectiveGroupAllow({
+    cfg: params.cfg,
+    accountId,
+    senderId: params.senderId,
+    allowFrom: groupAllowOverride ?? params.groupAllowFrom,
+  });
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
     resolvedThreadId,
@@ -226,6 +241,54 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     effectiveGroupAllow,
     hasGroupAllowOverride,
   };
+}
+
+export async function resolveTelegramEffectiveGroupAllow(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  senderId?: string;
+  allowFrom?: Array<string | number>;
+}): Promise<NormalizedAllowFrom> {
+  return normalizeAllowFrom(await expandTelegramAllowFromForSender(params));
+}
+
+async function expandTelegramAllowFromForSender(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  senderId?: string;
+  allowFrom?: Array<string | number>;
+}): Promise<Array<string | number> | undefined> {
+  const senderId = params.senderId ?? "";
+  return senderId
+    ? await expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: params.allowFrom,
+        channel: "telegram",
+        accountId: normalizeAccountId(params.accountId),
+        senderId,
+        isSenderAllowed: (candidateSenderId, allowFrom) =>
+          isSenderAllowed({
+            allow: normalizeAllowFrom(allowFrom),
+            senderId: candidateSenderId,
+          }),
+      })
+    : params.allowFrom;
+}
+
+export async function resolveTelegramEffectiveDmAllow(params: {
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  senderId?: string;
+  allowFrom?: Array<string | number>;
+  storeAllowFrom?: string[];
+  dmPolicy?: string;
+}): Promise<NormalizedAllowFrom> {
+  const allowFrom = await expandTelegramAllowFromForSender(params);
+  return normalizeDmAllowFromWithStore({
+    allowFrom,
+    storeAllowFrom: params.storeAllowFrom,
+    dmPolicy: params.dmPolicy,
+  });
 }
 
 /**

@@ -1581,6 +1581,33 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
+      name: "allows group messages from sender accessGroup allowFrom entries",
+      config: {
+        accessGroups: {
+          admins: {
+            type: "message.senders",
+            members: {
+              telegram: ["123456789"],
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "allowlist",
+            allowFrom: ["accessGroup:admins"],
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
       name: "blocks group messages when allowFrom is configured with @username entries (numeric IDs required)",
       config: {
         channels: {
@@ -2621,6 +2648,32 @@ describe("createTelegramBot", () => {
         channels: {
           telegram: {
             allowFrom: ["  TG:123456789  "],
+          },
+        },
+      },
+      message: {
+        chat: { id: 123456789, type: "private" },
+        from: { id: 123456789, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 1,
+    },
+    {
+      name: "allows direct messages from sender accessGroup allowFrom entries",
+      config: {
+        accessGroups: {
+          admins: {
+            type: "message.senders",
+            members: {
+              telegram: ["123456789"],
+            },
+          },
+        },
+        channels: {
+          telegram: {
+            dmPolicy: "allowlist",
+            allowFrom: ["accessGroup:admins"],
           },
         },
       },

@@ -28,6 +28,17 @@ describe("evaluateTelegramGroupBaseAccess", () => {
     });
   });
 
+  it("keeps access-group allowFrom entries configured without treating them as bad sender ids", () => {
+    const result = normalizeAllowFrom(["accessGroup:admins"]);
+
+    expect(result).toEqual({
+      entries: [],
+      hasWildcard: false,
+      hasEntries: true,
+      invalidEntries: [],
+    });
+  });
+
   it("fails closed when explicit group allowFrom override is empty", () => {
     const result = evaluateTelegramGroupBaseAccess({
       isGroup: true,
