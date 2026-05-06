@@ -116,11 +116,23 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryIsolationSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+    scope: z.union([z.literal("user"), z.literal("session"), z.literal("agent")]).default("user"),
+    fallbackPolicy: z
+      .union([z.literal("deny"), z.literal("session"), z.literal("agent")])
+      .default("deny"),
+    pathEncoding: z.union([z.literal("hash"), z.literal("whitelist")]).default("hash"),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
     backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    isolation: MemoryIsolationSchema.optional(),
   })
   .strict()
   .optional();

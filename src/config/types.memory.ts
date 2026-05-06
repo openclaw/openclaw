@@ -4,6 +4,10 @@ export type MemoryBackend = "builtin" | "qmd";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
+export type MemoryIsolationScope = "user" | "session" | "agent";
+export type MemoryIsolationFallbackPolicy = "deny" | "session" | "agent";
+export type MemoryPathEncoding = "hash" | "whitelist";
+
 /**
  * Memory isolation configuration.
  * When enabled, memory files are stored in user-specific subdirectories.
@@ -15,6 +19,18 @@ export type MemoryIsolationConfig = {
    * - false: All sessions share memory/ directory (legacy behavior)
    */
   enabled?: boolean;
+  /** Identity scope used for isolation (default "user"). */
+  scope?: MemoryIsolationScope;
+  /**
+   * What to do when the requested identity scope cannot be resolved.
+   * "deny" (default) refuses unscoped operations; other values relax to a coarser scope.
+   */
+  fallbackPolicy?: MemoryIsolationFallbackPolicy;
+  /**
+   * How user identifiers are encoded as path segments.
+   * "hash" (default) uses a sha256 prefix; "whitelist" requires safe ID characters.
+   */
+  pathEncoding?: MemoryPathEncoding;
 };
 
 export type MemoryConfig = {
