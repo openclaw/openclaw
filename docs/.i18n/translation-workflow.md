@@ -22,6 +22,7 @@ Internal note for the docs publish pipeline. This file is under `docs/.i18n`, wh
 7. Per-locale translation jobs run in parallel with `fail-fast: false`.
 8. Each locale job uploads an artifact for the requested source SHA.
 9. The finalizer downloads available artifacts, ignores stale or failed payloads, and pushes one aggregate i18n commit.
+10. After the aggregate commit lands, the finalizer dispatches the Pages deploy and live smoke workflows once.
 
 ## Debounce policy
 
@@ -98,6 +99,8 @@ The weekly run is the repair mechanism for LLM flakiness, partial failures, and 
 
 English deploys from source sync commits.
 
-Translations deploy from the aggregate i18n commit. A hot docs day should produce many fast English deploys, but only a small number of locale deploys.
+Translations deploy after the aggregate i18n commit. The finalizer dispatches GitHub Pages and live smoke once because GitHub suppresses normal push-triggered workflow runs from `GITHUB_TOKEN` commits.
+
+A hot docs day should produce many fast English deploys, but only a small number of locale deploys.
 
 If external deploy providers such as Mintlify watch every push, the aggregate i18n commit is the load reducer. Avoid restoring per-locale pushes to `main`.
