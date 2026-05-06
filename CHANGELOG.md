@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/config: add optional `description` field to `agents.list[]` config entries and surface it in `agents_list` tool output, enabling orchestrator agents to discover sub-agent capabilities dynamically without hardcoded catalogs. Closes #7490. (#75225) Thanks @shannon0430.
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.
 - Plugin skills/Windows: publish plugin-provided skill directories as junctions on Windows so standard users without Developer Mode can register plugin skills without symlink EPERM failures. Fixes #77958. (#77971) Thanks @hclsys and @jarro.
 - MS Teams: surface blocked Bot Framework egress by logging JWKS fetch network failures and adding a Bot Connector send hint for transport-level reply failures. Fixes #77674. (#78081) Thanks @Beandon13.
@@ -20,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Telegram/streaming: keep draft preview rotation from reusing a pre-tool assistant preview after visible tool or media output lands between compaction replay and the next assistant message. Thanks @vincentkoc.
+
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
 - Voice Call/realtime: bound the paced Twilio audio queue and close overloaded realtime streams before provider audio can pile up behind the websocket backpressure guard. Thanks @vincentkoc.

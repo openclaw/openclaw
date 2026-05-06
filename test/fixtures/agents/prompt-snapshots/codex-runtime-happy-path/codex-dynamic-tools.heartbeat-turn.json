@@ -1179,7 +1179,7 @@
     "name": "gateway"
   },
   {
-    "description": "List OpenClaw agent ids you can target with `sessions_spawn` when `runtime=\"subagent\"` (based on subagent allowlists).",
+    "description": "List OpenClaw agent ids you can target with `sessions_spawn` when `runtime=\"subagent\"` (based on subagent allowlists). Includes agent name and description when configured.",
     "inputSchema": {
       "properties": {},
       "type": "object"

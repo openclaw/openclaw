@@ -17,6 +17,7 @@ const AgentsListToolSchema = Type.Object({});
 type AgentListEntry = {
   id: string;
   name?: string;
+  description?: string;
   configured: boolean;
   model?: string;
   agentRuntime?: {
@@ -34,7 +35,7 @@ export function createAgentsListTool(opts?: {
     label: "Agents",
     name: "agents_list",
     description:
-      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists).',
+      'List OpenClaw agent ids you can target with `sessions_spawn` when `runtime="subagent"` (based on subagent allowlists). Includes agent name and description when configured.',
     parameters: AgentsListToolSchema,
     execute: async () => {
       const cfg = getRuntimeConfig();
@@ -60,12 +61,17 @@ export function createAgentsListTool(opts?: {
       const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
       const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));
       const configuredNameMap = new Map<string, string>();
+      const configuredDescMap = new Map<string, string>();
       for (const entry of configuredAgents) {
+        const normalizedId = normalizeAgentId(entry.id);
         const name = entry?.name?.trim() ?? "";
-        if (!name) {
-          continue;
+        if (name) {
+          configuredNameMap.set(normalizedId, name);
         }
-        configuredNameMap.set(normalizeAgentId(entry.id), name);
+        const description = entry?.description?.trim() ?? "";
+        if (description) {
+          configuredDescMap.set(normalizedId, description);
+        }
       }
 
       const allowed = resolveSubagentAllowedTargetIds({
@@ -83,6 +89,7 @@ export function createAgentsListTool(opts?: {
         return {
           id,
           name: configuredNameMap.get(id),
+          description: configuredDescMap.get(id),
           configured: configuredIds.includes(id),
           model: resolveAgentEffectiveModelPrimary(cfg, id),
           agentRuntime,

@@ -267,9 +267,10 @@ that would run unsandboxed.
 ### Discovery
 
 Use `agents_list` to see which agent ids are currently allowed for
-`sessions_spawn`. The response includes each listed agent's effective
-model and embedded runtime metadata so callers can distinguish PI, Codex
-app-server, and other configured native runtimes.
+`sessions_spawn`. The response includes configured agent names and descriptions
+when present, plus each listed agent's effective model and embedded runtime
+metadata so callers can distinguish PI, Codex app-server, and other configured
+native runtimes.
 
 ### Auto-archive
 

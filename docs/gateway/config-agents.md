@@ -937,6 +937,11 @@ For npm installs without a source checkout, see [Sandboxing § Images and setup]
 
 ### `agents.list` (per-agent overrides)
 
+Use `agents.list[].description` to add a short human-readable capability
+summary for an agent. OpenClaw includes non-empty descriptions in `agents_list`
+so callers can choose a `sessions_spawn.agentId` without inspecting the full
+configuration. Keep descriptions concise and capability-focused.
+
 Use `agents.list[].tts` to give an agent its own TTS provider, voice, model,
 style, or auto-TTS mode. The agent block deep-merges over global
 `messages.tts`, so shared credentials can stay in one place while individual
@@ -953,6 +958,7 @@ for provider examples and precedence.
         id: "main",
         default: true,
         name: "Main Agent",
+        description: "General-purpose assistant for everyday tasks.",
         workspace: "~/.openclaw/workspace",
         agentDir: "~/.openclaw/agents/main/agent",
         model: "anthropic/claude-opus-4-6", // or { primary, fallbacks }
