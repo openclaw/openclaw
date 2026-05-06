@@ -20,7 +20,11 @@ import {
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
-import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
+import {
+  classifyMediaReferenceSource,
+  MediaReferenceError,
+  resolveInboundMediaReference,
+} from "./media-reference.js";
 import {
   detectMime,
   extensionForMime,
@@ -393,6 +397,14 @@ async function loadWebMediaInternal(
     mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
   }
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
+  // If a `media://` URI survives the store lookup it has nowhere safe to land:
+  // letting it fall through to `path.resolve(workspaceDir, mediaUrl)` collapses
+  // the scheme into a directory component and produces paths like
+  // `<workspace>/media:/inbound/<id>`. Fail fast with the standard not-found
+  // shape so the caller sees the original URI in the error (#74123).
+  if (/^\s*media:\/\//i.test(mediaUrl)) {
+    throw new LocalMediaAccessError("not-found", `Local media file not found: ${mediaUrl.trim()}`);
+  }
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
     try {
@@ -527,7 +539,12 @@ async function loadWebMediaInternal(
   if (mediaUrl.startsWith("~")) {
     mediaUrl = resolveUserPath(mediaUrl);
   }
-  if (workspaceDir && !path.isAbsolute(mediaUrl) && !WINDOWS_DRIVE_RE.test(mediaUrl)) {
+  if (
+    workspaceDir &&
+    !path.isAbsolute(mediaUrl) &&
+    !WINDOWS_DRIVE_RE.test(mediaUrl) &&
+    !classifyMediaReferenceSource(mediaUrl).hasScheme
+  ) {
     mediaUrl = path.resolve(workspaceDir, mediaUrl);
   }
   try {

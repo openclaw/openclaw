@@ -569,4 +569,52 @@ describe("loadWebMedia", () => {
       code: "invalid-path",
     });
   });
+
+  // Regression coverage for #74123: when a `media://` URI bypassed the strict
+  // store resolver (for example via leading whitespace from upstream prompt
+  // formatting), it used to fall through to `path.resolve(workspaceDir,
+  // mediaUrl)` and surface as `<workspace>/media:/inbound/<id>` in the error.
+  // The early-throw must report the original URI verbatim and never join it
+  // under workspaceDir.
+  it("rejects stranded media:// URIs without joining them under workspaceDir", async () => {
+    const id = `stranded-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    // Leading whitespace bypasses the strict scheme check inside
+    // `resolveMediaStoreUriToPath`, so the URI survives intact and would
+    // previously hit `path.resolve(workspaceDir, mediaUrl)`.
+    const url = `  media://inbound/${id}`;
+    const rejection = await loadWebMedia(url, {
+      maxBytes: 1024 * 1024,
+      workspaceDir,
+    }).catch((err) => err);
+    expect(rejection).toMatchObject({
+      code: "not-found",
+      message: expect.stringContaining(`media://inbound/${id}`),
+    });
+    expect(rejection).not.toMatchObject({
+      message: expect.stringContaining(`${workspaceDir}${path.sep}media:`),
+    });
+  });
+
+  it("does not workspace-resolve media store URIs whose hostname is unsupported", async () => {
+    const rejection = await loadWebMedia("media://outbound/tiny.png", {
+      maxBytes: 1024 * 1024,
+      workspaceDir,
+    }).catch((err) => err);
+    expect(rejection).toMatchObject({ code: "path-not-allowed" });
+    expect(rejection).not.toMatchObject({
+      message: expect.stringContaining(`${workspaceDir}${path.sep}media:`),
+    });
+  });
+
+  it("does not workspace-resolve data: URIs that reach the local-path branch", async () => {
+    const dataUrl = "data:application/octet-stream;base64,AA==";
+    const rejection = await loadWebMedia(dataUrl, {
+      maxBytes: 1024 * 1024,
+      workspaceDir,
+      localRoots: [fixtureRoot],
+    }).catch((err) => err);
+    expect(rejection).not.toMatchObject({
+      message: expect.stringContaining(`${workspaceDir}${path.sep}data:`),
+    });
+  });
 });
