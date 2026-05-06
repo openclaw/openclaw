@@ -234,6 +234,36 @@ describe("channel-health-monitor", () => {
     await expectNoStart(manager);
   });
 
+  it("does not restart a channel with terminalDisconnect set", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: true,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("restarts a stopped channel without terminalDisconnect", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: false,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
+  });
+
   it("skips manually stopped channels", async () => {
     const manager = createSnapshotManager(
       {

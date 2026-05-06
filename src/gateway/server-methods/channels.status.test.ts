@@ -212,6 +212,36 @@ describe("channelsHandlers channels.status", () => {
     }
   });
 
+  it("annotates terminal-disconnect accounts with terminal-disconnect health state", async () => {
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: false,
+      terminalDisconnect: true,
+    });
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.status"](
+      createOptions({ probe: false, timeoutMs: 2000 }, { respond }),
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        channelAccounts: {
+          whatsapp: [
+            expect.objectContaining({
+              healthState: "terminal-disconnect",
+            }),
+          ],
+        },
+      }),
+      undefined,
+    );
+  });
+
   it("annotates unhealthy channel snapshots and includes event-loop health", async () => {
     const now = Date.now();
     mocks.applyPluginAutoEnable.mockReturnValue({ config: { autoEnabled: true }, changes: [] });

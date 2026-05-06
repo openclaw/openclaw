@@ -294,6 +294,61 @@ describe("evaluateChannelHealth", () => {
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
   });
+
+  it("treats terminal-disconnect channels as unhealthy but distinct from not-running", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: false,
+        enabled: true,
+        configured: true,
+        terminalDisconnect: true,
+      },
+      {
+        channelId: "whatsapp",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "terminal-disconnect" });
+  });
+
+  it("treats stopped channels without terminalDisconnect as not-running", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: false,
+        enabled: true,
+        configured: true,
+        terminalDisconnect: false,
+      },
+      {
+        channelId: "whatsapp",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "not-running" });
+  });
+
+  it("ignores terminalDisconnect when channel is still running", () => {
+    const evaluation = evaluateChannelHealth(
+      {
+        running: true,
+        connected: true,
+        enabled: true,
+        configured: true,
+        terminalDisconnect: true,
+      },
+      {
+        channelId: "whatsapp",
+        now: 100_000,
+        channelConnectGraceMs: 10_000,
+        staleEventThresholdMs: 30_000,
+      },
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {

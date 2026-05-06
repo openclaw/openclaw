@@ -134,6 +134,12 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (health.healthy) {
             continue;
           }
+          if (health.reason === "terminal-disconnect") {
+            log.info?.(
+              `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
+            );
+            continue;
+          }
 
           const key = rKey(channelId, accountId);
           const record = restartRecords.get(key) ?? {

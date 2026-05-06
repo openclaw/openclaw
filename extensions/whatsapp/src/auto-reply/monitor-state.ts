@@ -41,6 +41,7 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       Object.assign(status, createTransportActivityStatusPatch(at));
       status.lastError = null;
       status.healthState = "healthy";
+      status.terminalDisconnect = undefined;
       emit();
     },
     noteInbound(at = Date.now()) {
@@ -97,6 +98,8 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
       status.running = false;
       status.connected = false;
       status.lastEventAt = at;
+      status.terminalDisconnect =
+        status.healthState === "logged-out" || status.healthState === "conflict";
       if (!isTerminalHealthState(status.healthState)) {
         status.healthState = "stopped";
       }
