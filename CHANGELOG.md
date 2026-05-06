@@ -109,6 +109,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/channels: serialize channel and account startup with a 3-second handoff stagger and defer primary model prewarm until after `startChannels()` completes, preventing simultaneous Telegram `getMe` calls and provider-runtime imports from starving the Node event loop. Multi-account hosts (especially Windows 11 + Node 24 with 5+ Telegram accounts) saw multi-minute polling stalls on startup. (#78437) Thanks @glasswings-lang.
 - Google Meet/Voice Call: wait longer before playing PIN-derived Twilio DTMF for Meet dial-in prompts and retire stale delegated phone sessions instead of reusing completed calls.
 - Onboard/channels: recover externalized channel plugins from stale `channels.<id>` config by falling back to `ensureChannelSetupPluginInstalled` via the trusted catalog when the plugin is missing on disk, so leftover `appId`/token entries no longer dead-end onboard with "<channel> plugin not available." (#78328) Thanks @sliverp.
 - Codex/app-server: forward the OpenClaw workspace bootstrap block through Codex `developerInstructions` instead of `config.instructions`, so persona/style guidance reaches the behavior-shaping app-server lane. Fixes #77363. Thanks @lonexreb.

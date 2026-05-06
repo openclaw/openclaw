@@ -717,8 +717,8 @@ describe("server-channels auto restart", () => {
     );
   });
 
-  it("limits whole-channel account startup fanout to four", async () => {
-    const accountIds = ["one", "two", "three", "four", "five", "six"];
+  it("serializes whole-channel account startup with handoff stagger", async () => {
+    const accountIds = ["one", "two", "three"];
     const releases: Array<() => void> = [];
     let active = 0;
     let maxActive = 0;
@@ -749,28 +749,38 @@ describe("server-channels auto restart", () => {
     const start = manager.startChannel("discord");
     await flushMicrotasks();
 
-    expect(isConfigured).toHaveBeenCalledTimes(4);
-    expect(maxActive).toBe(4);
+    // Concurrency is now 1: only the first account's preflight runs.
+    expect(isConfigured).toHaveBeenCalledTimes(1);
+    expect(maxActive).toBe(1);
     expect(startAccount).not.toHaveBeenCalled();
 
-    releases.splice(0, 4).forEach((release) => release());
-    await waitForMicrotaskCondition(
-      () => isConfigured.mock.calls.length === 6,
-      "expected second account startup wave",
-    );
+    // Walk through all three accounts: release preflight, advance through
+    // the stagger sleep, and confirm only one is active at any time.
+    for (let i = 0; i < accountIds.length; i += 1) {
+      releases.shift()?.();
+      await flushMicrotasks();
+      // Stagger sleep happens after handoff inside the inner task; advance
+      // past it so the limiter picks up the next account.
+      await vi.advanceTimersByTimeAsync(3_000);
+      await flushMicrotasks();
+    }
 
-    expect(isConfigured).toHaveBeenCalledTimes(6);
-    expect(maxActive).toBe(4);
-
-    releases.splice(0).forEach((release) => release());
     await start;
-    expect(startAccount).toHaveBeenCalledTimes(6);
+    expect(isConfigured).toHaveBeenCalledTimes(3);
+    expect(startAccount).toHaveBeenCalledTimes(3);
+    expect(maxActive).toBe(1);
+    // sleepWithAbort(3_000, ...) is called once per account-handoff stagger.
+    expect(
+      hoisted.sleepWithAbort.mock.calls.filter(
+        ([ms]) => ms === 3_000,
+      ),
+    ).toHaveLength(3);
 
     await manager.stopChannel("discord");
   });
 
-  it("limits channel plugin startup fanout to four", async () => {
-    const channelIds = Array.from({ length: 6 }, (_, index) => `test-${index}` as ChannelId);
+  it("serializes channel plugin startup with handoff stagger", async () => {
+    const channelIds = Array.from({ length: 3 }, (_, index) => `test-${index}` as ChannelId);
     const releases: Array<() => void> = [];
     let active = 0;
     let maxActive = 0;
@@ -799,20 +809,24 @@ describe("server-channels auto restart", () => {
     const start = manager.startChannels();
     await flushMicrotasks();
 
-    expect(releases).toHaveLength(4);
-    expect(maxActive).toBe(4);
+    // Concurrency is 1: only the first plugin's preflight runs.
+    expect(releases).toHaveLength(1);
+    expect(maxActive).toBe(1);
 
-    releases.splice(0, 4).forEach((release) => release());
-    await waitForMicrotaskCondition(
-      () => releases.length === 2,
-      "expected second channel startup wave",
-    );
+    for (let i = 0; i < channelIds.length; i += 1) {
+      releases.shift()?.();
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await flushMicrotasks();
+    }
 
-    expect(releases).toHaveLength(2);
-    expect(maxActive).toBe(4);
-
-    releases.splice(0).forEach((release) => release());
     await start;
+    expect(maxActive).toBe(1);
+    expect(
+      hoisted.sleepWithAbort.mock.calls.filter(
+        ([ms]) => ms === 3_000,
+      ),
+    ).toHaveLength(3);
 
     await Promise.all(channelIds.map((id) => manager.stopChannel(id)));
   });
