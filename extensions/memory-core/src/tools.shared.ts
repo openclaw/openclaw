@@ -9,6 +9,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { IsolationIdentityError, resolveIsolationIdentity } from "./isolation-identity.js";
 
 type MemoryToolRuntime = typeof import("./tools.runtime.js");
 type MemorySearchManagerResult = Awaited<
@@ -56,7 +57,21 @@ export function resolveMemoryToolContext(options: {
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;
   }
-  return { cfg, agentId, userId: options.senderId };
+  let userId: string | undefined;
+  try {
+    userId = resolveIsolationIdentity({
+      cfg,
+      agentId,
+      sessionKey: options.agentSessionKey,
+      senderId: options.senderId,
+    });
+  } catch (error) {
+    if (error instanceof IsolationIdentityError) {
+      return null;
+    }
+    throw error;
+  }
+  return { cfg, agentId, userId };
 }
 
 export async function getMemoryManagerContext(params: {
