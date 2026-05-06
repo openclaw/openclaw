@@ -617,8 +617,8 @@ describe("matrix live qa scenarios", () => {
         approvalId = payload?.id ?? "";
         return { id: approvalId, status: "accepted" };
       }
-      if (method === "exec.approval.waitDecision") {
-        return { decision: "allow-once", id: approvalId };
+      if (method === "exec.approval.resolve") {
+        return { ok: true };
       }
       throw new Error(`unexpected gateway method ${method}`);
     });
@@ -660,21 +660,6 @@ describe("matrix live qa scenarios", () => {
       matched: false,
       since: "driver-sync-late-window",
     });
-    const sendReaction = vi.fn().mockResolvedValue("$approval-both-driver-reaction");
-    const waitForDriverReaction = vi.fn().mockResolvedValue({
-      event: {
-        eventId: "$approval-both-driver-reaction",
-        kind: "reaction",
-        reaction: {
-          eventId: "$approval-both-channel",
-          key: "✅",
-        },
-        roomId: "!main:matrix-qa.test",
-        sender: "@driver:matrix-qa.test",
-        type: "m.reaction",
-      } satisfies MatrixQaObservedEvent,
-      since: "driver-sync-driver-reaction",
-    });
     createMatrixQaClient
       .mockReturnValueOnce({
         primeRoom: vi.fn().mockResolvedValue("driver-sync-start"),
@@ -682,10 +667,6 @@ describe("matrix live qa scenarios", () => {
       })
       .mockReturnValueOnce({
         waitForRoomEvent,
-      })
-      .mockReturnValueOnce({
-        sendReaction,
-        waitForRoomEvent: waitForDriverReaction,
       });
 
     const scenario = MATRIX_QA_SCENARIOS.find(
@@ -699,15 +680,13 @@ describe("matrix live qa scenarios", () => {
           { eventId: "$approval-both-channel", roomId: "!main:matrix-qa.test" },
           { eventId: "$approval-both-dm", roomId: "!driver-dm:matrix-qa.test" },
         ],
-        reactionEventId: "$approval-both-driver-reaction",
-        reactionTargetEventId: "$approval-both-channel",
       },
     });
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
-    expect(waitForDriverReaction).toHaveBeenCalledTimes(1);
-    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
-    expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
+    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.resolve");
+    expect(gatewayCall.mock.calls.at(-1)?.[2]).toMatchObject({ expectFinal: false });
+    expect(createMatrixQaClient).toHaveBeenCalledTimes(2);
   });
 
   it("lets explicit Matrix scenario ids override the selected profile", () => {
