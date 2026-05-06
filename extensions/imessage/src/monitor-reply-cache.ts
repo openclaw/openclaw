@@ -29,6 +29,22 @@ type IMessageReplyCacheEntry = IMessageChatContext & {
   messageId: string;
   shortId: string;
   timestamp: number;
+  /**
+   * True when the gateway sent this message itself (recorded from the
+   * outbound path in send.ts after a successful imsg send), false when the
+   * cache entry came from inbound watch (most common path).
+   *
+   * Edit / unsend actions require this to be true: Messages.app only lets
+   * the original sender edit or retract a message, and even if the bridge
+   * accepted a non-sender attempt, letting an agent unsend a human user's
+   * message in a group chat would be a permission boundary violation.
+   *
+   * Optional for backwards compatibility with persisted entries from older
+   * gateway versions that did not record this field; missing values are
+   * treated as `false` (the safe default — pre-existing entries on disk
+   * came from the inbound-only writer that existed before this change).
+   */
+  isFromMe?: boolean;
 };
 
 const imessageReplyCacheByMessageId = new Map<string, IMessageReplyCacheEntry>();
@@ -107,6 +123,7 @@ function readPersistedEntries(): {
       chatGuid: typeof parsed.chatGuid === "string" ? parsed.chatGuid : undefined,
       chatIdentifier: typeof parsed.chatIdentifier === "string" ? parsed.chatIdentifier : undefined,
       chatId: typeof parsed.chatId === "number" ? parsed.chatId : undefined,
+      isFromMe: typeof parsed.isFromMe === "boolean" ? parsed.isFromMe : undefined,
     });
   }
   return { entries: out.slice(-REPLY_CACHE_MAX), maxObservedShortId };
@@ -372,7 +389,23 @@ function buildCrossChatError(
 
 export function resolveIMessageMessageId(
   shortOrUuid: string,
-  opts?: { requireKnownShortId?: boolean; chatContext?: IMessageChatContext },
+  opts?: {
+    requireKnownShortId?: boolean;
+    chatContext?: IMessageChatContext;
+    /**
+     * When true, only resolve message ids that the gateway recorded as sent
+     * by itself (`isFromMe: true`). Used by `edit` / `unsend` so an agent
+     * cannot retract or edit messages other participants sent — Messages.app
+     * enforces this at the OS level too, but failing earlier in the plugin
+     * gives a clean error and avoids dispatching a guaranteed-to-fail bridge
+     * call.
+     *
+     * Cache entries with no `isFromMe` field (older persisted entries from
+     * before this option existed, or any uncached UUID the agent passes
+     * through) are treated as not-from-me and rejected.
+     */
+    requireFromMe?: boolean;
+  },
 ): string {
   const trimmed = shortOrUuid.trim();
   if (!trimmed) {
@@ -386,11 +419,14 @@ export function resolveIMessageMessageId(
     // provide a scope and it disagrees with the cache.
     const uuid = imessageShortIdToUuid.get(trimmed);
     if (uuid) {
+      const cached = imessageReplyCacheByMessageId.get(uuid);
       if (opts?.chatContext && hasChatScope(opts.chatContext)) {
-        const cached = imessageReplyCacheByMessageId.get(uuid);
         if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
           throw buildCrossChatError(trimmed, "short", cached, opts.chatContext);
         }
+      }
+      if (opts?.requireFromMe && cached?.isFromMe !== true) {
+        throw buildFromMeError(trimmed, "short");
       }
       return uuid;
     }
@@ -410,13 +446,24 @@ export function resolveIMessageMessageId(
     return trimmed;
   }
 
+  const cached = imessageReplyCacheByMessageId.get(trimmed);
   if (opts?.chatContext) {
-    const cached = imessageReplyCacheByMessageId.get(trimmed);
     if (cached && isCrossChatMismatch(cached, opts.chatContext)) {
       throw buildCrossChatError(trimmed, "uuid", cached, opts.chatContext);
     }
   }
+  if (opts?.requireFromMe && cached?.isFromMe !== true) {
+    throw buildFromMeError(trimmed, "uuid");
+  }
   return trimmed;
+}
+
+function buildFromMeError(inputId: string, inputKind: "short" | "uuid"): Error {
+  return new Error(
+    `iMessage message id ${describeMessageIdForError(inputId, inputKind)} is not one this agent sent. ` +
+      `edit and unsend can only target messages the gateway delivered itself; ` +
+      `messages received from other participants cannot be modified.`,
+  );
 }
 
 /**

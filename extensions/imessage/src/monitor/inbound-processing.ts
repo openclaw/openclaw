@@ -583,6 +583,7 @@ export function buildIMessageInboundContext(params: {
         chatIdentifier: decision.chatIdentifier,
         chatId: decision.chatId,
         timestamp: Date.now(),
+        isFromMe: false,
       })
     : null;
   // Only surface the gateway-allocated shortId — never the raw chat.db

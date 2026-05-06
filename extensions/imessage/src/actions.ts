@@ -404,7 +404,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         runtime,
         options: opts,
       });
-    const messageId = () => {
+    const messageId = (resolveOpts?: { requireFromMe?: boolean }) => {
       const chatContext = buildChatContextFromActionParams({
         actionParams: params,
         currentChannelId: toolContext?.currentChannelId,
@@ -415,6 +415,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         {
           requireKnownShortId: true,
           chatContext,
+          ...(resolveOpts?.requireFromMe ? { requireFromMe: true } : {}),
         },
       );
     };
@@ -456,7 +457,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "edit") {
       await assertPrivateApiEnabled();
-      const resolvedMessageId = messageId();
+      const resolvedMessageId = messageId({ requireFromMe: true });
       const text =
         readStringParam(params, "text") ??
         readStringParam(params, "newText") ??
@@ -480,7 +481,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "unsend") {
       await assertPrivateApiEnabled();
-      const resolvedMessageId = messageId();
+      const resolvedMessageId = messageId({ requireFromMe: true });
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await chatGuid();
       await runtime.unsendMessage({

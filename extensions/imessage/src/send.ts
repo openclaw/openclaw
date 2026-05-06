@@ -14,6 +14,7 @@ import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-ru
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
+import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
@@ -267,6 +268,26 @@ export async function sendMessageIMessage(
         scope: echoScope,
         text: message,
         messageId: resolvedId ?? undefined,
+      });
+    }
+    // Record the outbound message in the reply cache with isFromMe=true so
+    // edit/unsend actions can verify the agent actually sent the message
+    // before dispatching. Inbound recording (in monitor/inbound-processing)
+    // sets isFromMe=false, so the cache distinguishes own-sent from received.
+    if (resolvedId) {
+      rememberIMessageReplyCache({
+        accountId: account.accountId,
+        messageId: resolvedId,
+        chatGuid: target.kind === "chat_guid" ? target.chatGuid : undefined,
+        chatIdentifier:
+          target.kind === "chat_identifier"
+            ? target.chatIdentifier
+            : target.kind === "handle"
+              ? `${target.service === "sms" ? "SMS" : "iMessage"};-;${target.to}`
+              : undefined,
+        chatId: target.kind === "chat_id" ? target.chatId : undefined,
+        timestamp: Date.now(),
+        isFromMe: true,
       });
     }
     return {

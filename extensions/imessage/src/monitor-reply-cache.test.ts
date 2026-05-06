@@ -113,6 +113,77 @@ describe("imessage short message id resolution", () => {
   });
 });
 
+describe("requireFromMe (edit / unsend authorization)", () => {
+  it("rejects a short id resolution when the cached entry came from inbound", () => {
+    // The default inbound recorder sets isFromMe:false (or omits it), so
+    // resolving with requireFromMe must reject — agents cannot edit/unsend
+    // messages that other participants sent.
+    const entry = rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "inbound-guid",
+      chatGuid: "iMessage;+;chatA",
+      timestamp: Date.now(),
+      isFromMe: false,
+    });
+
+    expect(() =>
+      resolveIMessageMessageId(entry.shortId, {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+        requireFromMe: true,
+      }),
+    ).toThrow("not one this agent sent");
+  });
+
+  it("allows a short id resolution when the cached entry was sent by the gateway", () => {
+    const entry = rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "outbound-guid",
+      chatGuid: "iMessage;+;chatA",
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+
+    expect(
+      resolveIMessageMessageId(entry.shortId, {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+        requireFromMe: true,
+      }),
+    ).toBe("outbound-guid");
+  });
+
+  it("rejects an uncached full guid under requireFromMe (agent cannot edit/unsend unknown messages)", () => {
+    expect(() =>
+      resolveIMessageMessageId("never-seen-guid", {
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+        requireFromMe: true,
+      }),
+    ).toThrow("not one this agent sent");
+  });
+
+  it("rejects when the cached entry has no isFromMe field (older persisted entry, treated as not-from-me)", () => {
+    // Persisted entries written before this option existed do not carry
+    // isFromMe. Treat undefined as the safe default (false) — that pre-
+    // existing-on-disk caller is the inbound recorder, the only writer that
+    // existed before.
+    rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "legacy-guid",
+      chatGuid: "iMessage;+;chatA",
+      timestamp: Date.now(),
+      // isFromMe deliberately omitted
+    });
+
+    expect(() =>
+      resolveIMessageMessageId("legacy-guid", {
+        chatContext: { chatGuid: "iMessage;+;chatA" },
+        requireFromMe: true,
+      }),
+    ).toThrow("not one this agent sent");
+  });
+});
+
 describe("findLatestIMessageEntryForChat", () => {
   it("returns the latest entry for the matching chat scope", () => {
     rememberIMessageReplyCache({
