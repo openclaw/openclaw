@@ -1,4 +1,4 @@
-import { readFileSync as readFileSyncOriginal } from "node:fs";
+import { existsSync as existsSyncOriginal, readFileSync as readFileSyncOriginal } from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -51,6 +51,13 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
+  function existsSyncWithoutGlobalCompileCache(value: string) {
+    if (path.resolve(value) === path.join(tmpdir(), "node-compile-cache")) {
+      return false;
+    }
+    return existsSyncOriginal(value);
+  }
+
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
@@ -138,6 +145,57 @@ describe("bundled plugin postinstall", () => {
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] could not prune OpenClaw compile cache: Error: locked",
     );
+  });
+
+  it("does not warn when compile-cache pruning hits EACCES or EPERM (shared caches)", () => {
+    const base = path.join("/tmp", "openclaw-shared-compile-cache");
+    const dirA = path.join(base, "v22.13.1-x64-efe9a9df-1001");
+    const dirB = path.join(base, "v22.13.1-x64-efe9a9df-1002");
+    const warn = vi.fn();
+    const rmSync = vi.fn((value: string) => {
+      if (value === dirA) {
+        throw Object.assign(new Error(`permission denied pruning ${value}`), { code: "EACCES" });
+      }
+      if (value === dirB) {
+        throw Object.assign(new Error(`operation not permitted pruning ${value}`), {
+          code: "EPERM",
+        });
+      }
+    });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: base },
+      existsSync: vi.fn((value: string) => value === base),
+      readdirSync: vi.fn(() => [
+        { name: path.basename(dirA), isDirectory: () => true },
+        { name: path.basename(dirB), isDirectory: () => true },
+      ]),
+      rmSync,
+      log: { warn },
+    });
+
+    expect(rmSync).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the compile-cache base directory cannot be listed (EACCES)", () => {
+    const base = path.join("/tmp", "openclaw-compile-cache-no-list");
+    const warn = vi.fn();
+    const rmSync = vi.fn();
+    const err = Object.assign(new Error(`EACCES: ${base}`), { code: "EACCES" });
+
+    pruneOpenClawCompileCache({
+      env: { NODE_COMPILE_CACHE: base },
+      existsSync: vi.fn(() => true),
+      readdirSync: vi.fn(() => {
+        throw err;
+      }),
+      rmSync,
+      log: { warn },
+    });
+
+    expect(rmSync).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("does not classify published packages with source files as source checkouts", () => {
@@ -395,7 +453,9 @@ describe("bundled plugin postinstall", () => {
   });
 
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-state-cleanup-");
+    const prefix = await createTempDirAsync("openclaw-packaged-prefix-");
+    const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
     const home = await createTempDirAsync("openclaw-packaged-home-");
     const stateOverride = path.join(home, "custom-state");
     const systemState = path.join(home, "system-state");
@@ -411,6 +471,15 @@ describe("bundled plugin postinstall", () => {
       "node_modules",
     );
     const currentFile = path.join(packageRoot, "dist", "entry.js");
+    const legacySymlinkTarget = path.join(
+      defaultLegacyRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const legacySymlink = path.join(slackScope, "web-api");
 
     await fs.mkdir(path.dirname(currentFile), { recursive: true });
     await fs.writeFile(currentFile, "export {};\n");
@@ -425,6 +494,9 @@ describe("bundled plugin postinstall", () => {
       await fs.mkdir(root, { recursive: true });
       await fs.writeFile(path.join(root, "package.json"), "{}\n");
     }
+    await fs.mkdir(legacySymlinkTarget, { recursive: true });
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.symlink(legacySymlinkTarget, legacySymlink, "dir");
 
     const log = { log: vi.fn(), warn: vi.fn() };
     runBundledPluginPostinstall({
@@ -434,6 +506,7 @@ describe("bundled plugin postinstall", () => {
         STATE_DIRECTORY: systemState,
       },
       packageRoot,
+      existsSync: existsSyncWithoutGlobalCompileCache,
       log,
     });
 
@@ -441,10 +514,48 @@ describe("bundled plugin postinstall", () => {
     await expect(fs.stat(oldBrandLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(overrideLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(systemLegacyRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.lstat(legacySymlink)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.stat(thirdPartyNodeModules)).resolves.toBeTruthy();
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
       expect.stringContaining("[postinstall] pruned legacy plugin runtime deps:"),
+    );
+  });
+
+  it("prunes global plugin-runtime symlinks before deleting their legacy targets", async () => {
+    const prefix = await createTempDirAsync("openclaw-packaged-prefix-");
+    const home = await createTempDirAsync("openclaw-packaged-home-");
+    const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(home, ".openclaw", "plugin-runtime-deps");
+    const legacyTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-2026.4.29-slack",
+      "node_modules",
+      "@slack",
+      "web-api",
+    );
+    const slackScope = path.join(nodeModulesRoot, "@slack");
+    const slackLink = path.join(slackScope, "web-api");
+
+    await fs.mkdir(legacyTarget, { recursive: true });
+    await fs.writeFile(path.join(legacyTarget, "package.json"), "{}\n");
+    await fs.mkdir(slackScope, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.symlink(legacyTarget, slackLink, "dir");
+
+    const log = { log: vi.fn(), warn: vi.fn() };
+    pruneLegacyPluginRuntimeDepsState({
+      env: { HOME: home },
+      packageRoot,
+      log,
+    });
+
+    await expect(fs.lstat(slackLink)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(legacyRuntimeRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.log).toHaveBeenCalledWith(
+      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps symlinks:"),
     );
   });
 

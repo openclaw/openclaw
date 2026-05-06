@@ -19,7 +19,7 @@ import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js"
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -176,6 +176,104 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledWith(
       expect.objectContaining({
         pluginToolAllowlist: expect.arrayContaining(["memory_search", "memory_get"]),
+      }),
+    );
+  });
+
+  it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    const tools = createOpenClawCodingTools({
+      config: testConfig,
+      toolConstructionPlan: {
+        includeBaseCodingTools: true,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+    expect(names.has("read")).toBe(true);
+    expect(names.has("write")).toBe(true);
+    expect(names.has("edit")).toBe(true);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("process")).toBe(false);
+    expect(names.has("apply_patch")).toBe(false);
+    expect(names.has("message")).toBe(false);
+  });
+
+  it("passes plugin suppression into OpenClaw tool construction plans", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        disablePluginTools: true,
+      }),
+    );
+  });
+
+  it("keeps plugin-only construction off the OpenClaw core factory", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      includeCoreTools: false,
+      runtimeToolAllowlist: ["memory_search"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+    });
+
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["lobster"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolAllowlist: ["lobster", DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY],
+      }),
+    );
+  });
+
+  it("passes explicit denylist entries to OpenClaw tool factory planning", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: { tools: { deny: ["pdf"] } },
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolDenylist: expect.arrayContaining(["pdf"]),
       }),
     );
   });
@@ -479,6 +577,54 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("sessions_spawn")).toBe(false);
     expect(names.has("exec")).toBe(false);
     expect(names.has("browser")).toBe(false);
+  });
+
+  it("includes browser tool with full profile when browser is configured (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: { profile: "full" },
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+      senderIsOwner: true,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // full profile must not filter any tools — browser, canvas, etc. must be present.
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    expect(names.has("exec")).toBe(true);
+    expect(names.has("message")).toBe(true);
+  });
+
+  it("includes browser tool with full profile for non-owner senders (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: { profile: "full" },
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+      senderIsOwner: false,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // browser is NOT owner-only; it must be available to non-owner senders.
+    expect(names.has("browser")).toBe(true);
+    expect(names.has("canvas")).toBe(true);
+    // owner-only tools should be filtered for non-owners
+    expect(names.has("gateway")).toBe(false);
+    expect(names.has("cron")).toBe(false);
+    expect(names.has("nodes")).toBe(false);
+  });
+
+  it("includes browser tool without explicit profile (defaults to no filtering) (#76507)", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        browser: { enabled: true },
+        plugins: { entries: { browser: { enabled: true } } },
+      } as OpenClawConfig,
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    // No profile means no profile filtering — all tools pass.
+    expect(names.has("browser")).toBe(true);
   });
 
   it("keeps browser out of coding-profile subagents unless profile-stage alsoAllow adds it", () => {

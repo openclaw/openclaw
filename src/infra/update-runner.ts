@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
 import {
   resolveControlUiDistIndexHealth,
@@ -57,9 +58,15 @@ export type UpdateRunResult = {
   durationMs: number;
   postUpdate?: {
     plugins?: {
-      status: "ok" | "skipped" | "error";
+      status: "ok" | "warning" | "skipped" | "error";
       reason?: string;
       changed: boolean;
+      warnings?: Array<{
+        pluginId?: string;
+        reason: string;
+        message: string;
+        guidance: string[];
+      }>;
       sync: {
         changed: boolean;
         switchedToBundled: string[];
@@ -169,6 +176,12 @@ const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktr
 const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const DEV_PREFLIGHT_LINT_ENV: NodeJS.ProcessEnv = {
+  OPENCLAW_LOCAL_CHECK: "1",
+  OPENCLAW_LOCAL_CHECK_MODE: "throttled",
+  OPENCLAW_OXLINT_SHARDS_SERIAL: "1",
+};
+const DEV_PREFLIGHT_LINT_OPT_IN_ENV = "OPENCLAW_UPDATE_PREFLIGHT_LINT";
 
 function normalizeDir(value?: string | null) {
   if (!value) {
@@ -559,8 +572,16 @@ function mergeCommandEnvironments(
   };
 }
 
-function shouldRunDevPreflightLint(): boolean {
-  return process.platform !== "win32";
+function shouldRunDevPreflightLint(env: NodeJS.ProcessEnv = process.env): boolean {
+  const value = env[DEV_PREFLIGHT_LINT_OPT_IN_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+function resolveDevPreflightLintEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...DEV_PREFLIGHT_LINT_ENV,
+  };
 }
 
 function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRunResult["reason"]> {
@@ -736,11 +757,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       steps,
       durationMs: Date.now() - startedAt,
     });
-    const runGitCheckoutOrFail = async (name: string, argv: string[]) => {
-      const checkoutStep = await runStep(step(name, argv, gitRoot));
-      steps.push(checkoutStep);
-      if (checkoutStep.exitCode !== 0) {
-        return buildGitErrorResult("checkout-failed");
+    const runRequiredGitStep = async (name: string, argv: string[], reason: string) => {
+      const gitStep = await runStep(step(name, argv, gitRoot));
+      steps.push(gitStep);
+      if (gitStep.exitCode !== 0) {
+        return buildGitErrorResult(reason);
       }
       return null;
     };
@@ -769,22 +790,24 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
 
     if (channel === "dev") {
       if (needsCheckoutMain) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${DEV_BRANCH}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          DEV_BRANCH,
-        ]);
+        const failure = await runRequiredGitStep(
+          `git checkout ${DEV_BRANCH}`,
+          ["git", "-C", gitRoot, "checkout", DEV_BRANCH],
+          "checkout-failed",
+        );
         if (failure) {
           return failure;
         }
       }
 
-      const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+      const fetchFailure = await runRequiredGitStep(
+        "git fetch",
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        "fetch-failed",
       );
-      steps.push(fetchStep);
+      if (fetchFailure) {
+        return fetchFailure;
+      }
       let preflightBaseSha: string | null = null;
       let candidates: string[] = [];
       if (devTargetRef) {
@@ -1033,7 +1056,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
                 `preflight lint (${shortSha})`,
                 managerScriptArgs(manager.manager, "lint"),
                 worktreeDir,
-                manager.env,
+                resolveDevPreflightLintEnv(manager.env),
               ),
             );
             steps.push(lintStep);
@@ -1090,14 +1113,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       }
 
       if (devTargetRef) {
-        const failure = await runGitCheckoutOrFail(`git checkout ${selectedSha}`, [
-          "git",
-          "-C",
-          gitRoot,
-          "checkout",
-          "--detach",
-          selectedSha,
-        ]);
+        const failure = await runRequiredGitStep(
+          `git checkout ${selectedSha}`,
+          ["git", "-C", gitRoot, "checkout", "--detach", selectedSha],
+          "checkout-failed",
+        );
         if (failure) {
           return failure;
         }
@@ -1132,20 +1152,13 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         }
       }
     } else {
-      const fetchStep = await runStep(
-        step("git fetch", ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"], gitRoot),
+      const fetchFailure = await runRequiredGitStep(
+        "git fetch",
+        ["git", "-C", gitRoot, "fetch", "--all", "--prune", "--tags"],
+        "fetch-failed",
       );
-      steps.push(fetchStep);
-      if (fetchStep.exitCode !== 0) {
-        return {
-          status: "error",
-          mode: "git",
-          root: gitRoot,
-          reason: "fetch-failed",
-          before: { sha: beforeSha, version: beforeVersion },
-          steps,
-          durationMs: Date.now() - startedAt,
-        };
+      if (fetchFailure) {
+        return fetchFailure;
       }
 
       const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
@@ -1161,14 +1174,11 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         };
       }
 
-      const failure = await runGitCheckoutOrFail(`git checkout ${tag}`, [
-        "git",
-        "-C",
-        gitRoot,
-        "checkout",
-        "--detach",
-        tag,
-      ]);
+      const failure = await runRequiredGitStep(
+        `git checkout ${tag}`,
+        ["git", "-C", gitRoot, "checkout", "--detach", tag],
+        "checkout-failed",
+      );
       if (failure) {
         return failure;
       }
@@ -1443,6 +1453,27 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           stepIndex: 0,
           totalSteps: 1,
         }),
+      postVerifyStep: async (verifiedPackageRoot) => {
+        const doctorEntry = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
+        if (!doctorEntry) {
+          return null;
+        }
+        const doctorNodePath = await resolveStableNodePath(process.execPath);
+        return await runStep({
+          runCommand,
+          name: "openclaw doctor",
+          argv: [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"],
+          cwd: verifiedPackageRoot,
+          timeoutMs,
+          env: {
+            OPENCLAW_UPDATE_IN_PROGRESS: "1",
+            [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+          },
+          progress,
+          stepIndex: 0,
+          totalSteps: 1,
+        });
+      },
     });
     return {
       status: packageUpdate.failedStep ? "error" : "ok",

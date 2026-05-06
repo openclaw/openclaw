@@ -9,7 +9,6 @@ import type {
   GatewayTailscaleMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
-import { formatConfigIssueSummary } from "../../config/issue-format.js";
 import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -26,6 +25,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
+import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -102,8 +102,6 @@ type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | 
  * restart storm that can render low-resource hosts unresponsive.
  */
 const EXIT_CONFIG_ERROR = 78;
-const CONFIG_AUTO_RECOVERY_MESSAGE =
-  "Gateway recovered automatically after a failed config change and restored the last known good configuration.";
 
 const GATEWAY_AUTH_MODES: readonly GatewayAuthMode[] = [
   "none",
@@ -161,7 +159,7 @@ function createGatewayCliStartupTrace() {
     async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
       const before = performance.now();
       try {
-        return await run();
+        return await withDiagnosticPhase(name, run);
       } finally {
         const now = performance.now();
         emit(name, now - before, now - started);
@@ -277,69 +275,12 @@ async function readGatewayStartupConfig(params: {
   snapshot: ConfigFileSnapshot | null;
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
-  const {
-    readConfigFileSnapshotWithPluginMetadata,
-    recoverConfigFromLastKnownGood,
-    recoverConfigFromJsonRootSuffix,
-  } = await import("../../config/config.js");
-  let snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
+  const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
+  const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
       readConfigFileSnapshotWithPluginMetadata().catch(() => null),
     );
-  let snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
-  if (snapshot?.exists && !snapshot.valid) {
-    const invalidSnapshot = snapshot;
-    const recovered = await params.startupTrace.measure("cli.config-recovery", () =>
-      recoverConfigFromLastKnownGood({
-        snapshot: invalidSnapshot,
-        reason: "gateway-run-invalid-config",
-      }),
-    );
-    if (recovered) {
-      const issueSummary = formatConfigIssueSummary([
-        ...invalidSnapshot.issues,
-        ...invalidSnapshot.legacyIssues,
-      ]);
-      gatewayLog.warn(
-        `gateway: restored invalid effective config from last-known-good backup: ${invalidSnapshot.path}${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
-      );
-      try {
-        const { writeRestartSentinel } = await import("../../infra/restart-sentinel.js");
-        await writeRestartSentinel({
-          kind: "config-auto-recovery",
-          status: "ok",
-          ts: Date.now(),
-          message: CONFIG_AUTO_RECOVERY_MESSAGE,
-          stats: {
-            mode: "config-auto-recovery",
-            reason: "gateway-run-invalid-config",
-            after: { restoredFrom: "last-known-good" },
-          },
-        });
-      } catch (err) {
-        gatewayLog.warn(
-          `gateway: failed to persist config auto-recovery notice: ${formatErrorMessage(err)}`,
-        );
-      }
-      snapshotRead = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
-        readConfigFileSnapshotWithPluginMetadata().catch(() => null),
-      );
-      snapshot = snapshotRead?.snapshot ?? null;
-    } else {
-      const repaired = await params.startupTrace.measure("cli.config-prefix-recovery", () =>
-        recoverConfigFromJsonRootSuffix(invalidSnapshot),
-      );
-      if (repaired) {
-        gatewayLog.warn(
-          `gateway: repaired invalid effective config by stripping a non-JSON prefix: ${invalidSnapshot.path}`,
-        );
-        snapshotRead = await params.startupTrace.measure("cli.config-snapshot-reload", () =>
-          readConfigFileSnapshotWithPluginMetadata().catch(() => null),
-        );
-        snapshot = snapshotRead?.snapshot ?? null;
-      }
-    }
-  }
+  const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};
   return {
     cfg,

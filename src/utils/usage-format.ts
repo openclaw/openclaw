@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 /**
@@ -203,7 +205,7 @@ function loadModelsJsonCostIndex(options?: {
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveOpenClawAgentDir(), "models.json");
+  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
   try {
     const stat = fs.statSync(modelsPath);
     if (
@@ -211,13 +213,13 @@ function loadModelsJsonCostIndex(options?: {
       modelsJsonCostCache.path !== modelsPath ||
       modelsJsonCostCache.mtimeMs !== stat.mtimeMs
     ) {
-      const parsed = JSON.parse(fs.readFileSync(modelsPath, "utf8")) as {
+      const parsed = tryReadJsonSync<{
         providers?: Record<string, ModelProviderConfig>;
-      };
+      }>(modelsPath);
       modelsJsonCostCache = {
         path: modelsPath,
         mtimeMs: stat.mtimeMs,
-        providers: parsed.providers,
+        providers: parsed?.providers,
         normalizedEntries: null,
         rawEntries: null,
       };
@@ -258,6 +260,42 @@ function findConfiguredProviderCost(params: {
   return buildProviderCostIndex(params.config?.models?.providers, {
     allowPluginNormalization: params.allowPluginNormalization,
   }).get(key);
+}
+
+function stableCostFingerprintValue(value: unknown): string {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? JSON.stringify(value) : JSON.stringify(String(value));
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableCostFingerprintValue(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .toSorted()
+    .map((key) => `${JSON.stringify(key)}:${stableCostFingerprintValue(record[key])}`)
+    .join(",")}}`;
+}
+
+function serializeCostIndex(
+  entries: Map<string, ModelCostConfig>,
+): Array<[string, ModelCostConfig]> {
+  return Array.from(entries.entries()).toSorted(([a], [b]) => a.localeCompare(b));
+}
+
+export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): string {
+  return stableCostFingerprintValue({
+    configuredRaw: serializeCostIndex(
+      buildProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
+    ),
+    configuredNormalized: serializeCostIndex(buildProviderCostIndex(config?.models?.providers)),
+    modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex({ allowPluginNormalization: false })),
+    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex()),
+    gatewayPricing: getGatewayModelPricingCacheFingerprint(),
+  });
 }
 
 export function resolveModelCostConfig(params: {

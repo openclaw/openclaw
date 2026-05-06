@@ -184,24 +184,24 @@ export function registerControlUiAndPairingSuite(): void {
   };
 
   const stripPairedMetadataRolesAndScopes = async (deviceId: string) => {
-    const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
-    const { writeJsonAtomic } = await import("../infra/json-files.js");
+    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
+    const { writeJson } = await import("../infra/json-files.js");
     const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
     const legacy = getRequiredPairedMetadata(paired, deviceId);
     delete legacy.roles;
     delete legacy.scopes;
-    await writeJsonAtomic(pairedPath, paired);
+    await writeJson(pairedPath, paired);
   };
 
   const overwritePairedPublicKey = async (deviceId: string, publicKey: string) => {
-    const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
-    const { writeJsonAtomic } = await import("../infra/json-files.js");
+    const { resolvePairingPaths, tryReadJson } = await import("../infra/pairing-files.js");
+    const { writeJson } = await import("../infra/json-files.js");
     const { pairedPath } = resolvePairingPaths(undefined, "devices");
-    const paired = (await readJsonFile<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
+    const paired = (await tryReadJson<Record<string, Record<string, unknown>>>(pairedPath)) ?? {};
     const metadata = getRequiredPairedMetadata(paired, deviceId);
     metadata.publicKey = publicKey;
-    await writeJsonAtomic(pairedPath, paired);
+    await writeJson(pairedPath, paired);
   };
 
   const seedApprovedOperatorReadPairing = async (params: {
@@ -310,6 +310,68 @@ export function registerControlUiAndPairingSuite(): void {
       } finally {
         ws.close();
         await rejectDevicePairing(pendingRequest.request.requestId);
+      }
+    });
+  });
+
+  test("clamps trusted-proxy control ui scopes for unpaired device identity", async () => {
+    const { replaceConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = undefined;
+    testState.gatewayControlUi = {
+      ...testState.gatewayControlUi,
+      allowedOrigins: ["https://localhost"],
+    };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          },
+          trustedProxies: ["127.0.0.1"],
+          controlUi: {
+            allowedOrigins: ["https://localhost"],
+          },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    await withControlUiGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
+      try {
+        const challengeNonce = await readConnectChallengeNonce(ws);
+        const { device } = await createSignedDevice({
+          token: null,
+          role: "operator",
+          scopes: ["operator.admin"],
+          clientId: CONTROL_UI_CLIENT.id,
+          clientMode: CONTROL_UI_CLIENT.mode,
+          nonce: challengeNonce,
+        });
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          scopes: ["operator.admin"],
+          device,
+          client: { ...CONTROL_UI_CLIENT },
+        });
+        expect(res.ok).toBe(true);
+        const payload = res.payload as
+          | {
+              auth?: { scopes?: string[]; deviceToken?: string };
+            }
+          | undefined;
+        expect(payload?.auth?.scopes).toEqual([]);
+        expect(payload?.auth?.deviceToken).toBeUndefined();
+
+        const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        expect(admin.ok).toBe(false);
+        expect(admin.error?.message ?? "").toContain("missing scope");
+      } finally {
+        ws.close();
       }
     });
   });

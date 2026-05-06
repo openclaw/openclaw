@@ -205,6 +205,7 @@ export type PluginServiceRegistration = {
   service: OpenClawPluginService;
   source: string;
   origin: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   rootDir?: string;
 };
 
@@ -327,6 +328,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  packageName?: string;
   description?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -336,6 +338,7 @@ export type PluginRecord = {
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;

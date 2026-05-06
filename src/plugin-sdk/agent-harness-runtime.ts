@@ -86,8 +86,12 @@ export {
   filterToolResultMediaUrls,
 } from "../agents/pi-embedded-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-export { resolveSessionAgentIds } from "../agents/agent-scope.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
+export {
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
@@ -113,6 +117,7 @@ export {
   resolveSessionWriteLockAcquireTimeoutMs,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   isToolWrappedWithBeforeToolCallHook,
@@ -153,8 +158,14 @@ export {
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.
  */
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args });
+export type ToolProgressDetailMode = "explain" | "raw";
+
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolProgressDetailMode },
+): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
   return formatToolDetail(display);
 }
 

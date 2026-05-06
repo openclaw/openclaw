@@ -65,9 +65,15 @@ function abortDueToTimeout(
   }
   const sanitizedUrl = sanitizeTimeoutLogUrl(url);
   const elapsedMs = Math.max(0, Date.now() - startedAtMs);
+  const delayMs = Math.max(0, elapsedMs - timeoutMs);
+  const eventLoopDelayHint =
+    delayMs >= Math.max(1000, timeoutMs * 0.5)
+      ? `timer delayed ${delayMs}ms, likely event-loop starvation`
+      : null;
   const consoleMessage = [
     `fetch timeout after ${timeoutMs}ms`,
     `(elapsed ${elapsedMs}ms)`,
+    eventLoopDelayHint,
     operation ? `operation=${operation}` : null,
     sanitizedUrl ? `url=${sanitizedUrl}` : null,
   ]
@@ -76,36 +82,45 @@ function abortDueToTimeout(
   log.warn("fetch timeout reached; aborting operation", {
     timeoutMs,
     elapsedMs,
+    ...(eventLoopDelayHint ? { timerDelayMs: delayMs, eventLoopDelayHint } : {}),
     consoleMessage,
     ...(operation ? { operation } : {}),
     ...(sanitizedUrl ? { url: sanitizedUrl } : {}),
   });
-  controller.abort();
+  const error = new Error("request timed out");
+  error.name = "TimeoutError";
+  controller.abort(error);
 }
 
 export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   signal?: AbortSignal;
   cleanup: () => void;
+  refresh: () => void;
 } {
   const { timeoutMs, signal } = params;
   if (!timeoutMs && !signal) {
-    return { signal: undefined, cleanup: () => {} };
+    return { signal: undefined, cleanup: () => {}, refresh: () => {} };
   }
   if (!timeoutMs) {
-    return { signal, cleanup: () => {} };
+    return { signal, cleanup: () => {}, refresh: () => {} };
   }
 
   const controller = new AbortController();
   const normalizedTimeoutMs = Math.max(1, Math.floor(timeoutMs));
-  const timeoutId = setTimeout(
-    abortDueToTimeout,
-    normalizedTimeoutMs,
-    controller,
-    normalizedTimeoutMs,
-    Date.now(),
-    params.operation,
-    params.url,
-  );
+  let active = true;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const scheduleTimeout = () => {
+    timeoutId = setTimeout(
+      abortDueToTimeout,
+      normalizedTimeoutMs,
+      controller,
+      normalizedTimeoutMs,
+      Date.now(),
+      params.operation,
+      params.url,
+    );
+  };
+  scheduleTimeout();
   const onAbort = bindAbortRelay(controller);
   if (signal) {
     if (signal.aborted) {
@@ -117,8 +132,20 @@ export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
 
   return {
     signal: controller.signal,
+    refresh: () => {
+      if (!active || controller.signal.aborted) {
+        return;
+      }
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      scheduleTimeout();
+    },
     cleanup: () => {
-      clearTimeout(timeoutId);
+      active = false;
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       if (signal) {
         signal.removeEventListener("abort", onAbort);
       }

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import type { SessionListRow } from "./sessions-helpers.js";
 import { runSessionsSendA2AFlow, __testing } from "./sessions-send-tool.a2a.js";
@@ -14,7 +15,10 @@ vi.mock("../../gateway/call.js", () => ({
 
 vi.mock("../run-wait.js", () => ({
   waitForAgentRun: vi.fn().mockResolvedValue({ status: "ok" }),
-  readLatestAssistantReply: vi.fn().mockResolvedValue("Test announce reply"),
+  readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({
+    text: "Test announce reply",
+    fingerprint: "test-announce-reply",
+  }),
 }));
 
 vi.mock("./agent-step.js", () => ({
@@ -40,6 +44,11 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     callGatewayMock.mockImplementation(callGateway);
     vi.clearAllMocks();
     vi.mocked(runAgentStep).mockResolvedValue("Test announce reply");
+    vi.mocked(waitForAgentRun).mockResolvedValue({ status: "ok" });
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValue({
+      text: "Test announce reply",
+      fingerprint: "test-announce-reply",
+    });
     __testing.setDepsForTest({
       callGateway,
     });
@@ -152,6 +161,41 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
     },
   );
+
+  it("does not inject a delayed reply that matches the baseline", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "same reply",
+      fingerprint: "same-reply",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      baseline: {
+        text: "same reply",
+        fingerprint: "same-reply",
+      },
+      waitRunId: "run-delayed",
+    });
+
+    expect(waitForAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-delayed",
+      }),
+    );
+    expect(readLatestAssistantReplySnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:discord:group:dev",
+      }),
+    );
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
 
   it.each(["NO_REPLY", "HEARTBEAT_OK"])(
     "suppresses exact announce control reply %s before channel delivery",

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
+import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -392,6 +393,72 @@ describe("agentCommand", () => {
     });
   });
 
+  it("persists embedded-runner turns to the session transcript", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          executionTrace: { runner: "embedded" },
+        },
+      });
+
+      await agentCommand({ message: "hello from user", agentId: "main" }, runtime);
+
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("hello from user");
+      expect(persistArgs?.result.meta?.executionTrace?.runner).toBe("embedded");
+    });
+  });
+
+  it("gap-fills Telegram-visible embedded replies without a runner trace", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      const sendMessageTelegram = vi.fn(async () => undefined);
+      const base = createDefaultAgentResult({ payloads: [{ text: "assistant-visible" }] });
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValueOnce({
+        ...base,
+        meta: {
+          ...base.meta,
+          finalAssistantVisibleText: "assistant-visible",
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "call a tool then answer",
+          agentId: "main",
+          to: "+1222",
+          channel: "telegram",
+          messageChannel: "telegram",
+          deliver: true,
+          senderIsOwner: false,
+          allowModelOverride: false,
+        },
+        runtime,
+        { sendMessageTelegram },
+      );
+
+      expect(sendMessageTelegram).toHaveBeenCalledWith(
+        "+1222",
+        "assistant-visible",
+        expect.objectContaining({ verbose: false }),
+      );
+      expect(vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript)).toHaveBeenCalledTimes(1);
+      const persistArgs = vi.mocked(attemptExecutionRuntime.persistCliTurnTranscript).mock
+        .calls[0]?.[0];
+      expect(persistArgs?.embeddedAssistantGapFill).toBe(true);
+      expect(persistArgs?.body).toBe("call a tool then answer");
+    });
+  });
+
   it("passes configured fast mode to embedded runs", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
@@ -585,6 +652,44 @@ describe("agentCommand", () => {
 
       const matching = assistantEvents.filter((evt) => evt.text === "hello");
       expect(matching).toHaveLength(1);
+    });
+  });
+
+  it("does not publish Codex app-server events from the core command callback", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+
+      const codexEvents: Array<{ runId: string; phase?: string }> = [];
+      const stop = onAgentEvent((evt) => {
+        if (evt.stream !== "codex_app_server.lifecycle") {
+          return;
+        }
+        codexEvents.push({
+          runId: evt.runId,
+          phase: typeof evt.data?.phase === "string" ? evt.data.phase : undefined,
+        });
+      });
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementationOnce(async (params) => {
+        (
+          params as {
+            onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
+          }
+        ).onAgentEvent?.({
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "startup" },
+        });
+        return {
+          payloads: [{ text: "hello" }],
+          meta: { agentMeta: { provider: "p", model: "m" } },
+        } as never;
+      });
+
+      await agentCommand({ message: "hi", to: "+1555", thinking: "low" }, runtime);
+      stop();
+
+      expect(codexEvents).toHaveLength(0);
     });
   });
 
