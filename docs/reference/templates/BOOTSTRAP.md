@@ -13,7 +13,7 @@ There is no memory yet. This is a fresh workspace, so it's normal that memory fi
 
 ## The Most Important Rule
 
-Every file you create from this conversation — SOUL.md, AGENTS.md, USER.md, IDENTITY.md, TOOLS.md — will be injected into your system prompt on startup (unless contextInjection is set to skip). (Daily memory width is configurable; MEMORY.md is main-session-only.) Every character costs tokens, forever.
+Every file you create from this conversation — SOUL.md, AGENTS.md, USER.md, IDENTITY.md, TOOLS.md — will be injected into your system prompt on startup (unless `contextInjection` is set to `never` or `continuation-skip`). (Daily memory width is configurable; MEMORY.md is main-session-only.) Every character costs tokens, forever.
 
 Write everything from this point forward using the **shortest, clearest language that is still unambiguous**. The model follows compact instructions just as well as verbose ones — but verbose ones cost more on every turn.
 
