@@ -58,6 +58,7 @@ import {
 import {
   buildOpenAIWebSocketResponseCreatePayload,
   planOpenAIWebSocketRequestPayload,
+  type PlannedWsRequestDebug,
 } from "./openai-ws-request.js";
 import type { ResponseCreateEvent } from "./openai-ws-types.js";
 import { log } from "./pi-embedded-runner/logger.js";
@@ -74,6 +75,85 @@ import { mergeTransportMetadata } from "./transport-stream-shared.js";
 // ─────────────────────────────────────────────────────────────────────────────
 // Per-session state
 // ─────────────────────────────────────────────────────────────────────────────
+
+type WsContextLineageDebug = {
+  contextLength: number;
+  tailRole?: string;
+  tailMessageId?: string;
+  tailParentId?: string;
+  latestUserMessageId?: string;
+};
+
+function readDebugString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function summarizeWsContextLineage(messages: ReadonlyArray<unknown>): WsContextLineageDebug {
+  const tail = messages.at(-1);
+  const tailRecord =
+    tail && typeof tail === "object" ? (tail as Record<string, unknown>) : undefined;
+  const latestUser = [...messages].reverse().find((message) => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    return (message as Record<string, unknown>).role === "user";
+  });
+  const latestUserRecord =
+    latestUser && typeof latestUser === "object"
+      ? (latestUser as Record<string, unknown>)
+      : undefined;
+  return {
+    contextLength: messages.length,
+    ...(readDebugString(tailRecord?.role) ? { tailRole: readDebugString(tailRecord?.role) } : {}),
+    ...(readDebugString(tailRecord?.id) ? { tailMessageId: readDebugString(tailRecord?.id) } : {}),
+    ...(readDebugString(tailRecord?.parentId)
+      ? { tailParentId: readDebugString(tailRecord?.parentId) }
+      : {}),
+    ...(readDebugString(latestUserRecord?.id)
+      ? { latestUserMessageId: readDebugString(latestUserRecord?.id) }
+      : {}),
+  };
+}
+
+function logWsRequestLineage(params: {
+  sessionId: string;
+  requestId: string;
+  debug: PlannedWsRequestDebug;
+  context: WsContextLineageDebug;
+}): void {
+  log.debug(
+    `[ws-stream] session=${params.sessionId} request=${params.requestId}: request lineage ${JSON.stringify(
+      {
+        ...params.debug,
+        ...params.context,
+      },
+    )}`,
+  );
+}
+
+function logWsCompletionLineage(params: {
+  sessionId: string;
+  requestId: string;
+  requestMode: PlannedWsRequestDebug["mode"];
+  requestedPreviousResponseId?: string;
+  acceptedResponseId: string;
+  managerPreviousResponseId?: string | null;
+  acceptedInputItemCount: number;
+  acceptedContextLength: number;
+}): void {
+  log.debug(
+    `[ws-stream] session=${params.sessionId} request=${params.requestId}: accepted response lineage ${JSON.stringify(
+      {
+        requestMode: params.requestMode,
+        requestedPreviousResponseId: params.requestedPreviousResponseId,
+        acceptedResponseId: params.acceptedResponseId,
+        managerPreviousResponseId: params.managerPreviousResponseId ?? undefined,
+        acceptedInputItemCount: params.acceptedInputItemCount,
+        acceptedContextLength: params.acceptedContextLength,
+      },
+    )}`,
+  );
+}
 
 interface WsSession {
   manager: OpenAIWebSocketManager;
@@ -939,6 +1019,13 @@ export function createOpenAIWebSocketStreamFn(
         const plannedInputItems = Array.isArray(plannedPayload.payload.input)
           ? plannedPayload.payload.input
           : [];
+        const requestLineageId = randomUUID();
+        logWsRequestLineage({
+          sessionId,
+          requestId: requestLineageId,
+          debug: plannedPayload.debug,
+          context: summarizeWsContextLineage(context.messages),
+        });
         if (plannedPayload.mode === "incremental") {
           log.debug(
             `[ws-stream] session=${sessionId}: incremental send (${plannedInputItems.length} items) previous_response_id=${plannedPayload.payload.previous_response_id}`,
@@ -1195,6 +1282,16 @@ export function createOpenAIWebSocketStreamFn(
                   api: model.api,
                   provider: model.provider,
                   id: model.id,
+                });
+                logWsCompletionLineage({
+                  sessionId,
+                  requestId: requestLineageId,
+                  requestMode: plannedPayload.debug.mode,
+                  requestedPreviousResponseId: plannedPayload.debug.previousResponseId,
+                  acceptedResponseId: event.response.id,
+                  managerPreviousResponseId: session.manager.previousResponseId,
+                  acceptedInputItemCount: session.lastResponseInputItems.length,
+                  acceptedContextLength: capturedContextLength,
                 });
                 const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
                   assistantMsg.stopReason === "toolUse" ? "toolUse" : "stop";

@@ -34,6 +34,31 @@ interface PlannedWsTurnInput {
 type PlannedWsRequestPayload = {
   mode: "full_context" | "incremental";
   payload: ResponseCreateEvent;
+  debug: PlannedWsRequestDebug;
+};
+
+export type WsInputItemDebugSummary = {
+  index: number;
+  type: InputItem["type"];
+  role?: string;
+  phase?: string;
+  id?: string;
+  callId?: string;
+  name?: string;
+  contentKind?: "text" | "parts";
+  contentLength?: number;
+  outputLength?: number;
+  argumentsLength?: number;
+  encryptedContentLength?: number;
+};
+
+export type PlannedWsRequestDebug = {
+  mode: "full_context" | "incremental";
+  previousResponseId?: string;
+  baselineLength: number;
+  fullInputLength: number;
+  suffixLength: number;
+  suffixItems: WsInputItemDebugSummary[];
 };
 
 function stringifyStable(value: unknown): string {
@@ -78,6 +103,67 @@ function inputItemsStartWith(input: InputItem[], baseline: InputItem[]): boolean
   return baseline.every((item, index) => stringifyStable(item) === stringifyStable(input[index]));
 }
 
+function summarizeInputItem(item: InputItem, index: number): WsInputItemDebugSummary {
+  if (item.type === "message") {
+    return {
+      index,
+      type: item.type,
+      role: item.role,
+      ...(item.phase ? { phase: item.phase } : {}),
+      contentKind: typeof item.content === "string" ? "text" : "parts",
+      contentLength: typeof item.content === "string" ? item.content.length : item.content.length,
+    };
+  }
+  if (item.type === "function_call") {
+    return {
+      index,
+      type: item.type,
+      ...(item.id ? { id: item.id } : {}),
+      ...(item.call_id ? { callId: item.call_id } : {}),
+      name: item.name,
+      argumentsLength: item.arguments.length,
+    };
+  }
+  if (item.type === "function_call_output") {
+    return {
+      index,
+      type: item.type,
+      callId: item.call_id,
+      outputLength: item.output.length,
+    };
+  }
+  if (item.type === "reasoning") {
+    return {
+      index,
+      type: item.type,
+      ...(item.id ? { id: item.id } : {}),
+      ...(item.encrypted_content ? { encryptedContentLength: item.encrypted_content.length } : {}),
+    };
+  }
+  return {
+    index,
+    type: item.type,
+    id: item.id,
+  };
+}
+
+function buildRequestDebug(params: {
+  mode: "full_context" | "incremental";
+  previousResponseId?: string | null;
+  baselineLength: number;
+  fullInputItems: InputItem[];
+  suffixItems: InputItem[];
+}): PlannedWsRequestDebug {
+  return {
+    mode: params.mode,
+    ...(params.previousResponseId ? { previousResponseId: params.previousResponseId } : {}),
+    baselineLength: params.baselineLength,
+    fullInputLength: params.fullInputItems.length,
+    suffixLength: params.suffixItems.length,
+    suffixItems: params.suffixItems.map((item, index) => summarizeInputItem(item, index)),
+  };
+}
+
 export function planOpenAIWebSocketRequestPayload(params: {
   fullPayload: ResponseCreateEvent;
   previousRequestPayload?: ResponseCreateEvent;
@@ -97,19 +183,37 @@ export function planOpenAIWebSocketRequestPayload(params: {
   ) {
     const baseline = [...previousInputItems, ...previousResponseInputItems];
     if (inputItemsStartWith(fullInputItems, baseline)) {
+      const suffixItems = fullInputItems.slice(baseline.length);
       return {
         mode: "incremental",
         payload: {
           ...params.fullPayload,
           previous_response_id: params.previousResponseId,
-          input: fullInputItems.slice(baseline.length),
+          input: suffixItems,
         },
+        debug: buildRequestDebug({
+          mode: "incremental",
+          previousResponseId: params.previousResponseId,
+          baselineLength: baseline.length,
+          fullInputItems,
+          suffixItems,
+        }),
       };
     }
   }
 
   const { previous_response_id: _previousResponseId, ...payload } = params.fullPayload;
-  return { mode: "full_context", payload };
+  return {
+    mode: "full_context",
+    payload,
+    debug: buildRequestDebug({
+      mode: "full_context",
+      previousResponseId: params.previousResponseId,
+      baselineLength: previousInputItems.length + previousResponseInputItems.length,
+      fullInputItems,
+      suffixItems: fullInputItems,
+    }),
+  };
 }
 
 export function buildOpenAIWebSocketWarmUpPayload(params: {
