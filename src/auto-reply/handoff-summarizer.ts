@@ -20,7 +20,7 @@ export function buildHierarchyReinforcementMessage(snapshot: HandoffSnapshot): A
     .join("\n");
 
   const content = [
-    "[SYSTEM HANDOFF] The previous model exhausted its quota and a fallback model is now active.",
+    "[SYSTEM HANDOFF] The previous model is no longer active and a fallback model is now active.",
     "You are the new LEADER (Orchestrator). Do not perform tasks already delegated to subordinates.",
     "",
     "ACTIVE SUBORDINATE UNITS:",
