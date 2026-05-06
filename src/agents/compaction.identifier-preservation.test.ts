@@ -7,6 +7,7 @@ vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<typeof piCodingAgent>("@mariozechner/pi-coding-agent");
   return {
     ...actual,
+    estimateTokens: vi.fn((message: unknown) => Math.ceil(JSON.stringify(message).length / 4)),
     generateSummary: vi.fn(),
   };
 });
