@@ -235,15 +235,15 @@ export type StopSlackStreamResult = {
  * After calling this the stream message becomes a normal Slack message.
  * Optionally include final text to append before stopping.
  *
- * If Slack's `chat.stopStream` responds with a known benign finalize error
- * (see {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) AND any prior `append`
- * has already landed on Slack, the error is swallowed and the session is
- * marked stopped - the already-delivered text stays visible.
+ * If Slack's `chat.stopStream` responds with an error while text is still
+ * buffered locally, this function throws a {@link SlackStreamNotDeliveredError}
+ * carrying that pending text so the caller can deliver it through the normal
+ * Slack reply path.
  *
- * If the same benign error fires while text is still only buffered locally
- * (e.g. short replies that never exceeded the SDK's buffer_size), this
- * function throws a {@link SlackStreamNotDeliveredError} carrying that pending
- * text so the caller can deliver it through the normal Slack reply path.
+ * If Slack responds with a known benign finalize error (see
+ * {@link BENIGN_SLACK_FINALIZE_ERROR_CODES}) after prior `append` calls already
+ * landed, the error is swallowed and the session is marked stopped - the
+ * already-delivered text stays visible.
  *
  * All other errors propagate unchanged.
  *
@@ -289,13 +289,14 @@ export async function stopSlackStream(
     const messageId = stopResponse?.ts ?? stopResponse?.message?.ts;
     return messageId ? { messageId } : {};
   } catch (err) {
+    const code = extractSlackErrorCode(err) ?? "unknown";
+    if (session.pendingText) {
+      // stop() can be the first network call for short replies. If Slack
+      // rejects that finalize for any reason, the user has not seen the
+      // SDK-buffered text yet. Let the caller fall back to chat.postMessage.
+      throw new SlackStreamNotDeliveredError(session.pendingText, code);
+    }
     if (isBenignSlackFinalizeError(err)) {
-      const code = extractSlackErrorCode(err) ?? "unknown";
-      if (session.pendingText) {
-        // stop() can be the first network call for short replies. If Slack
-        // Connect rejects it, the user has not seen the SDK-buffered text yet.
-        throw new SlackStreamNotDeliveredError(session.pendingText, code);
-      }
       if (session.delivered) {
         logVerbose(
           `slack-stream: finalize rejected by Slack (${code}); prior appends delivered, treating stream as stopped`,
