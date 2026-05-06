@@ -1,4 +1,3 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -136,13 +135,10 @@ describe("subagent registry persistence", () => {
   };
 
   const readPersistedRun = async <T>(
-    registryPath: string,
+    _registryPath: string,
     runId: string,
   ): Promise<T | undefined> => {
-    const parsed = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs?: Record<string, unknown>;
-    };
-    return parsed.runs?.[runId] as T | undefined;
+    return loadSubagentRegistryFromDisk().get(runId) as T | undefined;
   };
 
   const createPersistedEndedRun = (params: {
@@ -188,15 +184,7 @@ describe("subagent registry persistence", () => {
   };
 
   const fastPersistSubagentRunsToDisk = (runs: Map<string, SubagentRunRecord>) => {
-    const registryPath = tempStateDir
-      ? path.join(tempStateDir, "subagents", "runs.json")
-      : resolveSubagentRegistryPath();
-    fsSync.mkdirSync(path.dirname(registryPath), { recursive: true });
-    fsSync.writeFileSync(
-      registryPath,
-      `${JSON.stringify({ version: 2, runs: Object.fromEntries(runs) })}\n`,
-      "utf8",
-    );
+    saveSubagentRegistryToDisk(runs);
   };
 
   beforeEach(() => {
@@ -340,11 +328,14 @@ describe("subagent registry persistence", () => {
     expect(entry?.requesterOrigin?.channel).toBe("whatsapp");
     expect(entry?.requesterOrigin?.accountId).toBe("legacy-account");
 
-    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as { version?: number };
-    expect(after.version).toBe(2);
+    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(loadSubagentRegistryFromDisk().get("run-legacy")).toMatchObject({
+      cleanupHandled: true,
+      cleanupCompletedAt: 9,
+    });
   });
 
-  it("restores persisted runs from SQLite when the compatibility JSON registry is missing", async () => {
+  it("restores persisted runs from SQLite without legacy JSON", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     const registryPath = path.join(tempStateDir, "subagents", "runs.json");
@@ -362,7 +353,7 @@ describe("subagent registry persistence", () => {
     };
 
     saveSubagentRegistryToDisk(new Map([[record.runId, record]]));
-    await fs.rm(registryPath, { force: true });
+    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
 
     expect(loadSubagentRegistryFromDisk().get("run-sqlite")).toMatchObject({
       runId: "run-sqlite",
@@ -414,12 +405,12 @@ describe("subagent registry persistence", () => {
     expect(second.get("run-cached")?.endedAt).toBeUndefined();
     expect(second.get("run-cached")?.cleanupHandled).toBeUndefined();
 
-    await fs.writeFile(
-      registryPath,
-      `${JSON.stringify({
-        version: 2,
-        runs: {
-          "run-updated": {
+    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
+    saveSubagentRegistryToDisk(
+      new Map([
+        [
+          "run-updated",
+          {
             runId: "run-updated",
             childSessionKey: "agent:main:subagent:updated",
             requesterSessionKey: "agent:main:main",
@@ -429,9 +420,8 @@ describe("subagent registry persistence", () => {
             createdAt: 2,
             startedAt: 2,
           },
-        },
-      })}\n`,
-      "utf8",
+        ],
+      ]),
     );
 
     expect(loadSubagentRegistryFromDisk().has("run-updated")).toBe(true);
@@ -557,10 +547,11 @@ describe("subagent registry persistence", () => {
     });
 
     expect(announceSpy).toHaveBeenCalledTimes(2);
-    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs: Record<string, { cleanupCompletedAt?: number }>;
-    };
-    expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
+    const afterSecond = await readPersistedRun<{ cleanupCompletedAt?: number }>(
+      registryPath,
+      "run-3",
+    );
+    expect(afterSecond?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
   });
 
   it("retries cleanup announce after announce flow rejects", async () => {
@@ -587,11 +578,12 @@ describe("subagent registry persistence", () => {
     });
 
     expect(announceSpy).toHaveBeenCalledTimes(1);
-    const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs: Record<string, { cleanupHandled?: boolean; cleanupCompletedAt?: number }>;
-    };
-    expect(afterFirst.runs["run-reject"].cleanupHandled).toBe(false);
-    expect(afterFirst.runs["run-reject"].cleanupCompletedAt).toBeUndefined();
+    const afterFirst = await readPersistedRun<{
+      cleanupHandled?: boolean;
+      cleanupCompletedAt?: number;
+    }>(registryPath, "run-reject");
+    expect(afterFirst?.cleanupHandled).toBe(false);
+    expect(afterFirst?.cleanupCompletedAt).toBeUndefined();
 
     announceSpy.mockResolvedValueOnce(true);
     const beforeRetry = Date.now();
@@ -604,10 +596,11 @@ describe("subagent registry persistence", () => {
     });
 
     expect(announceSpy).toHaveBeenCalledTimes(2);
-    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs: Record<string, { cleanupCompletedAt?: number }>;
-    };
-    expect(afterSecond.runs["run-reject"].cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
+    const afterSecond = await readPersistedRun<{ cleanupCompletedAt?: number }>(
+      registryPath,
+      "run-reject",
+    );
+    expect(afterSecond?.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
   });
 
   it("keeps delete-mode runs retryable when announce is deferred", async () => {
@@ -636,17 +629,12 @@ describe("subagent registry persistence", () => {
     announceSpy.mockResolvedValueOnce(true);
     restartRegistry();
     await waitForRegistryWork(async () => {
-      const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-        runs?: Record<string, unknown>;
-      };
-      return announceSpy.mock.calls.length === 2 && afterSecond.runs?.["run-4"] === undefined;
+      const afterSecond = await readPersistedRun(registryPath, "run-4");
+      return announceSpy.mock.calls.length === 2 && afterSecond === undefined;
     });
 
     expect(announceSpy).toHaveBeenCalledTimes(2);
-    const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs?: Record<string, unknown>;
-    };
-    expect(afterSecond.runs?.["run-4"]).toBeUndefined();
+    await expect(readPersistedRun(registryPath, "run-4")).resolves.toBeUndefined();
   });
 
   it("reconciles orphaned restored runs by pruning them from registry", async () => {
@@ -662,17 +650,11 @@ describe("subagent registry persistence", () => {
 
     restartRegistry();
     await waitForRegistryWork(async () => {
-      const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-        runs?: Record<string, unknown>;
-      };
-      return after.runs?.["run-orphan-restore"] === undefined;
+      return (await readPersistedRun(registryPath, "run-orphan-restore")) === undefined;
     });
 
     expect(announceSpy).not.toHaveBeenCalled();
-    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs?: Record<string, unknown>;
-    };
-    expect(after.runs?.["run-orphan-restore"]).toBeUndefined();
+    await expect(readPersistedRun(registryPath, "run-orphan-restore")).resolves.toBeUndefined();
     expect(listSubagentRunsForRequester("agent:main:main")).toHaveLength(0);
   });
 
@@ -698,10 +680,7 @@ describe("subagent registry persistence", () => {
 
     restartRegistry();
     await waitForRegistryWork(async () => {
-      const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-        runs?: Record<string, unknown>;
-      };
-      return after.runs?.[runId] === undefined;
+      return (await readPersistedRun(registryPath, runId)) === undefined;
     });
 
     expect(callGateway).not.toHaveBeenCalled();
@@ -794,11 +773,9 @@ describe("subagent registry persistence", () => {
       }
     });
 
-    await expect(fs.access(attachmentsDir)).rejects.toHaveProperty("code", "ENOENT");
-    const after = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
-      runs?: Record<string, unknown>;
-    };
-    expect(after.runs?.["run-orphan-attachments"]).toBeUndefined();
+    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readPersistedRun(registryPath, "run-orphan-attachments")).resolves.toBeUndefined();
+    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("prefers active runs and can resolve them from persisted registry snapshots", async () => {

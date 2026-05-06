@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { loadJsonFile } from "../infra/json-file.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -96,9 +96,8 @@ function subagentRegistryDbOptions(): OpenClawStateDatabaseOptions {
 function normalizePersistedRunRecords(params: {
   runsRaw: Record<string, unknown>;
   isLegacy: boolean;
-}): { migrated: boolean; runs: Map<string, SubagentRunRecord> } {
+}): Map<string, SubagentRunRecord> {
   const out = new Map<string, SubagentRunRecord>();
-  let migrated = false;
   for (const [runId, entry] of Object.entries(params.runsRaw)) {
     if (!entry || typeof entry !== "object") {
       continue;
@@ -149,11 +148,8 @@ function normalizePersistedRunRecords(params: {
       cleanupHandled,
       spawnMode: typed.spawnMode === "session" ? "session" : "run",
     });
-    if (params.isLegacy) {
-      migrated = true;
-    }
   }
-  return { migrated, runs: out };
+  return out;
 }
 
 function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> | null {
@@ -168,7 +164,7 @@ function loadSubagentRegistryFromSqlite(): Map<string, SubagentRunRecord> | null
   for (const entry of entries) {
     runsRaw[entry.key] = entry.value;
   }
-  return normalizePersistedRunRecords({ runsRaw, isLegacy: false }).runs;
+  return normalizePersistedRunRecords({ runsRaw, isLegacy: false });
 }
 
 export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
@@ -203,17 +199,13 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
     setCachedRegistryRead(pathname, signature, new Map());
     return new Map();
   }
-  const { migrated, runs: out } = normalizePersistedRunRecords({
+  const out = normalizePersistedRunRecords({
     runsRaw: runsRaw as Record<string, unknown>,
     isLegacy: record.version === 1,
   });
-  if (migrated) {
-    try {
-      saveSubagentRegistryToDisk(out);
-    } catch {
-      // ignore migration write failures
-    }
-  } else {
+  try {
+    saveSubagentRegistryToDisk(out);
+  } catch {
     setCachedRegistryRead(pathname, signature, out);
   }
   return out;
@@ -241,14 +233,14 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
   for (const [runId, entry] of runs.entries()) {
     writeOpenClawStateKvJson(SUBAGENT_REGISTRY_KV_SCOPE, runId, entry, subagentRegistryDbOptions());
   }
-  // Compatibility export for older tools, downgrade paths, and readable support state.
-  saveJsonFile(pathname, out);
-  const signature = statRegistryFileSignature(pathname);
-  if (signature === null) {
-    registryReadCache.delete(pathname);
-  } else {
-    setCachedRegistryRead(pathname, signature, runs);
+  try {
+    fs.unlinkSync(pathname);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
   }
+  registryReadCache.delete(pathname);
 }
 
 function statRegistryFileSignature(pathname: string): string | null {

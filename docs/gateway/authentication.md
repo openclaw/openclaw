@@ -189,7 +189,7 @@ Use `/model` (or `/model list`) for a compact picker; use `/model status` for th
 
 ### Per-agent (CLI override)
 
-Set an explicit auth profile order override for an agent (SQLite-primary, compatibility-exported to that agent's `auth-state.json`):
+Set an explicit auth profile order override for an agent (stored in SQLite):
 
 ```bash
 openclaw models auth order get --provider anthropic

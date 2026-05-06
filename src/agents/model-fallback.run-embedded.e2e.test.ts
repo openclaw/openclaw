@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import {
+  loadPersistedAuthProfileState,
+  savePersistedAuthProfileState,
+} from "./auth-profiles/state.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -64,6 +69,10 @@ beforeEach(() => {
   runEmbeddedAttemptMock.mockReset();
   computeBackoffMock.mockClear();
   sleepWithAbortMock.mockClear();
+});
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
 });
 
 const OVERLOADED_ERROR_PAYLOAD =
@@ -165,23 +174,24 @@ async function writeAuthStore(
       },
     }),
   );
-  await fs.writeFile(
-    path.join(agentDir, "auth-state.json"),
-    JSON.stringify({
-      version: 1,
+  savePersistedAuthProfileState(
+    {
       usageStats:
         usageStats ??
         ({
           "openai:p1": { lastUsed: 1 },
           "groq:p1": { lastUsed: 2 },
         } as const),
-    }),
+    },
+    agentDir,
   );
 }
 
 async function readUsageStats(agentDir: string) {
-  const raw = await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8");
-  return JSON.parse(raw).usageStats as Record<string, Record<string, unknown> | undefined>;
+  return (loadPersistedAuthProfileState(agentDir).usageStats ?? {}) as Record<
+    string,
+    Record<string, unknown> | undefined
+  >;
 }
 
 function expectFailureCount(
@@ -207,17 +217,16 @@ async function writeMultiProfileAuthStore(agentDir: string) {
       },
     }),
   );
-  await fs.writeFile(
-    path.join(agentDir, "auth-state.json"),
-    JSON.stringify({
-      version: 1,
+  savePersistedAuthProfileState(
+    {
       usageStats: {
         "openai:p1": { lastUsed: 1 },
         "openai:p2": { lastUsed: 2 },
         "openai:p3": { lastUsed: 3 },
         "groq:p1": { lastUsed: 4 },
       },
-    }),
+    },
+    agentDir,
   );
 }
 

@@ -97,25 +97,23 @@ This plan has started landing in slices:
   still imported and compatibility-exported so downgrade/debug workflows keep
   working while HTTP serving and cleanup can survive a missing JSON sidecar.
 - The subagent run registry now uses the shared SQLite `kv` store as the
-  primary record path. `subagents/runs.json` remains a compatibility export and
-  legacy import source, while restore paths can recover runs from SQLite when
-  the JSON sidecar is missing.
+  primary record path. Legacy `subagents/runs.json` files import into SQLite
+  when SQLite is empty and are removed after import.
 - Sandbox container and browser registries now use the shared SQLite `kv` store
   as the primary record path. Existing sharded JSON entries import into SQLite
   on first read, and the shard files remain compatibility exports for downgrade
   and debugging workflows.
 - OpenRouter model capability cache now uses the shared SQLite `kv` store as
   the primary persistent cache. The older
-  `cache/openrouter-models.json` file remains a compatibility import/export
-  layer for downgrade and manual debugging workflows.
+  `cache/openrouter-models.json` file is a legacy import source and is removed
+  after import.
 - TUI last-session restore pointers now use the shared SQLite `kv` store as the
-  primary record path. The older `tui/last-session.json` file remains a
-  compatibility import/export layer, and doctor cleanup clears stale pointers
-  through the same SQLite-primary store.
+  primary record path. The older `tui/last-session.json` file is a legacy
+  import source and is removed after import.
 - Auth profile runtime routing state now uses the shared SQLite `kv` store as
-  the primary record path. The older per-agent `auth-state.json` file remains a
-  compatibility import/export layer for downgrade, CLI display, and manual
-  debugging; `auth-profiles.json` still owns credentials and stays file-backed.
+  the primary record path. The older per-agent `auth-state.json` file is a
+  legacy import source and is removed after import; `auth-profiles.json` still
+  owns credentials and stays file-backed.
 - `AgentRuntimeBackend`, `PreparedAgentRun`, and the Node worker runner exist
   for serializable prepared runs. `RunEventBus` owns serial parent event
   delivery for worker event streams. The worker runner enforces prepared-run
@@ -231,7 +229,7 @@ Use three explicit layers:
 
 ```text
 agent runtime boundary       OpenClaw-owned interface, PI as one backend
-agent state database         SQLite primary store, JSON import/export compatibility
+agent state database         SQLite primary store, legacy JSON import where needed
 agent filesystem boundary    VFS scratch plus host capability filesystem
 ```
 
@@ -518,20 +516,18 @@ Add tests before each migration step:
 - Plugin state and task registry coexistence with the shared state DB.
 - Managed outgoing media record import from legacy JSON plus SQLite-primary
   serving when the compatibility JSON record is missing.
-- Subagent run registry restore from SQLite when `subagents/runs.json` is
-  missing, plus session-store test helpers that use the current SQLite-primary
-  backend instead of raw compatibility JSON.
+- Subagent run registry import from legacy `subagents/runs.json`, legacy file
+  removal after import, and restore from SQLite without JSON exports.
 - Sandbox container and browser registry reads from SQLite when compatibility
   shard files are missing, while legacy monolithic registry migration stays an
   explicit repair operation.
-- OpenRouter model capability cache reads from SQLite when the compatibility
-  JSON cache file is missing, without triggering a network fetch.
-- TUI last-session restore pointers read from SQLite when the compatibility JSON
-  file is missing, import legacy JSON on read, and clear stale pointers from
-  both stores.
+- OpenRouter model capability cache reads from SQLite when the legacy JSON
+  cache file is missing, imports old cache JSON, and removes it after import.
+- TUI last-session restore pointers read from SQLite without JSON exports,
+  import legacy JSON on read, remove it, and clear stale pointers from SQLite.
 - Auth profile runtime state reads from SQLite when the compatibility
-  `auth-state.json` file is missing, imports legacy JSON on read, and deletes
-  both stores when runtime state is empty.
+  `auth-state.json` file is missing, imports legacy JSON on read, removes it,
+  and deletes SQLite state when runtime state is empty.
 
 ## Rollout Plan
 

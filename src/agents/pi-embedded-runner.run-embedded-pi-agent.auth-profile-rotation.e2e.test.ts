@@ -4,7 +4,12 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import {
+  loadPersistedAuthProfileState,
+  savePersistedAuthProfileState,
+} from "./auth-profiles/state.js";
 import type { AssistantMessage } from "./pi-ai-contract.js";
 import { buildAttemptReplayMetadata } from "./pi-embedded-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
@@ -135,6 +140,7 @@ afterEach(() => {
   cleanupLogCapture = undefined;
   setLoggerOverrideFn(null);
   resetLoggerFn();
+  closeOpenClawStateDatabaseForTest();
 });
 
 const baseUsage = {
@@ -331,7 +337,6 @@ const writeAuthStore = async (
   },
 ) => {
   const authPath = path.join(agentDir, "auth-profiles.json");
-  const statePath = path.join(agentDir, "auth-state.json");
   const authPayload = {
     version: 1,
     profiles: {
@@ -353,7 +358,7 @@ const writeAuthStore = async (
       } as Record<string, { lastUsed?: number }>),
   };
   await fs.writeFile(authPath, JSON.stringify(authPayload));
-  await fs.writeFile(statePath, JSON.stringify(statePayload));
+  savePersistedAuthProfileState(statePayload, agentDir);
 };
 
 const writeCopilotAuthStore = async (agentDir: string, token = "gh-token") => {
@@ -451,17 +456,7 @@ async function runAutoPinnedOpenAiTurn(params: {
 }
 
 async function readUsageStats(agentDir: string) {
-  const stored = JSON.parse(await fs.readFile(path.join(agentDir, "auth-state.json"), "utf-8")) as {
-    usageStats?: Record<
-      string,
-      {
-        lastUsed?: number;
-        cooldownUntil?: number;
-        disabledUntil?: number;
-        disabledReason?: AuthProfileFailureReason;
-      }
-    >;
-  };
+  const stored = loadPersistedAuthProfileState(agentDir);
   return stored.usageStats ?? {};
 }
 
@@ -1534,9 +1529,8 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
     try {
       await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
         const authPath = path.join(agentDir, "auth-profiles.json");
-        const authStatePath = path.join(agentDir, "auth-state.json");
         await fs.writeFile(authPath, JSON.stringify({ version: 1, profiles: {} }));
-        await fs.writeFile(authStatePath, JSON.stringify({ version: 1, usageStats: {} }));
+        savePersistedAuthProfileState({ usageStats: {} }, agentDir);
 
         await expectFailoverError(
           runEmbeddedPiAgentInline({
