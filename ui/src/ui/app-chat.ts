@@ -66,7 +66,7 @@ export type ChatHost = ChatInputHistoryState & {
   sessionsResult?: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   refreshSessionsAfterChat: Set<string>;
-  pendingAbort?: { runId: string; sessionKey: string } | null;
+  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
@@ -88,6 +88,21 @@ export type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult };
 
 export function isChatBusy(host: ChatHost) {
   return host.chatSending || Boolean(host.chatRunId);
+}
+
+export function hasAbortableSessionRun(host: {
+  chatRunId?: string | null;
+  sessionKey: string;
+  sessionsResult?: SessionsListResult | null;
+}): boolean {
+  if (host.chatRunId) {
+    return true;
+  }
+  return Boolean(
+    host.sessionsResult?.sessions.some(
+      (session) => session.key === host.sessionKey && session.hasActiveRun === true,
+    ),
+  );
 }
 
 export function isChatStopCommand(text: string) {
@@ -131,15 +146,16 @@ function confirmChatResetCommand(text: string) {
 }
 
 function isBtwCommand(text: string) {
-  return /^\/btw(?::|\s|$)/i.test(text.trim());
+  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
 }
 
 export async function handleAbortChat(host: ChatHost) {
-  // If disconnected but we have an active runId, queue the abort for when we reconnect
-  if (!host.connected && host.chatRunId) {
+  const activeRunId = host.chatRunId;
+  // If disconnected but this session is abortable, queue the abort for when we reconnect.
+  if (!host.connected && hasAbortableSessionRun(host)) {
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
-    host.pendingAbort = { runId: host.chatRunId, sessionKey: host.sessionKey };
+    host.pendingAbort = { runId: activeRunId, sessionKey: host.sessionKey };
     return;
   }
   if (!host.connected) {
@@ -650,8 +666,7 @@ function injectCommandResult(host: ChatHost, content: string) {
 }
 
 export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: boolean }) {
-  await Promise.all([
-    loadChatHistory(host as unknown as ChatState),
+  void Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
       activeMinutes: 0,
       limit: 0,
@@ -662,6 +677,7 @@ export async function refreshChat(host: ChatHost, opts?: { scheduleScroll?: bool
     refreshChatModels(host),
     refreshChatCommands(host),
   ]);
+  await loadChatHistory(host as unknown as ChatState);
   if (opts?.scheduleScroll !== false) {
     scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
   }

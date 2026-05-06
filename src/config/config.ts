@@ -39,8 +39,15 @@ export type {
   ConfigWriteFollowUp,
   RuntimeConfigSnapshotMetadata,
 } from "./runtime-snapshot.js";
-export type { ConfigWriteNotification } from "./io.js";
+export type {
+  ConfigWriteNotification,
+  ReadConfigFileSnapshotWithPluginMetadataResult,
+} from "./io.js";
 export { ConfigMutationConflictError, mutateConfigFile, replaceConfigFile } from "./mutate.js";
+export {
+  assertConfigWriteAllowedInCurrentMode,
+  NixModeConfigMutationError,
+} from "./nix-mode-write-guard.js";
 export * from "./paths.js";
 export * from "./recovery-policy.js";
 export * from "./runtime-overrides.js";

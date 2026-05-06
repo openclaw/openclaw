@@ -14,6 +14,9 @@ Welcome to the lobster tank! 🦞
 - **Peter Steinberger** - Benevolent Dictator
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
+- **Frank Yang** - PR triage, Agents, Gateway, Channels
+  - GitHub: [@frankekn](https://github.com/frankekn) · X: [@frankekn](https://x.com/frankekn)
+
 - **Shadow** - Discord subsystem, Discord admin, Clawhub, all community moderation
   - GitHub: [@thewilloftheshadow](https://github.com/thewilloftheshadow) · X: [@4shadowed](https://x.com/4shadowed)
 
@@ -93,13 +96,14 @@ Welcome to the lobster tank! 🦞
 
 ## PR Limits
 
-We cap at **10 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.
+We cap at **20 open PRs per author**. If you exceed this, the `r: too-many-prs` label is added and your PR is auto-closed. This is a hard limit.
 
-For coordinated change sets that genuinely need more than 10 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
+For coordinated change sets that genuinely need more than 20 PRs, join the **#clawtributors** channel in Discord and talk to maintainers first.
 
 ## Before You PR
 
 - Test locally with your OpenClaw instance
+- External PRs must include a filled **Real behavior proof** section in the PR body. Show the real setup you tested, the exact command or steps you ran after the patch, after-fix evidence, the observed result, and anything you did not test. Screenshots, recordings, terminal screenshots, console output, copied live output, linked artifacts, and redacted runtime logs all count. Unit tests, mocks, snapshots, lint, typechecks, and CI are useful but do not satisfy this requirement by themselves. Maintainers may apply `proof: override` only when the proof gate should not apply.
 - Run tests: `pnpm build && pnpm check && pnpm test`
 - For iterative local commits, `scripts/committer --fast "message" <files...>` passes `FAST_COMMIT=1` through to the pre-commit hook so it skips the repo-wide `pnpm check`. Only use it when you've already run equivalent targeted validation for the touched surface.
 - For extension/plugin changes, run the fast local lane first:
@@ -160,7 +164,7 @@ Built with Codex, Claude, or other AI tools? **Awesome - just mark it!**
 Please include in your PR:
 
 - [ ] Mark as AI-assisted in the PR title or description
-- [ ] Note the degree of testing (untested / lightly tested / fully tested)
+- [ ] Include human-run real behavior proof from your own setup. AI-generated tests, mocks, lint, typechecks, and CI output are supplemental only; they do not prove the fix works for users.
 - [ ] Include prompts or session logs if possible (super helpful!)
 - [ ] Confirm you understand what the code does
 - [ ] If you have access to Codex, run `codex review --base origin/main` locally and address the findings before asking for review

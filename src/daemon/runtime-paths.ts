@@ -11,8 +11,11 @@ import { resolveGatewayStateDir } from "./paths.js";
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
   "/.fnm/",
+  "/.local/share/fnm/",
+  "/library/application support/fnm/",
   "/.volta/",
   "/.asdf/",
+  "/.local/share/mise/",
   "/.n/",
   "/.nodenv/",
   "/.nodebrew/",
@@ -43,7 +46,17 @@ function buildSystemNodeCandidates(
   platform: NodeJS.Platform,
 ): string[] {
   if (platform === "darwin") {
-    return ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"];
+    return [
+      "/opt/homebrew/bin/node",
+      "/opt/homebrew/opt/node/bin/node",
+      "/opt/homebrew/opt/node@24/bin/node",
+      "/opt/homebrew/opt/node@22/bin/node",
+      "/usr/local/bin/node",
+      "/usr/local/opt/node/bin/node",
+      "/usr/local/opt/node@24/bin/node",
+      "/usr/local/opt/node@22/bin/node",
+      "/usr/bin/node",
+    ];
   }
   if (platform === "linux") {
     return ["/usr/local/bin/node", "/usr/bin/node"];
@@ -149,11 +162,23 @@ async function resolveBundledNodePath(params: {
   return null;
 }
 
+async function isVersionManagedRealNodePath(
+  nodePath: string,
+  platform: NodeJS.Platform,
+): Promise<boolean> {
+  try {
+    const realPath = await fs.realpath(nodePath);
+    return isVersionManagedNodePath(realPath, platform);
+  } catch {
+    return false;
+  }
+}
+
 export function isVersionManagedNodePath(
   nodePath: string,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  const normalized = normalizeForCompare(nodePath, platform);
+  const normalized = normalizeLowercaseStringOrEmpty(normalizeForCompare(nodePath, platform));
   return VERSION_MANAGER_MARKERS.some((marker) => normalized.includes(marker));
 }
 
@@ -192,17 +217,29 @@ export async function resolveSystemNodeInfo(params: {
 }): Promise<SystemNodeInfo | null> {
   const env = params.env ?? process.env;
   const platform = params.platform ?? process.platform;
-  const systemNode = await resolveSystemNodePath(env, platform);
-  if (!systemNode) {
-    return null;
+  const execFileImpl = params.execFile ?? execFileAsync;
+  let firstAvailable: SystemNodeInfo | null = null;
+  for (const systemNode of buildSystemNodeCandidates(env, platform)) {
+    try {
+      await fs.access(systemNode);
+    } catch {
+      continue;
+    }
+    if (await isVersionManagedRealNodePath(systemNode, platform)) {
+      continue;
+    }
+    const version = await resolveNodeVersion(systemNode, execFileImpl);
+    const info = {
+      path: systemNode,
+      version,
+      supported: isSupportedNodeVersion(version),
+    };
+    if (info.supported) {
+      return info;
+    }
+    firstAvailable ??= info;
   }
-
-  const version = await resolveNodeVersion(systemNode, params.execFile ?? execFileAsync);
-  return {
-    path: systemNode,
-    version,
-    supported: isSupportedNodeVersion(version),
-  };
+  return firstAvailable;
 }
 
 export function renderSystemNodeWarning(
@@ -240,13 +277,23 @@ export async function resolvePreferredNodePath(params: {
     return bundledNode;
   }
 
-  // Prefer the node that is currently running `openclaw gateway install`.
-  // This respects the user's active version manager (fnm/nvm/volta/etc.).
   const currentExecPath = params.execPath ?? process.execPath;
   if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      return resolveStableNodePath(currentExecPath);
+      const stableCurrentPath = await resolveStableNodePath(currentExecPath);
+      if (!isVersionManagedNodePath(currentExecPath, platform)) {
+        return stableCurrentPath;
+      }
+      const systemNode = await resolveSystemNodeInfo({
+        env: params.env,
+        platform,
+        execFile: execFileImpl,
+      });
+      if (systemNode?.supported) {
+        return systemNode.path;
+      }
+      return stableCurrentPath;
     }
   }
 

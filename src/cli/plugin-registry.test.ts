@@ -42,6 +42,8 @@ const mocks = vi.hoisted(() => ({
     >(),
   resolveChannelPluginIds:
     vi.fn<typeof import("../plugins/channel-plugin-ids.js").resolveChannelPluginIds>(),
+  resolveEffectivePluginIds:
+    vi.fn<typeof import("../plugins/effective-plugin-ids.js").resolveEffectivePluginIds>(),
   resolvePluginRuntimeLoadContext:
     vi.fn<typeof import("../plugins/runtime/load-context.js").resolvePluginRuntimeLoadContext>(),
 }));
@@ -73,6 +75,11 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
   ) => mocks.resolveDiscoverableScopedChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
     mocks.resolveChannelPluginIds(...args),
+}));
+
+vi.mock("../plugins/effective-plugin-ids.js", () => ({
+  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
+    mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../plugins/runtime/load-context.js", () => ({
@@ -134,6 +141,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveConfiguredChannelPluginIds.mockReset();
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReset();
     mocks.resolveChannelPluginIds.mockReset();
+    mocks.resolveEffectivePluginIds.mockReset();
     mocks.resolvePluginRuntimeLoadContext.mockReset();
     resetPluginRegistryLoadedForTests();
 
@@ -141,6 +149,7 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolveDiscoverableScopedChannelPluginIds.mockReturnValue([]);
+    mocks.resolveEffectivePluginIds.mockReturnValue(["demo"]);
     mocks.resolvePluginRuntimeLoadContext.mockImplementation((options) => {
       const rawConfig = (options?.config ?? {}) as Record<string, unknown>;
       return {
@@ -270,6 +279,7 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         config,
+        onlyPluginIds: ["demo"],
         throwOnLoadError: true,
         workspaceDir: "/tmp/workspace",
       }),

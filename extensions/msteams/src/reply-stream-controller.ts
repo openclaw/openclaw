@@ -1,5 +1,22 @@
+import {
+  createLiveMessageState,
+  createPreviewMessageReceipt,
+  defineFinalizableLivePreviewAdapter,
+  deliverWithFinalizableLivePreviewAdapter,
+  markLiveMessageFinalized,
+  type LiveMessageState,
+} from "openclaw/plugin-sdk/channel-message";
+import {
+  createChannelProgressDraftGate,
+  formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
+  resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelProgressDraftLabel,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
-import type { ReplyPayload } from "../runtime-api.js";
+import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
@@ -12,16 +29,15 @@ import { TeamsHttpStream } from "./streaming-message.js";
 // when combined with `undefined` in a union.
 type Maybe<T> = T | undefined;
 
-const INFORMATIVE_STATUS_TEXTS = [
-  "Thinking...",
-  "Working on that...",
-  "Checking the details...",
-  "Putting an answer together...",
-];
-
-export function pickInformativeStatusText(random = Math.random): string {
-  const index = Math.floor(random() * INFORMATIVE_STATUS_TEXTS.length);
-  return INFORMATIVE_STATUS_TEXTS[index] ?? INFORMATIVE_STATUS_TEXTS[0];
+export function pickInformativeStatusText(
+  params: { config?: MSTeamsConfig; seed?: string; random?: () => number } | (() => number) = {},
+): string | undefined {
+  const options = typeof params === "function" ? { random: params } : params;
+  return resolveChannelProgressDraftLabel({
+    entry: options.config,
+    seed: options.seed,
+    random: options.random,
+  });
 }
 
 export function createTeamsReplyStreamController(params: {
@@ -29,10 +45,20 @@ export function createTeamsReplyStreamController(params: {
   context: MSTeamsTurnContext;
   feedbackLoopEnabled: boolean;
   log: MSTeamsMonitorLogger;
+  msteamsConfig?: MSTeamsConfig;
+  progressSeed?: string;
   random?: () => number;
 }) {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
-  const stream = isPersonal
+  const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
+  const shouldUseNativeStream =
+    isPersonal && (streamMode === "partial" || streamMode === "progress");
+  const shouldSuppressDefaultToolProgressMessages =
+    shouldUseNativeStream && streamMode === "progress";
+  const shouldStreamPreviewToolProgress =
+    shouldSuppressDefaultToolProgressMessages &&
+    resolveChannelStreamingPreviewToolProgress(params.msteamsConfig);
+  const stream = shouldUseNativeStream
     ? new TeamsHttpStream({
         sendActivity: (activity) => params.context.sendActivity(activity),
         feedbackLoopEnabled: params.feedbackLoopEnabled,
@@ -44,52 +70,198 @@ export function createTeamsReplyStreamController(params: {
 
   let streamReceivedTokens = false;
   let informativeUpdateSent = false;
+  let progressLines: string[] = [];
+  let lastInformativeText = "";
   let pendingFinalize: Promise<void> | undefined;
+  let liveState: LiveMessageState<ReplyPayload> = createLiveMessageState({
+    canFinalizeInPlace: Boolean(stream),
+  });
+
+  const markStreamFinalized = () => {
+    if (!stream || stream.isFailed) {
+      return;
+    }
+    const messageId = stream.messageId ?? stream.previewStreamId;
+    if (!messageId) {
+      return;
+    }
+    liveState = markLiveMessageFinalized(liveState, createPreviewMessageReceipt({ id: messageId }));
+  };
+
+  const renderInformativeUpdate = async () => {
+    if (!stream) {
+      return;
+    }
+    const informativeText = formatChannelProgressDraftText({
+      entry: params.msteamsConfig,
+      lines: shouldStreamPreviewToolProgress ? progressLines : [],
+      seed: params.progressSeed,
+      bullet: "-",
+    });
+    if (!informativeText || informativeText === lastInformativeText) {
+      return;
+    }
+    lastInformativeText = informativeText;
+    informativeUpdateSent = true;
+    await stream.sendInformativeUpdate(informativeText);
+  };
+
+  const progressDraftGate = createChannelProgressDraftGate({
+    onStart: renderInformativeUpdate,
+  });
+
+  const noteProgressWork = async (options?: { toolName?: string }): Promise<void> => {
+    if (!stream || streamMode !== "progress") {
+      return;
+    }
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return;
+    }
+    const hadStarted = progressDraftGate.hasStarted;
+    await progressDraftGate.noteWork();
+    if (hadStarted && progressDraftGate.hasStarted) {
+      await renderInformativeUpdate();
+    }
+  };
+
+  const pushProgressLine = async (
+    line?: string,
+    options?: { toolName?: string },
+  ): Promise<void> => {
+    if (!stream || streamMode !== "progress") {
+      return;
+    }
+    if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
+      return;
+    }
+    if (shouldStreamPreviewToolProgress) {
+      const normalized = line?.replace(/\s+/g, " ").trim();
+      if (normalized) {
+        const previous = progressLines.at(-1);
+        if (previous !== normalized) {
+          progressLines = [...progressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(params.msteamsConfig),
+          );
+        }
+      }
+    }
+    await noteProgressWork();
+  };
+
+  const fallbackAfterStreamFailure = (
+    payload: ReplyPayload,
+    hasMedia: boolean,
+  ): Maybe<ReplyPayload> => {
+    if (!payload.text) {
+      return payload;
+    }
+    const streamedLength = stream?.streamedLength ?? 0;
+    if (streamedLength <= 0) {
+      return payload;
+    }
+    const remainingText = payload.text.slice(streamedLength);
+    if (!remainingText) {
+      return hasMedia ? { ...payload, text: undefined } : undefined;
+    }
+    return { ...payload, text: remainingText };
+  };
+
+  const finalizeProgressPayload = async (
+    payload: ReplyPayload,
+    hasMedia: boolean,
+  ): Promise<Maybe<ReplyPayload>> => {
+    if (!stream || !payload.text) {
+      return payload;
+    }
+    const result = await deliverWithFinalizableLivePreviewAdapter({
+      kind: "final",
+      payload,
+      liveState,
+      adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { text: string }>({
+        draft: {
+          flush: async () => {},
+          clear: async () => {},
+          id: () => stream.previewStreamId,
+        },
+        buildFinalEdit: (candidate) => (candidate.text ? { text: candidate.text } : undefined),
+        editFinal: async (_previewId, edit) => {
+          const finalized = await stream.replaceInformativeWithFinal(edit.text);
+          informativeUpdateSent = false;
+          if (!finalized || stream.isFailed) {
+            throw new Error("Teams progress stream finalization failed");
+          }
+        },
+        resolveFinalizedId: (previewId) => stream.messageId ?? stream.previewStreamId ?? previewId,
+        createPreviewReceipt: (id) => createPreviewMessageReceipt({ id }),
+        onPreviewFinalized: (_id, _receipt, state) => {
+          liveState = state;
+        },
+        logPreviewEditFailure: (err) => {
+          params.log.debug?.(`stream finalization failed: ${formatUnknownError(err)}`);
+        },
+      }),
+      deliverNormally: async () => false,
+    });
+
+    return result.kind === "preview-finalized"
+      ? hasMedia
+        ? { ...payload, text: undefined }
+        : undefined
+      : payload;
+  };
 
   return {
     async onReplyStart(): Promise<void> {
-      if (!stream || informativeUpdateSent) {
-        return;
-      }
-      informativeUpdateSent = true;
-      await stream.sendInformativeUpdate(pickInformativeStatusText(params.random));
+      return;
+    },
+
+    async noteProgressWork(options?: { toolName?: string }): Promise<void> {
+      await noteProgressWork(options);
     },
 
     onPartialReply(payload: { text?: string }): void {
       if (!stream || !payload.text) {
         return;
       }
+      if (streamMode === "progress") {
+        return;
+      }
       streamReceivedTokens = true;
       stream.update(payload.text);
     },
 
-    preparePayload(payload: ReplyPayload): Maybe<ReplyPayload> {
+    async pushProgressLine(line?: string, options?: { toolName?: string }): Promise<void> {
+      await pushProgressLine(line, options);
+    },
+
+    shouldSuppressDefaultToolProgressMessages(): boolean {
+      return shouldSuppressDefaultToolProgressMessages;
+    },
+
+    shouldStreamPreviewToolProgress(): boolean {
+      return shouldStreamPreviewToolProgress;
+    },
+
+    async preparePayload(payload: ReplyPayload): Promise<Maybe<ReplyPayload>> {
+      const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+
+      if (stream && streamMode === "progress" && informativeUpdateSent && !stream.isFinalized) {
+        if (!payload.text) {
+          return payload;
+        }
+        return await finalizeProgressPayload(payload, hasMedia);
+      }
+
       if (!stream || !streamReceivedTokens) {
         return payload;
       }
-
-      const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
 
       // Stream failed after partial delivery (e.g. > 4000 chars). Send only
       // the unstreamed suffix via block delivery to avoid duplicate text.
       if (stream.isFailed) {
         streamReceivedTokens = false;
 
-        if (!payload.text) {
-          return payload;
-        }
-
-        const streamedLength = stream.streamedLength;
-        if (streamedLength <= 0) {
-          return payload;
-        }
-
-        const remainingText = payload.text.slice(streamedLength);
-        if (!remainingText) {
-          return hasMedia ? { ...payload, text: undefined } : undefined;
-        }
-
-        return { ...payload, text: remainingText };
+        return fallbackAfterStreamFailure(payload, hasMedia);
       }
 
       if (!stream.hasContent || stream.isFinalized) {
@@ -100,7 +272,9 @@ export function createTeamsReplyStreamController(params: {
       // subsequent text segments (after tool calls) use fallback delivery.
       // finalize() is idempotent; the later call in markDispatchIdle is a no-op.
       streamReceivedTokens = false;
-      pendingFinalize = stream.finalize();
+      pendingFinalize = stream.finalize().then(() => {
+        markStreamFinalized();
+      });
 
       if (!hasMedia) {
         return undefined;
@@ -109,12 +283,20 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<void> {
+      progressDraftGate.cancel();
       await pendingFinalize;
-      await stream?.finalize();
+      if (!pendingFinalize) {
+        await stream?.finalize();
+        markStreamFinalized();
+      }
     },
 
     hasStream(): boolean {
       return Boolean(stream);
+    },
+
+    liveState(): LiveMessageState<ReplyPayload> {
+      return liveState;
     },
 
     /**

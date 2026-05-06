@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   appendJsonl,
   buildRttResult,
@@ -17,15 +17,24 @@ import { __testing as cliTesting } from "../../scripts/rtt.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt.json");
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 describe("RTT harness", () => {
   it("validates OpenClaw package specs", () => {
     expect(validateOpenClawPackageSpec("openclaw@main")).toBe("openclaw@main");
+    expect(validateOpenClawPackageSpec("openclaw@alpha")).toBe("openclaw@alpha");
     expect(validateOpenClawPackageSpec("openclaw@beta")).toBe("openclaw@beta");
     expect(validateOpenClawPackageSpec("openclaw@latest")).toBe("openclaw@latest");
     expect(validateOpenClawPackageSpec("openclaw@2026.4.30")).toBe("openclaw@2026.4.30");
     expect(validateOpenClawPackageSpec("openclaw@2026.4.30-beta.2")).toBe(
       "openclaw@2026.4.30-beta.2",
+    );
+    expect(validateOpenClawPackageSpec("openclaw@2026.4.30-alpha.2")).toBe(
+      "openclaw@2026.4.30-alpha.2",
     );
 
     expect(() => validateOpenClawPackageSpec("@openclaw/openclaw@beta")).toThrow(
@@ -156,6 +165,7 @@ describe("RTT harness", () => {
 
   it("appends JSONL rows", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-test-"));
+    tempDirs.push(tempDir);
     const jsonlPath = path.join(tempDir, "data/rtt.jsonl");
     await appendJsonl(jsonlPath, { run: 1 });
     await appendJsonl(jsonlPath, { run: 2 });

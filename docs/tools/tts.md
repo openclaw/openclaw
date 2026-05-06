@@ -12,6 +12,11 @@ OpenClaw can convert outbound replies into audio across **14 speech providers**
 and deliver native voice messages on Feishu, Matrix, Telegram, and WhatsApp,
 audio attachments everywhere else, and PCM/Ulaw streams for telephony and Talk.
 
+TTS is the speech-output half of Talk's `stt-tts` mode. Provider-native
+`realtime` Talk sessions synthesize speech inside the realtime provider instead
+of calling this TTS path, while `transcription` sessions do not synthesize an
+assistant voice response.
+
 ## Quick start
 
 <Steps>
@@ -586,6 +591,11 @@ attempted provider:
 The whole TTS request only fails when **every** attempted provider is skipped
 or fails.
 
+Talk session provider selection is session-scoped. A Talk client should choose
+provider ids, model ids, voice ids, and locales from `talk.catalog` and pass
+them through the Talk session or handoff request. Opening a voice session should
+not mutate `messages.tts` or global Talk provider defaults.
+
 ## Model-driven directives
 
 By default, the assistant **can** emit `[[tts:...]]` directives to override
@@ -852,11 +862,14 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   </Accordion>
 
   <Accordion title="Inworld">
+    ### Inworld primary
+
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
     <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
     <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
     <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
+
   </Accordion>
 
   <Accordion title="Local CLI (tts-local-cli)">

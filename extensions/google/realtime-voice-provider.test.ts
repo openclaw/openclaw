@@ -16,7 +16,7 @@ type MockGoogleLiveConnectParams = {
     onopen: () => void;
     onmessage: (message: Record<string, unknown>) => void;
     onerror: (event: { error?: unknown; message?: string }) => void;
-    onclose: () => void;
+    onclose: (event?: { code?: number; reason?: string; wasClean?: boolean }) => void;
   };
 };
 
@@ -65,6 +65,27 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     delete process.env.GOOGLE_API_KEY;
   });
 
+  it("declares realtime Talk capabilities for catalog selection", () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+
+    expect(provider.capabilities).toEqual({
+      transports: ["provider-websocket", "gateway-relay"],
+      inputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      outputAudioFormats: [
+        { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
+        { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      ],
+      supportsBrowserSession: true,
+      supportsBargeIn: true,
+      supportsToolCalls: true,
+      supportsVideoFrames: true,
+      supportsSessionResumption: true,
+    });
+  });
+
   it("normalizes provider config and cfg model-provider key fallback", () => {
     const provider = buildGoogleRealtimeVoiceProvider();
     const resolved = provider.resolveConfig?.({
@@ -107,6 +128,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       turnCoverage: "only-activity",
       automaticActivityDetectionDisabled: false,
       enableAffectiveDialog: undefined,
+      sessionResumption: undefined,
+      contextWindowCompression: undefined,
       thinkingLevel: undefined,
       thinkingBudget: undefined,
     });
@@ -181,6 +204,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
           },
           turnCoverage: "TURN_INCLUDES_ONLY_ACTIVITY",
         },
+        sessionResumption: {},
+        contextWindowCompression: { slidingWindow: {} },
         tools: [
           {
             functionDeclarations: [
@@ -290,7 +315,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     });
     expect(session).toMatchObject({
       provider: "google",
-      transport: "json-pcm-websocket",
+      transport: "provider-websocket",
       protocol: "google-live-bidi",
       clientSecret: "auth_tokens/browser-session",
       websocketUrl:
@@ -310,6 +335,83 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         },
       },
     });
+  });
+
+  it("can opt out of Google Live session resumption and context compression", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        contextWindowCompression: false,
+        sessionResumption: false,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("contextWindowCompression");
+    expect(lastConnectParams().config).not.toHaveProperty("sessionResumption");
+  });
+
+  it("captures Google Live resumption handles and reuses them on reconnect", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onmessage({
+      sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+  });
+
+  it("reconnects unexpected Google Live closes with the latest resumption handle", async () => {
+    vi.useFakeTimers();
+    try {
+      const provider = buildGoogleRealtimeVoiceProvider();
+      const onClose = vi.fn();
+      const onError = vi.fn();
+      const bridge = provider.createBridge({
+        providerConfig: { apiKey: "gemini-key" },
+        onAudio: vi.fn(),
+        onClearAudio: vi.fn(),
+        onClose,
+        onError,
+      });
+
+      await bridge.connect();
+      lastConnectParams().callbacks.onmessage({
+        setupComplete: { sessionId: "session-1" },
+        sessionResumptionUpdate: { resumable: true, newHandle: "resume-1" },
+      });
+      lastConnectParams().callbacks.onclose({
+        code: 1011,
+        reason: "temporary upstream close",
+        wasClean: false,
+      });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(onError).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.stringContaining("reconnecting 1/3"),
+        }),
+      );
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(connectMock).toHaveBeenCalledTimes(2);
+      expect(lastConnectParams().config.sessionResumption).toEqual({ handle: "resume-1" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for setup completion before draining audio and firing ready", async () => {
@@ -369,6 +471,32 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     bridge.sendAudio(silence20ms);
 
     expect(session.sendRealtimeInput).toHaveBeenCalledWith({ audioStreamEnd: true });
+  });
+
+  it("fuses telephony mu-law conversion into the Gemini 16 kHz PCM input frame", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+    lastConnectParams().callbacks.onopen();
+    lastConnectParams().callbacks.onmessage({ setupComplete: { sessionId: "session-1" } });
+
+    bridge.sendAudio(Buffer.from([0xff, 0x00]));
+
+    expect(session.sendRealtimeInput).toHaveBeenCalledWith({
+      audio: {
+        data: expect.any(String),
+        mimeType: "audio/pcm;rate=16000",
+      },
+    });
+    const sent = Buffer.from(session.sendRealtimeInput.mock.calls[0]?.[0].audio.data, "base64");
+    expect(Array.from({ length: sent.length / 2 }, (_, i) => sent.readInt16LE(i * 2))).toEqual([
+      0, -16062, -32124, -32124,
+    ]);
   });
 
   it("accepts PCM16 24 kHz audio without the telephony mu-law hop", async () => {

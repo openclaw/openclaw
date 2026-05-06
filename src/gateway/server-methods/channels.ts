@@ -18,6 +18,11 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
+  DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  evaluateChannelHealth,
+} from "../channel-health-policy.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -51,6 +56,58 @@ type ChannelStopPayload = {
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
 const CHANNEL_STATUS_PROBE_CONCURRENCY = 5;
+
+function channelStatusTimeoutPayload(step: string, timeoutMs: number): Record<string, unknown> {
+  return {
+    ok: false,
+    timedOut: true,
+    error: `${step} timed out after ${timeoutMs}ms`,
+  };
+}
+
+async function runChannelStatusHook(params: {
+  accountId: string;
+  channelId: ChannelId;
+  step: "audit" | "probe";
+  timeoutMs: number;
+  warnings: string[];
+  run: () => Promise<unknown>;
+}): Promise<unknown> {
+  const timeoutMs = Math.max(1, params.timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+    if (typeof timer === "object" && "unref" in timer) {
+      timer.unref();
+    }
+  });
+  const result = await Promise.race([
+    Promise.resolve()
+      .then(params.run)
+      .then(
+        (value) => ({ kind: "value" as const, value }),
+        (error) => ({ kind: "error" as const, error }),
+      ),
+    timeout,
+  ]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result.kind === "value") {
+    return result.value;
+  }
+  const warningPrefix = `${params.channelId}:${params.accountId} ${params.step}`;
+  if (result.kind === "timeout") {
+    params.warnings.push(`${warningPrefix} timed out after ${timeoutMs}ms`);
+    return channelStatusTimeoutPayload(params.step, timeoutMs);
+  }
+  const message = formatForLog(result.error);
+  params.warnings.push(`${warningPrefix} failed: ${message}`);
+  return {
+    ok: false,
+    error: message,
+  };
+}
 
 function resolveChannelsStatusTimeoutMs(params: { probe: boolean; timeoutMsRaw: unknown }): number {
   const fallback = params.probe ? CHANNEL_STATUS_MAX_TIMEOUT_MS : 10_000;
@@ -193,6 +250,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const pluginMap = new Map<ChannelId, ChannelPlugin>(
       plugins.map((plugin) => [plugin.id, plugin]),
     );
+    const statusWarnings: string[] = [];
 
     const resolveRuntimeSnapshot = (
       channelId: ChannelId,
@@ -232,10 +290,18 @@ export const channelsHandlers: GatewayRequestHandlers = {
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (configured) {
-          probeResult = await plugin.status.probeAccount({
-            account,
+          probeResult = await runChannelStatusHook({
+            channelId,
+            accountId,
+            step: "probe",
             timeoutMs,
-            cfg,
+            warnings: statusWarnings,
+            run: () =>
+              plugin.status!.probeAccount!({
+                account,
+                timeoutMs,
+                cfg,
+              }),
           });
           lastProbeAt = Date.now();
         }
@@ -247,11 +313,19 @@ export const channelsHandlers: GatewayRequestHandlers = {
           configured = await plugin.config.isConfigured(account, cfg);
         }
         if (configured) {
-          auditResult = await plugin.status.auditAccount({
-            account,
+          auditResult = await runChannelStatusHook({
+            channelId,
+            accountId,
+            step: "audit",
             timeoutMs,
-            cfg,
-            probe: probeResult,
+            warnings: statusWarnings,
+            run: () =>
+              plugin.status!.auditAccount!({
+                account,
+                timeoutMs,
+                cfg,
+                probe: probeResult,
+              }),
           });
         }
       }
@@ -276,6 +350,15 @@ export const channelsHandlers: GatewayRequestHandlers = {
       }
       if (snapshot.lastOutboundAt == null) {
         snapshot.lastOutboundAt = activity.outboundAt;
+      }
+      const health = evaluateChannelHealth(snapshot, {
+        channelId,
+        now: Date.now(),
+        staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+        channelConnectGraceMs: DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+      });
+      if (!health.healthy) {
+        snapshot.healthState = health.reason;
       }
       return { accountId: accountId, account, snapshot };
     };
@@ -324,6 +407,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelDetailLabels: uiCatalog.detailLabels,
       channelSystemImages: uiCatalog.systemImages,
       channelMeta: uiCatalog.entries,
+      ...(context.getEventLoopHealth ? { eventLoop: context.getEventLoopHealth() } : {}),
       channels: {} as Record<string, unknown>,
       channelAccounts: {} as Record<string, unknown>,
       channelDefaultAccountId: {} as Record<string, unknown>,
@@ -361,6 +445,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
         accountsMap[result.pluginId] = result.accounts;
         defaultAccountIdMap[result.pluginId] = result.defaultAccountId;
       }
+    }
+    if (statusWarnings.length > 0) {
+      payload.partial = true;
+      payload.warnings = statusWarnings.slice(0, 50);
     }
 
     respond(true, payload, undefined);

@@ -40,6 +40,25 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
+  const staleOpenAICodexModelIds = new Set([
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.2-pro",
+    "gpt-5.3",
+    "gpt-5.3-codex",
+    "gpt-5.3-chat-latest",
+  ]);
+
+  function isStaleOpenAICodexModel(provider?: string, id?: string): boolean {
+    return (
+      provider === "openai-codex" && staleOpenAICodexModelIds.has(id?.trim().toLowerCase() ?? "")
+    );
+  }
+
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -52,6 +71,9 @@ vi.mock("../model-suppression.js", () => {
       baseUrl?: string;
       config?: unknown;
     }) => {
+      if (isStaleOpenAICodexModel(provider, id)) {
+        return true;
+      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -67,6 +89,9 @@ vi.mock("../model-suppression.js", () => {
       );
     },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
+      if (isStaleOpenAICodexModel(provider, id)) {
+        return true;
+      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -92,6 +117,10 @@ vi.mock("../model-suppression.js", () => {
         isQwenCodingPlanBaseUrl(resolveConfiguredQwenBaseUrl(config))
       ) {
         return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
+      }
+      if (isStaleOpenAICodexModel(provider, id)) {
+        const modelId = id?.trim().toLowerCase() ?? "";
+        return `Unknown model: openai-codex/${modelId}. ${modelId} is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.`;
       }
       if (
         (provider === "openai" ||
@@ -1455,7 +1484,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not downgrade exact openai-codex gpt-5.3-codex registry metadata", () => {
+  it("rejects stale exact openai-codex gpt-5.3-codex registry metadata", () => {
     vi.mocked(discoverModels).mockReturnValue({
       find: vi.fn((provider: string, modelId: string) => {
         if (provider !== "openai-codex") {
@@ -1475,13 +1504,10 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex",
-      contextWindow: 272000,
-      maxTokens: 128000,
-    });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      'Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.',
+    );
   });
 
   it("canonicalizes the legacy openai-codex gpt-5.4-codex alias at runtime", () => {
@@ -1685,53 +1711,6 @@ describe("resolveModel", () => {
       cost: { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 1_000_000,
       contextTokens: 272_000,
-      maxTokens: 128_000,
-    });
-  });
-
-  it("lets official openai-codex metadata override legacy unmarked models-add rows", () => {
-    mockDiscoveredModel(discoverModels, {
-      provider: "openai-codex",
-      modelId: "gpt-5.5",
-      templateModel: {
-        ...buildOpenAICodexForwardCompatExpectation("gpt-5.5"),
-        name: "GPT-5.5",
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 400_000,
-      },
-    });
-
-    const cfg = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
-            models: [
-              {
-                ...makeModel("gpt-5.5"),
-                api: "openai-codex-responses",
-                reasoning: true,
-                input: ["text", "image"],
-                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-                contextWindow: 400_000,
-                contextTokens: 272_000,
-                maxTokens: 128_000,
-              },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    const result = resolveModelForTest("openai-codex", "gpt-5.5", "/tmp/agent", cfg);
-
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.5",
-      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-      contextWindow: 400_000,
       maxTokens: 128_000,
     });
   });

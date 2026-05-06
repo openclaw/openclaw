@@ -46,10 +46,25 @@ npm installs run in the npm root with:
 npm install --prefix ~/.openclaw/npm <spec> --omit=dev --ignore-scripts --no-audit --no-fund
 ```
 
+`openclaw plugins install npm-pack:<path.tgz>` uses that same managed npm root
+for a local npm-pack tarball. OpenClaw reads the tarball's npm metadata, adds it
+to the managed root as a copied `file:` dependency, runs the normal npm install,
+and then verifies the installed lockfile metadata before trusting the plugin.
+This is intended for package-acceptance and release-candidate proof where a
+local pack artifact should behave like the registry artifact it simulates.
+
 npm may hoist transitive dependencies to `~/.openclaw/npm/node_modules` beside
 the plugin package. OpenClaw scans the managed npm root before trusting the
 install and uses npm to remove npm-managed packages during uninstall, so hoisted
 runtime dependencies stay inside the managed cleanup boundary.
+
+Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
+dependency. OpenClaw does not let npm install a separate registry copy of the
+host package into the managed root, because stale host packages can affect npm
+peer resolution during later plugin installs. Instead, after npm finishes
+mutating the shared root during install, update, or uninstall, OpenClaw reasserts
+plugin-local `node_modules/openclaw` links for installed packages that declare
+the host peer.
 
 git installs clone or refresh the repository, then run:
 
@@ -85,9 +100,10 @@ openclaw plugins install <source>
 openclaw doctor --fix
 ```
 
-`doctor --fix` can clean legacy OpenClaw-generated dependency state and install
-configured downloadable plugins that are missing from the local install records.
-It does not repair dependencies for an already-installed local plugin.
+`doctor --fix` can clean legacy OpenClaw-generated dependency state and recover
+downloadable plugins that are missing from the local install records when config
+references them. Doctor does not repair dependencies for an already-installed
+local plugin.
 
 ## Bundled plugins
 
@@ -118,8 +134,11 @@ not a supported way to prepare bundled plugin dependencies.
 
 Older OpenClaw versions generated bundled-plugin dependency roots at startup or
 during doctor repair. Current doctor cleanup removes those stale directories and
-symlinks when `--fix` is used, including old `plugin-runtime-deps` roots,
+symlinks when `--fix` is used, including old `plugin-runtime-deps` roots, global
+Node-prefix package symlinks that point at pruned `plugin-runtime-deps` targets,
 `.openclaw-runtime-deps*` manifests, generated plugin `node_modules`, install
-stage directories, and package-local pnpm stores.
+stage directories, and package-local pnpm stores. Packaged postinstall also
+removes those global symlinks before pruning the legacy target roots so upgrades
+do not leave dangling ESM package imports.
 
 These paths are legacy debris only. New installs should not create them.
