@@ -693,7 +693,7 @@ function assertMatrixQaToolProgressMentionsInert(event: MatrixQaObservedEvent) {
 
 function hasMatrixQaToolProgressPreviewLine(body: string | undefined) {
   return Boolean(
-    body?.split(/\r?\n/).some((line) => /^\s*[-*•]\s+`?[^`\s][^`]*`?\s*$/u.test(line)),
+    body?.split(/\r?\n/).some((line) => /^\s*(?:[-*•]\s+`?[^`\s][^`]*`?|`[^`]+`)\s*$/u.test(line)),
   );
 }
 

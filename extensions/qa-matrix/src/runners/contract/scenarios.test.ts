@@ -2927,7 +2927,7 @@ describe("matrix live qa scenarios", () => {
     const previewEvent = matrixQaMessageEvent({
       kind: "notice",
       eventId: previewEventId,
-      body: "Nautiling...\n- `📖 Read: from…ng-matrix-tool-progress-target.txt`",
+      body: "Nautiling...\n`📖 Read: from…ng-matrix-tool-progress-target.txt`",
     });
     const { waitForRoomEvent } = mockMatrixQaRoomClient({
       driverEventId: "$tool-progress-error-short-trigger",
@@ -2962,7 +2962,7 @@ describe("matrix live qa scenarios", () => {
 
     await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
       artifacts: {
-        previewBodyPreview: "Nautiling...\n- `📖 Read: from…ng-matrix-tool-progress-target.txt`",
+        previewBodyPreview: "Nautiling...\n`📖 Read: from…ng-matrix-tool-progress-target.txt`",
         previewEventId,
         reply: {
           eventId: "$tool-progress-error-short-final",
