@@ -51,6 +51,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1" },
     };
+    const logWsControl = createLogger();
 
     attachGatewayWsConnectionHandler({
       wss,
@@ -65,7 +66,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       refreshHealthSnapshot: vi.fn(async () => ({}) as never),
       logGateway: createLogger() as never,
       logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
+      logWsControl: logWsControl as never,
       extraHandlers: {},
       broadcast: vi.fn(),
       buildRequestContext: () => createRequestContext() as never,
@@ -124,5 +125,16 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     await vi.waitFor(() => {
       expect(socket.close).toHaveBeenCalledWith(1013, "gateway starting");
     });
+    expect(logWsControl.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.objectContaining({ cause: "startup-sidecars-pending" }),
+    );
+    expect(logWsControl.debug).toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.objectContaining({
+        cause: "startup-sidecars-pending",
+        handshake: "failed",
+      }),
+    );
   });
 });
