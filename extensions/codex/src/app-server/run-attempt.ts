@@ -1583,7 +1583,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
-    forceMessageTool: params.sourceReplyDeliveryMode === "message_tool_only",
+    forceMessageTool: shouldForceMessageTool(params),
     enableHeartbeatTool: params.trigger === "heartbeat",
     forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
@@ -1615,6 +1615,10 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
+  return params.sourceReplyDeliveryMode === "message_tool_only";
 }
 
 function shouldProjectMirroredHistoryForCodexStart(params: {
@@ -1983,6 +1987,7 @@ export const __testing = {
   buildDynamicTools,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
     openClawCodingToolsFactoryForTests = factory;
   },

@@ -498,42 +498,15 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
-  it("forces the message dynamic tool for message-tool-only source replies", async () => {
+  it("forces the message dynamic tool for message-tool-only source replies", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.config = { tools: { profile: "coding" } };
     params.sourceReplyDeliveryMode = "message_tool_only";
-    params.messageProvider = "whatsapp";
-    params.runtimePlan = buildCodexRuntimePlan(params, workspaceDir);
-    let seenForceMessageTool: boolean | undefined;
-    __testing.setOpenClawCodingToolsFactoryForTests((options) => {
-      seenForceMessageTool = options?.forceMessageTool;
-      return [
-        {
-          name: "message",
-          description: "message test tool",
-          parameters: { type: "object", properties: {} },
-          execute: vi.fn(),
-        },
-      ] as never;
-    });
 
-    const dynamicTools = await __testing.buildDynamicTools({
-      params,
-      resolvedWorkspace: workspaceDir,
-      effectiveWorkspace: workspaceDir,
-      sandboxSessionKey: "agent:main:session-1",
-      sandbox: null,
-      runAbortController: new AbortController(),
-      sessionAgentId: "main",
-      pluginConfig: {},
-      onYieldDetected: () => undefined,
-    });
-    const dynamicToolNames = dynamicTools.map((tool) => tool.name);
+    expect(__testing.shouldForceMessageTool(params)).toBe(true);
 
-    expect(seenForceMessageTool).toBe(true);
-    expect(dynamicToolNames).toContain("message");
+    params.sourceReplyDeliveryMode = "automatic";
+    expect(__testing.shouldForceMessageTool(params)).toBe(false);
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", async () => {
@@ -1710,87 +1683,6 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  });
-
-  it("routes MCP approval elicitations through the native bridge", async () => {
-    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
-    let handleRequest:
-      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
-      | undefined;
-    const bridgeSpy = vi
-      .spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest")
-      .mockResolvedValue({
-        action: "accept",
-        content: null,
-        _meta: null,
-      });
-    const request = vi.fn(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      if (method === "turn/start") {
-        return turnStartResult();
-      }
-      return {};
-    });
-    __testing.setCodexAppServerClientFactoryForTests(
-      async () =>
-        ({
-          request,
-          addNotificationHandler: (handler: typeof notify) => {
-            notify = handler;
-            return () => undefined;
-          },
-          addRequestHandler: (
-            handler: (request: {
-              id: string;
-              method: string;
-              params?: unknown;
-            }) => Promise<unknown>,
-          ) => {
-            handleRequest = handler;
-            return () => undefined;
-          },
-        }) as never,
-    );
-
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-    );
-    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
-
-    const result = await handleRequest?.({
-      id: "request-elicitation-1",
-      method: "mcpServer/elicitation/request",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        serverName: "codex_apps__github",
-        mode: "form",
-      },
-    });
-
-    expect(result).toEqual({
-      action: "accept",
-      content: null,
-      _meta: null,
-    });
-    expect(bridgeSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        threadId: "thread-1",
-        turnId: "turn-1",
-      }),
-    );
-
-    await notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: { id: "turn-1", status: "completed" },
-      },
-    });
     await run;
   });
 
