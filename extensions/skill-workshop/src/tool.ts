@@ -155,9 +155,6 @@ export function createSkillWorkshopTool(params: {
         return jsonResult(result);
       }
       if (action === "apply") {
-        if (params.config.approvalPolicy !== "auto") {
-          throw new Error("tool apply requires auto approval policy");
-        }
         if (!raw.id) {
           throw new Error("id required");
         }

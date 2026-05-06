@@ -617,7 +617,7 @@ describe("skill-workshop", () => {
     expect(await store.list("pending")).toHaveLength(1);
   });
 
-  it("keeps explicit tool suggestions pending when pending mode receives apply true", async () => {
+  it("queues apply true suggestions in pending mode before explicit apply", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
     let tool: AnyAgentTool | undefined;
@@ -652,17 +652,23 @@ describe("skill-workshop", () => {
       (result?.details as { proposal?: { id?: string } } | undefined)?.proposal?.id ?? "";
     expect(proposalId).toBeTruthy();
     await expect(
-      tool?.execute?.("call-2", {
-        action: "apply",
-        id: proposalId,
-      }),
-    ).rejects.toThrow("tool apply requires auto approval policy");
-    await expect(
       fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
     expect(await store.list("applied")).toHaveLength(0);
+
+    const applied = await tool?.execute?.("call-2", {
+      action: "apply",
+      id: proposalId,
+    });
+
+    expect(applied?.details).toMatchObject({ status: "applied" });
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
+    ).resolves.toBeUndefined();
+    expect(await store.list("pending")).toHaveLength(0);
+    expect(await store.list("applied")).toHaveLength(1);
   });
 
   it("uses the reviewer to propose existing skill repairs", async () => {

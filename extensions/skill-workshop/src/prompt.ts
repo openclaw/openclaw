@@ -4,7 +4,7 @@ export function buildWorkshopGuidance(config: SkillWorkshopConfig): string {
   const writeMode =
     config.approvalPolicy === "auto"
       ? "Auto mode: apply safe workspace-skill updates; apply=false queues instead."
-      : "Pending mode: queue suggestions for review; tool calls cannot apply them.";
+      : "Pending mode: queue suggestions; use apply action after explicit approval.";
   return [
     "<skill_workshop>",
     "Use for durable procedural memory, not facts/preferences.",
