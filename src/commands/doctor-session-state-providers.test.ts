@@ -3,6 +3,7 @@ import {
   applySessionRouteStateRepair,
   resolveConfiguredDoctorSessionStateRoute,
   scanSessionRouteStateOwners,
+  storeMayContainPluginSessionRouteState,
 } from "./doctor-session-state-providers.js";
 
 const codexOwner = {
@@ -15,6 +16,35 @@ const codexOwner = {
 };
 
 describe("doctor session state provider routes", () => {
+  it("skips plugin route-state scans for unrelated recovery metadata", () => {
+    expect(
+      storeMayContainPluginSessionRouteState({
+        "agent:main:subagent:wedged-child": {
+          sessionId: "session-wedged-child",
+          updatedAt: 1,
+          abortedLastRun: true,
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: 1,
+            wedgedAt: 2,
+            wedgedReason: "blocked",
+          },
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      storeMayContainPluginSessionRouteState({
+        "agent:main:telegram:direct:1": {
+          sessionId: "session-codex",
+          updatedAt: 1,
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("preserves raw configured CLI runtimes before harness policy normalization", () => {
     expect(
       resolveConfiguredDoctorSessionStateRoute({

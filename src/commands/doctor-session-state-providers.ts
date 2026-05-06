@@ -126,6 +126,29 @@ function resolvePluginDoctorSessionRouteStateOwners(params: {
   return listPluginDoctorSessionRouteStateOwners({ env: params.env });
 }
 
+function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
+  const record = entry as unknown as Record<string, unknown>;
+  return (
+    normalizeString(record.providerOverride) !== undefined ||
+    normalizeString(record.modelOverride) !== undefined ||
+    normalizeString(record.modelOverrideSource) !== undefined ||
+    record.liveModelSwitchPending !== undefined ||
+    normalizeString(record.modelProvider) !== undefined ||
+    normalizeString(record.model) !== undefined ||
+    normalizeString(record.agentHarnessId) !== undefined ||
+    record.cliSessionBindings !== undefined ||
+    record.cliSessionIds !== undefined ||
+    normalizeString(record.authProfileOverride) !== undefined ||
+    normalizeString(record.authProfileOverrideSource) !== undefined
+  );
+}
+
+export function storeMayContainPluginSessionRouteState(
+  store: Record<string, SessionEntry>,
+): boolean {
+  return Object.values(store).some((entry) => entryMayContainPluginSessionRouteState(entry));
+}
+
 export type DoctorSessionRouteState = {
   defaultProvider: string;
   configuredModelRefs: string[];
@@ -434,6 +457,9 @@ export async function runPluginSessionStateDoctorRepairs(params: {
   warnings: string[];
   changes: string[];
 }): Promise<void> {
+  if (!storeMayContainPluginSessionRouteState(params.store)) {
+    return;
+  }
   const owners = resolvePluginDoctorSessionRouteStateOwners({ env: params.env });
   if (owners.length === 0) {
     return;
