@@ -1,6 +1,7 @@
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
@@ -12,6 +13,7 @@ import {
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { defaultRuntime } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -97,6 +99,20 @@ export async function drainFormattedSystemEvents(params: {
     params.sessionKey,
     selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
   );
+  // Emit `continuation.queue.drain` on every drain, including empty drains;
+  // absence of work is still a drain tick. Continuation-prefix detection is
+  // best-effort, while structural traceparent reconstruction belongs to the
+  // concrete tracing adapter.
+  const drainedContinuationCount = queued.filter((event) =>
+    event.text.startsWith("[continuation:"),
+  ).length;
+  const traceparent = queued.find((event) => event.traceparent)?.traceparent;
+  emitContinuationQueueDrainSpan({
+    drainedCount: queued.length,
+    drainedContinuationCount,
+    ...(traceparent ? { traceparent } : {}),
+    log: (message) => defaultRuntime.log(message),
+  });
   systemLines.push(
     ...queued.flatMap((event) => {
       const compacted = compactSystemEvent(event.text);

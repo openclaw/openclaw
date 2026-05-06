@@ -32,10 +32,11 @@ import {
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { isLikelyExecutionAckPrompt } from "../../agents/pi-embedded-runner/run/incomplete-turn.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import type { ContinueWorkRequest } from "../../agents/tools/continue-work-tool.js";
 import {
   resolveGroupSessionKey,
+  resolveSessionStoreEntry,
   resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
@@ -68,6 +69,7 @@ import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
+  stripContinuationSignal,
   stripLeadingSilentToken,
 } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -84,7 +86,31 @@ import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { resolveReplyRunFireReason } from "./run-provenance.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+type EmbeddedPiAgentRunResult = Awaited<
+  ReturnType<typeof import("../../agents/pi-embedded.runtime.js").runEmbeddedPiAgent>
+>;
+
+async function runEmbeddedPiAgentDefault(
+  ...args: Parameters<typeof import("../../agents/pi-embedded.runtime.js").runEmbeddedPiAgent>
+): Promise<EmbeddedPiAgentRunResult> {
+  const { runEmbeddedPiAgent } = await import("../../agents/pi-embedded.runtime.js");
+  return await runEmbeddedPiAgent(...args);
+}
+
+/** Type guard for wrapped continuation run results. */
+function isContinuationWrappedRunResult(
+  result: unknown,
+): result is { result: EmbeddedPiAgentRunResult; continueWorkRequest?: ContinueWorkRequest } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    "result" in result &&
+    "continueWorkRequest" in result
+  );
+}
 
 // Maximum number of LiveSessionModelSwitchError retries before surfacing a
 // user-visible error. Prevents infinite ping-pong when the persisted session
@@ -95,6 +121,8 @@ const GPT_CHAT_BREVITY_ACK_MAX_CHARS = 420;
 const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
+const BLOCKED_LIVENESS_NOTICE_TEXT =
+  "⚠️ Agent liveness: blocked. The run cannot make progress; try again or start a fresh conversation if this repeats.";
 
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
@@ -113,18 +141,17 @@ export type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
-      runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      runResult: EmbeddedPiAgentRunResult;
       fallbackProvider?: string;
       fallbackModel?: string;
       fallbackAttempts: RuntimeFallbackAttempt[];
       didLogHeartbeatStrip: boolean;
       autoCompactionCount: number;
       /** Payload keys sent directly (not via pipeline) during tool flush. */
+      continueWorkRequest?: import("../../agents/tools/continue-work-tool.js").ContinueWorkRequest;
       directlySentBlockKeys?: Set<string>;
     }
   | { kind: "final"; payload: ReplyPayload };
-
-type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
 
 type FallbackSelectionState = Pick<
   SessionEntry,
@@ -1055,6 +1082,24 @@ export async function runAgentTurnWithFallback(params: {
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const shouldNotifyUserAboutCompaction =
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
+  let didSurfaceBlockedLivenessState = false;
+  const surfaceBlockedLivenessState = async () => {
+    if (didSurfaceBlockedLivenessState || !params.opts?.onBlockReply) {
+      return;
+    }
+    const noticePayload = params.applyReplyToMode({
+      text: BLOCKED_LIVENESS_NOTICE_TEXT,
+      replyToId: currentMessageId,
+      replyToCurrent: true,
+      isError: true,
+    });
+    try {
+      await params.opts.onBlockReply(noticePayload);
+      didSurfaceBlockedLivenessState = true;
+    } catch (err) {
+      logVerbose(`blocked liveness notice delivery failed (non-fatal): ${String(err)}`);
+    }
+  };
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
     if (!params.opts?.onBlockReply) {
       return;
@@ -1117,10 +1162,11 @@ export async function runAgentTurnWithFallback(params: {
       isControlUiVisible: shouldSurfaceToControlUi,
     });
   }
-  let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let runResult: EmbeddedPiAgentRunResult;
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
+  let continueWorkRequest: ContinueWorkRequest | undefined;
   let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
@@ -1278,6 +1324,21 @@ export async function runAgentTurnWithFallback(params: {
         if (text && startsWithSilentToken(text, SILENT_REPLY_TOKEN)) {
           text = stripLeadingSilentToken(text, SILENT_REPLY_TOKEN);
         }
+        // Strip continuation markers (CONTINUE_WORK, [[CONTINUE_DELEGATE:…]])
+        // from streamed blocks so they never reach the channel. The regex anchors
+        // to the end of the text, so mid-sentence mentions are safe. Final-payload
+        // stripping in runReplyAgent still runs for the assembled payloads.
+        // Only strip when continuation is enabled — otherwise the tokens are
+        // regular text the model happened to generate. (#104)
+        if (
+          text &&
+          params.followupRun.run.config?.agents?.defaults?.continuation?.enabled === true
+        ) {
+          const cont = stripContinuationSignal(text);
+          if (cont.signal) {
+            text = cont.text;
+          }
+        }
         if (!text) {
           // Allow media-only payloads (e.g. tool result screenshots) through.
           if (reply.hasMedia) {
@@ -1326,14 +1387,18 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
-      const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
+      const fallbackResult = await runWithModelFallback<
+        | EmbeddedPiAgentRunResult
+        | { result: EmbeddedPiAgentRunResult; continueWorkRequest?: ContinueWorkRequest }
+      >({
         ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
         runId,
         sessionId: params.followupRun.run.sessionId,
         lane: runLane,
         classifyResult: async ({ result, provider, model }) => {
+          const effectiveResult = isContinuationWrappedRunResult(result) ? result.result : result;
           const classification = outcomePlan.classifyRunResult({
-            result,
+            result: effectiveResult,
             provider,
             model,
             hasDirectlySentBlockReply: directlySentBlockKeys.size > 0,
@@ -1540,11 +1605,18 @@ export async function runAgentTurnWithFallback(params: {
               runId,
               sessionKey: params.sessionKey,
             });
+            let attemptContinueWorkRequest: ContinueWorkRequest | undefined;
             try {
-              const result = await runEmbeddedPiAgent({
+              const result = await runEmbeddedPiAgentDefault({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
                 trigger: params.isHeartbeat ? "heartbeat" : "user",
+                fireReason: resolveReplyRunFireReason({
+                  opts: params.opts,
+                  drainsContinuationDelegateQueue:
+                    effectiveRun.drainsContinuationDelegateQueue === true,
+                }),
+                parentRunId: params.opts?.parentRunId,
                 groupId: resolveGroupSessionKey(params.sessionCtx)?.id,
                 groupChannel:
                   normalizeOptionalString(params.sessionCtx.GroupChannel) ??
@@ -1567,6 +1639,16 @@ export async function runAgentTurnWithFallback(params: {
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                drainsContinuationDelegateQueue:
+                  params.followupRun.run.drainsContinuationDelegateQueue,
+                continueWorkOpts:
+                  params.followupRun.run.config?.agents?.defaults?.continuation?.enabled === true
+                    ? {
+                        requestContinuation: (request) => {
+                          attemptContinueWorkRequest = request;
+                        },
+                      }
+                    : undefined,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,
@@ -1588,6 +1670,71 @@ export async function runAgentTurnWithFallback(params: {
                 imageOrder: params.opts?.imageOrder,
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                 replyOperation: params.replyOperation,
+                // Continuation: request_compaction opts wired from session state.
+                requestCompactionOpts:
+                  runtimeConfig?.agents?.defaults?.continuation?.enabled === true
+                    ? {
+                        sessionId: params.followupRun.run.sessionId,
+                        getContextUsage: () => {
+                          const entry = params.getActiveSessionEntry();
+                          const totalTokens =
+                            (entry as { totalTokens?: number } | undefined)?.totalTokens ?? 0;
+                          const contextWindow =
+                            (entry as { contextTokens?: number } | undefined)?.contextTokens ??
+                            200_000;
+                          return contextWindow > 0 ? totalTokens / contextWindow : 0;
+                        },
+                        triggerCompaction: async (request) => {
+                          try {
+                            const { compactEmbeddedPiSession } =
+                              await import("../../agents/pi-embedded-runner/compact.queued.js");
+                            // Thread the session's active provider/model through so
+                            // volitional compaction doesn't fall back to DEFAULT_PROVIDER/MODEL.
+                            // Use inner-scope provider/model from the fallback
+                            // dispatcher (line 805) so a fallback-selected model
+                            // gets the compaction request, not the persisted primary
+                            // (which may be in cooldown — would re-fail immediately).
+                            // Thread authProfileId only when the inner-scope provider
+                            // matches the persisted primary
+                            // (the persisted profile is keyed to the primary). On fallback
+                            // to a different provider, leave undefined so resolveEmbedded-
+                            // CompactionTarget picks the default profile for that provider.
+                            // Mirrors the pattern at line ~841 (runCliAgent dispatch).
+                            const compactionAuthProfileId =
+                              provider === params.followupRun.run.provider
+                                ? params.followupRun.run.authProfileId
+                                : undefined;
+                            const result = await compactEmbeddedPiSession({
+                              sessionId: params.followupRun.run.sessionId ?? "",
+                              runId: request.runId ?? runId,
+                              sessionKey: params.sessionKey,
+                              sessionFile: params.followupRun.run.sessionFile ?? "",
+                              workspaceDir: params.followupRun.run.workspaceDir ?? process.cwd(),
+                              messageProvider: params.followupRun.run.messageProvider,
+                              provider,
+                              model,
+                              authProfileId: compactionAuthProfileId,
+                              trigger: request.trigger,
+                              diagId: request.diagId,
+                            });
+                            // Honor the real result instead of unconditionally claiming
+                            // success; otherwise compaction telemetry lies and the
+                            // failure is invisible to the caller.
+                            return {
+                              ok: result.ok,
+                              compacted: result.compacted,
+                              reason: result.reason,
+                            };
+                          } catch (err) {
+                            return {
+                              ok: false,
+                              compacted: false,
+                              reason: err instanceof Error ? err.message : String(err),
+                            };
+                          }
+                        },
+                      }
+                    : undefined,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,
                 blockReplyChunking: params.blockReplyChunking,
                 onPartialReply: async (payload) => {
@@ -1625,6 +1772,12 @@ export async function runAgentTurnWithFallback(params: {
                     evt.stream === "lifecycle" && typeof evt.data.phase === "string";
                   if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
                     notifyAgentRunStart();
+                  }
+                  if (
+                    evt.stream === "lifecycle" &&
+                    readStringValue(evt.data.livenessState) === "blocked"
+                  ) {
+                    await surfaceBlockedLivenessState();
                   }
                   // Trigger typing when tools start executing.
                   // Must await to ensure typing indicator starts before tool summaries are emitted.
@@ -1835,7 +1988,10 @@ export async function runAgentTurnWithFallback(params: {
                 result.meta?.agentMeta?.compactionCount ?? 0,
               );
               attemptCompactionCount = Math.max(attemptCompactionCount, resultCompactionCount);
-              return result;
+              return {
+                result,
+                continueWorkRequest: attemptContinueWorkRequest,
+              };
             } catch (err) {
               if (rollbackFallbackCandidateSelection) {
                 try {
@@ -1855,7 +2011,16 @@ export async function runAgentTurnWithFallback(params: {
           })();
         },
       });
-      runResult = fallbackResult.result;
+      const fallbackRunResult = fallbackResult.result as
+        | EmbeddedPiAgentRunResult
+        | { result: EmbeddedPiAgentRunResult; continueWorkRequest?: ContinueWorkRequest };
+      if (isContinuationWrappedRunResult(fallbackRunResult)) {
+        runResult = fallbackRunResult.result;
+        continueWorkRequest = fallbackRunResult.continueWorkRequest;
+      } else {
+        runResult = fallbackRunResult;
+        continueWorkRequest = undefined;
+      }
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;
       fallbackAttempts = Array.isArray(fallbackResult.attempts)
@@ -2058,11 +2223,24 @@ export async function runAgentTurnWithFallback(params: {
           }
 
           // Keep the in-memory snapshot consistent with the on-disk store reset.
-          delete params.activeSessionStore[sessionKey];
+          {
+            const memResolved = resolveSessionStoreEntry({
+              store: params.activeSessionStore,
+              sessionKey,
+            });
+            delete params.activeSessionStore[memResolved.normalizedKey];
+            for (const legacyKey of memResolved.legacyKeys) {
+              delete params.activeSessionStore[legacyKey];
+            }
+          }
 
           // Remove session entry from store using a fresh, locked snapshot.
           await updateSessionStore(params.storePath, (store) => {
-            delete store[sessionKey];
+            const resolved = resolveSessionStoreEntry({ store, sessionKey });
+            delete store[resolved.normalizedKey];
+            for (const legacyKey of resolved.legacyKeys) {
+              delete store[legacyKey];
+            }
           });
         } catch (cleanupErr) {
           defaultRuntime.error(
@@ -2161,6 +2339,30 @@ export async function runAgentTurnWithFallback(params: {
   // overflow errors were returned as embedded error payloads.
   const finalEmbeddedError = runResult?.meta?.error;
   const hasPayloadText = runResult?.payloads?.some((p) => normalizeOptionalString(p.text));
+  // #475+#487 reconcile (option c): #487 prepends a standalone blocked-liveness
+  // notice payload; #475 (#481) prefixes existing error payloads with a blocked
+  // marker. Both fire on `livenessState === "blocked"`, producing double-emit
+  // (notice + prefixed-error) when both an error payload and blocked liveness
+  // are present. Tests written against #475's contract expect single-payload
+  // outcomes. Gate #487's prepend on the absence of an error payload so the
+  // notice surfaces only as the silent-blocked fallback (no error to prefix);
+  // when an error payload is present, #475's prefix carries the blocked-state
+  // signal alone.
+  const hasErrorPayload = runResult?.payloads?.some((p) => p.isError) ?? false;
+  if (
+    runResult?.meta?.livenessState === "blocked" &&
+    !didSurfaceBlockedLivenessState &&
+    !hasErrorPayload
+  ) {
+    runResult.payloads = [
+      {
+        text: BLOCKED_LIVENESS_NOTICE_TEXT,
+        isError: true,
+      },
+      ...(runResult.payloads ?? []),
+    ];
+    didSurfaceBlockedLivenessState = true;
+  }
   if (finalEmbeddedError && !hasPayloadText) {
     const errorMsg = finalEmbeddedError.message ?? "";
     if (isContextOverflowError(errorMsg)) {
@@ -2172,6 +2374,46 @@ export async function runAgentTurnWithFallback(params: {
         }),
       };
     }
+  }
+
+  // #475: surface terminal blocked livenessState as a channel-visible marker.
+  // The embedded runner sets `meta.livenessState = "blocked"` on terminal
+  // give-up paths (compaction-failure cap, strict-agentic blocked, role-ordering
+  // give-up, etc.) but channel consumers never read this metadata. Operators
+  // could not distinguish a normal error reply from a session that gave up
+  // after exhausting compaction retries. Inject a one-line marker prefix on the
+  // outbound error payload(s) when liveness is blocked AND the payload hasn't
+  // already been auto-recovered or replaced by a more specific marker.
+  // (B-shape cascade-phase observability is tracked separately as a follow-up
+  // PR — it requires a new typing/status protocol surface.)
+  const finalLivenessState = runResult?.meta?.livenessState;
+  if (
+    runResult &&
+    finalLivenessState === "blocked" &&
+    Array.isArray(runResult.payloads) &&
+    runResult.payloads.length > 0
+  ) {
+    const blockedMarker = "⛔ Session blocked: ";
+    runResult.payloads = runResult.payloads.map((payload) => {
+      if (!payload.isError) {
+        return payload;
+      }
+      const text = normalizeOptionalString(payload.text);
+      if (!text) {
+        return payload;
+      }
+      if (text.startsWith(blockedMarker)) {
+        return payload;
+      }
+      // #475+#487 reconcile: skip the standalone blocked-liveness notice
+      // sentinel so it surfaces unprefixed. The notice is itself a blocked-
+      // state marker; prefixing it produces a "⛔ Session blocked: ⚠️ Agent
+      // liveness: blocked..." chimera that fails the single-marker contract.
+      if (text.startsWith(BLOCKED_LIVENESS_NOTICE_TEXT)) {
+        return payload;
+      }
+      return { ...payload, text: `${blockedMarker}${text}` };
+    });
   }
 
   // Surface rate limit and overload errors that occur mid-turn (after tool
@@ -2231,5 +2473,6 @@ export async function runAgentTurnWithFallback(params: {
     didLogHeartbeatStrip,
     autoCompactionCount,
     directlySentBlockKeys: directlySentBlockKeys.size > 0 ? directlySentBlockKeys : undefined,
+    continueWorkRequest,
   };
 }

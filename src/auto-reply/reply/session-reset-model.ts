@@ -2,6 +2,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStoreEntry, updateSessionStore } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -120,17 +121,21 @@ function applySelectionToSession(params: {
   if (!updated) {
     return;
   }
-  sessionStore[sessionKey] = sessionEntry;
+  const memResolved = resolveSessionStoreEntry({ store: sessionStore, sessionKey });
+  sessionStore[memResolved.normalizedKey] = sessionEntry;
+  for (const legacyKey of memResolved.legacyKeys) {
+    delete sessionStore[legacyKey];
+  }
   if (storePath) {
-    void import("../../config/sessions.js")
-      .then(({ updateSessionStore }) =>
-        updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        }),
-      )
-      .catch(() => {
-        // Ignore persistence errors; session still proceeds.
-      });
+    updateSessionStore(storePath, (store) => {
+      const resolved = resolveSessionStoreEntry({ store, sessionKey });
+      store[resolved.normalizedKey] = sessionEntry;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
+    }).catch(() => {
+      // Ignore persistence errors; session still proceeds.
+    });
   }
 }
 

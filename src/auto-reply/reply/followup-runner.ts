@@ -33,6 +33,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveReplyRunFireReason } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -278,6 +279,11 @@ export function createFollowupRunner(params: {
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
                 trigger: "user",
+                fireReason: resolveReplyRunFireReason({
+                  opts,
+                  drainsContinuationDelegateQueue: run.drainsContinuationDelegateQueue === true,
+                }),
+                parentRunId: opts?.parentRunId,
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
                 agentAccountId: run.agentAccountId,
@@ -331,6 +337,70 @@ export function createFollowupRunner(params: {
                   bootstrapPromptWarningSignaturesSeen[
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
+                // Continuation: thread requestCompactionOpts so request_compaction
+                // is callable on queued followup turns, not just the first turn.
+                requestCompactionOpts:
+                  runtimeConfig?.agents?.defaults?.continuation?.enabled === true
+                    ? {
+                        sessionId: run.sessionId,
+                        getContextUsage: () => {
+                          // Followup path doesn't have a live token count;
+                          // returning null makes request_compaction reply
+                          // with guard "context_unknown" instead of pretending
+                          // usage is 0% and tripping the 70% floor with a
+                          // misleading reason. Main-session callers (see
+                          // agent-runner-execution.ts) supply the real ratio
+                          // from sessionTokenInfo.
+                          return null;
+                        },
+                        triggerCompaction: async (request) => {
+                          try {
+                            const { compactEmbeddedPiSession } =
+                              await import("../../agents/pi-embedded-runner/compact.queued.js");
+                            // Thread the session's active provider/model through so
+                            // volitional compaction doesn't fall back to DEFAULT_PROVIDER/MODEL.
+                            // Use inner-scope provider/model from the fallback
+                            // dispatcher (line 207) so a fallback-selected model
+                            // gets the compaction request, not the persisted primary
+                            // (which may be in cooldown — would re-fail immediately).
+                            // Thread authProfileId only when the inner-scope
+                            // provider matches the persisted primary
+                            // (the persisted profile is keyed to the primary). On fallback
+                            // to a different provider, leave undefined so resolveEmbedded-
+                            // CompactionTarget picks the default profile for that provider.
+                            const compactionAuthProfileId =
+                              provider === run.provider ? run.authProfileId : undefined;
+                            const result = await compactEmbeddedPiSession({
+                              sessionId: run.sessionId ?? "",
+                              runId: request.runId ?? runId,
+                              sessionKey: run.sessionKey,
+                              sessionFile: run.sessionFile ?? "",
+                              workspaceDir: run.workspaceDir ?? process.cwd(),
+                              messageProvider: run.messageProvider,
+                              provider,
+                              model,
+                              authProfileId: compactionAuthProfileId,
+                              trigger: request.trigger,
+                              diagId: request.diagId,
+                            });
+                            // Honor the real result instead of unconditionally
+                            // claiming success; otherwise compaction telemetry lies
+                            // and the failure is invisible to the caller.
+                            return {
+                              ok: result.ok,
+                              compacted: result.compacted,
+                              reason: result.reason,
+                            };
+                          } catch (err) {
+                            return {
+                              ok: false,
+                              compacted: false,
+                              reason: err instanceof Error ? err.message : String(err),
+                            };
+                          }
+                        },
+                      }
+                    : undefined,
                 onAgentEvent: (evt) => {
                   if (evt.stream !== "compaction") {
                     return;
@@ -364,6 +434,99 @@ export function createFollowupRunner(params: {
         replyOperation.fail("run_failed", err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
+      }
+
+      // Consume and dispatch continue_delegate queue enqueued during this
+      // followup turn. Parallels the main-session dispatch in agent-runner.ts:
+      // without this, delegates queued by continue_work-triggered heartbeats
+      // (or any followup turn) stay in the queue until the NEXT inbound
+      // message arrives to trigger the main-session dispatch. RFC §3.2.
+      if (runtimeConfig?.agents?.defaults?.continuation?.enabled === true && sessionKey) {
+        const [
+          { dispatchToolDelegates },
+          { resolveLiveContinuationRuntimeConfig },
+          { loadContinuationChainState, persistContinuationChainState },
+          { updateSessionStore, resolveSessionStoreEntry },
+        ] = await Promise.all([
+          import("../continuation/delegate-dispatch.js"),
+          import("../continuation/config.js"),
+          import("../continuation/state.js"),
+          import("../../config/sessions/store.js"),
+        ]);
+        const tailUsage = runResult.meta?.agentMeta?.usage;
+        const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
+        const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+        const chainState = loadContinuationChainState(tailEntry, turnTokens);
+        const dispatchResult = await dispatchToolDelegates({
+          sessionKey,
+          chainState,
+          ctx: {
+            sessionKey,
+            agentChannel: queued.originatingChannel ?? undefined,
+            agentAccountId: queued.originatingAccountId ?? undefined,
+            agentTo: queued.originatingTo ?? undefined,
+            agentThreadId: queued.originatingThreadId ?? undefined,
+          },
+          maxChainLength: resolveLiveContinuationRuntimeConfig(runtimeConfig).maxChainLength,
+          // Hedge re-arm must see fresh chain state.
+          loadFreshChainState: () => loadContinuationChainState(tailEntry, 0),
+        });
+        // Persist the advanced chain state back to the session
+        // entry after dispatch. Without this the followup-path counter never
+        // advances and `maxChainLength` enforcement breaks across hops.
+        //
+        // Persist even when `dispatched === 0`. The chainState
+        // returned from `dispatchToolDelegates` carries the fresh
+        // `accumulatedChainTokens` from `loadContinuationChainState(tailEntry,
+        // turnTokens)` regardless of whether any delegate spawned. Guarding on
+        // `dispatched > 0` drops the token total on followup-only chains
+        // (delayed-only delegates, all-deferred dispatches, or pure
+        // continue_work turns), causing token-budget drift across hops.
+        if (dispatchResult && tailEntry) {
+          persistContinuationChainState({
+            sessionEntry: tailEntry,
+            count: dispatchResult.chainState.currentChainCount,
+            startedAt: dispatchResult.chainState.chainStartedAt,
+            tokens: dispatchResult.chainState.accumulatedChainTokens,
+          });
+          // The in-memory mutation above is orphaned for disk. The followup
+          // path's only durable writer is `persistRunSessionUsage`
+          // → `updateSessionStoreEntry`, which `loadSessionStore(...,
+          // skipCache: true)` and patches usage fields only —
+          // `continuationChain*` is not in that patch shape. Without an
+          // explicit `updateSessionStore` call the followup-only token chain
+          // never reaches disk; cost-cap and `maxChainLength` enforcement
+          // see stale values across cache eviction or gateway restart.
+          //
+          // Mirror agent-runner's explicit `updateSessionStore` with
+          // `resolveSessionStoreEntry`
+          // legacy-key cleanup so the chain fields land alongside the
+          // disk-canonical entry.
+          if (storePath && sessionKey) {
+            try {
+              await updateSessionStore(storePath, (store) => {
+                const resolved = resolveSessionStoreEntry({ store, sessionKey });
+                if (resolved.existing) {
+                  store[resolved.normalizedKey] = {
+                    ...resolved.existing,
+                    continuationChainCount: dispatchResult.chainState.currentChainCount,
+                    continuationChainStartedAt: dispatchResult.chainState.chainStartedAt,
+                    continuationChainTokens: dispatchResult.chainState.accumulatedChainTokens,
+                  };
+                  for (const legacyKey of resolved.legacyKeys) {
+                    delete store[legacyKey];
+                  }
+                }
+              });
+            } catch (err) {
+              // Mirror agent-runner.ts's defensive log: persistence failure
+              // must not break the followup reply itself.
+              defaultRuntime.error?.(
+                `[followup-runner] failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
+              );
+            }
+          }
+        }
       }
 
       const usage = runResult.meta?.agentMeta?.usage;

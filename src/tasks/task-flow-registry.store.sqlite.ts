@@ -15,6 +15,7 @@ type FlowRegistryRow = {
   sync_mode: TaskFlowSyncMode | null;
   shape?: string | null;
   owner_key: string;
+  chain_id: string | null;
   requester_origin_json: string | null;
   controller_id: string | null;
   revision: number | bigint | null;
@@ -91,6 +92,7 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
     ownerKey: row.owner_key,
+    ...(row.chain_id ? { chainId: row.chain_id } : {}),
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
     revision: normalizeNumber(row.revision) ?? 0,
@@ -114,6 +116,7 @@ function bindFlowRecord(record: TaskFlowRecord) {
     flow_id: record.flowId,
     sync_mode: record.syncMode,
     owner_key: record.ownerKey,
+    chain_id: record.chainId ?? null,
     requester_origin_json: serializeJson(record.requesterOrigin),
     controller_id: record.controllerId ?? null,
     revision: record.revision,
@@ -140,6 +143,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         sync_mode,
         shape,
         owner_key,
+        chain_id,
         requester_origin_json,
         controller_id,
         revision,
@@ -163,6 +167,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         flow_id,
         sync_mode,
         owner_key,
+        chain_id,
         requester_origin_json,
         controller_id,
         revision,
@@ -182,6 +187,7 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
         @flow_id,
         @sync_mode,
         @owner_key,
+        @chain_id,
         @requester_origin_json,
         @controller_id,
         @revision,
@@ -201,6 +207,10 @@ function createStatements(db: DatabaseSync): FlowRegistryStatements {
       ON CONFLICT(flow_id) DO UPDATE SET
         sync_mode = excluded.sync_mode,
         owner_key = excluded.owner_key,
+        -- chain_id is intentionally NOT updated on conflict:
+        -- chain_id is set-once at create-time and represents the originating
+        -- continuation chain; UPDATE-on-hop is deferred-by-design so that the
+        -- column remains a stable audit-correlation key.
         requester_origin_json = excluded.requester_origin_json,
         controller_id = excluded.controller_id,
         revision = excluded.revision,
@@ -248,7 +258,8 @@ function ensureSchema(db: DatabaseSync) {
       cancel_requested_at INTEGER,
       created_at INTEGER NOT NULL,
       updated_at INTEGER NOT NULL,
-      ended_at INTEGER
+      ended_at INTEGER,
+      chain_id TEXT
     );
   `);
   if (!hasFlowRunsColumn(db, "owner_key") && hasFlowRunsColumn(db, "owner_session_key")) {
@@ -313,9 +324,16 @@ function ensureSchema(db: DatabaseSync) {
   if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
   }
+  // Continuation chain-of-origin column. Idempotent-by-PRAGMA-guard
+  // mirroring the state_json model above. Set-once at create-time; updates on
+  // later hops intentionally leave the origin id stable for audit queries.
+  if (!hasFlowRunsColumn(db, "chain_id")) {
+    db.exec(`ALTER TABLE flow_runs ADD COLUMN chain_id TEXT;`);
+  }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_updated_at ON flow_runs(updated_at);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_chain_id ON flow_runs(chain_id);`);
 }
 
 function ensureFlowRegistryPermissions(pathname: string) {

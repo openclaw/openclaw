@@ -5,6 +5,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
+import { hasCotFramePrefix } from "./cot-frame.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -125,11 +126,18 @@ export function createBlockReplyDeliveryHandler(params: {
     const mediaNormalizedPayload = params.normalizeMediaPaths
       ? await params.normalizeMediaPaths(normalized.payload)
       : normalized.payload;
-    const blockPayload = copyReplyPayloadMetadata(
+    let blockPayload = copyReplyPayloadMetadata(
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
     );
     const blockHasMedia = resolveSendableOutboundReplyParts(blockPayload).hasMedia;
+
+    if (blockPayload.text && hasCotFramePrefix(blockPayload.text)) {
+      if (!blockHasMedia) {
+        return;
+      }
+      blockPayload = { ...blockPayload, text: undefined };
+    }
 
     // Skip empty payloads unless they have audioAsVoice flag (need to track it).
     if (!blockPayload.text && !blockHasMedia && !blockPayload.audioAsVoice) {
