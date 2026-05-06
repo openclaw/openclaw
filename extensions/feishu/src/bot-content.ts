@@ -130,6 +130,28 @@ export function resolveFeishuGroupSession(params: {
   };
 }
 
+export function isFeishuTopicGroupSessionScope(scope: GroupSessionScope | undefined): boolean {
+  return scope === "group_topic" || scope === "group_topic_sender";
+}
+
+export function buildFeishuGroupTopicPromptHint(params: {
+  groupSessionScope?: GroupSessionScope;
+  topicRootMessageId?: string | null;
+}): string | undefined {
+  if (!isFeishuTopicGroupSessionScope(params.groupSessionScope)) {
+    return undefined;
+  }
+  const messageId = params.topicRootMessageId?.trim();
+  if (!messageId) {
+    return undefined;
+  }
+  return [
+    `This Feishu session is scoped to a topic thread (groupSessionScope=${params.groupSessionScope}).`,
+    `To post visible output inside this topic thread, use the message tool with action="thread-reply" and messageId="${messageId}".`,
+    `Do not use action="send" for this group: a plain send will post to the main chat outside the topic thread and will not appear here.`,
+  ].join(" ");
+}
+
 export function parseMessageContent(content: string, messageType: string): string {
   if (messageType === "post") {
     return parsePostContent(content).textContent;

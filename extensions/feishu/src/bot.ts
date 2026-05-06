@@ -21,6 +21,7 @@ import { resolveOpenDmAllowlistAccess } from "openclaw/plugin-sdk/security-runti
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
+  buildFeishuGroupTopicPromptHint,
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
   normalizeMentions,
@@ -1273,7 +1274,17 @@ export async function handleFeishuMessage(params: {
         CommandAuthorized: commandAuthorized,
         OriginatingChannel: "feishu" as const,
         OriginatingTo: feishuTo,
-        GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
+        GroupSystemPrompt: isGroup
+          ? [
+              normalizeOptionalString(groupConfig?.systemPrompt),
+              buildFeishuGroupTopicPromptHint({
+                groupSessionScope: groupSession?.groupSessionScope,
+                topicRootMessageId: ctx.rootId ?? ctx.messageId,
+              }),
+            ]
+              .filter((part): part is string => Boolean(part))
+              .join("\n\n") || undefined
+          : undefined,
         ...mediaPayload,
         ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
       });
