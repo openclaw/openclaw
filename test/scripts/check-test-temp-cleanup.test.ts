@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectTestTempCleanupFindings, main } from "../../scripts/check-test-temp-cleanup.mjs";
+import {
+  collectTestTempCleanupFindings,
+  main,
+  renderTestTempCleanupReport,
+} from "../../scripts/check-test-temp-cleanup.mjs";
 
 const tempDirs: string[] = [];
 
@@ -85,19 +89,28 @@ describe("check-test-temp-cleanup", () => {
   });
 
   it("supports json output for tooling", async () => {
+    const root = await createFixtureRepo({
+      relativePath: "src/json.test.ts",
+      source: `import fs from "node:fs";\nimport os from "node:os";\nimport path from "node:path";\nconst dir = fs.mkdtempSync(path.join(os.tmpdir(), "json-"));\nconsole.log(dir);\n`,
+    });
     let stdout = "";
-    const exitCode = await main(["--json"], {
-      stdout: { write: (chunk) => (stdout += chunk) },
-      stderr: { write: () => 0 },
+    const result = await renderTestTempCleanupReport({
+      root,
+      json: true,
+      io: {
+        stdout: { write: (chunk) => ((stdout += chunk), chunk.length) },
+        stderr: { write: () => 0 },
+      },
     });
 
-    expect(exitCode).toBe(1);
+    expect(result.exitCode).toBe(1);
     expect(() => JSON.parse(stdout)).not.toThrow();
     const parsed = JSON.parse(stdout) as Array<{ file?: unknown; severity?: unknown }>;
-    expect(parsed.length).toBeGreaterThan(0);
-    expect(parsed.some((entry) => typeof entry.file === "string")).toBe(true);
-    expect(parsed.some((entry) => entry.severity === "error" || entry.severity === "warning")).toBe(
-      true,
-    );
+    expect(parsed).toEqual([
+      expect.objectContaining({
+        file: "src/json.test.ts",
+        severity: "error",
+      }),
+    ]);
   });
 });
