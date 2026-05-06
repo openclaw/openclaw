@@ -994,15 +994,13 @@ export async function runPreparedReply(
       authProfileId,
       authProfileIdSource,
       thinkLevel: resolvedThinkLevel,
-      fastMode: useFastReplyRuntime
-        ? false
-        : resolveFastModeState({
-            cfg,
-            provider,
-            model,
-            agentId,
-            sessionEntry: preparedSessionState.sessionEntry,
-          }).enabled,
+      fastMode: resolveFastModeState({
+        cfg,
+        provider,
+        model,
+        agentId,
+        sessionEntry: preparedSessionState.sessionEntry,
+      }).enabled,
       verboseLevel: resolvedVerboseLevel,
       reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
