@@ -1124,6 +1124,12 @@ export const OpenClawSchema = z
       )
       .optional(),
     proxy: ProxyConfigSchema,
+    trajectory: z
+      .object({
+        flushTimeoutMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((cfg, ctx) => {

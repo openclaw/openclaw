@@ -40,6 +40,28 @@ type TrajectoryRuntimeInit = {
   writer?: QueuedFileWriter;
 };
 
+/**
+ * Resolve the trajectory flush timeout (ms) from config or env.
+ * Reads, in order:
+ *  1. cfg.trajectory.flushTimeoutMs (openclaw.json)
+ *  2. env.OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS
+ *  3. undefined (no periodic flush)
+ */
+function resolveFlushTimeoutMs(cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv): number | undefined {
+  const cfgValue = cfg?.trajectory?.flushTimeoutMs;
+  if (typeof cfgValue === "number" && cfgValue > 0) {
+    return cfgValue;
+  }
+  const envValue = env?.OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS?.trim();
+  if (envValue) {
+    const parsed = parseInt(envValue, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
 type TrajectoryRuntimeRecorder = {
   enabled: true;
   filePath: string;
@@ -272,6 +294,32 @@ export function createTrajectoryRuntimeRecorder(
   let droppedEventBytes = 0;
   let captureStopped = false;
 
+  // Periodic flush timer (configurable via cfg or env).
+  const flushTimeoutMs = resolveFlushTimeoutMs(params.cfg, env);
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastFlushTime = Date.now();
+
+  const scheduleFlush = () => {
+    if (flushTimer || flushTimeoutMs === undefined) {
+      return;
+    }
+    flushTimer = setTimeout(async () => {
+      flushTimer = null;
+      await writer.flush();
+      lastFlushTime = Date.now();
+    }, flushTimeoutMs);
+  };
+
+  const cancelFlushTimer = () => {
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+  };
+
+  // Initial schedule.
+  scheduleFlush();
+
   const writeBoundedLine = (line: string, options: { reserveSentinel: boolean }): boolean => {
     const jsonlLine = `${line}\n`;
     const lineBytes = Buffer.byteLength(jsonlLine, "utf8");
@@ -338,8 +386,14 @@ export function createTrajectoryRuntimeRecorder(
         return;
       }
       writeBoundedLine(line, { reserveSentinel: true });
+
+      // Do NOT reschedule on each event — timer runs independently once started.
+      // scheduleFlush() is called once at initialization.
     },
     flush: async () => {
+      // Cancel any pending periodic flush.
+      cancelFlushTimer();
+
       if (droppedEvents > 0) {
         const line = buildEventLine("trace.truncated", {
           reason: "trajectory-runtime-file-size-limit",
@@ -357,6 +411,7 @@ export function createTrajectoryRuntimeRecorder(
       if (!params.writer) {
         writers.delete(filePath);
       }
+      // Timer already cancelled above; do not reschedule after final flush.
     },
   };
 }
