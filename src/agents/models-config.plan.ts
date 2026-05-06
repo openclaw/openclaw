@@ -56,24 +56,31 @@ export async function resolveProvidersForModelsJsonWithDeps(
 ): Promise<Record<string, ProviderConfig>> {
   const { cfg, agentDir, env } = params;
   const explicitProviders = cfg.models?.providers ?? {};
-  const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
-  const implicitProviders = await resolveImplicitProvidersImpl({
-    agentDir,
-    config: cfg,
-    env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    explicitProviders,
-    ...(params.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
-      : {}),
-    ...(params.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
-      : {}),
-    ...(params.providerDiscoveryTimeoutMs !== undefined
-      ? { providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs }
-      : {}),
-    ...(params.providerDiscoveryEntriesOnly === true ? { providerDiscoveryEntriesOnly: true } : {}),
-  });
+  const mode = cfg.models?.mode ?? "merge";
+  let implicitProviders: Record<string, ProviderConfig> = {};
+  if (mode !== "replace") {
+    const resolveImplicitProvidersImpl = deps?.resolveImplicitProviders ?? resolveImplicitProviders;
+    implicitProviders =
+      (await resolveImplicitProvidersImpl({
+        agentDir,
+        config: cfg,
+        env,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        explicitProviders,
+        ...(params.pluginMetadataSnapshot
+          ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
+          : {}),
+        ...(params.providerDiscoveryProviderIds
+          ? { providerDiscoveryProviderIds: params.providerDiscoveryProviderIds }
+          : {}),
+        ...(params.providerDiscoveryTimeoutMs !== undefined
+          ? { providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs }
+          : {}),
+        ...(params.providerDiscoveryEntriesOnly === true
+          ? { providerDiscoveryEntriesOnly: true }
+          : {}),
+      })) ?? {};
+  }
   return mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,
