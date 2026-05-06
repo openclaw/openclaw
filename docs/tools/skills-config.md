@@ -89,6 +89,11 @@ Rules:
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
+- `OPENCLAW_SKILLS_WATCH_POLLING=1`: optional env override to force chokidar polling for skill
+  watchers when the underlying filesystem misses native events.
+- `OPENCLAW_SKILLS_WATCH_POLL_INTERVAL_MS=<ms>`: optional env override for the polling interval
+  used with `OPENCLAW_SKILLS_WATCH_POLLING`. Invalid values, including values below `1`, are
+  ignored.
 - `install.preferBrew`: prefer brew installers when available (default: true).
 - `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
   This only affects **skill installs**; the Gateway runtime should still be Node
