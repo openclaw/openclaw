@@ -176,8 +176,11 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     });
   }
 
-  // Prefer binding by device identity (stable across reconnects / per-call clients like callGateway()).
-  // Fallback to connId only when device identity is not available.
+  // Prefer binding by device identity: it is stable across reconnects and per-call clients like
+  // callGateway(). Shared-auth local backend clients intentionally omit device identity, so their
+  // websocket connId is not a stable security boundary. For those records, allow only callers that
+  // also lack a device identity and rely on the approval id, node binding, command binding, and
+  // allow-once consumption below.
   const snapshotDeviceId = snapshot.requestedByDeviceId ?? null;
   const clientDeviceId = opts.client?.connect?.device?.id ?? null;
   if (snapshotDeviceId) {
@@ -188,13 +191,10 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
         details: { runId },
       });
     }
-  } else if (
-    snapshot.requestedByConnId &&
-    snapshot.requestedByConnId !== (opts.client?.connId ?? null)
-  ) {
+  } else if (clientDeviceId) {
     return systemRunApprovalGuardError({
-      code: "APPROVAL_CLIENT_MISMATCH",
-      message: "approval id not valid for this client",
+      code: "APPROVAL_DEVICE_MISMATCH",
+      message: "approval id not valid for this device",
       details: { runId },
     });
   }

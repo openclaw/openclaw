@@ -426,4 +426,52 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     });
     expectRejectedForwardingResult(result, "APPROVAL_NODE_MISMATCH", "not valid for this node");
   });
+
+  test("accepts no-device approvals across per-call backend connections", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "approval-request-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "gateway-client";
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: {
+        connId: "node-invoke-conn",
+        connect: {
+          scopes: ["operator.write"],
+          device: undefined,
+        },
+      },
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects no-device approvals replayed by a device-bound caller", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.requestedByConnId = "approval-request-conn";
+    record.requestedByDeviceId = null;
+    record.requestedByClientId = "gateway-client";
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expectRejectedForwardingResult(result, "APPROVAL_DEVICE_MISMATCH", "not valid for this device");
+  });
 });
