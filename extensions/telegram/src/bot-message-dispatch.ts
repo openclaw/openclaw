@@ -1618,7 +1618,8 @@ export const dispatchTelegramMessage = async ({
     !dispatchError &&
     !deliverySummary.delivered &&
     !suppressSilentReplyFallback &&
-    !queuedFinal
+    !queuedFinal &&
+    isGroup
   ) {
     const policySessionKey =
       ctxPayload.CommandSource === "native"
