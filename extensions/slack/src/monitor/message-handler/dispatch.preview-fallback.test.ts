@@ -1091,6 +1091,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(session.stopped).toBe(true);
   });
 
+  it("routes pending native stream text through chunked sender for unexpected finalize failures", async () => {
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: FINAL_REPLY_TEXT,
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(
+        FINAL_REPLY_TEXT,
+        "method_not_supported_for_channel_type",
+      ),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(postMessageMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
+      }),
+    );
+    expect(session.stopped).toBe(true);
+  });
+
   it("routes all pending native stream text through chunked sender when an append flush fails", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [

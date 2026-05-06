@@ -83,6 +83,40 @@ describe("stopSlackStream finalize error handling", () => {
     expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("hello world");
   });
 
+  it("throws SlackStreamNotDeliveredError for unexpected finalize codes while text is buffered", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => {
+        throw slackApiError("method_not_supported_for_channel_type");
+      },
+    });
+    await appendSlackStream({ session, text: "short thread reply" });
+
+    const thrown = await stopSlackStream({ session }).catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe(
+      "method_not_supported_for_channel_type",
+    );
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("short thread reply");
+  });
+
+  it("throws SlackStreamNotDeliveredError for non-Slack stop errors while text is buffered", async () => {
+    const session = makeSession({
+      appendImpl: async () => null,
+      stopImpl: async () => {
+        throw new Error("socket reset");
+      },
+    });
+    await appendSlackStream({ session, text: "locally buffered reply" });
+
+    const thrown = await stopSlackStream({ session }).catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(SlackStreamNotDeliveredError);
+    expect((thrown as SlackStreamNotDeliveredError).slackCode).toBe("unknown");
+    expect((thrown as SlackStreamNotDeliveredError).pendingText).toBe("locally buffered reply");
+  });
+
   it("clears pendingText after an append flush is acknowledged by Slack", async () => {
     const session = makeSession({
       appendImpl: async () => ({ ts: "1700000000.100203" }),
