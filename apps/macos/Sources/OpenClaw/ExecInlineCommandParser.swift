@@ -15,6 +15,39 @@ enum ExecInlineCommandParser {
         "+o",
     ])
 
+    static func hasPosixInteractiveStartupBeforeInlineCommand(
+        _ argv: [String],
+        flags: Set<String>) -> Bool
+    {
+        var idx = 1
+        var sawStartupOption = false
+        while idx < argv.count {
+            let token = argv[idx].trimmingCharacters(in: .whitespacesAndNewlines)
+            if token.isEmpty {
+                idx += 1
+                continue
+            }
+            if token == "--" {
+                return false
+            }
+            if self.isPosixInteractiveStartupOption(token) {
+                sawStartupOption = true
+            }
+            if flags.contains(token) || self.isCombinedCommandFlag(token) {
+                return sawStartupOption
+            }
+            if !token.hasPrefix("-"), !token.hasPrefix("+") {
+                return false
+            }
+            if self.consumesSeparateValue(token) {
+                idx += 2
+                continue
+            }
+            idx += 1
+        }
+        return false
+    }
+
     static func findMatch(
         _ argv: [String],
         flags: Set<String>,
@@ -80,5 +113,22 @@ enum ExecInlineCommandParser {
 
     private static func consumesSeparateValue(_ token: String) -> Bool {
         return self.posixShellOptionsWithSeparateValues.contains(token)
+    }
+
+    private static func isPosixInteractiveStartupOption(_ token: String) -> Bool {
+        if token == "--init-file" || token == "--rcfile" {
+            return true
+        }
+        if token.hasPrefix("--init-file=") || token.hasPrefix("--rcfile=") {
+            return true
+        }
+        let chars = Array(token)
+        guard chars.count >= 2, chars[0] == "-", chars[1] != "-" else {
+            return false
+        }
+        if chars.dropFirst().contains("-") {
+            return false
+        }
+        return chars.dropFirst().contains("i")
     }
 }

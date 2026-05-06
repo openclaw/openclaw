@@ -157,6 +157,21 @@ struct ExecAllowlistTests {
         }
     }
 
+    @Test func `resolve for allowlist fails closed for interactive posix shell wrappers`() {
+        for command in [
+            ["/bin/bash", "-i", "-c", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "-ic", "/usr/bin/printf safe_marker"],
+            ["/bin/bash", "--rcfile", "/tmp/payload.sh", "-i", "-c", "/usr/bin/printf safe_marker"],
+        ] {
+            let resolutions = ExecCommandResolution.resolveForAllowlist(
+                command: command,
+                rawCommand: nil,
+                cwd: nil,
+                env: ["PATH": "/usr/bin:/bin"])
+            #expect(resolutions.isEmpty)
+        }
+    }
+
     @Test func `resolve for allowlist uses wrapper argv payload even with canonical raw command`() {
         let command = ["/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
         let canonicalRaw = "/bin/sh -lc \"echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test\""

@@ -6,9 +6,10 @@ enum ExecShellWrapperParser {
         let command: String?
 
         static let notWrapper = ParsedShellWrapper(isWrapper: false, command: nil)
+        static let blockedWrapper = ParsedShellWrapper(isWrapper: true, command: nil)
     }
 
-    private enum Kind {
+    private enum Kind: Equatable {
         case posix
         case cmd
         case powershell
@@ -52,6 +53,13 @@ enum ExecShellWrapperParser {
 
         guard let spec = self.wrapperSpecs.first(where: { $0.names.contains(base0) }) else {
             return .notWrapper
+        }
+        if spec.kind == .posix,
+           ExecInlineCommandParser.hasPosixInteractiveStartupBeforeInlineCommand(
+               command,
+               flags: self.posixInlineFlags)
+        {
+            return .blockedWrapper
         }
         guard let payload = self.extractPayload(command: command, spec: spec) else {
             return .notWrapper
