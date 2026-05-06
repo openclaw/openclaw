@@ -41,6 +41,9 @@ const TELEGRAM_DISPATCHER_KEEP_ALIVE_TIMEOUT_MS = 30_000;
 const TELEGRAM_DISPATCHER_KEEP_ALIVE_MAX_TIMEOUT_MS = 600_000;
 const TELEGRAM_DISPATCHER_CONNECTIONS_PER_ORIGIN = 10;
 const TELEGRAM_DISPATCHER_PIPELINING = 1;
+const TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD = 5;
+const TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS = 10_000;
+const TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS = 60_000;
 
 type TelegramAgentPoolOptions = {
   allowH2: false;
@@ -77,6 +80,12 @@ type TelegramTransportAttempt = {
   exportAttempt: TelegramDispatcherAttempt;
   logLevel?: "debug" | "warn";
   logMessage?: string;
+};
+
+type TelegramTransportAttemptHealth = {
+  consecutiveFailures: number;
+  cooldownMs: number;
+  unhealthyUntilMs: number;
 };
 
 type TelegramDnsResultOrder = "ipv4first" | "verbatim";
@@ -444,7 +453,19 @@ function formatErrorCodes(err: unknown): string {
   return codes.length > 0 ? codes.join(",") : "none";
 }
 
+function createTelegramTransportAttemptUnhealthyError(unhealthyUntilMs: number): Error {
+  const remainingMs = Math.max(0, unhealthyUntilMs - Date.now());
+  const err = new Error(
+    `telegram transport attempt temporarily unhealthy; retry after ${remainingMs}ms`,
+  );
+  err.name = "TelegramTransportAttemptUnhealthyError";
+  return err;
+}
+
 function shouldUseTelegramTransportFallback(err: unknown): boolean {
+  if (err instanceof Error && err.name === "TelegramTransportAttemptUnhealthyError") {
+    return true;
+  }
   const ctx: TelegramTransportFallbackContext = {
     message:
       err && typeof err === "object" && "message" in err
@@ -639,6 +660,57 @@ export function resolveTelegramTransport(
   });
 
   let stickyAttemptIndex = 0;
+  const attemptHealth = transportAttempts.map<TelegramTransportAttemptHealth>(() => ({
+    consecutiveFailures: 0,
+    cooldownMs: TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS,
+    unhealthyUntilMs: 0,
+  }));
+
+  const getAttemptCooldownError = (attemptIndex: number): Error | null => {
+    const health = attemptHealth[attemptIndex];
+    if (!health) {
+      return null;
+    }
+    if (health.unhealthyUntilMs <= Date.now()) {
+      return null;
+    }
+    return createTelegramTransportAttemptUnhealthyError(health.unhealthyUntilMs);
+  };
+
+  const recordAttemptSuccess = (attemptIndex: number): void => {
+    const health = attemptHealth[attemptIndex];
+    if (!health) {
+      return;
+    }
+    health.consecutiveFailures = 0;
+    health.cooldownMs = TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS;
+    health.unhealthyUntilMs = 0;
+  };
+
+  const recordAttemptFailure = (attemptIndex: number, err: unknown): void => {
+    if (!shouldUseTelegramTransportFallback(err)) {
+      return;
+    }
+    const health = attemptHealth[attemptIndex];
+    if (!health) {
+      return;
+    }
+    health.consecutiveFailures += 1;
+    if (health.consecutiveFailures < TELEGRAM_TRANSPORT_ATTEMPT_FAILURE_THRESHOLD) {
+      return;
+    }
+    const cooldownMs = Math.min(
+      TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS,
+      Math.max(TELEGRAM_TRANSPORT_ATTEMPT_INITIAL_COOLDOWN_MS, health.cooldownMs),
+    );
+    health.unhealthyUntilMs = Date.now() + cooldownMs;
+    health.cooldownMs = Math.min(TELEGRAM_TRANSPORT_ATTEMPT_MAX_COOLDOWN_MS, cooldownMs * 2);
+    health.consecutiveFailures = 0;
+    log.warn(
+      `telegram transport attempt marked temporarily unhealthy for ${cooldownMs}ms (codes=${formatErrorCodes(err)})`,
+    );
+  };
+
   const promoteStickyAttempt = (nextIndex: number, err: unknown, reason?: string): boolean => {
     if (nextIndex <= stickyAttemptIndex || nextIndex >= transportAttempts.length) {
       return false;
@@ -664,23 +736,34 @@ export function resolveTelegramTransport(
     const startIndex = Math.min(stickyAttemptIndex, transportAttempts.length - 1);
     let err: unknown;
 
-    try {
-      const response = await sourceFetch(
-        input,
-        withDispatcherIfMissing(init, transportAttempts[startIndex].createDispatcher()),
-      );
-      captureHttpExchange({
-        url: resolveRequestUrl(input),
-        method: init?.method ?? "GET",
-        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-        requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-        response,
-        flowId: randomUUID(),
-        meta: { subsystem: "telegram-fetch" },
-      });
-      return response;
-    } catch (caught) {
-      err = caught;
+    const startCooldownError = callerProvidedDispatcher
+      ? null
+      : getAttemptCooldownError(startIndex);
+    if (startCooldownError) {
+      err = startCooldownError;
+    } else {
+      try {
+        const response = await sourceFetch(
+          input,
+          withDispatcherIfMissing(init, transportAttempts[startIndex].createDispatcher()),
+        );
+        recordAttemptSuccess(startIndex);
+        captureHttpExchange({
+          url: resolveRequestUrl(input),
+          method: init?.method ?? "GET",
+          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          response,
+          flowId: randomUUID(),
+          meta: { subsystem: "telegram-fetch" },
+        });
+        return response;
+      } catch (caught) {
+        err = caught;
+        if (!callerProvidedDispatcher) {
+          recordAttemptFailure(startIndex, err);
+        }
+      }
     }
 
     if (!shouldUseTelegramTransportFallback(err)) {
@@ -693,11 +776,17 @@ export function resolveTelegramTransport(
     for (let nextIndex = startIndex + 1; nextIndex < transportAttempts.length; nextIndex += 1) {
       const nextAttempt = transportAttempts[nextIndex];
       promoteStickyAttempt(nextIndex, err);
+      const cooldownError = getAttemptCooldownError(nextIndex);
+      if (cooldownError) {
+        err = cooldownError;
+        continue;
+      }
       try {
         const response = await sourceFetch(
           input,
           withDispatcherIfMissing(init, nextAttempt.createDispatcher()),
         );
+        recordAttemptSuccess(nextIndex);
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
@@ -710,6 +799,7 @@ export function resolveTelegramTransport(
         return response;
       } catch (caught) {
         err = caught;
+        recordAttemptFailure(nextIndex, err);
         if (!shouldUseTelegramTransportFallback(err)) {
           throw err;
         }
