@@ -599,15 +599,26 @@ describe("matrix live qa scenarios", () => {
 
   it("reuses observed Matrix approval events across channel and DM target=both waits", async () => {
     const context = matrixQaScenarioContext();
-    context.topology.rooms.push({
-      key: scenarioTesting.MATRIX_QA_DRIVER_DM_ROOM_KEY,
-      kind: "dm",
-      memberRoles: ["driver", "sut"],
-      memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
-      name: "Driver DM",
-      requireMention: false,
-      roomId: "!driver-dm:matrix-qa.test",
-    });
+    context.topology.rooms.push(
+      {
+        key: scenarioTesting.MATRIX_QA_DRIVER_DM_ROOM_KEY,
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+        name: "Driver DM",
+        requireMention: false,
+        roomId: "!driver-dm:matrix-qa.test",
+      },
+      {
+        key: scenarioTesting.MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
+        kind: "dm",
+        memberRoles: ["driver", "sut"],
+        memberUserIds: ["@driver:matrix-qa.test", "@sut:matrix-qa.test"],
+        name: "Driver shared DM",
+        requireMention: false,
+        roomId: "!driver-shared-dm:matrix-qa.test",
+      },
+    );
     let approvalId = "";
     const gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
       if (method === "exec.approval.request") {
@@ -642,7 +653,10 @@ describe("matrix live qa scenarios", () => {
       });
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
       const channelApproval = buildApprovalEvent("$approval-both-channel", "!main:matrix-qa.test");
-      const dmApproval = buildApprovalEvent("$approval-both-dm", "!driver-dm:matrix-qa.test");
+      const dmApproval = buildApprovalEvent(
+        "$approval-both-dm",
+        "!driver-shared-dm:matrix-qa.test",
+      );
       context.observedEvents.push(channelApproval, dmApproval, {
         eventId: "$approval-both-option",
         kind: "reaction",
@@ -678,7 +692,7 @@ describe("matrix live qa scenarios", () => {
       artifacts: {
         approvals: [
           { eventId: "$approval-both-channel", roomId: "!main:matrix-qa.test" },
-          { eventId: "$approval-both-dm", roomId: "!driver-dm:matrix-qa.test" },
+          { eventId: "$approval-both-dm", roomId: "!driver-shared-dm:matrix-qa.test" },
         ],
       },
     });
@@ -686,7 +700,7 @@ describe("matrix live qa scenarios", () => {
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
     expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.resolve");
     expect(gatewayCall.mock.calls.at(-1)?.[2]).toMatchObject({ expectFinal: false });
-    expect(createMatrixQaClient).toHaveBeenCalledTimes(2);
+    expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
   });
 
   it("lets explicit Matrix scenario ids override the selected profile", () => {
