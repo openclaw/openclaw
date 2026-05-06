@@ -996,6 +996,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    streamingWatchdogMs: opts.streamingWatchdogMs,
   });
 
   let finishTui: (() => void) | null = null;

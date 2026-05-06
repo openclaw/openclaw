@@ -9,6 +9,7 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  streamingWatchdogMs?: number;
 };
 
 export type TuiExitReason = "exit" | "return-to-crestodian";

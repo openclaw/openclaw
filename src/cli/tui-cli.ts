@@ -20,6 +20,11 @@ export function registerTuiCli(program: Command) {
     .option("--message <text>", "Send an initial message after connecting")
     .option("--timeout-ms <ms>", "Agent timeout in ms (defaults to agents.defaults.timeoutSeconds)")
     .option("--history-limit <n>", "History entries to load", "200")
+    .option(
+      "--streaming-watchdog-ms <ms>",
+      "Streaming watchdog timeout in ms (default: 30000)",
+      "30000",
+    )
     .addHelpText(
       "after",
       () => `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/tui", "docs.openclaw.ai/cli/tui")}\n`,
@@ -42,6 +47,10 @@ export function registerTuiCli(program: Command) {
           );
         }
         const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        const streamingWatchdogMs = Number.parseInt(
+          String(opts.streamingWatchdogMs ?? "30000"),
+          10,
+        );
         const { runTui } = await import("../tui/tui.js");
         await runTui({
           local: isLocal,
@@ -54,6 +63,7 @@ export function registerTuiCli(program: Command) {
           message: opts.message as string | undefined,
           timeoutMs,
           historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
+          streamingWatchdogMs: Number.isNaN(streamingWatchdogMs) ? undefined : streamingWatchdogMs,
         });
       } catch (err) {
         defaultRuntime.error(String(err));
