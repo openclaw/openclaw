@@ -23,9 +23,7 @@ export function runExtensionOxlint(params) {
   try {
     prepareExtensionPackageBoundaryArtifacts(repoRoot);
 
-    const extensionFiles = params.roots.flatMap((root) =>
-      collectTypeScriptFiles(path.resolve(repoRoot, root)),
-    );
+    const extensionFiles = collectTrackedTypeScriptFiles(repoRoot, params.roots);
 
     if (extensionFiles.length === 0) {
       console.log(params.emptyMessage);
@@ -123,34 +121,41 @@ function isTopLevelExtensionsIgnorePattern(pattern) {
   );
 }
 
-function collectTypeScriptFiles(directoryPath) {
-  const entries = fs.readdirSync(directoryPath, { withFileTypes: true });
-  const files = [];
-
-  for (const entry of entries.toSorted((a, b) => a.name.localeCompare(b.name))) {
-    const entryPath = path.join(directoryPath, entry.name);
-    if (entry.isDirectory()) {
-      if (shouldSkipExtensionLintDirectory(entry.name)) {
-        continue;
-      }
-      files.push(...collectTypeScriptFiles(entryPath));
-      continue;
-    }
-
-    if (!entry.isFile()) {
-      continue;
-    }
-
-    if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
-      continue;
-    }
-
-    files.push(path.relative(process.cwd(), entryPath).split(path.sep).join("/"));
+export function collectTrackedTypeScriptFiles(
+  repoRoot,
+  roots,
+  { spawn = spawnSync, exists = (filePath) => fs.existsSync(path.join(repoRoot, filePath)) } = {},
+) {
+  if (roots.length === 0) {
+    return [];
   }
 
-  return files;
+  const result = spawn("git", ["ls-files", "-z", "--", ...roots], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: process.platform === "win32",
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      `git ls-files failed while collecting extension lint targets: ${result.stderr.trim()}`,
+    );
+  }
+
+  return result.stdout
+    .split("\0")
+    .filter((filePath) => filePath.length > 0)
+    .filter((filePath) => exists(filePath))
+    .filter((filePath) => filePath.endsWith(".ts") || filePath.endsWith(".tsx"))
+    .filter((filePath) => !hasPathSegment(filePath, "node_modules"))
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
-function shouldSkipExtensionLintDirectory(name) {
-  return name === "node_modules";
+function hasPathSegment(filePath, segment) {
+  return filePath.split("/").includes(segment);
 }

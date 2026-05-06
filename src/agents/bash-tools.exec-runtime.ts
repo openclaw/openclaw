@@ -13,7 +13,7 @@ import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.j
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
-import type { ProcessSession } from "./bash-process-registry.js";
+import type { ProcessSession, ProcessStatus } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
@@ -157,6 +157,15 @@ export type ExecProcessOutcome =
       aggregated: string;
       timedOut: boolean;
       failureKind: ExecProcessFailureKind;
+      reason: string;
+    }
+  | {
+      status: "killed";
+      exitCode: number | null;
+      exitSignal: NodeJS.Signals | number | null;
+      durationMs: number;
+      aggregated: string;
+      timedOut: false;
       reason: string;
     };
 
@@ -315,7 +324,7 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+function maybeNotifyOnExit(session: ProcessSession, status: Exclude<ProcessStatus, "running">) {
   if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
     return;
   }
@@ -330,7 +339,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
-  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
+  if (status === "killed" && session.exitReason === "manual-cancel" && !output) {
     return;
   }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
@@ -495,6 +504,18 @@ export function buildExecExitOutcome(params: {
   durationMs: number;
   timeoutSec: number | null | undefined;
 }): ExecProcessOutcome {
+  if (params.exit.reason === "manual-cancel") {
+    return {
+      status: "killed",
+      exitCode: params.exit.exitCode,
+      exitSignal: params.exit.exitSignal,
+      durationMs: params.durationMs,
+      aggregated: params.aggregated,
+      timedOut: false,
+      reason: joinExecFailureOutput(params.aggregated, "Command canceled by request"),
+    };
+  }
+
   const exitCode = params.exit.exitCode ?? 0;
   const isNormalExit = params.exit.reason === "exit";
   const isShellFailure = exitCode === 126 || exitCode === 127;
@@ -869,7 +890,7 @@ export async function runExecProcess(opts: {
       }
       if (opts.sandbox?.finalizeExec) {
         await opts.sandbox.finalizeExec({
-          status: outcome.status,
+          status: outcome.status === "completed" ? "completed" : "failed",
           exitCode: exit.exitCode ?? null,
           timedOut: exit.timedOut,
           token: sandboxFinalizeToken,

@@ -196,6 +196,7 @@ const PATH_SHELL_ENV_KEYS = ["PATH", "SHELL"] as const;
 const PROCESS_STATUS_RUNNING = "running";
 const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
+const PROCESS_STATUS_KILLED = "killed";
 const OUTPUT_DONE = "done";
 const OUTPUT_NOPE = "nope";
 const OUTPUT_EXEC_COMPLETED = "Exec completed";
@@ -768,6 +769,30 @@ describe("exec notifyOnExit", () => {
     expect(queuedEvent).toMatchObject({ trusted: false });
     expect(formatted).toBeUndefined();
   });
+
+  it(
+    "does not enqueue a notifyOnExit event when a backgrounded exec is manually killed",
+    async () => {
+      const tool = createNotifyOnExitExecTool();
+      const processTool = createProcessTool();
+      const sessionId = await startBackgroundCommand(
+        tool,
+        isWin ? "Start-Sleep -Seconds 5" : "sleep 5",
+      );
+
+      const killResult = await processTool.execute(nextCallId(), {
+        action: "kill",
+        sessionId,
+      });
+
+      expect(readProcessStatus(killResult.details)).toBe(PROCESS_STATUS_COMPLETED);
+      await expect
+        .poll(() => getFinishedSession(sessionId)?.status, NOTIFY_POLL_OPTIONS)
+        .toBe(PROCESS_STATUS_KILLED);
+      expect(hasNotifyEventForPrefix(sessionId.slice(0, 8))).toBe(false);
+    },
+    isWin ? 15_000 : 5_000,
+  );
 
   it("preserves the origin delivery context on background exec completion events", async () => {
     const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
