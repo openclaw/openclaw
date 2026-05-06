@@ -273,8 +273,17 @@ async function runAutoUpdateCommand(params: {
   try {
     const res = await runCommandWithTimeout(argv, {
       timeoutMs: params.timeoutMs,
+      // Strip the gateway service markers so the spawned `openclaw update` child
+      // is not refused by `shouldBlockPackageUpdateFromGatewayServiceEnv`. The
+      // guard exists to stop a human running `openclaw update` from inside the
+      // live gateway process, not to block the gateway's own auto-update flow.
+      // OPENCLAW_AUTO_UPDATE is left as a positive signal for any future logic
+      // that wants to detect this code path explicitly. `resolveCommandEnv`
+      // filters undefined values out of the merged env before spawn.
       env: {
         OPENCLAW_AUTO_UPDATE: "1",
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
       },
     });
     return {

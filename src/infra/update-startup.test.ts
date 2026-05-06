@@ -436,6 +436,56 @@ describe("update-startup", () => {
     );
   });
 
+  it("strips OPENCLAW_SERVICE_MARKER and OPENCLAW_SERVICE_KIND from the auto-update child env", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    vi.mocked(runCommandWithTimeout).mockResolvedValue({
+      stdout: "{}",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const originalArgv = process.argv.slice();
+    const originalMarker = process.env.OPENCLAW_SERVICE_MARKER;
+    const originalKind = process.env.OPENCLAW_SERVICE_KIND;
+    process.argv = [process.execPath, "/opt/openclaw/dist/entry.js"];
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    try {
+      await runAutoUpdateCheckWithDefaults({
+        cfg: createBetaAutoUpdateConfig(),
+      });
+    } finally {
+      process.argv = originalArgv;
+      if (originalMarker === undefined) {
+        delete process.env.OPENCLAW_SERVICE_MARKER;
+      } else {
+        process.env.OPENCLAW_SERVICE_MARKER = originalMarker;
+      }
+      if (originalKind === undefined) {
+        delete process.env.OPENCLAW_SERVICE_KIND;
+      } else {
+        process.env.OPENCLAW_SERVICE_KIND = originalKind;
+      }
+    }
+
+    const calls = vi.mocked(runCommandWithTimeout).mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    const lastCall = calls[calls.length - 1];
+    const optionsArg = lastCall[1] as { env?: Record<string, unknown> };
+    expect(optionsArg.env).toBeDefined();
+    // The override map must explicitly clear the markers so resolveCommandEnv
+    // strips them before spawning the package-update child.
+    expect(optionsArg.env).toMatchObject({
+      OPENCLAW_AUTO_UPDATE: "1",
+      OPENCLAW_SERVICE_MARKER: undefined,
+      OPENCLAW_SERVICE_KIND: undefined,
+    });
+  });
+
   it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
