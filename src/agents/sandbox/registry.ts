@@ -2,6 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { writeJson } from "../../infra/json-files.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
+import {
+  deleteOpenClawStateKvJson,
+  listOpenClawStateKvJson,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+} from "../../state/openclaw-state-kv.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 import { acquireSessionWriteLock } from "../session-write-lock.js";
 import {
@@ -9,6 +16,7 @@ import {
   SANDBOX_BROWSERS_DIR,
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
+  SANDBOX_STATE_DIR,
 } from "./constants.js";
 import { hashTextSha256 } from "./hash.js";
 
@@ -83,6 +91,9 @@ const RegistryFileSchema = z.object({
   entries: z.array(RegistryEntrySchema),
 });
 
+const SANDBOX_CONTAINER_REGISTRY_KV_SCOPE = "sandbox_registry_containers";
+const SANDBOX_BROWSER_REGISTRY_KV_SCOPE = "sandbox_registry_browsers";
+
 function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegistryEntry {
   return {
     ...entry,
@@ -129,6 +140,21 @@ export async function readRegistry(): Promise<SandboxRegistry> {
   };
 }
 
+function sandboxRegistryDbOptions(): OpenClawStateDatabaseOptions {
+  return {
+    env: {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.dirname(SANDBOX_STATE_DIR),
+    },
+  };
+}
+
+function registryKvScopeForDir(dir: string): string {
+  return dir === SANDBOX_BROWSERS_DIR
+    ? SANDBOX_BROWSER_REGISTRY_KV_SCOPE
+    : SANDBOX_CONTAINER_REGISTRY_KV_SCOPE;
+}
+
 function shardedEntryFilePath(dir: string, containerName: string): string {
   return path.join(dir, `${hashTextSha256(containerName)}.json`);
 }
@@ -155,6 +181,15 @@ async function readShardedEntry<T extends RegistryEntry>(
   dir: string,
   containerName: string,
 ): Promise<T | null> {
+  const sqliteEntry = readOpenClawStateKvJson(
+    registryKvScopeForDir(dir),
+    containerName,
+    sandboxRegistryDbOptions(),
+  ) as T | undefined;
+  if (sqliteEntry?.containerName === containerName) {
+    return sqliteEntry;
+  }
+
   let raw: string;
   try {
     raw = await fs.readFile(shardedEntryFilePath(dir, containerName), "utf-8");
@@ -166,10 +201,24 @@ async function readShardedEntry<T extends RegistryEntry>(
     throw error;
   }
   const parsed = safeParseJsonWithSchema(RegistryEntrySchema, raw) as T | null;
+  if (parsed?.containerName === containerName) {
+    writeOpenClawStateKvJson(
+      registryKvScopeForDir(dir),
+      parsed.containerName,
+      parsed,
+      sandboxRegistryDbOptions(),
+    );
+  }
   return parsed?.containerName === containerName ? parsed : null;
 }
 
 async function writeShardedEntry(dir: string, entry: RegistryEntryPayload): Promise<void> {
+  writeOpenClawStateKvJson(
+    registryKvScopeForDir(dir),
+    entry.containerName,
+    entry,
+    sandboxRegistryDbOptions(),
+  );
   await fs.mkdir(dir, { recursive: true });
   await writeJson(shardedEntryFilePath(dir, entry.containerName), entry, {
     trailingNewline: true,
@@ -177,17 +226,30 @@ async function writeShardedEntry(dir: string, entry: RegistryEntryPayload): Prom
 }
 
 async function removeShardedEntry(dir: string, containerName: string): Promise<void> {
+  deleteOpenClawStateKvJson(registryKvScopeForDir(dir), containerName, sandboxRegistryDbOptions());
   await fs.rm(shardedEntryFilePath(dir, containerName), { force: true });
 }
 
 async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise<T[]> {
+  const byName = new Map<string, T>();
+  for (const entry of listOpenClawStateKvJson<T>(
+    registryKvScopeForDir(dir),
+    sandboxRegistryDbOptions(),
+  )) {
+    if (entry.value?.containerName) {
+      byName.set(entry.value.containerName, entry.value);
+    }
+  }
+
   let files: string[];
   try {
     files = await fs.readdir(dir);
   } catch (error) {
     const code = (error as { code?: string } | null)?.code;
     if (code === "ENOENT") {
-      return [];
+      return [...byName.values()].toSorted((left, right) =>
+        left.containerName.localeCompare(right.containerName),
+      );
     }
     throw error;
   }
@@ -205,13 +267,20 @@ async function readShardedEntries<T extends RegistryEntry>(dir: string): Promise
         }
       }),
   );
-  const validEntries: T[] = [];
   for (const entry of entries) {
     if (entry) {
-      validEntries.push(entry);
+      if (!byName.has(entry.containerName)) {
+        writeOpenClawStateKvJson(
+          registryKvScopeForDir(dir),
+          entry.containerName,
+          entry,
+          sandboxRegistryDbOptions(),
+        );
+        byName.set(entry.containerName, entry);
+      }
     }
   }
-  return validEntries.toSorted((left, right) =>
+  return [...byName.values()].toSorted((left, right) =>
     left.containerName.localeCompare(right.containerName),
   );
 }

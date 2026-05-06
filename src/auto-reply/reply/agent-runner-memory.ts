@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../../agents/agent-core-contract.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -445,6 +445,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       params.storePath,
       sessionEntryForTranscript?.sessionFile,
       {
+        agentId: resolveAgentIdFromSessionKey(params.sessionKey),
         mode: "recent",
         maxMessages: 200,
         maxBytes: 1024 * 1024,

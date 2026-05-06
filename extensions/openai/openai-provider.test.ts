@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { Context, Model, SimpleStreamOptions } from "@mariozechner/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -435,7 +435,7 @@ describe("buildOpenAIProvider", () => {
     expectNoCatalogEntry(entries, "chat-latest");
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
+  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.4+", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 

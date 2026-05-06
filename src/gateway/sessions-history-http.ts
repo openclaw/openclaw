@@ -160,7 +160,10 @@ export async function handleSessionHistoryHttpRequest(
           entry.sessionId,
           target.storePath,
           entry.sessionFile,
-          resolveSessionHistoryTailReadOptions(limit),
+          {
+            ...resolveSessionHistoryTailReadOptions(limit),
+            agentId: target.agentId,
+          },
         )
       : undefined;
   // Cursor reads still need an arbitrary historical window. The common first
@@ -169,6 +172,7 @@ export async function handleSessionHistoryHttpRequest(
     boundedSnapshot?.messages ??
     (entry?.sessionId
       ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile, {
+          agentId: target.agentId,
           mode: "full",
           reason: "session history cursor pagination",
         })
@@ -207,6 +211,7 @@ export async function handleSessionHistoryHttpRequest(
   let sentHistory = history;
   const sseState = SessionHistorySseState.fromRawSnapshot({
     target: {
+      agentId: target.agentId,
       sessionId: entry.sessionId,
       storePath: target.storePath,
       sessionFile: entry.sessionFile,

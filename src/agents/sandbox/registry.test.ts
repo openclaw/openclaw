@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 
 type WriteDelayConfig = {
   targetFile: "containers.json" | "browsers.json" | null;
@@ -11,6 +13,7 @@ type WriteDelayConfig = {
 
 const {
   TEST_STATE_DIR,
+  SANDBOX_STATE_DIR,
   SANDBOX_REGISTRY_PATH,
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_CONTAINERS_DIR,
@@ -21,19 +24,21 @@ const {
   const { mkdtempSync } = require("node:fs");
   const { tmpdir } = require("node:os");
   const baseDir = mkdtempSync(path.join(tmpdir(), "openclaw-sandbox-registry-"));
+  const sandboxDir = path.join(baseDir, "sandbox");
 
   return {
     TEST_STATE_DIR: baseDir,
-    SANDBOX_REGISTRY_PATH: path.join(baseDir, "containers.json"),
-    SANDBOX_BROWSER_REGISTRY_PATH: path.join(baseDir, "browsers.json"),
-    SANDBOX_CONTAINERS_DIR: path.join(baseDir, "containers"),
-    SANDBOX_BROWSERS_DIR: path.join(baseDir, "browsers"),
+    SANDBOX_STATE_DIR: sandboxDir,
+    SANDBOX_REGISTRY_PATH: path.join(sandboxDir, "containers.json"),
+    SANDBOX_BROWSER_REGISTRY_PATH: path.join(sandboxDir, "browsers.json"),
+    SANDBOX_CONTAINERS_DIR: path.join(sandboxDir, "containers"),
+    SANDBOX_BROWSERS_DIR: path.join(sandboxDir, "browsers"),
     writeGateState: { active: null as WriteDelayConfig | null },
   };
 });
 
 vi.mock("./constants.js", () => ({
-  SANDBOX_STATE_DIR: TEST_STATE_DIR,
+  SANDBOX_STATE_DIR,
   SANDBOX_REGISTRY_PATH,
   SANDBOX_BROWSER_REGISTRY_PATH,
   SANDBOX_CONTAINERS_DIR,
@@ -84,6 +89,8 @@ type SandboxBrowserRegistryEntry = import("./registry.js").SandboxBrowserRegistr
 type SandboxRegistryEntry = import("./registry.js").SandboxRegistryEntry;
 type MigrationResult = Awaited<ReturnType<typeof migrateLegacySandboxRegistryFiles>>[number];
 
+const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+
 function payloadMentionsContainer(payload: string, containerName: string): boolean {
   return (
     payload.includes(`"containerName":"${containerName}"`) ||
@@ -92,10 +99,12 @@ function payloadMentionsContainer(payload: string, containerName: string): boole
 }
 
 async function seedMalformedContainerRegistry(payload: string) {
+  await fs.mkdir(path.dirname(SANDBOX_REGISTRY_PATH), { recursive: true });
   await fs.writeFile(SANDBOX_REGISTRY_PATH, payload, "utf-8");
 }
 
 async function seedMalformedBrowserRegistry(payload: string) {
+  await fs.mkdir(path.dirname(SANDBOX_BROWSER_REGISTRY_PATH), { recursive: true });
   await fs.writeFile(SANDBOX_BROWSER_REGISTRY_PATH, payload, "utf-8");
 }
 
@@ -129,15 +138,23 @@ function installWriteGate(
 
 beforeEach(() => {
   writeGateState.active = null;
+  process.env.OPENCLAW_STATE_DIR = TEST_STATE_DIR;
 });
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   await fs.rm(SANDBOX_CONTAINERS_DIR, { recursive: true, force: true });
   await fs.rm(SANDBOX_BROWSERS_DIR, { recursive: true, force: true });
   await fs.rm(SANDBOX_REGISTRY_PATH, { force: true });
   await fs.rm(SANDBOX_BROWSER_REGISTRY_PATH, { force: true });
   await fs.rm(`${SANDBOX_REGISTRY_PATH}.lock`, { force: true });
   await fs.rm(`${SANDBOX_BROWSER_REGISTRY_PATH}.lock`, { force: true });
+  await fs.rm(path.join(TEST_STATE_DIR, "state"), { recursive: true, force: true });
+  if (originalOpenClawStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = originalOpenClawStateDir;
+  }
 });
 
 afterAll(async () => {
@@ -170,10 +187,12 @@ function containerEntry(overrides: Partial<SandboxRegistryEntry> = {}): SandboxR
 }
 
 async function seedContainerRegistry(entries: SandboxRegistryEntry[]) {
+  await fs.mkdir(path.dirname(SANDBOX_REGISTRY_PATH), { recursive: true });
   await fs.writeFile(SANDBOX_REGISTRY_PATH, `${JSON.stringify({ entries }, null, 2)}\n`, "utf-8");
 }
 
 async function seedBrowserRegistry(entries: SandboxBrowserRegistryEntry[]) {
+  await fs.mkdir(path.dirname(SANDBOX_BROWSER_REGISTRY_PATH), { recursive: true });
   await fs.writeFile(
     SANDBOX_BROWSER_REGISTRY_PATH,
     `${JSON.stringify({ entries }, null, 2)}\n`,
@@ -324,6 +343,51 @@ describe("registry race safety", () => {
     await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
   });
 
+  it("keeps container registry readable from SQLite when compatibility shards are missing", async () => {
+    await updateRegistry(
+      containerEntry({ containerName: "container-sqlite", sessionKey: "sess:x" }),
+    );
+    await fs.rm(SANDBOX_CONTAINERS_DIR, { recursive: true, force: true });
+
+    await expect(readRegistryEntry("container-sqlite")).resolves.toEqual(
+      expect.objectContaining({
+        containerName: "container-sqlite",
+        sessionKey: "sess:x",
+      }),
+    );
+    await expect(readRegistry()).resolves.toEqual({
+      entries: [
+        expect.objectContaining({
+          containerName: "container-sqlite",
+          sessionKey: "sess:x",
+        }),
+      ],
+    });
+  });
+
+  it("keeps SQLite container registry primary when compatibility shards are stale", async () => {
+    const entry = containerEntry({
+      containerName: "container-stale-shard",
+      sessionKey: "sqlite-session",
+    });
+    await updateRegistry(entry);
+    const [shardName] = await fs.readdir(SANDBOX_CONTAINERS_DIR);
+    await fs.writeFile(
+      path.join(SANDBOX_CONTAINERS_DIR, shardName ?? ""),
+      `${JSON.stringify({ ...entry, sessionKey: "stale-json-session" })}\n`,
+      "utf-8",
+    );
+
+    await expect(readRegistry()).resolves.toEqual({
+      entries: [
+        expect.objectContaining({
+          containerName: "container-stale-shard",
+          sessionKey: "sqlite-session",
+        }),
+      ],
+    });
+  });
+
   it("keeps both container updates under concurrent writes", async () => {
     await Promise.all([
       updateRegistry(containerEntry({ containerName: "container-a" })),
@@ -394,6 +458,22 @@ describe("registry race safety", () => {
         .slice()
         .toSorted(),
     ).toEqual(["browser-a", "browser-b"]);
+  });
+
+  it("keeps browser registry readable from SQLite when compatibility shards are missing", async () => {
+    await updateBrowserRegistry(
+      browserEntry({ containerName: "browser-sqlite", sessionKey: "sess:browser" }),
+    );
+    await fs.rm(SANDBOX_BROWSERS_DIR, { recursive: true, force: true });
+
+    await expect(readBrowserRegistry()).resolves.toEqual({
+      entries: [
+        expect.objectContaining({
+          containerName: "browser-sqlite",
+          sessionKey: "sess:browser",
+        }),
+      ],
+    });
   });
 
   it("prevents concurrent browser remove/update from resurrecting deleted entries", async () => {

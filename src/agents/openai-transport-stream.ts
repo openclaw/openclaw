@@ -1,15 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import {
-  calculateCost,
-  createAssistantMessageEventStream,
-  getEnvApiKey,
-  parseStreamingJson,
-  type Api,
-  type Context,
-  type Model,
-} from "@earendil-works/pi-ai";
-import { convertMessages } from "@earendil-works/pi-ai/openai-completions";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {
@@ -27,6 +16,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import type { StreamFn } from "./agent-core-contract.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import {
@@ -58,6 +48,16 @@ import {
   resolveOpenAIStrictToolFlagForInventory,
   resolveOpenAIStrictToolSetting,
 } from "./openai-tool-schema.js";
+import {
+  calculateCost,
+  createAssistantMessageEventStream,
+  getEnvApiKey,
+  parseStreamingJson,
+  type Api,
+  type Context,
+  type Model,
+} from "./pi-ai-contract.js";
+import { convertMessages } from "./pi-ai-openai-completions-contract.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
 import {
   buildGuardedModelFetch,

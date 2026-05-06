@@ -36,6 +36,7 @@ openclaw sessions --active 120
 openclaw sessions --limit 25
 openclaw sessions --verbose
 openclaw sessions --json
+openclaw sessions --export-store sessions-debug.json
 ```
 
 Scope selection:
@@ -45,6 +46,14 @@ Scope selection:
 - `--agent <id>`: one configured agent store
 - `--all-agents`: aggregate all configured agent stores
 - `--store <path>`: explicit store path (cannot be combined with `--agent` or `--all-agents`)
+- `--export-store <path>`: export the raw resolved store JSON to a file
+
+Canonical per-agent session stores use OpenClaw's shared SQLite state database by
+default. Custom `--store` paths stay file-backed JSON unless
+`OPENCLAW_SESSION_STORE_BACKEND=sqlite` is set. Set
+`OPENCLAW_SESSION_STORE_BACKEND=json` to force the legacy `sessions.json`
+backend for repair or bisect work.
+
 - `--limit <n|all>`: max rows to output (default `100`; `all` restores full output)
 
 Export a trajectory bundle for a stored session:
@@ -87,6 +96,11 @@ JSON examples:
   ]
 }
 ```
+
+Use `openclaw sessions --export-store <path>` to write the raw resolved session
+store to JSON for debugging, backup, or SQLite compatibility checks. The command
+reads through the active backend, so SQLite-backed stores export the same shape
+older `sessions.json` tools expect.
 
 ## Cleanup maintenance
 

@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -17,6 +16,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
+import type { AgentToolResult } from "./agent-core-contract.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { SessionEntry } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildSessionContext,
   migrateSessionEntries,
   parseSessionEntries,
-} from "@earendil-works/pi-coding-agent";
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 function isMissingFileError(error: unknown): boolean {

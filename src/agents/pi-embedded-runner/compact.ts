@@ -1,11 +1,5 @@
 import fs from "node:fs/promises";
 import os from "node:os";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import {
-  createAgentSession,
-  estimateTokens,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
@@ -33,6 +27,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-ke
 import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import {
   resolveAgentDir,
   resolveRunModelFallbacksOverride,
@@ -70,6 +65,11 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
+import {
+  createAgentSession,
+  DefaultResourceLoader,
+  estimateTokens,
+} from "../pi-coding-agent-contract.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
 import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import {
@@ -105,6 +105,9 @@ import {
   resolveSkillsPromptForRun,
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
+import type { SessionManager as TranscriptSessionManager } from "../transcript/session-manager-contract.js";
+import { openTranscriptSessionManager } from "../transcript/session-manager.js";
+import { readTranscriptFileState } from "../transcript/transcript-file-state.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -159,11 +162,18 @@ import {
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
-import { readTranscriptFileState } from "./transcript-file-state.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
 export type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
+
+type PiCreateAgentSessionOptions = NonNullable<Parameters<typeof createAgentSession>[0]>;
+
+function asPiCreateAgentSessionManager(
+  sessionManager: TranscriptSessionManager,
+): PiCreateAgentSessionOptions["sessionManager"] {
+  return sessionManager as unknown as PiCreateAgentSessionOptions["sessionManager"];
+}
 
 function hasRealConversationContent(
   msg: AgentMessage,
@@ -956,20 +966,27 @@ async function compactEmbeddedPiSessionDirectOnce(
       });
       await prewarmSessionFile(params.sessionFile);
       const transcriptPolicy = runtimePlan.transcript.resolvePolicy(runtimePlanModelContext);
-      const sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        config: params.config,
-        contextWindowTokens: ctxInfo.tokens,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        missingToolResultText:
-          model.api === "openai-responses" ||
-          model.api === "azure-openai-responses" ||
-          model.api === "openai-codex-responses"
-            ? "aborted"
-            : undefined,
-        allowedToolNames,
-      });
+      const sessionManager = guardSessionManager(
+        openTranscriptSessionManager({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          cwd: effectiveWorkspace,
+        }),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          config: params.config,
+          contextWindowTokens: ctxInfo.tokens,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          missingToolResultText:
+            model.api === "openai-responses" ||
+            model.api === "azure-openai-responses" ||
+            model.api === "openai-codex-responses"
+              ? "aborted"
+              : undefined,
+          allowedToolNames,
+        },
+      );
       checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
         sessionManager,
         sessionFile: params.sessionFile,
@@ -1054,7 +1071,7 @@ async function compactEmbeddedPiSessionDirectOnce(
             thinkingLevel: mapThinkingLevel(thinkLevel),
             tools: sessionToolAllowlist,
             customTools,
-            sessionManager,
+            sessionManager: asPiCreateAgentSessionManager(sessionManager),
             settingsManager,
             resourceLoader,
           });

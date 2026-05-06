@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { expect, vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -19,6 +17,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../../shared/string-coerce.js";
+import type { AgentMessage } from "../../agent-core-contract.js";
+import type { Api, Model } from "../../pi-ai-contract.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../pi-embedded-messaging.types.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -279,7 +279,7 @@ vi.mock("../../../trajectory/metadata.js", () => ({
   buildTrajectoryRunMetadata: () => ({ source: "test" }),
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", () => {
+function createPiCodingAgentMock() {
   function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
@@ -299,7 +299,9 @@ vi.mock("@earendil-works/pi-coding-agent", () => {
       open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
     },
   };
-});
+}
+
+vi.mock("../../pi-coding-agent-contract.js", createPiCodingAgentMock);
 
 vi.mock("../../subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -430,10 +432,6 @@ vi.mock("../../session-file-repair.js", () => ({
 vi.mock("../session-manager-cache.js", () => ({
   prewarmSessionFile: async () => {},
   trackSessionManagerAccess: () => {},
-}));
-
-vi.mock("../session-manager-init.js", () => ({
-  prepareSessionManagerForRun: async () => {},
 }));
 
 vi.mock("../../session-write-lock.js", () => ({

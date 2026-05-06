@@ -332,3 +332,20 @@ export function resolveAgentsDirFromSessionStorePath(storePath: string): string 
   }
   return agentsDir;
 }
+
+export function resolveAgentIdFromSessionStorePath(storePath: string): string | undefined {
+  const candidateAbsPath = path.resolve(storePath);
+  if (path.basename(candidateAbsPath) !== "sessions.json") {
+    return undefined;
+  }
+  const sessionsDir = path.dirname(candidateAbsPath);
+  if (path.basename(sessionsDir) !== "sessions") {
+    return undefined;
+  }
+  const agentDir = path.dirname(sessionsDir);
+  const agentsDir = path.dirname(agentDir);
+  if (path.basename(agentsDir) !== "agents") {
+    return undefined;
+  }
+  return normalizeAgentId(path.basename(agentDir));
+}

@@ -1,10 +1,3 @@
-import {
-  completeSimple,
-  getModel,
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "@earendil-works/pi-ai";
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
@@ -13,6 +6,7 @@ import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { completeSimple, type Api, type AssistantMessage, type Model } from "./pi-ai-contract.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
 

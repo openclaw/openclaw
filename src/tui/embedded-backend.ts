@@ -205,6 +205,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const localMessages =
       sessionId && storePath
         ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            agentId: sessionAgentId,
             mode: "recent",
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),

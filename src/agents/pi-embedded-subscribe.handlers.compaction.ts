@@ -1,6 +1,6 @@
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { AgentEvent } from "./agent-core-contract.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 

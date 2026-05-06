@@ -1,15 +1,27 @@
 import fs from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import {
+  appendSqliteSessionTranscriptEvent,
+  loadSqliteSessionTranscriptEvents,
+} from "./transcript-store.sqlite.js";
+import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
   readLatestAssistantTextFromSessionTranscript,
+  readTailAssistantTextFromSessionTranscript,
 } from "./transcript.js";
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
 
 describe("appendAssistantMessageToSessionTranscript", () => {
   const fixture = useTempSessionsFixture("transcript-test-");
@@ -170,6 +182,45 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messageLine.message.content[0].text).toBe("Hello from delivery mirror!");
   });
 
+  it("uses scoped SQLite transcript events for delivery mirror idempotency", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    writeTranscriptStore();
+    appendSqliteSessionTranscriptEvent({
+      agentId: "main",
+      sessionId,
+      event: {
+        type: "message",
+        id: "sqlite-mirror-message",
+        message: {
+          role: "assistant",
+          idempotencyKey: "mirror:sqlite-source-message",
+          content: [{ type: "text", text: "Hello from SQLite mirror!" }],
+        },
+      },
+    });
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      agentId: "main",
+      sessionKey,
+      text: "Hello from SQLite mirror!",
+      idempotencyKey: "mirror:sqlite-source-message",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      messageId: "sqlite-mirror-message",
+    });
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]).type).toBe("session");
+    }
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
   it("does not append a duplicate delivery mirror when the latest assistant message already matches", async () => {
     writeTranscriptStore();
 
@@ -200,49 +251,38 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
-  it("dedupes against the latest assistant even when a large user entry follows it", async () => {
+  it("uses scoped SQLite transcript events for delivery mirror latest-match dedupe", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     writeTranscriptStore();
-
-    const exactResult = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath: fixture.storePath(),
-      message: createExactAssistantMessage({ text: "Hello before the large user entry" }),
+    appendSqliteSessionTranscriptEvent({
+      agentId: "main",
+      sessionId,
+      event: {
+        type: "message",
+        id: "sqlite-latest-assistant",
+        message: createExactAssistantMessage({ text: "Already delivered" }),
+      },
     });
 
-    expect(exactResult.ok).toBe(true);
-    if (!exactResult.ok) {
-      return;
-    }
-
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: { role: "user", content: "x".repeat(5 * 1024 * 1024) },
-    });
-
-    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(sessionFile);
-    if (!latestAssistantText) {
-      throw new Error("expected latest assistant text");
-    }
-    expect(latestAssistantText.id).toBe(exactResult.messageId);
-    expect(latestAssistantText.text).toBe("Hello before the large user entry");
-
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+    const result = await appendAssistantMessageToSessionTranscript({
+      agentId: "main",
       sessionKey,
-      text: "Hello before the large user entry",
+      text: "Already delivered",
       storePath: fixture.storePath(),
     });
 
-    expect(mirrorResult.ok).toBe(true);
-    if (mirrorResult.ok) {
-      expect(mirrorResult.messageId).toBe(exactResult.messageId);
-      const records = fs
-        .readFileSync(sessionFile, "utf-8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as { type?: string; message?: { role?: string } });
-      expect(records.filter((record) => record.type === "message")).toHaveLength(2);
+    expect(result).toMatchObject({
+      ok: true,
+      messageId: "sqlite-latest-assistant",
+    });
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]).type).toBe("session");
     }
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
   });
 
   it("does not reuse an older matching assistant message across turns", async () => {
@@ -582,5 +622,153 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     expect(messages[1]?.parentId).toBe("legacy-first");
     expect(messages[2]?.id).toBe(appended.messageId);
     expect(messages[2]?.parentId).toBe("legacy-second");
+  });
+
+  it("imports existing scoped JSONL transcript into SQLite before appending", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "sqlite-import-session",
+      fixture.sessionsDir(),
+    );
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "sqlite-import-session",
+          timestamp: new Date().toISOString(),
+          cwd: process.cwd(),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "legacy-first",
+          timestamp: new Date().toISOString(),
+          message: { role: "user", content: "legacy first" },
+        }),
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      agentId: "main",
+      sessionId: "sqlite-import-session",
+      message: { role: "assistant", content: "new reply" },
+      now: 123,
+    });
+
+    const events = loadSqliteSessionTranscriptEvents({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "sqlite-import-session",
+    }).map((entry) => entry.event as { type?: string; id?: string; parentId?: string | null });
+
+    expect(events.map((event) => event.type)).toEqual(["session", "message", "message"]);
+    expect(events[1]).toMatchObject({ id: "legacy-first", parentId: null });
+    expect(events[2]).toMatchObject({ id: appended.messageId, parentId: "legacy-first" });
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("mirrors a newly created scoped transcript header into SQLite", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "sqlite-new-session",
+      fixture.sessionsDir(),
+    );
+
+    const appended = await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      agentId: "main",
+      sessionId: "sqlite-new-session",
+      cwd: "/workspace",
+      message: { role: "assistant", content: "new reply" },
+      now: 456,
+    });
+
+    const events = loadSqliteSessionTranscriptEvents({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      agentId: "main",
+      sessionId: "sqlite-new-session",
+    }).map((entry) => entry.event as { type?: string; id?: string; message?: unknown });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      type: "session",
+      id: "sqlite-new-session",
+      cwd: "/workspace",
+    });
+    expect(events[1]).toMatchObject({
+      type: "message",
+      id: appended.messageId,
+    });
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("reads latest and tail assistant text from scoped SQLite transcripts", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-transcript-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    appendSqliteSessionTranscriptEvent({
+      agentId: "main",
+      sessionId: "sqlite-read-session",
+      event: { type: "session", id: "sqlite-read-session" },
+      now: () => 100,
+    });
+    appendSqliteSessionTranscriptEvent({
+      agentId: "main",
+      sessionId: "sqlite-read-session",
+      event: {
+        type: "message",
+        id: "assistant-1",
+        message: {
+          role: "assistant",
+          timestamp: 200,
+          content: [{ type: "text", text: "first reply" }],
+        },
+      },
+      now: () => 200,
+    });
+    appendSqliteSessionTranscriptEvent({
+      agentId: "main",
+      sessionId: "sqlite-read-session",
+      event: {
+        type: "message",
+        id: "assistant-2",
+        message: {
+          role: "assistant",
+          timestamp: 300,
+          content: [{ type: "text", text: "latest reply" }],
+        },
+      },
+      now: () => 300,
+    });
+
+    await expect(
+      readLatestAssistantTextFromSessionTranscript(undefined, {
+        agentId: "main",
+        sessionId: "sqlite-read-session",
+      }),
+    ).resolves.toEqual({
+      id: "assistant-2",
+      text: "latest reply",
+      timestamp: 300,
+    });
+    await expect(
+      readTailAssistantTextFromSessionTranscript(undefined, {
+        agentId: "main",
+        sessionId: "sqlite-read-session",
+      }),
+    ).resolves.toEqual({
+      id: "assistant-2",
+      text: "latest reply",
+      timestamp: 300,
+    });
+
+    fs.rmSync(stateDir, { recursive: true, force: true });
   });
 });

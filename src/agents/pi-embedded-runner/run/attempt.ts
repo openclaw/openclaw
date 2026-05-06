@@ -1,8 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { createAgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
@@ -55,6 +53,7 @@ import {
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
+import type { AgentMessage } from "../../agent-core-contract.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -83,6 +82,8 @@ import {
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
+import type { AgentToolArtifactStore } from "../../filesystem/agent-filesystem.js";
+import { createSqliteToolArtifactStore } from "../../filesystem/tool-artifact-store.sqlite.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
@@ -94,6 +95,7 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
+import { createAgentSession, DefaultResourceLoader } from "../../pi-coding-agent-contract.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -188,6 +190,8 @@ import {
   type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import { removeSessionManagerTailEntries } from "../../transcript/session-manager-tail.js";
+import { openTranscriptSessionManager } from "../../transcript/session-manager.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -229,7 +233,6 @@ import {
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
-import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
 import {
   describeEmbeddedAgentStreamStrategy,
@@ -668,38 +671,25 @@ function removeTrailingMidTurnPrecheckAssistantError(params: {
     params.activeSession.agent.state.messages = messages.slice(0, -1);
   }
 
-  const mutableSessionManager = params.sessionManager as unknown as {
-    fileEntries?: Array<{
-      type?: string;
-      id?: string;
-      parentId?: string | null;
-      message?: AgentMessage;
-    }>;
-    byId?: Map<string, unknown>;
-    leafId?: string | null;
-    _rewriteFile?: () => void;
-  };
-  const lastEntry = mutableSessionManager.fileEntries?.at(-1);
-  if (lastEntry?.type !== "message" || !isMidTurnPrecheckAssistantError(lastEntry.message)) {
-    if (isMidTurnPrecheckAssistantError(params.activeSession.agent.state.messages.at(-1))) {
-      log.warn(
-        "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
-      );
-    }
-    return;
-  }
-  if (typeof mutableSessionManager._rewriteFile !== "function") {
+  const removal = removeSessionManagerTailEntries(
+    params.sessionManager,
+    (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message as never),
+    { maxEntries: 1 },
+  );
+  if (removal.rewriteUnavailable) {
     log.warn(
       "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
     );
     return;
   }
-  mutableSessionManager.fileEntries?.pop();
-  if (lastEntry.id) {
-    mutableSessionManager.byId?.delete(lastEntry.id);
+  if (
+    removal.removed === 0 &&
+    isMidTurnPrecheckAssistantError(params.activeSession.agent.state.messages.at(-1))
+  ) {
+    log.warn(
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
+    );
   }
-  mutableSessionManager.leafId = lastEntry.parentId ?? null;
-  mutableSessionManager._rewriteFile();
 }
 
 export function resolveAttemptToolPolicyMessageProvider(params: {
@@ -790,6 +780,25 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   ]);
 }
 
+function createRunArtifactStoreBestEffort(params: {
+  agentId: string;
+  runId: string;
+  artifactStore?: AgentToolArtifactStore;
+}): AgentToolArtifactStore | undefined {
+  if (params.artifactStore) {
+    return params.artifactStore;
+  }
+  try {
+    return createSqliteToolArtifactStore({
+      agentId: params.agentId,
+      runId: params.runId,
+    });
+  } catch (error) {
+    log.debug(`run artifact store unavailable: ${formatErrorMessage(error)}`);
+    return undefined;
+  }
+}
+
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
@@ -861,6 +870,11 @@ export async function runEmbeddedAttempt(
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
+  });
+  const runArtifactStore = createRunArtifactStoreBestEffort({
+    agentId: sessionAgentId,
+    runId: params.runId,
+    artifactStore: params.agentFilesystem?.artifacts,
   });
   const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
     config: params.config,
@@ -1061,12 +1075,14 @@ export async function runEmbeddedAttempt(
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             disableMessageTool: params.disableMessageTool,
+            agentFilesystem: params.agentFilesystem,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
             forceHeartbeatTool: params.forceHeartbeatTool,
             authProfileStore: params.authProfileStore,
             recordToolPrepStage: (name) => corePluginToolStages.mark(name),
             onToolOutcome: params.onToolOutcome,
+            artifactStore: runArtifactStore,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -1630,25 +1646,32 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        config: params.config,
-        contextWindowTokens: params.contextTokenBudget,
-        inputProvenance: params.inputProvenance,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        missingToolResultText:
-          params.model.api === "openai-responses" ||
-          params.model.api === "azure-openai-responses" ||
-          params.model.api === "openai-codex-responses"
-            ? "aborted"
-            : undefined,
-        allowedToolNames: replayAllowedToolNames,
-        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
-        onUserMessagePersisted: (message) => {
-          params.onUserMessagePersisted?.(message);
+      sessionManager = guardSessionManager(
+        openTranscriptSessionManager({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          cwd: effectiveWorkspace,
+        }),
+        {
+          agentId: sessionAgentId,
+          sessionKey: params.sessionKey,
+          config: params.config,
+          contextWindowTokens: params.contextTokenBudget,
+          inputProvenance: params.inputProvenance,
+          allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+          missingToolResultText:
+            params.model.api === "openai-responses" ||
+            params.model.api === "azure-openai-responses" ||
+            params.model.api === "openai-codex-responses"
+              ? "aborted"
+              : undefined,
+          allowedToolNames: replayAllowedToolNames,
+          suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+          onUserMessagePersisted: (message) => {
+            params.onUserMessagePersisted?.(message);
+          },
         },
-      });
+      );
       trackSessionManagerAccess(params.sessionFile);
 
       await runAttemptContextEngineBootstrap({
@@ -1679,14 +1702,6 @@ export async function runEmbeddedAttempt(
             agentId: sessionAgentId,
           }),
         warn: (message) => log.warn(message),
-      });
-
-      await prepareSessionManagerForRun({
-        sessionManager,
-        sessionFile: params.sessionFile,
-        hadSessionFile,
-        sessionId: params.sessionId,
-        cwd: effectiveWorkspace,
       });
 
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
@@ -2059,6 +2074,7 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
+        artifactStore: runArtifactStore,
       });
       trajectoryRecorder?.recordEvent("session.started", {
         trigger: params.trigger,

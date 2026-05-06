@@ -1,26 +1,36 @@
-import type { Api, Context, Model, ProviderStreamOptions } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
   getApiKeyForModel,
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
-import { normalizeModelRef } from "../agents/model-selection.js";
+import { findNormalizedProviderValue, normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
+import type { Api, Context, Model, ProviderStreamOptions } from "../agents/pi-ai-contract.js";
+import { complete } from "../agents/pi-ai-contract.js";
+import { resolveModelWithRegistry } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
+import { prepareProviderDynamicModel } from "../plugins/provider-runtime.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
 } from "./types.js";
+
+let piModelDiscoveryRuntimePromise: Promise<
+  typeof import("../agents/pi-model-discovery-runtime.js")
+> | null = null;
+
+function loadPiModelDiscoveryRuntime() {
+  piModelDiscoveryRuntimePromise ??= import("../agents/pi-model-discovery-runtime.js");
+  return piModelDiscoveryRuntimePromise;
+}
 
 function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requestedMaxTokens = 4096) {
   if (
@@ -133,17 +143,48 @@ async function resolveImageRuntime(params: {
   authStore?: ImageDescriptionRequest["authStore"];
 }): Promise<{ apiKey: string; model: Model<Api> }> {
   await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+  const { discoverAuthStorage, discoverModels } = await loadPiModelDiscoveryRuntime();
+  const authStorage = discoverAuthStorage(params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
-  const resolved = await resolveModelAsync(
-    resolvedRef.provider,
-    resolvedRef.model,
-    params.agentDir,
-    params.cfg,
-    {
-      allowBundledStaticCatalogFallback: true,
-    },
-  );
-  const { authStorage, model } = resolved;
+  const configuredProviders = params.cfg.models?.providers;
+  const providerConfig =
+    configuredProviders?.[resolvedRef.provider] ??
+    findNormalizedProviderValue(configuredProviders, resolvedRef.provider);
+  // Fast path: resolve without dynamic model preparation first.
+  // This avoids unnecessary prepare hooks (e.g. OpenRouter catalog fetch)
+  // for models that are already explicitly resolvable.
+  let model = resolveModelWithRegistry({
+    provider: resolvedRef.provider,
+    modelId: resolvedRef.model,
+    modelRegistry,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+  }) as Model<Api> | null;
+
+  // If the model is not in the registry yet, prepare dynamic provider models
+  // and retry (needed for provider-runtime-backed dynamic models).
+  if (!model) {
+    await prepareProviderDynamicModel({
+      provider: resolvedRef.provider,
+      config: params.cfg,
+      context: {
+        config: params.cfg,
+        agentDir: params.agentDir,
+        provider: resolvedRef.provider,
+        modelId: resolvedRef.model,
+        modelRegistry,
+        providerConfig,
+      },
+    });
+    model = resolveModelWithRegistry({
+      provider: resolvedRef.provider,
+      modelId: resolvedRef.model,
+      modelRegistry,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    }) as Model<Api> | null;
+  }
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }

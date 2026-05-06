@@ -1,10 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import {
-  AuthStorage as PiAuthStorageClass,
-  ModelRegistry as PiModelRegistryClass,
-  type AuthStorage,
-  type ModelRegistry,
-} from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -27,6 +20,13 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
+import type { Api, Model } from "../pi-ai-contract.js";
+import {
+  AuthStorage as PiAuthStorageClass,
+  ModelRegistry as PiModelRegistryClass,
+  type AuthStorage,
+  type ModelRegistry,
+} from "../pi-coding-agent-contract.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {

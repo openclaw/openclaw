@@ -15,9 +15,9 @@ import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-suppor
 
 const completeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@earendil-works/pi-ai", async () => {
+vi.mock("../pi-ai-contract.js", async () => {
   const actual =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+    await vi.importActual<typeof import("../pi-ai-contract.js")>("../pi-ai-contract.js");
   return {
     ...actual,
     complete: completeMock,

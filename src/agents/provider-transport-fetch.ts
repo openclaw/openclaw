@@ -1,4 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -10,8 +9,7 @@ import {
 } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
-import { formatModelTransportDebugUrl } from "./model-transport-url.js";
+import type { Api, Model } from "./pi-ai-contract.js";
 import {
   ensureModelProviderLocalService,
   type ProviderLocalServiceLease,

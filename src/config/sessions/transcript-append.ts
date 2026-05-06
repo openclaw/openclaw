@@ -10,17 +10,20 @@ import {
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
+import {
+  appendSqliteSessionTranscriptEvent,
+  hasSqliteSessionTranscriptEvents,
+  importJsonlTranscriptToSqlite,
+} from "./transcript-store.sqlite.js";
 
 const TRANSCRIPT_APPEND_SCAN_CHUNK_BYTES = 64 * 1024;
 const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
-let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
-  null;
 const transcriptAppendQueues = new Map<string, Promise<void>>();
 
 async function loadCurrentSessionVersion(): Promise<number> {
-  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
-  return (await piCodingAgentModulePromise).CURRENT_SESSION_VERSION;
+  return (await import("../../agents/transcript/session-transcript-contract.js"))
+    .CURRENT_SESSION_VERSION;
 }
 
 type TranscriptLeafInfo = {
@@ -122,6 +125,38 @@ function lineHasNonSessionEntry(line: string): boolean {
   } catch {
     return false;
   }
+}
+
+function shouldMirrorTranscriptToSqlite(params: {
+  agentId?: string;
+  sessionId?: string;
+}): params is {
+  agentId: string;
+  sessionId: string;
+} {
+  return Boolean(params.agentId?.trim() && params.sessionId?.trim());
+}
+
+function importJsonlTranscriptToSqliteIfEmpty(params: {
+  transcriptPath: string;
+  agentId: string;
+  sessionId: string;
+  now: number;
+}): void {
+  if (
+    hasSqliteSessionTranscriptEvents({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    })
+  ) {
+    return;
+  }
+  importJsonlTranscriptToSqlite({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    transcriptPath: params.transcriptPath,
+    now: () => params.now,
+  });
 }
 
 async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Promise<{
@@ -235,6 +270,7 @@ async function withTranscriptAppendQueue<T>(
 type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
   message: TMessage;
+  agentId?: string;
   now?: number;
   sessionId?: string;
   cwd?: string;
@@ -300,6 +336,14 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
         ? redactTranscriptMessage(params.message, params.config)
         : redactSecrets(params.message)
     ) as TMessage;
+    if (shouldMirrorTranscriptToSqlite(params)) {
+      importJsonlTranscriptToSqliteIfEmpty({
+        transcriptPath: params.transcriptPath,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        now,
+      });
+    }
     const entry = {
       type: "message",
       id: messageId,
@@ -308,6 +352,15 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
       message: finalMessage,
     };
     await fs.appendFile(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
+    if (shouldMirrorTranscriptToSqlite(params)) {
+      appendSqliteSessionTranscriptEvent({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        transcriptPath: params.transcriptPath,
+        event: entry,
+        now: () => now,
+      });
+    }
     return { messageId, message: finalMessage };
   } finally {
     await lock.release();
