@@ -1787,7 +1787,7 @@
       "fast-xml-parser": "5.7.0",
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
-      "basic-ftp": "5.3.0",
+      "basic-ftp": "5.3.1",
       "file-type": "22.0.1",
       "form-data": "2.5.4",
       "ip-address": "10.2.0",
