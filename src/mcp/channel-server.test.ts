@@ -511,9 +511,12 @@ describe("openclaw channel mcp server", () => {
           server: { server: { notification: ReturnType<typeof vi.fn> } };
         }
       ).pendingClaudePermissions.set("abcde", {
-        toolName: "Bash",
-        description: "run npm test",
-        inputPreview: '{"cmd":"npm test"}',
+        request: {
+          toolName: "Bash",
+          description: "run npm test",
+          inputPreview: '{"cmd":"npm test"}',
+        },
+        createdAtMs: Date.now(),
       });
       (
         bridge as unknown as {
