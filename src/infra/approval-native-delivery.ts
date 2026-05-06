@@ -110,7 +110,7 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
         reason: "preferred",
       });
     }
-  } else if (!originTarget) {
+  } else if (!originTarget && !preferOrigin) {
     for (const target of approverDmTargets) {
       plannedTargets.push({
         surface: "approver-dm",

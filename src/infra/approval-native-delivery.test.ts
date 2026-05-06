@@ -41,7 +41,7 @@ describe("resolveChannelNativeApprovalDeliveryPlan", () => {
     ]);
   });
 
-  it("falls back to approver DMs when origin delivery is unavailable", async () => {
+  it("does not fall back to approver DMs when origin-only delivery is unavailable", async () => {
     const adapter: ChannelApprovalNativeAdapter = {
       describeDeliveryCapabilities: () => ({
         enabled: true,
@@ -60,16 +60,37 @@ describe("resolveChannelNativeApprovalDeliveryPlan", () => {
       adapter,
     });
 
+    expect(plan.targets).toEqual([]);
+  });
+
+  it("falls back to approver DMs when origin is unsupported", async () => {
+    const adapter: ChannelApprovalNativeAdapter = {
+      describeDeliveryCapabilities: () => ({
+        enabled: true,
+        preferredSurface: "approver-dm",
+        supportsOriginSurface: false,
+        supportsApproverDmSurface: true,
+      }),
+      resolveApproverDmTargets: async () => [{ to: "approver-1" }, { to: "approver-2" }],
+    };
+
+    const plan = await resolveChannelNativeApprovalDeliveryPlan({
+      cfg: {} as never,
+      approvalKind: "exec",
+      request: execRequest,
+      adapter,
+    });
+
     expect(plan.targets).toEqual([
       {
         surface: "approver-dm",
         target: { to: "approver-1" },
-        reason: "fallback",
+        reason: "preferred",
       },
       {
         surface: "approver-dm",
         target: { to: "approver-2" },
-        reason: "fallback",
+        reason: "preferred",
       },
     ]);
   });
