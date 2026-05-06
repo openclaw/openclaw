@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
-import type { OpenClawConfig } from "./config-utils.js";
+import { splitShellArgs, type OpenClawConfig } from "./config-utils.js";
 
 type ResolvedMemoryBackendConfig = ReturnType<typeof resolveMemoryBackendConfig>;
 
@@ -401,6 +401,13 @@ describe("resolveMemoryBackendConfig", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     expect(resolved.qmd?.searchMode).toBe("query");
     expect(resolved.qmd?.searchTool).toBe("hybrid_search");
+  });
+});
+
+describe("splitShellArgs", () => {
+  it("preserves empty quoted arguments", () => {
+    expect(splitShellArgs(`cmd "" '' tail`)).toEqual(["cmd", "", "", "tail"]);
+    expect(splitShellArgs(`cmd ""#literal`)).toEqual(["cmd", "#literal"]);
   });
 });
 
