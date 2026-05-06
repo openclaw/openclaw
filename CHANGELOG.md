@@ -107,6 +107,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex/app-server: route every agent run through its own isolated Codex app-server subprocess when `agents.defaults.maxConcurrent > 1`, so concurrent runs that target different agent directories no longer race on the shared client. Previously the second concurrent run forced `clearSharedCodexAppServerClient()` and SIGTERMed the first run's app-server mid-stream, silently dropping its in-flight turn (the user only saw a stuck session until the terminal-idle timeout fired). With `maxConcurrent === 1` (legacy default behavior in deployments that explicitly opt out of concurrency) the shared client is preserved unchanged.
 - Feishu: hydrate missing native topic starter thread IDs before session routing so first turns and follow-ups stay in the same topic session. Fixes #78262. Thanks @joeyzenghuan.
 - LINE: reject `dmPolicy: "open"` configs without wildcard `allowFrom` so webhook DMs fail validation instead of being acknowledged and silently blocked before inbound processing. Fixes #78316.
 - Providers/xAI: stop sending OpenAI-style reasoning effort controls to native Grok Responses models, so `xai/grok-4.3` no longer fails live Docker/Gateway runs with `Invalid reasoning effort`.
