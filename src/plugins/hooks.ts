@@ -78,6 +78,8 @@ import type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookResolveExecEnvEvent,
+  PluginHookResolveExecEnvContext,
 } from "./hook-types.js";
 
 // Re-export types for consumers
@@ -144,6 +146,8 @@ export type {
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
+  PluginHookResolveExecEnvEvent,
+  PluginHookResolveExecEnvContext,
 };
 
 export type HookRunnerLogger = {
@@ -1392,6 +1396,26 @@ export function createHookRunner(
     );
   }
 
+  /**
+   * Run resolve_exec_env hook.
+   * Allows plugins to contribute environment variables for exec tool execution.
+   * All plugin results are merged (later plugins override earlier ones for same keys).
+   */
+  async function runResolveExecEnv(
+    event: PluginHookResolveExecEnvEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<Record<string, string>> {
+    const result = await runModifyingHook<"resolve_exec_env", Record<string, string>>(
+      "resolve_exec_env",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => ({ ...acc, ...next }),
+      },
+    );
+    return result ?? {};
+  }
+
   // =========================================================================
   // Utility
   // =========================================================================
@@ -1455,6 +1479,7 @@ export function createHookRunner(
     runCronChanged,
     // Install hooks
     runBeforeInstall,
+    runResolveExecEnv,
     // Utility
     hasHooks,
     getHookCount,
