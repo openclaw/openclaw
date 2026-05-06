@@ -10,6 +10,7 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import {
   ConfigMutationConflictError,
+  assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
@@ -1944,6 +1945,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   const shouldRestart = opts.restart !== false;
   if (timeoutMs === null) {
     return;
+  }
+  if (opts.dryRun !== true) {
+    assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 

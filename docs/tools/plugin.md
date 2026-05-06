@@ -578,6 +578,11 @@ top-level `installRecords` and rebuildable manifest metadata in `plugins`. If
 the registry is missing, stale, or invalid, `openclaw plugins registry
 --refresh` rebuilds its manifest view from install records, config policy, and
 manifest/package metadata without loading plugin runtime modules.
+
+In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin lifecycle mutators are disabled.
+Manage plugin package selection and config through the Nix source for the
+install instead; for nix-openclaw, start with the agent-first
+[Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 `openclaw plugins update <id-or-npm-spec>` applies to tracked installs. Passing
 an npm package spec with a dist-tag or exact version resolves the package name
 back to the tracked plugin record and records the new spec for future updates.

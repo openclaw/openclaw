@@ -397,6 +397,19 @@ function createGatewayStartupTrace() {
   };
 }
 
+function formatRuntimeGatewayAuthTokenWarning(): string {
+  const base =
+    "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token.";
+  if (!isNixMode) {
+    return `${base} Persist one with \`openclaw config set gateway.auth.mode token\` and \`openclaw config set gateway.auth.token <token>\`.`;
+  }
+  return [
+    base,
+    "In Nix mode, set gateway.auth.token in your Nix-managed OpenClaw config and rebuild.",
+    "For the first-party Nix flow, see https://github.com/openclaw/nix-openclaw#quick-start and https://docs.openclaw.ai/install/nix.",
+  ].join(" ");
+}
+
 function collectProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
   const usage = process.memoryUsage();
   const toMb = (bytes: number) => bytes / 1024 / 1024;
@@ -577,21 +590,12 @@ export async function startGatewayServer(
       authOverride: opts.auth,
       tailscaleOverride: opts.tailscale,
       activateRuntimeSecrets,
-      persistStartupAuth: true,
     }),
   );
   cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);
   if (authBootstrap.generatedToken) {
-    if (authBootstrap.persistedGeneratedToken) {
-      log.info(
-        "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
-      );
-    } else {
-      log.warn(
-        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
-      );
-    }
+    log.warn(formatRuntimeGatewayAuthTokenWarning());
   }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfgAtStart);
   setDiagnosticsEnabledForProcess(diagnosticsEnabled);
@@ -610,31 +614,19 @@ export async function startGatewayServer(
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
   const controlUiSeed = minimalTestGateway
-    ? { config: cfgAtStart, persistedAllowedOriginsSeed: false }
+    ? { config: cfgAtStart, seededAllowedOrigins: false }
     : await startupTrace.measure("control-ui.seed", () =>
         maybeSeedControlUiAllowedOriginsAtStartup({
           config: cfgAtStart,
-          writeConfig: async (nextConfig) => {
-            const { replaceConfigFile } = await import("../config/mutate.js");
-            await replaceConfigFile({
-              nextConfig,
-              afterWrite: { mode: "auto" },
-            });
-          },
           log,
           runtimeBind: opts.bind,
           runtimePort: port,
         }),
       );
   cfgAtStart = controlUiSeed.config;
-  // Capture the final config hash only after startup writes (plugin auto-enable,
-  // auth token generation, control-UI origin seeding) so the config reloader can
-  // suppress its own persistence events without rereading config on every boot.
-  if (
-    startupConfigLoad.wroteConfig ||
-    authBootstrap.persistedGeneratedToken ||
-    controlUiSeed.persistedAllowedOriginsSeed
-  ) {
+  // Keep the old startup-write suppression path intact for compatibility with
+  // callers that may still report a write, but startup itself no longer mutates config.
+  if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
     const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
       readConfigFileSnapshot(),
     );

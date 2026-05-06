@@ -185,7 +185,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - Show the migration it applied.
     - Rewrite `~/.openclaw/openclaw.json` with the updated schema.
 
-    The Gateway also auto-runs doctor migrations on startup when it detects a legacy config format, so stale configs are repaired without manual intervention. Cron job store migrations are handled by `openclaw doctor --fix`.
+    Gateway startup refuses legacy config formats and asks you to run `openclaw doctor --fix`; it does not rewrite `openclaw.json` on startup. Cron job store migrations are also handled by `openclaw doctor --fix`.
 
     Current migrations:
 
