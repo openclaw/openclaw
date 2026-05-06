@@ -323,6 +323,50 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(mutations).toEqual(["first\n"]);
   });
 
+  it("rejects when an append call aborts during the active append operation", async () => {
+    let markAppendStarted!: () => void;
+    let releaseAppend!: () => void;
+    const appendStarted = new Promise<void>((resolve) => {
+      markAppendStarted = resolve;
+    });
+    const appendRelease = new Promise<void>((resolve) => {
+      releaseAppend = resolve;
+    });
+    const mutations: string[] = [];
+    const activeFile = path.join(tmpDir, "active-append.txt");
+    const baseTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write tool",
+      parameters: {} as AnyAgentTool["parameters"],
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "fallback" }],
+        details: {},
+      })),
+    };
+    const writeTool = wrapToolWriteWithAppend(baseTool, {
+      root: tmpDir,
+      appendFile: async (_absolutePath, content) => {
+        mutations.push(content);
+        markAppendStarted();
+        await appendRelease;
+      },
+    });
+
+    const controller = new AbortController();
+    const append = writeTool.execute(
+      "active-append",
+      { path: activeFile, content: "active\n", append: true },
+      controller.signal,
+    );
+    await appendStarted;
+
+    controller.abort();
+    await expect(append).rejects.toMatchObject({ name: "AbortError" });
+    releaseAppend();
+    expect(mutations).toEqual(["active\n"]);
+  });
+
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {
     const allowedRelativePath = "memory/2026-03-07.md";
     const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);

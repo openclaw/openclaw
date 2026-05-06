@@ -717,16 +717,55 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   } as const;
 }
 
-function throwAbortError(): never {
+function createAbortError(): Error {
   const err = new Error("Aborted");
   err.name = "AbortError";
-  throw err;
+  return err;
+}
+
+function throwAbortError(): never {
+  throw createAbortError();
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throwAbortError();
   }
+}
+
+function appendFileWithAbort(
+  signal: AbortSignal | undefined,
+  append: () => Promise<void>,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+
+    let aborted = false;
+    const onAbort = () => {
+      aborted = true;
+      reject(createAbortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    void (async () => {
+      try {
+        await append();
+        if (aborted) {
+          return;
+        }
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      } catch (error: unknown) {
+        signal?.removeEventListener("abort", onAbort);
+        if (!aborted) {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    })();
+  });
 }
 
 function createSandboxWriteOperations(params: SandboxToolParams) {
@@ -867,7 +906,7 @@ export function wrapToolWriteWithAppend(
       const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(ops.root, expanded);
       await withFileMutationQueue(resolved, async () => {
         throwIfAborted(signal);
-        await ops.appendFile(resolved, content);
+        await appendFileWithAbort(signal, () => ops.appendFile(resolved, content));
       });
       return {
         content: [{ type: "text", text: `Appended to ${filePath}.` }],
