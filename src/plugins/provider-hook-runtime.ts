@@ -2,10 +2,7 @@ import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
-import {
-  resolveConfigScopedRuntimeCacheValue,
-  type ConfigScopedRuntimeCache,
-} from "./plugin-cache-primitives.js";
+import type { ConfigScopedRuntimeCache } from "./plugin-cache-primitives.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
@@ -31,6 +28,11 @@ type ProviderRuntimePluginLookupParams = {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
+};
+
+type ProviderPluginsForHooksResult = {
+  plugins: ProviderPlugin[];
+  loadInFlight: boolean;
 };
 
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
@@ -105,6 +107,19 @@ export function resolveProviderPluginsForHooks(params: {
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 }): ProviderPlugin[] {
+  return resolveProviderPluginsForHooksWithState(params).plugins;
+}
+
+function resolveProviderPluginsForHooksWithState(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  onlyPluginIds?: string[];
+  providerRefs?: string[];
+  applyAutoEnable?: boolean;
+  bundledProviderAllowlistCompat?: boolean;
+  bundledProviderVitestCompat?: boolean;
+}): ProviderPluginsForHooksResult {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   if (
@@ -118,7 +133,7 @@ export function resolveProviderPluginsForHooks(params: {
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
     })
   ) {
-    return [];
+    return { plugins: [], loadInFlight: true };
   }
   const resolved = resolvePluginProviders({
     ...params,
@@ -129,7 +144,7 @@ export function resolveProviderPluginsForHooks(params: {
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
   });
-  return resolved;
+  return { plugins: resolved, loadInFlight: false };
 }
 
 export function resolveProviderRuntimePlugin(
@@ -151,33 +166,37 @@ export function resolveProviderRuntimePlugin(
     return activePlugin;
   }
   const cacheConfig = params.env && params.env !== process.env ? undefined : params.config;
-  const plugin = resolveConfigScopedRuntimeCacheValue({
-    cache: providerRuntimePluginCache,
-    config: cacheConfig,
-    key: resolveProviderRuntimePluginCacheKey(params),
-    load: () => {
-      return (
-        resolveProviderPluginsForHooks({
-          config: params.config,
-          workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
-          env: params.env,
-          providerRefs: apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider],
-          applyAutoEnable: params.applyAutoEnable,
-          bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
-          bundledProviderVitestCompat: params.bundledProviderVitestCompat,
-        }).find((plugin) => {
-          if (apiOwnerHint) {
-            return (
-              matchesProviderLiteralId(plugin, params.provider) ||
-              matchesProviderId(plugin, apiOwnerHint)
-            );
-          }
-          return matchesProviderId(plugin, params.provider);
-        }) ?? null
-      );
-    },
+  const cacheKey = cacheConfig ? resolveProviderRuntimePluginCacheKey(params) : "";
+  const cached = cacheConfig ? providerRuntimePluginCache.get(cacheConfig) : undefined;
+  if (cached?.has(cacheKey)) {
+    return cached.get(cacheKey) ?? undefined;
+  }
+  const resolved = resolveProviderPluginsForHooksWithState({
+    config: params.config,
+    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+    env: params.env,
+    providerRefs: apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider],
+    applyAutoEnable: params.applyAutoEnable,
+    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
+    bundledProviderVitestCompat: params.bundledProviderVitestCompat,
   });
-  return plugin ?? undefined;
+  const plugin = resolved.plugins.find((plugin) => {
+    if (apiOwnerHint) {
+      return (
+        matchesProviderLiteralId(plugin, params.provider) || matchesProviderId(plugin, apiOwnerHint)
+      );
+    }
+    return matchesProviderId(plugin, params.provider);
+  });
+  if (cacheConfig && !resolved.loadInFlight) {
+    let writableCache = providerRuntimePluginCache.get(cacheConfig);
+    if (!writableCache) {
+      writableCache = new Map();
+      providerRuntimePluginCache.set(cacheConfig, writableCache);
+    }
+    writableCache.set(cacheKey, plugin ?? null);
+  }
+  return plugin;
 }
 
 export function resolveProviderHookPlugin(params: {

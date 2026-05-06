@@ -1274,6 +1274,53 @@ describe("provider-runtime", () => {
     ).toBe(wrappedStreamFn);
   });
 
+  it("resolves Azure OpenAI Responses hooks through the manifest-owned OpenAI provider", () => {
+    resolvePluginProvidersMock.mockImplementation((params) =>
+      params.providerRefs?.includes("azure-openai-responses")
+        ? [
+            {
+              id: "openai",
+              label: "OpenAI",
+              hookAliases: ["azure-openai-responses"],
+              auth: [],
+              prepareExtraParams: ({ extraParams }) => ({
+                ...extraParams,
+                azureResponsesHook: true,
+              }),
+            },
+          ]
+        : [],
+    );
+
+    expect(
+      prepareProviderExtraParams({
+        provider: "azure-openai-responses",
+        config: {
+          models: {
+            providers: {
+              "azure-openai-responses": {
+                baseUrl: "https://azure.example.com/openai/v1",
+                api: "azure-openai-responses",
+                models: [],
+              },
+            },
+          },
+        } as never,
+        context: createDemoRuntimeContext({
+          provider: "azure-openai-responses",
+          extraParams: {},
+        }),
+      }),
+    ).toEqual({
+      azureResponsesHook: true,
+    });
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["azure-openai-responses"],
+      }),
+    );
+  });
+
   it("does not run broad provider-hook scans for reasoning output mode", () => {
     resolvePluginProvidersMock.mockImplementation((params) => {
       if (params.providerRefs?.includes("mock-openai")) {
@@ -2297,6 +2344,85 @@ describe("provider-runtime", () => {
         },
       }),
     ).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache in-flight provider hook misses as config-scoped misses", () => {
+    const cachedNormalizedConfig: ModelProviderConfig = {
+      baseUrl: "https://cached.example.com",
+      api: "openai-completions",
+      models: [],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "cached-provider": { enabled: true },
+          "outer-provider": { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    let providerLoadInFlight = false;
+    resolveOwningPluginIdsForProviderMock.mockImplementation((params) => [params.provider]);
+    isPluginProvidersLoadInFlightMock.mockImplementation(() => providerLoadInFlight);
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const providerRef = params?.providerRefs?.[0];
+      if (providerRef === "cached-provider") {
+        return [
+          {
+            id: "cached-provider",
+            label: "Cached Provider",
+            auth: [],
+            normalizeConfig: () => cachedNormalizedConfig,
+          },
+        ];
+      }
+      providerLoadInFlight = true;
+      try {
+        const reentrantResult = normalizeProviderConfigWithPlugin({
+          provider: "cached-provider",
+          config,
+          context: {
+            provider: "cached-provider",
+            providerConfig: {
+              baseUrl: "https://example.com",
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        });
+        expect(reentrantResult).toBeUndefined();
+        return [];
+      } finally {
+        providerLoadInFlight = false;
+      }
+    });
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "outer-provider",
+        config,
+        context: {
+          provider: "outer-provider",
+          providerConfig: {
+            baseUrl: "https://outer.example.com",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "cached-provider",
+        config,
+        context: {
+          provider: "cached-provider",
+          providerConfig: { baseUrl: "https://example.com", api: "openai-completions", models: [] },
+        },
+      }),
+    ).toBe(cachedNormalizedConfig);
 
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });

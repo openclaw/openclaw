@@ -497,6 +497,12 @@ export function resolveOwningPluginIdsForProvider(params: {
           plugin.providers.some(
             (providerId) => normalizeProviderId(providerId) === normalizedProvider,
           ) ||
+          Object.keys(plugin.modelCatalog?.providers ?? {}).some(
+            (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+          ) ||
+          Object.keys(plugin.modelCatalog?.aliases ?? {}).some(
+            (providerId) => normalizeProviderId(providerId) === normalizedProvider,
+          ) ||
           plugin.cliBackends.some(
             (backendId) => normalizeProviderId(backendId) === normalizedProvider,
           ),
@@ -513,6 +519,14 @@ export function resolveOwningPluginIdsForProvider(params: {
       workspaceDir: params.workspaceDir,
       env,
       providerId: normalizedProvider,
+      includeDisabled: true,
+    }),
+    ...resolvePluginContributionOwners({
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env,
+      contribution: "modelCatalogProviders",
+      matches: (providerId) => normalizeProviderId(providerId) === normalizedProvider,
       includeDisabled: true,
     }),
     ...resolvePluginContributionOwners({
