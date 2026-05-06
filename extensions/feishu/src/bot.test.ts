@@ -1156,6 +1156,53 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultSourceReplyDeliveryMode: "automatic",
+      }),
+    );
+  });
+
+  it("honors explicit group visibleReplies=message_tool instead of forcing Feishu automatic replies", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      messages: { groupChat: { visibleReplies: "message_tool" } },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-explicit-message-tool",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        defaultSourceReplyDeliveryMode: "automatic",
+      }),
+    );
   });
 
   it("blocks group sender when global groupSenderAllowFrom excludes sender", async () => {

@@ -1246,6 +1246,11 @@ export async function handleFeishuMessage(params: {
           (ctx.suppressReplyTarget ? undefined : ctx.messageId))
         : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    const defaultSourceReplyDeliveryMode =
+      isGroup &&
+      (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies) === undefined
+        ? ("automatic" as const)
+        : undefined;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1323,6 +1328,7 @@ export async function handleFeishuMessage(params: {
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             identity,
+            defaultSourceReplyDeliveryMode,
             messageCreateTimeMs,
           });
 
@@ -1488,6 +1494,7 @@ export async function handleFeishuMessage(params: {
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         identity,
+        defaultSourceReplyDeliveryMode,
         messageCreateTimeMs,
       });
 

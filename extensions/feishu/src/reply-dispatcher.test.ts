@@ -297,6 +297,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
   });
 
+  it("can force automatic source replies for default Feishu group dispatch", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      defaultSourceReplyDeliveryMode: "automatic",
+    });
+
+    expect(result.replyOptions).toHaveProperty("sourceReplyDeliveryMode", "automatic");
+  });
+
   it("enables core block streaming when Feishu blockStreaming is explicitly true", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
