@@ -32,6 +32,10 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 const authSourceCheckMock = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
 }));
