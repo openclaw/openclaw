@@ -245,7 +245,7 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
   Optional git base ref for the managed worktree. Requires `visible: true` and `worktree: true`.
 </ParamField>
 <ParamField path="toolsAllow" type="string[]">
-  Native sub-agents only. Narrows the spawned child run's tool set to the listed tool ids, for example `["read", "exec"]`. Omit to use the normal child tool policy; pass `[]` to run the child with no tools. `runtime: "acp"` rejects this field because ACP harnesses do not use the embedded-runner tool construction path.
+  Native embedded sub-agents only. Narrows the spawned child run's tool set to the listed tool ids, for example `["read", "exec"]`. Omit to use the normal child tool policy; pass `[]` to run the child with no tools. `runtime: "acp"` rejects this field because ACP harnesses do not use the embedded-runner tool construction path. CLI-backed native runs also reject this field because CLI harnesses do not use OpenClaw's embedded tool construction path.
 </ParamField>
 
 <Warning>
