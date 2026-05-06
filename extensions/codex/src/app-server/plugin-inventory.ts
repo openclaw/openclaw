@@ -9,10 +9,7 @@ import type { v2 } from "./protocol-generated/typescript/index.js";
 
 export const CODEX_PLUGIN_MARKETPLACE_NAME = "openai-curated";
 
-export type CodexPluginBridgeRequest = <T = unknown>(
-  method: string,
-  params?: unknown,
-) => Promise<T>;
+export type CodexPluginBridgeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
 export type CodexPluginInventoryRecord = {
   key: string;
@@ -96,7 +93,7 @@ export async function readCodexPluginInventory(params: {
   if (!config.enabled) {
     return { enabled: false, marketplaceFound: false, records: [], diagnostics: [] };
   }
-  const listed = await params.request<v2.PluginListResponse>("plugin/list", {});
+  const listed = (await params.request("plugin/list", {})) as v2.PluginListResponse;
   const marketplace = listed.marketplaces.find(
     (entry) => entry.name === CODEX_PLUGIN_MARKETPLACE_NAME,
   );
@@ -233,7 +230,7 @@ async function readAppsBestEffort(
   forceRefetch: boolean,
 ): Promise<v2.AppInfo[]> {
   try {
-    const apps = await request<v2.AppsListResponse>("app/list", { forceRefetch });
+    const apps = (await request("app/list", { forceRefetch })) as v2.AppsListResponse;
     return apps.data;
   } catch {
     return [];

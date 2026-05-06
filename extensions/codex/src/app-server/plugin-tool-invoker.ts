@@ -16,6 +16,7 @@ import {
   buildCodexPluginMention,
   readCodexPluginInventory,
   resolveCodexPluginEffectivePolicy,
+  type CodexPluginBridgeRequest,
   type CodexPluginInventoryRecord,
 } from "./plugin-inventory.js";
 import {
@@ -72,7 +73,7 @@ export async function invokeCodexPluginTool(params: {
   }
 
   const appIdsEnabled = await enableCodexPluginAppsBestEffort({ request, record });
-  const thread = await request<{ thread: { id: string } }>("thread/start", {
+  const thread = (await request("thread/start", {
     model: resolveCodexPluginToolModel(config),
     cwd: params.context?.workspaceDir ?? process.cwd(),
     approvalPolicy: appServer.approvalPolicy,
@@ -84,7 +85,7 @@ export async function invokeCodexPluginTool(params: {
     ephemeral: true,
     experimentalRawEvents: true,
     persistExtendedHistory: true,
-  });
+  })) as { thread: { id: string } };
 
   const threadId = thread.thread.id;
   const run = await runCodexPluginTurn({
@@ -107,18 +108,18 @@ export async function invokeCodexPluginTool(params: {
   };
 }
 
-function makeRequest(client: CodexAppServerClient, timeoutMs: number) {
-  return <M extends string>(method: M, requestParams?: unknown) =>
+function makeRequest(client: CodexAppServerClient, timeoutMs: number): CodexPluginBridgeRequest {
+  return (method: string, requestParams?: unknown) =>
     client.request(method, requestParams, { timeoutMs });
 }
 
 async function enableCodexPluginAppsBestEffort(params: {
-  request: <T = JsonValue | undefined>(method: string, requestParams?: unknown) => Promise<T>;
+  request: CodexPluginBridgeRequest;
   record: CodexPluginInventoryRecord;
 }): Promise<string[]> {
-  const apps = await params.request<{
+  const apps = (await params.request("app/list", { forceRefetch: true })) as {
     data?: Array<{ id?: string; pluginDisplayNames?: string[] }>;
-  }>("app/list", { forceRefetch: true });
+  };
   const displayNames = new Set([
     params.record.displayName,
     params.record.pluginName,
@@ -145,7 +146,7 @@ async function enableCodexPluginAppsBestEffort(params: {
 
 async function runCodexPluginTurn(params: {
   client: CodexAppServerClient;
-  request: <T = JsonValue | undefined>(method: string, requestParams?: unknown) => Promise<T>;
+  request: CodexPluginBridgeRequest;
   threadId: string;
   plugin: CodexPluginInventoryRecord;
   userRequest: string;
@@ -203,9 +204,7 @@ async function runCodexPluginTurn(params: {
   });
 
   try {
-    const response = await params.request<{
-      turn: { id: string; status: string; error?: unknown };
-    }>("turn/start", {
+    const response = (await params.request("turn/start", {
       threadId: params.threadId,
       input: [
         {
@@ -215,7 +214,9 @@ async function runCodexPluginTurn(params: {
         },
       ],
       cwd: params.cwd,
-    });
+    })) as {
+      turn: { id: string; status: string; error?: unknown };
+    };
     turnId = response.turn.id;
     idleTimeout = setTimeout(() => {
       if (!completed) {

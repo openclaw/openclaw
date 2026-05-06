@@ -22,7 +22,7 @@ import { buildCodexMigrationPlan } from "./plan.js";
 const OPENAI_CURATED_MARKETPLACE = "openai-curated";
 const CODEX_PLUGIN_APPLY_TIMEOUT_MS = 60_000;
 
-type CodexMigrationAppServerRequest = <T>(method: string, params?: unknown) => Promise<T>;
+type CodexMigrationAppServerRequest = (method: string, params?: unknown) => Promise<unknown>;
 
 let appServerRequestForTests: CodexMigrationAppServerRequest | undefined;
 
@@ -51,8 +51,8 @@ async function defaultAppServerRequest(
   const runtimeOptions = resolveCodexAppServerRuntimeOptions({
     pluginConfig: readCodexPluginConfigFromOpenClawConfig(ctx.config),
   });
-  return async <T>(method: string, requestParams?: unknown): Promise<T> =>
-    await requestCodexAppServerJson<T>({
+  return async (method: string, requestParams?: unknown): Promise<unknown> =>
+    await requestCodexAppServerJson({
       method,
       requestParams,
       timeoutMs: CODEX_PLUGIN_APPLY_TIMEOUT_MS,
@@ -76,13 +76,13 @@ function readPluginDetail(item: MigrationItem):
 }
 
 async function refreshCodexPluginRuntime(request: CodexMigrationAppServerRequest): Promise<void> {
-  await request<v2.PluginListResponse>("plugin/list", { cwds: [] } satisfies v2.PluginListParams);
-  await request<v2.SkillsListResponse>("skills/list", {
+  await request("plugin/list", { cwds: [] } satisfies v2.PluginListParams);
+  await request("skills/list", {
     cwds: [],
     forceReload: true,
   } satisfies v2.SkillsListParams);
   await request("config/mcpServer/reload", undefined);
-  await request<v2.AppsListResponse>("app/list", {
+  await request("app/list", {
     limit: 100,
     forceRefetch: true,
   } satisfies v2.AppsListParams);
@@ -96,9 +96,9 @@ async function applyCodexPluginActivationItems(params: {
     return [];
   }
   const request = appServerRequestForTests ?? (await defaultAppServerRequest(params.ctx));
-  const listed = await request<v2.PluginListResponse>("plugin/list", {
+  const listed = (await request("plugin/list", {
     cwds: [],
-  } satisfies v2.PluginListParams);
+  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
   const marketplace = listed.marketplaces.find(
     (entry) => entry.name === OPENAI_CURATED_MARKETPLACE,
   );
@@ -148,7 +148,7 @@ async function applyCodexPluginActivationItems(params: {
       });
       continue;
     }
-    await request<v2.PluginInstallResponse>("plugin/install", {
+    await request("plugin/install", {
       marketplacePath: marketplace.path,
       pluginName: detail.pluginName,
     } satisfies v2.PluginInstallParams);

@@ -28,10 +28,10 @@ export async function ensureCodexPluginActivated(params: {
       message: `Codex marketplace path for ${record.marketplaceName} is unavailable.`,
     };
   }
-  const installed = await params.request<v2.PluginInstallResponse>("plugin/install", {
+  const installed = (await params.request("plugin/install", {
     marketplacePath: record.marketplacePath,
     pluginName: record.pluginName,
-  } satisfies v2.PluginInstallParams);
+  } satisfies v2.PluginInstallParams)) as v2.PluginInstallResponse;
   await refreshCodexPluginRuntimeState(params.request);
   if (installed.appsNeedingAuth.length > 0) {
     return { status: "auth_required", appsNeedingAuth: installed.appsNeedingAuth };

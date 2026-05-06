@@ -74,7 +74,7 @@ function createConfigRuntime(initialConfig: MigrationProviderContext["config"]):
         return { nextConfig: currentConfig };
       },
     },
-  } as NonNullable<MigrationProviderContext["runtime"]>;
+  } as unknown as NonNullable<MigrationProviderContext["runtime"]>;
   return { runtime, getConfig: () => currentConfig };
 }
 

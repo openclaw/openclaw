@@ -63,7 +63,7 @@ type CodexSource = {
   archivePaths: CodexArchiveSource[];
 };
 
-type CodexMigrationAppServerRequest = <T>(method: string, params?: unknown) => Promise<T>;
+type CodexMigrationAppServerRequest = (method: string, params?: unknown) => Promise<unknown>;
 
 let appServerRequestForTests: CodexMigrationAppServerRequest | undefined;
 
@@ -200,12 +200,12 @@ async function defaultAppServerRequest(params: {
   const startOptions = {
     ...runtimeOptions.start,
     env: {
-      ...(runtimeOptions.start.env ?? {}),
+      ...runtimeOptions.start.env,
       CODEX_HOME: params.codexHome,
     },
   };
-  return async <T>(method: string, requestParams?: unknown): Promise<T> =>
-    await requestCodexAppServerJson<T>({
+  return async (method: string, requestParams?: unknown): Promise<unknown> =>
+    await requestCodexAppServerJson({
       method,
       requestParams,
       timeoutMs: CODEX_PLUGIN_DISCOVERY_TIMEOUT_MS,
@@ -222,7 +222,7 @@ async function listAllApps(request: CodexMigrationAppServerRequest): Promise<v2.
       limit: 100,
       forceRefetch: true,
     } satisfies v2.AppsListParams;
-    const response = await request<v2.AppsListResponse>("app/list", params);
+    const response = (await request("app/list", params)) as v2.AppsListResponse;
     apps.push(...response.data);
     cursor = response.nextCursor;
   } while (cursor);
@@ -243,7 +243,9 @@ async function discoverInstalledOpenAiCuratedPlugins(params: {
         pluginConfig: params.pluginConfig,
       }));
     const [listed, apps] = await Promise.all([
-      request<v2.PluginListResponse>("plugin/list", { cwds: [] } satisfies v2.PluginListParams),
+      request("plugin/list", {
+        cwds: [],
+      } satisfies v2.PluginListParams) as Promise<v2.PluginListResponse>,
       listAllApps(request),
     ]);
     const marketplace = listed.marketplaces.find(
@@ -254,18 +256,23 @@ async function discoverInstalledOpenAiCuratedPlugins(params: {
     }
     const plugins = marketplace.plugins
       .filter((plugin) => plugin.installed)
-      .map((plugin) => {
+      .map((plugin): CodexInstalledPluginSource => {
         const accessible = pluginAccessible(plugin, apps);
-        return {
+        const source: CodexInstalledPluginSource = {
           id: plugin.id,
           name: pluginNameFromSummary(plugin),
           displayName: displayNameForPlugin(plugin),
           marketplaceName: OPENAI_CURATED_MARKETPLACE,
-          ...(marketplace.path ? { marketplacePath: marketplace.path } : {}),
           installed: plugin.installed,
           enabled: plugin.enabled,
-          ...(accessible !== undefined ? { accessible } : {}),
         };
+        if (marketplace.path) {
+          source.marketplacePath = marketplace.path;
+        }
+        if (accessible !== undefined) {
+          source.accessible = accessible;
+        }
+        return source;
       })
       .toSorted((a, b) => a.name.localeCompare(b.name));
     return { plugins };

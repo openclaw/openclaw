@@ -41,7 +41,6 @@ export function buildMigrationContext(params: {
   const stateDir = resolveStateDir();
   const ctx: MigrationProviderContext & { plugins?: string[] } = {
     config,
-    runtime: params.runtime,
     stateDir,
     source: params.source,
     includeSecrets: Boolean(params.includeSecrets),
