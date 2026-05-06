@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  isReasoningPrefacedSilentReply,
+  isSilentReplyPayloadText,
   isSilentReplyPrefixText,
   isSilentReplyText,
   startsWithSilentToken,
@@ -133,5 +135,88 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+});
+
+describe("isReasoningPrefacedSilentReply", () => {
+  it("classifies reasoning preamble + trailing NO_REPLY as silent", () => {
+    const text =
+      "think\n" +
+      "The user's message is from Aftermath in the #general channel.\n" +
+      "The message is a self-promotional advertisement.\n" +
+      "Silence is the required action.\n" +
+      "Therefore, I should output NO_REPLY.NO_REPLY";
+    expect(isReasoningPrefacedSilentReply(text)).toBe(true);
+  });
+
+  it("classifies single trailing NO_REPLY with reasoning preamble as silent", () => {
+    const text = "think\nThe user is saying hello. I will not reply.\nNO_REPLY";
+    expect(isReasoningPrefacedSilentReply(text)).toBe(true);
+  });
+
+  it("accepts other reasoning heading words", () => {
+    for (const heading of ["thinking", "thought", "reasoning", "analysis"]) {
+      const text = `${heading}\nUser asked a trivial question.\nNO_REPLY`;
+      expect(isReasoningPrefacedSilentReply(text)).toBe(true);
+    }
+  });
+
+  it("accepts reasoning heading with trailing colon", () => {
+    expect(isReasoningPrefacedSilentReply("thinking:\nSome analysis.\nNO_REPLY")).toBe(true);
+  });
+
+  it("collapses doubled trailing NO_REPLY forms with inner punctuation", () => {
+    // The exact observed pattern from the bug report.
+    expect(isReasoningPrefacedSilentReply("think\nbody\nNO_REPLY.NO_REPLY")).toBe(true);
+    expect(isReasoningPrefacedSilentReply("think\nbody\nNO_REPLY NO_REPLY")).toBe(true);
+    expect(isReasoningPrefacedSilentReply("think\nbody\nNO_REPLY. NO_REPLY")).toBe(true);
+  });
+
+  it("preserves #19537 — substantive replies ending with NO_REPLY are not silent", () => {
+    const substantive = "Here is the answer you asked for.\n\nNO_REPLY";
+    expect(isReasoningPrefacedSilentReply(substantive)).toBe(false);
+  });
+
+  it("returns false when message does not end with the silent token", () => {
+    expect(isReasoningPrefacedSilentReply("think\nbody\nactual reply")).toBe(false);
+  });
+
+  it("returns false for plain substantive text without reasoning preamble", () => {
+    expect(isReasoningPrefacedSilentReply("I should reply to this. NO_REPLY")).toBe(false);
+  });
+
+  it("returns false for empty or whitespace-only input", () => {
+    expect(isReasoningPrefacedSilentReply("")).toBe(false);
+    expect(isReasoningPrefacedSilentReply(undefined)).toBe(false);
+    expect(isReasoningPrefacedSilentReply("   ")).toBe(false);
+  });
+
+  it("returns true when only the silent token remains after trimming", () => {
+    expect(isReasoningPrefacedSilentReply("  NO_REPLY  ")).toBe(true);
+    expect(isReasoningPrefacedSilentReply("NO_REPLY.NO_REPLY")).toBe(true);
+  });
+
+  it("does not match when reasoning heading is followed inline by prose on same line", () => {
+    // A bare heading must be on its own line; inline "think the answer is X" is
+    // natural language and should not be suppressed.
+    expect(isReasoningPrefacedSilentReply("think the answer is yes\nNO_REPLY")).toBe(false);
+  });
+});
+
+describe("isSilentReplyPayloadText integration", () => {
+  it("returns true for reasoning-prefaced silent replies", () => {
+    expect(isSilentReplyPayloadText("think\nanalysis goes here\nNO_REPLY.NO_REPLY")).toBe(true);
+  });
+
+  it("still returns true for exact token", () => {
+    expect(isSilentReplyPayloadText("NO_REPLY")).toBe(true);
+  });
+
+  it("still returns true for JSON action envelope", () => {
+    expect(isSilentReplyPayloadText('{"action":"NO_REPLY"}')).toBe(true);
+  });
+
+  it("still returns false for substantive replies ending with NO_REPLY (#19537)", () => {
+    expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
   });
 });

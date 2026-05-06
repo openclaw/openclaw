@@ -109,6 +109,49 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain("verify before retrying");
   });
 
+  it("does not surface couldn't-generate when last assistant is a reasoning-prefaced silent reply", async () => {
+    // Regression for the false-positive where Gemini emits its chain-of-thought
+    // as a "think\n...\nNO_REPLY" plain-text payload. The outbound silent-reply
+    // suppressor strips the assistant text, leaving `assistantTexts: []`. The
+    // classifier must consult `lastAssistant.content` directly so it does not
+    // surface "Agent couldn't generate a response" for an intentional silence.
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [],
+        didSendViaMessagingTool: false,
+        lastAssistant: {
+          stopReason: "stop",
+          provider: "google-vertex",
+          model: "gemini-3.1-pro-preview",
+          content: [
+            {
+              type: "text",
+              text: "think\nAnother advertisement. Ignore.NO_REPLY",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "google-vertex",
+      model: "gemini-3.1-pro-preview",
+      runId: "run-incomplete-turn-reasoning-prefaced-silent",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    const payloads = result.payloads ?? [];
+    expect(payloads).not.toContainEqual(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("couldn't generate a response"),
+      }),
+    );
+  });
+
   it("synthesizes a silent cron payload from a trailing current-attempt NO_REPLY tool result", () => {
     const payload = resolveSilentToolResultReplyPayload({
       isCronTrigger: true,

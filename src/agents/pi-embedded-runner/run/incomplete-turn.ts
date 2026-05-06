@@ -244,7 +244,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     return null;
   }
 
-  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts)) {
+  if (hasOnlySilentAssistantReply(params.attempt.assistantTexts, params.attempt.lastAssistant)) {
     return null;
   }
 
@@ -282,12 +282,49 @@ function joinAssistantTexts(assistantTexts?: readonly string[]): string {
   return (assistantTexts ?? []).join("\n\n").trim();
 }
 
-function hasOnlySilentAssistantReply(assistantTexts?: readonly string[]): boolean {
-  const nonEmptyTexts = (assistantTexts ?? []).filter((text) => text.trim().length > 0);
+function hasOnlySilentAssistantReply(
+  assistantTexts?: readonly string[],
+  lastAssistant?: AssistantMessage | null,
+): boolean {
+  const candidates = collectAssistantSilentReplyCandidates(assistantTexts, lastAssistant);
   return (
-    nonEmptyTexts.length > 0 &&
-    nonEmptyTexts.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
+    candidates.length > 0 &&
+    candidates.every((text) => isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN))
   );
+}
+
+/**
+ * Collects candidate assistant text strings that should be checked against
+ * `isSilentReplyPayloadText`.
+ *
+ * Pulls from two sources: `assistantTexts` (the openclaw run wrapper's
+ * post-chunker text collection — can be empty when streaming/chunking
+ * filters drop the assistant text before it reaches the wrapper) and
+ * `lastAssistant.content` text parts (the raw model output recorded in the
+ * session). The session text is the authoritative source for "did the
+ * assistant say a silent-reply sentinel?", and consulting it prevents the
+ * incomplete-turn warning from surfacing as a false positive on
+ * reasoning-prefaced silent replies (e.g. "think\n...\nNO_REPLY") that the
+ * outbound silent-reply suppressor correctly stripped from delivery.
+ */
+function collectAssistantSilentReplyCandidates(
+  assistantTexts?: readonly string[],
+  lastAssistant?: AssistantMessage | null,
+): string[] {
+  const collected: string[] = [];
+  for (const text of assistantTexts ?? []) {
+    if (typeof text === "string" && text.trim().length > 0) {
+      collected.push(text);
+    }
+  }
+  const lastAssistantText =
+    lastAssistant && typeof lastAssistant === "object"
+      ? readMessageTextContent(lastAssistant as AgentMessage)
+      : undefined;
+  if (lastAssistantText && lastAssistantText.trim().length > 0) {
+    collected.push(lastAssistantText);
+  }
+  return collected;
 }
 
 function isToolResultRole(role: string): boolean {
@@ -406,6 +443,17 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
+  // A reasoning-prefaced silent reply (for example "think\n...\nNO_REPLY"
+  // from Gemini's chain-of-thought leaking as plain text) is *intentional
+  // silence*, not a model that "didn't finish thinking." Without this guard
+  // the empty-response/reasoning-only/planning-only retry resolvers each
+  // re-trigger the model and the incomplete-turn classifier surfaces a
+  // "couldn't generate a response" warning even though the outbound
+  // silent-reply suppressor correctly stripped the noise from delivery.
+  const text = readMessageTextContent(message as AgentMessage);
+  if (text && isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN)) {
+    return false;
+  }
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
@@ -427,6 +475,13 @@ function isEmptyResponseAssistantTurn(params: {
     return true;
   }
   if (assistant.stopReason === "error") {
+    return false;
+  }
+  // Reasoning-prefaced silent reply (for example "think\n...\nNO_REPLY") is
+  // intentional silence. Treat it the same as an exact NO_REPLY so the
+  // empty-response retry path doesn't burn tokens re-prompting Gemini.
+  const assistantText = readMessageTextContent(assistant as AgentMessage);
+  if (assistantText && isSilentReplyPayloadText(assistantText, SILENT_REPLY_TOKEN)) {
     return false;
   }
   if (
