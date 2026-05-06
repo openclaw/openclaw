@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/skill-curator",
+  "version": "2026.5.6",
+  "private": true,
+  "description": "OpenClaw skill curator plugin – telemetry, stale/archive transitions, LLM review passes, and snapshot backups",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

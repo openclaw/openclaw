@@ -1,0 +1,84 @@
+{
+  "id": "skill-curator",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Skill Curator",
+  "description": "Tracks skill usage telemetry, auto-archives stale skills, snapshots workspace skills before mutations, and runs periodic LLM review passes.",
+  "contracts": {
+    "tools": ["skill_curator"],
+    "commands": ["curator"]
+  },
+  "uiHints": {
+    "intervalHours": {
+      "label": "Interval Hours",
+      "help": "How often (in hours) the curator runs its periodic pass."
+    },
+    "minIdleHours": {
+      "label": "Min Idle Hours",
+      "help": "Agent must be idle this many hours before curator will run."
+    },
+    "staleAfterDays": {
+      "label": "Stale After Days",
+      "help": "Days since last use before a skill is marked stale."
+    },
+    "archiveAfterDays": {
+      "label": "Archive After Days",
+      "help": "Days since last use before a stale skill is archived."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "interval_hours": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 8760,
+        "default": 168
+      },
+      "min_idle_hours": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 168,
+        "default": 2
+      },
+      "stale_after_days": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3650,
+        "default": 30
+      },
+      "archive_after_days": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 3650,
+        "default": 90
+      },
+      "backup": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "keep": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 5
+          }
+        },
+        "default": {
+          "enabled": true,
+          "keep": 5
+        }
+      }
+    }
+  }
+}
