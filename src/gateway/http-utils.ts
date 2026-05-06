@@ -137,6 +137,21 @@ function resolveSessionKey(params: {
     return explicit;
   }
 
+  // Check for a stable chat/conversation ID provided by OpenAI-compatible frontends
+  // (e.g. Open-WebUI sends X-Chat-Id; Langchain and others may use X-Thread-Id).
+  // When present, derive a stable session key so all turns of the same chat share
+  // one session rather than proliferating a new session per message.
+  const chatId =
+    normalizeOptionalString(getHeader(params.req, "x-chat-id")) ||
+    normalizeOptionalString(getHeader(params.req, "x-thread-id")) ||
+    "";
+  if (chatId) {
+    return buildAgentMainSessionKey({
+      agentId: params.agentId,
+      mainKey: `${params.prefix}-chat:${chatId}`,
+    });
+  }
+
   const user = params.user?.trim();
   const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
