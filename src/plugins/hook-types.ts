@@ -270,12 +270,24 @@ export type PluginHookLlmOutputEvent = {
   };
 };
 
+export type PluginHookEmbeddedRunStageTiming = {
+  name: string;
+  durationMs: number;
+  elapsedMs: number;
+};
+
+export type PluginHookEmbeddedRunStageSummary = {
+  totalMs: number;
+  stages: PluginHookEmbeddedRunStageTiming[];
+};
+
 export type PluginHookAgentEndEvent = {
   runId?: string;
   messages: unknown[];
   success: boolean;
   error?: string;
   durationMs?: number;
+  prepStages?: PluginHookEmbeddedRunStageSummary;
 };
 
 export type PluginHookBeforeAgentFinalizeEvent = {

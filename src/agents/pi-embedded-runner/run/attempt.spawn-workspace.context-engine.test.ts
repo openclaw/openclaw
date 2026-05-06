@@ -265,6 +265,63 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
   });
 
+  it("exposes embedded prep stages on attempt result and agent_end hook event", async () => {
+    const runAgentEnd = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "agent_end"),
+      runAgentEnd,
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(result.prepStages).toEqual(
+      expect.objectContaining({
+        totalMs: expect.any(Number),
+        stages: expect.arrayContaining([
+          expect.objectContaining({
+            name: "bundle-tools",
+            durationMs: expect.any(Number),
+            elapsedMs: expect.any(Number),
+          }),
+          expect.objectContaining({
+            name: "system-prompt",
+            durationMs: expect.any(Number),
+            elapsedMs: expect.any(Number),
+          }),
+          expect.objectContaining({
+            name: "stream-setup",
+            durationMs: expect.any(Number),
+            elapsedMs: expect.any(Number),
+          }),
+        ]),
+      }),
+    );
+    expect(runAgentEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        durationMs: expect.any(Number),
+        prepStages: expect.objectContaining({
+          totalMs: expect.any(Number),
+          stages: expect.arrayContaining([
+            expect.objectContaining({ name: "bundle-tools" }),
+            expect.objectContaining({ name: "system-prompt" }),
+            expect.objectContaining({ name: "stream-setup" }),
+          ]),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("keeps before_prompt_build prependContext out of system prompt on transcriptPrompt runs", async () => {
     const runBeforePromptBuild = vi.fn(async () => ({ prependContext: "dynamic hook context" }));
     hoisted.getGlobalHookRunnerMock.mockReturnValue({
