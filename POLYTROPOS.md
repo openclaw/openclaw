@@ -23,14 +23,16 @@ This repository is the *core fork* (the runtime + loader). Plugins live in a sep
 These invariants exist because we already paid the price of getting them wrong.
 
 ### Runtime config stability
-Polytropos should run with an unchanged default config file:
+Polytropos continues to use the **same config file**:
 
 - `~/.openclaw/openclaw.json`
 
-If a feature requires a new config key, prefer:
+If we need to introduce new *core* config keys for the fork, they should be:
 
-1) **optional** config (safe default)
-2) config that is local to a plugin entry (`plugins.entries.<id>.config`)
+- namespaced under a single top-level object: `polytropos.*`
+- additive (safe defaults)
+
+Plugin config continues to live where it already lives today (plugin entry config in the same file).
 
 ### Extension deployment location
 Plugins deploy to:
