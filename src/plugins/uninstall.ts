@@ -585,7 +585,7 @@ export async function applyPluginUninstallDirectoryRemoval(
       .then(() => true)
       .catch(() => false)) ?? false;
   const warnings: string[] = [];
-  if (!existed) {
+  if (!existed && removal.cleanup?.kind !== "npm") {
     return { directoryRemoved: false, warnings };
   }
 
