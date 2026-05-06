@@ -78,6 +78,7 @@ describe("resolveEnvApiKey provider auth aliases", () => {
         EXTERNAL_CLOUD_API_KEY: "secret",
       },
       workspaceDir: "/workspace",
+      allowWorkspaceScopedSnapshot: true,
     });
   });
 });
