@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TRANSCRIPT_INDEX_CACHE_ENTRIES = 256;
+const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
 type ParsedTranscriptRecord = Record<string, unknown>;
 
@@ -14,12 +16,30 @@ export type IndexedTranscriptEntry = {
   record: ParsedTranscriptRecord;
 };
 
+export type IndexedTranscriptVisibleRecord = IndexedTranscriptEntry & {
+  visible: true;
+};
+
+export type IndexedTranscriptRuntimeContextRecord = {
+  seq?: number;
+  id?: string;
+  offset: number;
+  byteLength: number;
+  visible: false;
+  runtimeContextSenderLabel: string;
+};
+
+export type IndexedTranscriptRecord =
+  | IndexedTranscriptVisibleRecord
+  | IndexedTranscriptRuntimeContextRecord;
+
 type SessionTranscriptIndex = {
   filePath: string;
   mtimeMs: number;
   size: number;
   hasTreeEntries: boolean;
   leafId?: string;
+  records: IndexedTranscriptRecord[];
   entries: IndexedTranscriptEntry[];
 };
 
@@ -83,6 +103,13 @@ function isIndexableTranscriptRecord(record: unknown): record is ParsedTranscrip
 
 function isVisibleTranscriptRecord(record: ParsedTranscriptRecord): boolean {
   return Boolean(record.message) || record.type === "compaction";
+}
+
+function extractRuntimeContextSenderLabel(record: ParsedTranscriptRecord): string | null {
+  if (record.type !== "custom_message" || record.customType !== RUNTIME_CONTEXT_CUSTOM_TYPE) {
+    return null;
+  }
+  return typeof record.content === "string" ? extractInboundSenderLabel(record.content) : null;
 }
 
 function isTreeTranscriptRecord(record: ParsedTranscriptRecord): boolean {
@@ -154,23 +181,39 @@ function buildActiveTreeEntries(params: {
   return out.toReversed();
 }
 
-function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry[] {
+function toIndexedRecords(rawEntries: IndexedRawEntry[]): {
+  records: IndexedTranscriptRecord[];
+  entries: IndexedTranscriptEntry[];
+} {
+  const records: IndexedTranscriptRecord[] = [];
   const entries: IndexedTranscriptEntry[] = [];
   let seq = 0;
   for (const entry of rawEntries) {
     if (!isVisibleTranscriptRecord(entry.record)) {
+      const runtimeContextSenderLabel = extractRuntimeContextSenderLabel(entry.record);
+      if (runtimeContextSenderLabel) {
+        records.push({
+          ...(entry.id ? { id: entry.id } : {}),
+          offset: entry.offset,
+          byteLength: entry.byteLength,
+          visible: false,
+          runtimeContextSenderLabel,
+        });
+      }
       continue;
     }
     seq += 1;
-    entries.push({
+    const indexedEntry: IndexedTranscriptEntry = {
       seq,
       ...(entry.id ? { id: entry.id } : {}),
       offset: entry.offset,
       byteLength: entry.byteLength,
       record: entry.record,
-    });
+    };
+    entries.push(indexedEntry);
+    records.push({ ...indexedEntry, visible: true });
   }
-  return entries;
+  return { records, entries };
 }
 
 async function buildSessionTranscriptIndex(
@@ -214,13 +257,15 @@ async function buildSessionTranscriptIndex(
   });
 
   const activeRawEntries = hasTreeEntries ? buildActiveTreeEntries({ byId, leafId }) : rawEntries;
+  const indexed = toIndexedRecords(activeRawEntries);
   return {
     filePath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
     hasTreeEntries,
     ...(leafId ? { leafId } : {}),
-    entries: toIndexedEntries(activeRawEntries),
+    records: indexed.records,
+    entries: indexed.entries,
   };
 }
 

@@ -4,7 +4,10 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
+import {
+  clearSessionTranscriptIndexCache,
+  readSessionTranscriptIndex,
+} from "./session-transcript-index.fs.js";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
@@ -27,6 +30,7 @@ import {
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
+  visitSessionMessagesAsync,
 } from "./session-utils.fs.js";
 
 function buildSessionAssistantMessage(text: string, timestamp: number) {
@@ -111,6 +115,26 @@ function buildBasicSessionTranscript(
     { message: { role: "user", content: userText } },
     { message: { role: "assistant", content: assistantText } },
   ];
+}
+
+function buildRuntimeContextSenderRow(label?: string, suffix = ""): unknown {
+  return {
+    type: "custom_message",
+    customType: "openclaw.runtime-context",
+    display: false,
+    content: label
+      ? [
+          "OpenClaw runtime context for the immediately preceding user message.",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "Sender (untrusted metadata):",
+          "```json",
+          JSON.stringify({ label, id: "358611388488351744" }),
+          "```",
+          suffix,
+        ].join("\n")
+      : "OpenClaw runtime context with no parseable sender metadata.",
+  };
 }
 
 describe("readFirstUserMessageFromTranscript", () => {
@@ -581,6 +605,181 @@ describe("readSessionMessages", () => {
     expect(marker.__openclaw?.kind).toBe("compaction");
     expect(marker.__openclaw?.id).toBe("comp-1");
     expect(typeof marker.timestamp).toBe("number");
+  });
+
+  test.each([
+    {
+      name: "sync",
+      read: async (sessionId: string, currentStorePath: string) =>
+        readSessionMessages(sessionId, currentStorePath),
+    },
+    {
+      name: "async full",
+      read: async (sessionId: string, currentStorePath: string) =>
+        readSessionMessagesAsync(sessionId, currentStorePath, undefined, {
+          mode: "full",
+          reason: "test runtime context sender labels",
+        }),
+    },
+  ])(
+    "attaches sender labels from hidden runtime context rows without exposing the row ($name)",
+    async ({ read }) => {
+      const sessionId = "test-session-runtime-context-sender";
+      writeTranscript(tmpDir, sessionId, [
+        { type: "session", version: 1, id: sessionId },
+        { message: { role: "user", content: "Hello from Discord" } },
+        buildRuntimeContextSenderRow("Yuka"),
+        { message: { role: "assistant", content: "Hello" } },
+      ]);
+      clearSessionTranscriptIndexCache();
+
+      const out = await read(sessionId, storePath);
+      expect(out).toHaveLength(2);
+      expect(out[0]).toMatchObject({
+        role: "user",
+        content: "Hello from Discord",
+        senderLabel: "Yuka",
+        __openclaw: { seq: 1 },
+      });
+      expect(out[1]).toMatchObject({ role: "assistant", __openclaw: { seq: 2 } });
+      expect(out).not.toContainEqual(
+        expect.objectContaining({
+          type: "custom_message",
+          customType: "openclaw.runtime-context",
+        }),
+      );
+    },
+  );
+
+  test("hides runtime context rows when they do not contain sender labels", () => {
+    const sessionId = "test-session-runtime-context-without-sender";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      buildRuntimeContextSenderRow(),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ role: "user", content: "Hello from Discord" });
+    expect(out[0]).not.toHaveProperty("senderLabel");
+    expect(out).not.toContainEqual(
+      expect.objectContaining({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+      }),
+    );
+  });
+
+  test("does not cache hidden runtime-context payloads in async transcript indexes", async () => {
+    const sessionId = "test-session-runtime-context-index-minimal";
+    const hiddenPayload = `hidden-payload-${"x".repeat(32 * 1024)}`;
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      buildRuntimeContextSenderRow("Yuka", hiddenPayload),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const index = await readSessionTranscriptIndex(transcriptPath);
+    const serializedIndex = JSON.stringify(index);
+    expect(serializedIndex).toContain("Yuka");
+    expect(serializedIndex).not.toContain(hiddenPayload);
+    expect(index?.records).toEqual([
+      expect.objectContaining({ visible: true, seq: 1 }),
+      expect.objectContaining({ visible: false, runtimeContextSenderLabel: "Yuka" }),
+      expect.objectContaining({ visible: true, seq: 2 }),
+    ]);
+  });
+
+  test("attaches runtime-context sender labels across system and compaction markers", () => {
+    const sessionId = "test-session-runtime-context-after-markers";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      { message: { role: "system", content: "Synthetic marker" } },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+      },
+      buildRuntimeContextSenderRow("Yuka"),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(4);
+    expect(out[0]).toMatchObject({
+      role: "user",
+      content: "Hello from Discord",
+      senderLabel: "Yuka",
+      __openclaw: { seq: 1 },
+    });
+    expect(out[1]).toMatchObject({ role: "system", content: "Synthetic marker" });
+    expect(out[2]).toMatchObject({
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      __openclaw: { kind: "compaction", seq: 3 },
+    });
+    expect(out[3]).toMatchObject({ role: "assistant", __openclaw: { seq: 4 } });
+  });
+
+  test.each(["assistant", "tool"] as const)(
+    "does not attach runtime-context sender labels across %s messages",
+    (role) => {
+      const sessionId = `test-session-runtime-context-stale-${role}`;
+      writeTranscript(tmpDir, sessionId, [
+        { type: "session", version: 1, id: sessionId },
+        { message: { role: "user", content: "Hello from Discord" } },
+        { message: { role, content: "Conversation boundary" } },
+        buildRuntimeContextSenderRow("Late Sender"),
+      ]);
+
+      const out = readSessionMessages(sessionId, storePath);
+      expect(out).toHaveLength(2);
+      expect(out[0]).toMatchObject({ role: "user", content: "Hello from Discord" });
+      expect(out[0]).not.toHaveProperty("senderLabel");
+    },
+  );
+
+  test("visits async messages without prebuilding the full message list", async () => {
+    const sessionId = "test-session-runtime-context-visit-async";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      buildRuntimeContextSenderRow("Yuka"),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    const count = await visitSessionMessagesAsync(
+      sessionId,
+      storePath,
+      undefined,
+      (message, seq) => {
+        visited.push({ message, seq });
+      },
+      { mode: "full", reason: "test runtime context sender label visitor" },
+    );
+
+    expect(count).toBe(2);
+    expect(visited).toEqual([
+      {
+        seq: 1,
+        message: expect.objectContaining({
+          role: "user",
+          content: "Hello from Discord",
+          senderLabel: "Yuka",
+        }),
+      },
+      {
+        seq: 2,
+        message: expect.objectContaining({ role: "assistant", content: "Hello" }),
+      },
+    ]);
   });
 
   test("reads recent messages from the transcript tail without loading the whole file", () => {

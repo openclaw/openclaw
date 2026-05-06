@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -16,7 +17,7 @@ import {
 } from "./session-transcript-files.fs.js";
 import {
   readSessionTranscriptIndex,
-  type IndexedTranscriptEntry,
+  type IndexedTranscriptRecord,
 } from "./session-transcript-index.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -42,6 +43,7 @@ const transcriptMessageCountCache = new Map<
 >();
 const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
 const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
+const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 type TranscriptFileHandle = Awaited<ReturnType<typeof fs.promises.open>>;
 
 function readSessionTitleFieldsCacheKey(
@@ -179,6 +181,11 @@ const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 type TailTranscriptRecord = {
   id?: string;
   parentId?: string | null;
+  record: Record<string, unknown>;
+};
+
+type TranscriptRecordSource = {
+  seq?: number;
   record: Record<string, unknown>;
 };
 
@@ -426,13 +433,85 @@ function readSelectedTranscriptRecords(filePath: string): TailTranscriptRecord[]
   }
 }
 
-function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[] {
+function isRuntimeContextEntry(entry: Record<string, unknown>): boolean {
+  return entry.type === "custom_message" && entry.customType === RUNTIME_CONTEXT_CUSTOM_TYPE;
+}
+
+function extractRuntimeContextSenderLabel(entry: Record<string, unknown>): string | null {
+  return typeof entry.content === "string" ? extractInboundSenderLabel(entry.content) : null;
+}
+
+function getTranscriptMessageRole(message: unknown): string {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return "";
+  }
+  const role = (message as { role?: unknown }).role;
+  return typeof role === "string" ? normalizeLowercaseStringOrEmpty(role) : "";
+}
+
+function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: string | null): boolean {
+  if (!senderLabel) {
+    return false;
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    const role = getTranscriptMessageRole(message);
+    if (!role) {
+      continue;
+    }
+    if (role === "system") {
+      continue;
+    }
+    if (role !== "user") {
+      return false;
+    }
+    const record = message as Record<string, unknown>;
+    if (typeof record.senderLabel === "string" && record.senderLabel.trim()) {
+      return false;
+    }
+    messages[i] = {
+      ...record,
+      senderLabel,
+    };
+    return true;
+  }
+  return false;
+}
+
+type PendingIndexedMessage = {
+  message: unknown;
+  seq: number;
+};
+
+function attachSenderLabelToPendingUser(
+  pending: PendingIndexedMessage[],
+  senderLabel: string | null,
+): boolean {
+  const messages = pending.map((entry) => entry.message);
+  const changed = attachSenderLabelToPreviousUser(messages, senderLabel);
+  if (changed) {
+    for (let index = 0; index < messages.length; index += 1) {
+      const entry = pending[index];
+      if (entry) {
+        entry.message = messages[index];
+      }
+    }
+  }
+  return changed;
+}
+
+function transcriptRecordsToMessages(records: TranscriptRecordSource[]): unknown[] {
   const messages: unknown[] = [];
   let messageSeq = 0;
   for (const entry of records) {
-    const message = parsedSessionEntryToMessage(entry.record, messageSeq + 1);
+    if (isRuntimeContextEntry(entry.record)) {
+      attachSenderLabelToPreviousUser(messages, extractRuntimeContextSenderLabel(entry.record));
+      continue;
+    }
+    const seq = typeof entry.seq === "number" ? entry.seq : messageSeq + 1;
+    const message = parsedSessionEntryToMessage(entry.record, seq);
     if (message) {
-      messageSeq += 1;
+      messageSeq = seq;
       messages.push(message);
     }
   }
@@ -564,7 +643,7 @@ export async function readSessionMessagesAsync(
     return [];
   }
   const index = await readSessionTranscriptIndex(filePath);
-  return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
+  return index ? indexedTranscriptRecordsToMessages(index.records) : [];
 }
 
 export async function visitSessionMessagesAsync(
@@ -582,13 +661,7 @@ export async function visitSessionMessagesAsync(
   if (!index) {
     return 0;
   }
-  for (const entry of index.entries) {
-    const message = indexedTranscriptEntryToMessage(entry);
-    if (message) {
-      visit(message, entry.seq);
-    }
-  }
-  return index.entries.length;
+  return visitIndexedTranscriptRecords(index.records, visit);
 }
 
 export async function readSessionMessageCountAsync(
@@ -747,13 +820,54 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   return null;
 }
 
-function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
-  return parsedSessionEntryToMessage(entry.record, entry.seq);
+function indexedTranscriptRecordsToMessages(records: IndexedTranscriptRecord[]): unknown[] {
+  const messages: unknown[] = [];
+  visitIndexedTranscriptRecords(records, (message) => {
+    messages.push(message);
+  });
+  return messages;
 }
 
-function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
-  const message = indexedTranscriptEntryToMessage(entry);
-  return message ? [message] : [];
+function visitIndexedTranscriptRecords(
+  records: IndexedTranscriptRecord[],
+  visit: (message: unknown, seq: number) => void,
+): number {
+  const pending: PendingIndexedMessage[] = [];
+  let visited = 0;
+  const flushPending = () => {
+    for (const entry of pending) {
+      visit(entry.message, entry.seq);
+      visited += 1;
+    }
+    pending.length = 0;
+  };
+
+  for (const record of records) {
+    if (!record.visible) {
+      attachSenderLabelToPendingUser(pending, record.runtimeContextSenderLabel);
+      continue;
+    }
+    const message = parsedSessionEntryToMessage(record.record, record.seq);
+    if (!message) {
+      continue;
+    }
+    const role = getTranscriptMessageRole(message);
+    if (role === "user") {
+      flushPending();
+      pending.push({ message, seq: record.seq });
+      continue;
+    }
+    if (role === "system" && pending.length > 0) {
+      pending.push({ message, seq: record.seq });
+      continue;
+    }
+    flushPending();
+    visit(message, record.seq);
+    visited += 1;
+  }
+
+  flushPending();
+  return visited;
 }
 
 export {
