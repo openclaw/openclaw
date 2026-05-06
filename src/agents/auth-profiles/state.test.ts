@@ -26,7 +26,7 @@ describe("auth profile runtime state persistence", () => {
     await fs.rm(agentDir, { recursive: true, force: true });
   });
 
-  it("reads runtime state from SQLite when auth-state.json is missing", async () => {
+  it("reads runtime state from SQLite without auth-state.json", async () => {
     savePersistedAuthProfileState(
       {
         order: { openai: ["openai:default"] },
@@ -35,7 +35,9 @@ describe("auth profile runtime state persistence", () => {
       },
       agentDir,
     );
-    await fs.unlink(resolveAuthStatePath(agentDir));
+    await expect(fs.access(resolveAuthStatePath(agentDir))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
 
     expect(loadPersistedAuthProfileState(agentDir)).toEqual({
       order: { openai: ["openai:default"] },
@@ -44,7 +46,7 @@ describe("auth profile runtime state persistence", () => {
     });
   });
 
-  it("imports legacy auth-state.json into SQLite on read", async () => {
+  it("imports legacy auth-state.json into SQLite on read and removes the file", async () => {
     const statePath = resolveAuthStatePath(agentDir);
     await fs.writeFile(
       statePath,
@@ -65,9 +67,10 @@ describe("auth profile runtime state persistence", () => {
       order: { anthropic: ["anthropic:default"] },
       lastGood: { anthropic: "anthropic:default" },
     });
+    await expect(fs.access(statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("deletes SQLite and compatibility state when runtime state is empty", async () => {
+  it("deletes SQLite state when runtime state is empty", async () => {
     savePersistedAuthProfileState(
       {
         usageStats: { "openai:default": { lastUsed: 123 } },

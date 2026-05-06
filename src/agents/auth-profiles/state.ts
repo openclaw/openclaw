@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
+import { loadJsonFile } from "../../infra/json-file.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   deleteOpenClawStateKvJson,
@@ -97,6 +97,13 @@ export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileSta
       key,
       authProfileStateToJsonValue(payload),
     );
+    try {
+      fs.unlinkSync(key);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw error;
+      }
+    }
   }
   return legacyState;
 }
@@ -136,6 +143,12 @@ export function savePersistedAuthProfileState(
     authProfileStateKey(agentDir),
     authProfileStateToJsonValue(payload),
   );
-  saveJsonFile(statePath, payload);
+  try {
+    fs.unlinkSync(statePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
   return payload;
 }

@@ -3,13 +3,11 @@ import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
-  resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
-import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
 
@@ -60,7 +58,7 @@ export async function modelsAuthOrderGetCommand(
       agentId,
       agentDir,
       provider,
-      authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
+      authStateStore: "sqlite",
       order: order.length > 0 ? order : null,
     });
     return;
@@ -68,7 +66,7 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log("Auth runtime state: SQLite");
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
@@ -83,7 +81,7 @@ export async function modelsAuthOrderClearCommand(
     order: null,
   });
   if (!updated) {
-    throw new Error("Failed to update auth-state.json (lock busy?).");
+    throw new Error("Failed to update auth runtime state (lock busy?).");
   }
 
   runtime.log(`Agent: ${agentId}`);
@@ -122,7 +120,7 @@ export async function modelsAuthOrderSetCommand(
     order: requested,
   });
   if (!updated) {
-    throw new Error("Failed to update auth-state.json (lock busy?).");
+    throw new Error("Failed to update auth runtime state (lock busy?).");
   }
 
   runtime.log(`Agent: ${agentId}`);
