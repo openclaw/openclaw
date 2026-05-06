@@ -51,6 +51,24 @@ describe("exec foreground failures", () => {
     expect((result.details as { durationMs?: number }).durationMs).toEqual(expect.any(Number));
   });
 
+  it("keeps the background-disabled warning when exec actually runs synchronously", async () => {
+    const tool = createExecTool({
+      security: "full",
+      ask: "off",
+      allowBackground: false,
+    });
+
+    const result = await tool.execute("call-background-disabled-foreground", {
+      command: isWin ? "Write-Output ok" : "printf ok",
+      background: true,
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text).toContain(
+      "Warning: background execution is disabled; running synchronously.",
+    );
+  });
+
   it("rejects invalid host values before launching a command", async () => {
     const tool = createExecTool({
       security: "full",

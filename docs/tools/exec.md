@@ -9,6 +9,8 @@ title: "Exec tool"
 Run shell commands in the workspace. Supports foreground + background execution via `process`.
 If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 Background sessions are scoped per agent; `process` only sees sessions from the same agent.
+Approval-gated gateway/node execs are an exception: the approval prompt returns immediately, and
+the approved command continues through the exec approval follow-up path.
 
 ## Parameters
 

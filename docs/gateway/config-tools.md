@@ -27,6 +27,12 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                       |
 | `full`      | No restriction (same as unset)                                                                                                  |
 
+When you add runtime or filesystem tools to a restricted profile, prefer the matching group
+(`group:runtime` or `group:fs`) instead of only one tool from that group. `exec` relies on
+`process` for background status/follow-up handling, and `write` commonly pairs with `edit` for
+file updates. `openclaw doctor --fix` repairs older partial `alsoAllow` configs that already opted
+into `exec`/`write` but missed those companion tools.
+
 ### Tool groups
 
 | Group              | Tools                                                                                                                   |

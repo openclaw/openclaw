@@ -4,6 +4,7 @@ import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { collectToolCompanionAllowlistWarnings } from "./tool-companion-allowlist-repair.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -194,6 +195,7 @@ export async function collectDoctorPreviewWarnings(params: {
   const hasChannelConfig = hasChannels(params.cfg);
   const hasPluginConfig = hasPlugins(params.cfg);
 
+  warnings.push(...collectToolCompanionAllowlistWarnings(params.cfg, params.doctorFixCommand));
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
 
   const channelPluginRuntime =
