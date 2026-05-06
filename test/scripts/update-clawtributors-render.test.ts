@@ -5,7 +5,7 @@ import {
 } from "../../scripts/update-clawtributors-render.js";
 
 describe("scripts/update-clawtributors-render", () => {
-  it("renders explicit avatar dimensions for every entry", () => {
+  it("renders markdown contributor entries by default", () => {
     const block = renderClawtributorsBlock(
       [
         {
@@ -16,7 +16,7 @@ describe("scripts/update-clawtributors-render", () => {
         {
           display: "Rajat Joshi",
           html_url: "https://github.com/18-RAJAT",
-          avatar_url: "https://avatars.githubusercontent.com/u/78920780?v=4&s=48",
+          avatar_url: "docs/assets/clawtributors/18-rajat.png",
         },
       ],
       {
@@ -27,14 +27,15 @@ describe("scripts/update-clawtributors-render", () => {
       },
     );
 
-    expect(block).toContain('width="48"');
-    expect(block).toContain('height="48"');
     expect(block).toContain(
-      '<a href="https://github.com/18-RAJAT"><img src="https://avatars.githubusercontent.com/u/78920780?v=4&amp;s=48" width="48" height="48" alt="Rajat Joshi" title="Rajat Joshi"/></a>',
+      "[![Andy](https://avatars.githubusercontent.com/u/91510251?v=4&s=48)](https://github.com/andyk-ms)",
+    );
+    expect(block).toContain(
+      "[![Rajat Joshi](docs/assets/clawtributors/18-rajat.png)](https://github.com/18-RAJAT)",
     );
   });
 
-  it("round-trips rendered html entries without losing contributors", () => {
+  it("round-trips rendered markdown entries without losing contributors", () => {
     const entries = [
       {
         display: "Andy",
@@ -44,7 +45,7 @@ describe("scripts/update-clawtributors-render", () => {
       {
         display: "Rajat Joshi",
         html_url: "https://github.com/18-RAJAT",
-        avatar_url: "https://avatars.githubusercontent.com/u/78920780?v=4&s=48",
+        avatar_url: "docs/assets/clawtributors/18-rajat.png",
       },
       {
         display: 'Tom & "Jerry"',
@@ -64,9 +65,9 @@ describe("scripts/update-clawtributors-render", () => {
     expect(parsed).toEqual(entries);
   });
 
-  it("parses legacy markdown entries for seed compatibility", () => {
+  it("parses legacy html entries for seed compatibility", () => {
     const parsed = parseRenderedClawtributorEntries(
-      "[![Rajat Joshi](https://avatars.githubusercontent.com/u/78920780?v=4&s=48)](https://github.com/18-RAJAT)",
+      `<a href="https://github.com/18-RAJAT"><img src="https://avatars.githubusercontent.com/u/78920780?v=4&amp;s=48" width="48" height="48" alt="Rajat Joshi" title="Rajat Joshi"/></a>`,
     );
 
     expect(parsed).toEqual([
@@ -82,7 +83,7 @@ describe("scripts/update-clawtributors-render", () => {
     const entries = Array.from({ length: 3 }, (_, index) => ({
       display: `Contributor ${index + 1}`,
       html_url: `https://github.com/example-${index + 1}`,
-      avatar_url: `https://avatars.githubusercontent.com/u/${index + 1}?v=4&s=48`,
+      avatar_url: `docs/assets/clawtributors/example-${index + 1}.png`,
     }));
 
     const block = renderClawtributorsBlock(entries, {
@@ -95,12 +96,12 @@ describe("scripts/update-clawtributors-render", () => {
     expect(parseRenderedClawtributorEntries(block)).toHaveLength(entries.length);
   });
 
-  it("does not re-parse markdown-looking alt text during html validation", () => {
+  it("escapes markdown-looking display names without breaking count validation", () => {
     const entries = [
       {
         display: "[![x](u)](h)",
         html_url: "https://github.com/example-markdown-alt",
-        avatar_url: "https://avatars.githubusercontent.com/u/99?v=4&s=48",
+        avatar_url: "docs/assets/clawtributors/example-markdown-alt.png",
       },
     ];
 

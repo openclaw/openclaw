@@ -13,38 +13,28 @@ export function renderClawtributorsBlock(
   entries: readonly RenderableClawtributorEntry[],
   options: RenderClawtributorsBlockOptions,
 ): string {
-  const lines = renderClawtributorsLines(entries, options.perLine, options.avatarSize);
-  const block = `${options.startMarker}\n${lines.join("\n")}\n${options.endMarker}`;
-  const renderedCount = parseRenderedClawtributorEntries(block, { markdown: false }).length;
-  if (renderedCount !== entries.length) {
-    throw new Error(
-      `Rendered clawtributors count mismatch: expected ${entries.length}, got ${renderedCount}`,
-    );
-  }
+  const lines = renderClawtributorsLines(entries, options.perLine);
+  const body = lines.length > 0 ? `\n\n${lines.join("\n")}\n` : "\n";
+  const block = `${options.startMarker}${body}\n${options.endMarker}`;
+  assertRenderedClawtributorCount(block, entries);
   return block;
 }
 
 export function renderClawtributorsLines(
   entries: readonly RenderableClawtributorEntry[],
   perLine: number,
-  avatarSize: number,
 ): string[] {
   const lines: string[] = [];
   for (let i = 0; i < entries.length; i += perLine) {
     const chunk = entries.slice(i, i + perLine);
-    const parts = chunk.map((entry) => renderClawtributorEntry(entry, avatarSize));
+    const parts = chunk.map((entry) => renderClawtributorEntry(entry));
     lines.push(parts.join(" "));
   }
   return lines;
 }
 
-export function renderClawtributorEntry(
-  entry: RenderableClawtributorEntry,
-  avatarSize: number,
-): string {
-  const size = String(avatarSize);
-  const label = escapeHtmlAttribute(entry.display);
-  return `<a href="${escapeHtmlAttribute(entry.html_url)}"><img src="${escapeHtmlAttribute(entry.avatar_url)}" width="${size}" height="${size}" alt="${label}" title="${label}"/></a>`;
+export function renderClawtributorEntry(entry: RenderableClawtributorEntry): string {
+  return `[![${escapeMarkdownText(entry.display)}](${entry.avatar_url})](${entry.html_url})`;
 }
 
 export function parseRenderedClawtributorEntries(
@@ -52,20 +42,7 @@ export function parseRenderedClawtributorEntries(
   options: { markdown?: boolean } = {},
 ): Array<{ display: string; html_url: string; avatar_url: string }> {
   const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
-  if (options.markdown !== false) {
-    const markdown = /\[!\[([^\]]+)\]\(([^)]+)\)\]\(([^)]+)\)/g;
-    for (const match of content.matchAll(markdown)) {
-      const [, alt, src, href] = match;
-      if (!href || !src || !alt) {
-        continue;
-      }
-      entries.push({
-        html_url: href,
-        avatar_url: src,
-        display: alt.replace(/\\([\\[\]])/g, "$1"),
-      });
-    }
-  }
+
   const linked = /<a href="([^"]+)"><img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of content.matchAll(linked)) {
     const [, href, src, alt] = match;
@@ -78,6 +55,7 @@ export function parseRenderedClawtributorEntries(
       display: decodeHtmlAttribute(alt),
     });
   }
+
   const standalone = /<img src="([^"]+)"[^>]*alt="([^"]+)"[^>]*>/g;
   for (const match of content.matchAll(standalone)) {
     const [, src, alt] = match;
@@ -95,15 +73,61 @@ export function parseRenderedClawtributorEntries(
       display: decodedAlt,
     });
   }
+
+  if (entries.length > 0 || options.markdown === false) {
+    return entries;
+  }
+
+  const markdown = /\[!\[((?:\\.|[^\]])+)\]\(((?:\\.|[^)])+)\)\]\(((?:\\.|[^)])+)\)/g;
+  for (const match of content.matchAll(markdown)) {
+    const [, alt, src, href] = match;
+    if (!href || !src || !alt) {
+      continue;
+    }
+    entries.push({
+      html_url: href,
+      avatar_url: src,
+      display: unescapeMarkdownText(alt),
+    });
+  }
+
   return entries;
 }
 
-function escapeHtmlAttribute(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+function assertRenderedClawtributorCount(
+  block: string,
+  entries: readonly RenderableClawtributorEntry[],
+): void {
+  const expectedByRendered = new Map<string, number>();
+  for (const entry of entries) {
+    const rendered = renderClawtributorEntry(entry);
+    expectedByRendered.set(rendered, (expectedByRendered.get(rendered) ?? 0) + 1);
+  }
+
+  let actualEntries = 0;
+  for (const [rendered, expected] of expectedByRendered) {
+    const actual = block.split(rendered).length - 1;
+    if (actual !== expected) {
+      throw new Error(
+        `Rendered clawtributors count mismatch: expected ${entries.length}, got ${actualEntries + actual}`,
+      );
+    }
+    actualEntries += actual;
+  }
+
+  if (actualEntries !== entries.length) {
+    throw new Error(
+      `Rendered clawtributors count mismatch: expected ${entries.length}, got ${actualEntries}`,
+    );
+  }
+}
+
+function escapeMarkdownText(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\[/g, "\\[").replace(/\]/g, "\\]");
+}
+
+function unescapeMarkdownText(value: string): string {
+  return value.replace(/\\([\[\]])/g, "$1").replace(/\\\\/g, "\\");
 }
 
 function decodeHtmlAttribute(value: string): string {
