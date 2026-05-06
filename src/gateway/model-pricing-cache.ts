@@ -84,7 +84,7 @@ type PricingModelNormalizationOptions = {
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
-const CACHE_TTL_MS = 24 * 60 * 60_000;
+export const GATEWAY_MODEL_PRICING_CACHE_TTL_MS = 24 * 60 * 60_000;
 const FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("gateway").child("model-pricing");
@@ -1124,7 +1124,7 @@ function scheduleRefresh(
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       log.warn(`pricing refresh failed: ${String(error)}`);
     });
-  }, CACHE_TTL_MS);
+  }, GATEWAY_MODEL_PRICING_CACHE_TTL_MS);
   refreshTimer.unref?.();
 }
 

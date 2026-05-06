@@ -471,6 +471,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/diagnostics: add `diagnostics.pricing` operator-read RPC that returns model pricing cache metadata (`cachedAt`, `age`, `ttlMs`, `size`) so operators can tell whether the pricing cache is populated, stale, or empty after a startup timeout. Thanks @ziomancer.
 - Channels/streaming: add unified `streaming.mode: "progress"` drafts with auto single-word status labels and shared progress configuration across Discord, Telegram, Matrix, Slack, and Microsoft Teams.
 - Agents/commands: add `/steer <message>` for queue-independent steering of the active current-session run without starting a new turn when the session is idle. (#76934)
 - Tools/BTW: add `/side` as a text and native slash-command alias for `/btw` side questions.

@@ -323,6 +323,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
   <Accordion title="System and identity">
     - `health` returns the cached or freshly probed gateway health snapshot.
     - `diagnostics.stability` returns the recent bounded diagnostic stability recorder. It keeps operational metadata such as event names, counts, byte sizes, memory readings, queue/session state, channel/plugin names, and session ids. It does not keep chat text, webhook bodies, tool outputs, raw request or response bodies, tokens, cookies, or secret values. Operator read scope is required.
+    - `diagnostics.pricing` returns model pricing cache metadata: `cachedAt` (epoch ms or `null` when empty), `age` (ms since `cachedAt` or `null`), `ttlMs` (refresh interval), and `size` (number of cached entries). It does not return individual model pricing rows. Operator read scope is required.
     - `status` returns the `/status`-style gateway summary; sensitive fields are included only for admin-scoped operator clients.
     - `gateway.identity.get` returns the gateway device identity used by relay and pairing flows.
     - `system-presence` returns the current presence snapshot for connected operator/node devices.
