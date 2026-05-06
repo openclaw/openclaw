@@ -67,59 +67,74 @@ describe("before_agent_run hook", () => {
     }
   });
 
-  it("merges with most-restrictive-wins: block beats pass", async () => {
+  it("blocks when one of multiple handlers passes and a later handler blocks", async () => {
+    const calls: string[] = [];
+    const passHandler = vi.fn(async () => {
+      calls.push("pass-plugin");
+      return { outcome: "pass" as const };
+    });
+    const blockHandler = vi.fn(async () => {
+      calls.push("block-plugin");
+      return {
+        outcome: "block" as const,
+        reason: "blocked",
+      };
+    });
     const registry = makeRegistry([
       {
-        pluginId: "plugin-a",
+        pluginId: "pass-plugin",
         hookName: "before_agent_run",
-        handler: async () => ({ outcome: "pass" as const }),
+        handler: passHandler,
         source: "test",
         priority: 10,
       },
       {
-        pluginId: "plugin-b",
+        pluginId: "block-plugin",
         hookName: "before_agent_run",
-        handler: async () => ({
-          outcome: "block" as const,
-          reason: "blocked",
-        }),
+        handler: blockHandler,
         source: "test",
         priority: 5,
       },
     ]);
     const runner = createHookRunner(registry);
     const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
+
     expect(result?.decision.outcome).toBe("block");
-    expect(result?.pluginId).toBe("plugin-b");
+    expect(result?.pluginId).toBe("block-plugin");
+    expect(passHandler).toHaveBeenCalledTimes(1);
+    expect(blockHandler).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(["pass-plugin", "block-plugin"]);
   });
 
-  it("short-circuits on block (skips remaining handlers)", async () => {
-    let secondHandlerCalled = false;
+  it("short-circuits when the first of multiple handlers blocks", async () => {
+    const blockHandler = vi.fn(async () => ({
+      outcome: "block" as const,
+      reason: "blocked",
+    }));
+    const passHandler = vi.fn(async () => ({ outcome: "pass" as const }));
     const registry = makeRegistry([
       {
-        pluginId: "plugin-a",
+        pluginId: "block-plugin",
         hookName: "before_agent_run",
-        handler: async () => ({
-          outcome: "block" as const,
-          reason: "blocked",
-        }),
+        handler: blockHandler,
         source: "test",
         priority: 10,
       },
       {
-        pluginId: "plugin-b",
+        pluginId: "pass-plugin",
         hookName: "before_agent_run",
-        handler: async () => {
-          secondHandlerCalled = true;
-          return { outcome: "pass" as const };
-        },
+        handler: passHandler,
         source: "test",
         priority: 5,
       },
     ]);
     const runner = createHookRunner(registry);
-    await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
-    expect(secondHandlerCalled).toBe(false);
+    const result = await runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx);
+
+    expect(result?.decision.outcome).toBe("block");
+    expect(result?.pluginId).toBe("block-plugin");
+    expect(blockHandler).toHaveBeenCalledTimes(1);
+    expect(passHandler).not.toHaveBeenCalled();
   });
 
   it("treats void handler returns as pass (no effect)", async () => {
