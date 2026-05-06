@@ -3,11 +3,17 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { TSchema } from "typebox";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   resolveProviderFollowupFallbackRoute,
   resolveProviderSystemPromptContribution,
+  resolveProviderTextTransforms,
+  transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import { resolvePreparedExtraParams } from "../pi-embedded-runner/extra-params.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
@@ -53,6 +59,7 @@ export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
   const config = asOpenClawConfig(params.config);
+  const providerRuntimeHandle = params.providerRuntimeHandle;
   return {
     isSilentPayload(payload): boolean {
       return isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) && !hasMedia(payload);
@@ -62,6 +69,7 @@ export function buildAgentRuntimeDeliveryPlan(
         provider: params.provider,
         config,
         workspaceDir: params.workspaceDir,
+        runtimeHandle: providerRuntimeHandle,
         context: {
           config,
           agentDir: params.agentDir,
@@ -90,6 +98,24 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
+  const toolPlanningConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
+  let toolPlanningMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  const loadToolPlanningMetadataSnapshot = () => {
+    toolPlanningMetadataSnapshot ??= loadManifestMetadataSnapshot({
+      config: toolPlanningConfig,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      env: process.env,
+    });
+    return toolPlanningMetadataSnapshot;
+  };
+  const providerRuntimeHandle =
+    params.providerRuntimeHandle ??
+    resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      config,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+    });
   const auth = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
@@ -112,6 +138,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     config,
     workspaceDir: params.workspaceDir,
     env: process.env,
+    runtimeHandle: providerRuntimeHandle,
     modelId: params.modelId,
     modelApi,
     model,
@@ -137,6 +164,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       config,
       workspaceDir: overrides?.workspaceDir ?? params.workspaceDir,
       env: process.env,
+      runtimeHandle: providerRuntimeHandle,
       modelApi: overrides?.modelApi ?? modelApi,
       model: asProviderRuntimeModel(overrides?.model) ?? model,
     });
@@ -154,19 +182,52 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       agentId: overrides.agentId ?? params.agentId,
       model: asProviderRuntimeModel(overrides.model) ?? model,
       resolvedTransport: overrides.resolvedTransport ?? transport,
+      providerRuntimeHandle,
     });
+  let memoizedTranscriptPolicy: ReturnType<typeof resolveTranscriptRuntimePolicy> | undefined;
+  let memoizedTransportExtraParams: ReturnType<typeof resolveTransportExtraParams> | undefined;
+  const resolveDefaultTranscriptPolicy = () => {
+    memoizedTranscriptPolicy ??= resolveTranscriptRuntimePolicy();
+    return memoizedTranscriptPolicy;
+  };
+  const resolveDefaultTransportExtraParams = () => {
+    memoizedTransportExtraParams ??= resolveTransportExtraParams();
+    return memoizedTransportExtraParams;
+  };
+  const providerTextTransforms = resolveProviderTextTransforms({
+    provider: params.provider,
+    config,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    runtimeHandle: providerRuntimeHandle,
+  });
 
   return {
     resolvedRef,
+    providerRuntimeHandle,
     auth,
     prompt: {
       provider: params.provider,
       modelId: params.modelId,
+      textTransforms: providerTextTransforms,
       resolveSystemPromptContribution(context) {
         return resolveProviderSystemPromptContribution({
           provider: params.provider,
           config,
           workspaceDir: context.workspaceDir ?? params.workspaceDir,
+          runtimeHandle: providerRuntimeHandle,
+          context: {
+            ...context,
+            config: asOpenClawConfig(context.config),
+          },
+        });
+      },
+      transformSystemPrompt(context) {
+        return transformProviderSystemPrompt({
+          provider: params.provider,
+          config,
+          workspaceDir: context.workspaceDir ?? params.workspaceDir,
+          runtimeHandle: providerRuntimeHandle,
           context: {
             ...context,
             config: asOpenClawConfig(context.config),
@@ -175,6 +236,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       },
     },
     tools: {
+      preparedPlanning: {
+        loadMetadataSnapshot: loadToolPlanningMetadataSnapshot,
+      },
       normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
         tools: AgentTool<TSchemaType, TResult>[],
         overrides?: {
@@ -203,13 +267,20 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       },
     },
     transcript: {
-      policy: resolveTranscriptRuntimePolicy(),
+      get policy() {
+        return resolveDefaultTranscriptPolicy();
+      },
       resolvePolicy: resolveTranscriptRuntimePolicy,
     },
-    delivery: buildAgentRuntimeDeliveryPlan(params),
+    delivery: buildAgentRuntimeDeliveryPlan({
+      ...params,
+      providerRuntimeHandle,
+    }),
     outcome: buildAgentRuntimeOutcomePlan(),
     transport: {
-      extraParams: resolveTransportExtraParams(),
+      get extraParams() {
+        return resolveDefaultTransportExtraParams();
+      },
       resolveExtraParams: resolveTransportExtraParams,
     },
     observability: {

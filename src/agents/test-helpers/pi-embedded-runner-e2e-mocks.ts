@@ -81,6 +81,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           provider: params.provider,
           modelId: params.modelId,
           resolveSystemPromptContribution: vi.fn(() => undefined),
+          transformSystemPrompt: vi.fn((context) => context.systemPrompt),
         },
         tools: {
           normalize: vi.fn((tools: unknown[]) => tools),
