@@ -1,3 +1,9 @@
+# Polytropos - OpenClaw fork: enhanced customization via plugins
+
+See [POLYTROPOS.md](POLYTROPOS.md) for documentation on the Polytropos fork.
+
+What follows is the upstream OpenClaw README.
+
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">
