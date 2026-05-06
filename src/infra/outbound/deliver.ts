@@ -191,6 +191,7 @@ type ChannelHandlerParams = {
   forceDocument?: boolean;
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
+  abortSignal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
   onPlatformSendStart?: () => Promise<void>;
 };
