@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import {
@@ -85,6 +86,7 @@ function createRuntimeModel(): ProviderRuntimeModel {
     provider: "openai",
     id: "gpt-5.5",
     name: "gpt-5.5",
+    baseUrl: "https://api.openai.com/v1",
     api: "openai-responses",
     reasoning: true,
     input: ["text", "image"],
@@ -95,19 +97,30 @@ function createRuntimeModel(): ProviderRuntimeModel {
   };
 }
 
+function createConfiguredModel(
+  overrides: Partial<ModelDefinitionConfig> = {},
+): ModelDefinitionConfig {
+  return {
+    id: "gpt-5.5",
+    name: "gpt-5.5",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_050_000,
+    contextTokens: 1_000_000,
+    maxTokens: 128_000,
+    ...overrides,
+  };
+}
+
 describe("resolveEffectiveRuntimeModel", () => {
   it("can read Codex OAuth context overrides for native Codex harness runs", () => {
     const cfg = {
       models: {
         providers: {
           "openai-codex": {
-            models: [
-              {
-                id: "gpt-5.5",
-                contextWindow: 1_050_000,
-                contextTokens: 1_000_000,
-              },
-            ],
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [createConfiguredModel()],
           },
         },
       },
@@ -133,13 +146,8 @@ describe("resolveEffectiveRuntimeModel", () => {
       models: {
         providers: {
           "openai-codex": {
-            models: [
-              {
-                id: "gpt-5.5",
-                contextWindow: 1_050_000,
-                contextTokens: 1_000_000,
-              },
-            ],
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            models: [createConfiguredModel()],
           },
         },
       },

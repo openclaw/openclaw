@@ -10,6 +10,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
@@ -37,6 +38,16 @@ vi.mock("../../agents/harness/builtin-pi.js", () => ({
 }));
 
 const baseCfg = baseCommandTestConfig;
+const codexStatusModel: ModelDefinitionConfig = {
+  id: "gpt-5.5",
+  name: "GPT-5.5",
+  reasoning: true,
+  input: ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 1_050_000,
+  contextTokens: 1_000_000,
+  maxTokens: 128_000,
+};
 
 async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
   const commandParams = buildCommandTestParams("/status", baseCfg);
@@ -659,13 +670,8 @@ describe("buildStatusReply subagent summary", () => {
         models: {
           providers: {
             "openai-codex": {
-              models: [
-                {
-                  id: "gpt-5.5",
-                  contextWindow: 1_050_000,
-                  contextTokens: 1_000_000,
-                },
-              ],
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [codexStatusModel],
             },
           },
         },
