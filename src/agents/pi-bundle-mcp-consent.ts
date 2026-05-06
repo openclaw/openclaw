@@ -196,7 +196,7 @@ export function scrubModelSuppliedConfirmationToken(input: unknown): {
   if (!("confirmation_token" in input)) {
     return { cleaned: input, stripped: false };
   }
-  const { confirmation_token: _ignored, ...rest } = input as Record<string, unknown>;
+  const { confirmation_token: _ignored, ...rest } = input;
   return { cleaned: rest, stripped: true };
 }
 
