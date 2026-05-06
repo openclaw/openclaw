@@ -3,6 +3,7 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
+  importLegacyApnsRegistrationFileToSqlite,
   loadApnsRegistration,
   registerApnsRegistration,
   registerApnsToken,
