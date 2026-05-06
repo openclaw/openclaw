@@ -16,6 +16,7 @@ import {
   waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { isCronJobActive } from "../active-jobs.js";
 import { enqueueRun, run, start } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
@@ -226,6 +227,43 @@ describe("cron service ops regressions", () => {
     const staleExecuted = jobs.find((entry) => entry.id === "unrelated-stale-executed");
     expect(unrelated?.state.nextRunAtMs).toBe(dueNextRunAtMs);
     expect((staleExecuted?.state.nextRunAtMs ?? 0) > nowMs).toBe(true);
+  });
+
+  it("tracks manual cron.run as an active cron job until execution finishes", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const now = Date.parse("2026-02-06T10:05:00.000Z");
+    const job = createIsolatedRegressionJob({
+      id: "manual-active-job",
+      name: "manual active job",
+      scheduledAt: now,
+      schedule: { kind: "at", at: new Date(now).toISOString() },
+      payload: { kind: "agentTurn", message: "long manual task" },
+      state: { nextRunAtMs: now },
+    });
+    await writeCronJobs(store.storePath, [job]);
+
+    const runStarted = createDeferred<void>();
+    const runResult = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        runStarted.resolve();
+        return await runResult.promise;
+      }),
+    });
+
+    const manualRun = run(state, job.id, "force");
+    await runStarted.promise;
+    expect(isCronJobActive(job.id)).toBe(true);
+
+    runResult.resolve({ status: "ok", summary: "done" });
+    await expect(manualRun).resolves.toEqual({ ok: true, ran: true });
+    expect(isCronJobActive(job.id)).toBe(false);
   });
 
   it("applies timeoutSeconds to manual cron.run isolated executions", async () => {
