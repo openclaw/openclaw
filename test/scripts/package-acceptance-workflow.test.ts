@@ -103,8 +103,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain('"all-since-"');
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
-    expect(workflow).toContain("update-channel-switch upgrade-survivor");
+    expect(workflow).toContain("update-channel-switch update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
+    expect(workflow).toContain("published-upgrade-survivor update-restart-auth");
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
@@ -252,7 +253,19 @@ describe("package artifact reuse", () => {
     expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
     expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
+    expect(packageJson).toContain("test:docker:update-restart-auth");
+    expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
     expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
+    expect(publishedUpgradeSurvivor).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE");
+    expect(publishedUpgradeSurvivor).toContain('local shim_dir="$npm_config_prefix/bin"');
+    expect(publishedUpgradeSurvivor).toContain("seed_update_restart_probe_device_auth");
+    expect(publishedUpgradeSurvivor).toContain("upgrade survivor restart probe");
+    expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_secretref_env");
+    expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
+    expect(publishedUpgradeSurvivor).toContain(
+      "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
+    );
+    expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
     expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
     expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
@@ -534,7 +547,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update",
+      "docker_lanes: doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
@@ -597,16 +610,21 @@ describe("package artifact reuse", () => {
     );
   });
 
-  it("keeps Slack live QA disabled in CI until credentials are provisioned", () => {
+  it("runs live transport lanes nightly while release checks stay gated", () => {
     const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
 
-    expect(releaseWorkflow).toContain("qa_live_slack_enabled=false");
-    expect(releaseWorkflow).toContain(
-      "RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED || 'false' }}",
-    );
-    expect(releaseWorkflow).toContain("vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
-    expect(qaWorkflow).toContain("if: vars.OPENCLAW_QA_SLACK_LIVE_CI_ENABLED == 'true'");
+    for (const channel of ["DISCORD", "WHATSAPP", "SLACK"]) {
+      const lower = channel.toLowerCase();
+      expect(releaseWorkflow).toContain(
+        `RELEASE_QA_${channel}_LIVE_CI_ENABLED: \${{ vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED || 'false' }}`,
+      );
+      expect(releaseWorkflow).toContain(`qa_live_${lower}_enabled="$qa_live_${lower}_ci_enabled"`);
+      expect(releaseWorkflow).toContain(
+        `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
+      );
+      expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
   });
 
   it("names package acceptance Telegram as artifact-backed package validation", () => {

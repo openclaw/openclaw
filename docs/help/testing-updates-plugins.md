@@ -78,6 +78,7 @@ pnpm test:docker:plugin-lifecycle-matrix
 pnpm test:docker:plugin-update
 pnpm test:docker:upgrade-survivor
 pnpm test:docker:published-upgrade-survivor
+pnpm test:docker:update-restart-auth
 pnpm test:docker:update-migration
 ```
 
@@ -103,6 +104,10 @@ Important lanes:
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
   probes `/healthz`, `/readyz`, and RPC status.
+- `test:docker:update-restart-auth` installs the candidate package, starts a
+  managed token-auth Gateway, unsets caller gateway auth env for
+  `openclaw update --yes --json`, and requires the candidate update command to
+  restart the Gateway before the normal probes.
 - `test:docker:update-migration` is the cleanup-heavy published-update lane. It
   starts from a configured Discord/Telegram-style user state, runs baseline
   doctor so configured plugin dependencies have a chance to materialize, seeds
@@ -164,10 +169,10 @@ resolved release SHA. For post-publish proof, pass
 `package_acceptance_package_spec=openclaw@YYYY.M.D` so the same upgrade matrix
 targets the shipped npm package instead.
 
-Release checks call Package Acceptance with the package/update/plugin set:
+Release checks call Package Acceptance with the package/update/restart/plugin set:
 
 ```text
-doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update
+doctor-switch update-channel-switch update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update
 ```
 
 When release soak is enabled, they also pass:
@@ -178,10 +183,10 @@ published_upgrade_survivor_scenarios=reported-issues
 telegram_mode=mock-openai
 ```
 
-This keeps package migration, update channel switching, stale plugin dependency
-cleanup, offline plugin coverage, plugin update behavior, and Telegram package
-QA on the same resolved artifact without making the default release package gate
-walk every published release.
+This keeps package migration, update channel switching, corrupt managed-plugin
+tolerance, stale plugin dependency cleanup, offline plugin coverage, plugin
+update behavior, and Telegram package QA on the same resolved artifact without
+making the default release package gate walk every published release.
 
 `last-stable-4` resolves to the four latest stable npm-published OpenClaw
 releases. Release package acceptance pins `2026.4.23` as the first plugin-update
@@ -224,7 +229,7 @@ For release candidates, the default proof stack is:
 1. `pnpm check:changed` and `pnpm test:changed` for source-level regressions.
 2. `pnpm release:check` for package artifact integrity.
 3. Package Acceptance `package` profile or the release-check custom package
-   lanes for install/update/plugin contracts.
+   lanes for install/update/restart/plugin contracts.
 4. Cross-OS release checks for OS-specific installer, onboarding, and platform
    behavior.
 5. Live suites only when the changed surface touches provider or hosted-service
@@ -245,7 +250,8 @@ Compatibility leniency is narrow and time boxed:
   warning or skipping.
 
 Do not add new startup migrations for these old shapes. Add or extend a doctor
-repair, then prove it with `upgrade-survivor` or `published-upgrade-survivor`.
+repair, then prove it with `upgrade-survivor`, `published-upgrade-survivor`, or
+`update-restart-auth` when the update command owns the restart.
 
 ## Adding coverage
 
@@ -257,6 +263,7 @@ can fail for the right reason:
   checker test.
 - CLI install/update behavior: Docker lane assertion or fixture.
 - Published-release migration behavior: `published-upgrade-survivor` scenario.
+- Update-owned restart behavior: `update-restart-auth`.
 - Registry/package source behavior: `test:docker:plugins` fixture or ClawHub
   fixture server.
 - Dependency layout or cleanup behavior: assert both runtime execution and the

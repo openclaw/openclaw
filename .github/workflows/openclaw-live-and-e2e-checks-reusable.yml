@@ -34,7 +34,7 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lanes
         required: false
         default: openclaw@latest
         type: string
@@ -129,7 +129,7 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-restart-auth/update-migration Docker lanes
         required: false
         default: openclaw@latest
         type: string

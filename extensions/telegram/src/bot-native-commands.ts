@@ -1115,9 +1115,9 @@ export const registerTelegramNativeCommands = ({
           skippedNonSilent: 0,
         };
 
-        const { createChannelReplyPipeline, deliverReplies } =
+        const { createChannelMessageReplyPipeline, deliverReplies } =
           await loadTelegramNativeCommandDeliveryRuntime();
-        const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+        const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
           cfg: executionCfg,
           agentId: route.agentId,
           channel: "telegram",

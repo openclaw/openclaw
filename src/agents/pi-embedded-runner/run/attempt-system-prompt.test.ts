@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+let buildAttemptSystemPrompt: typeof import("./attempt-system-prompt.js").buildAttemptSystemPrompt;
+
+beforeEach(async () => {
+  vi.resetModules();
+  vi.doUnmock("../system-prompt.js");
+  ({ buildAttemptSystemPrompt } = await import("./attempt-system-prompt.js"));
+});
 
 const baseProviderTransform = {
   provider: "openai",

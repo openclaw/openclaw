@@ -50,8 +50,7 @@ import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
-import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
@@ -108,6 +107,7 @@ import {
   applyPiAutoCompactionGuard,
   applyPiCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveEffectiveCompactionMode,
 } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
@@ -713,15 +713,17 @@ export async function runEmbeddedAttempt(
     | ((outcome: "completed" | "aborted" | "error", err?: unknown) => void)
     | undefined;
   try {
+    const skillsSnapshotForRun =
+      sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? undefined : params.skillsSnapshot;
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
       agentId: sessionAgentId,
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: skillsSnapshotForRun,
     });
-    restoreSkillEnv = params.skillsSnapshot
+    restoreSkillEnv = skillsSnapshotForRun
       ? applySkillEnvOverridesFromSnapshot({
-          snapshot: params.skillsSnapshot,
+          snapshot: skillsSnapshotForRun,
           config: params.config,
         })
       : applySkillEnvOverrides({
@@ -730,7 +732,7 @@ export async function runEmbeddedAttempt(
         });
 
     const skillsPrompt = resolveSkillsPromptForRun({
-      skillsSnapshot: params.skillsSnapshot,
+      skillsSnapshot: skillsSnapshotForRun,
       entries: shouldLoadSkillEntries ? skillEntries : undefined,
       config: params.config,
       workspaceDir: effectiveWorkspace,
@@ -747,7 +749,7 @@ export async function runEmbeddedAttempt(
       );
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
-    const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+    const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
     );
@@ -1452,6 +1454,7 @@ export async function runEmbeddedAttempt(
       const piAutoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
+        compactionMode: resolveEffectiveCompactionMode(params.config),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider: params.provider,
           modelId: params.modelId,
