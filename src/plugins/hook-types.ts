@@ -87,6 +87,7 @@ export type PluginHookName =
   | "message_received"
   | "message_sending"
   | "message_sent"
+  | "sessions_send"
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
@@ -124,6 +125,7 @@ export const PLUGIN_HOOK_NAMES = [
   "message_received",
   "message_sending",
   "message_sent",
+  "sessions_send",
   "before_tool_call",
   "after_tool_call",
   "tool_result_persist",
@@ -395,6 +397,69 @@ export type PluginHookReplyDispatchResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
 };
+
+export type PluginHookSessionsSendCancelTarget = {
+  kind?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type PluginHookSessionsSendTask = {
+  intent?: string;
+  instructions?: string;
+  constraints?: {
+    timeoutSeconds?: number;
+    maxPingPongTurns?: number;
+  };
+  runtime?: {
+    waitRunId?: string;
+    roundOneReply?: string;
+    announceTimeoutMs?: number;
+    maxPingPongTurns?: number;
+    cancelTarget?: PluginHookSessionsSendCancelTarget;
+  };
+  requester?: {
+    sessionKey?: string;
+    channel?: string;
+  };
+  correlationId?: string;
+  parentRunId?: string;
+};
+
+export type PluginHookSessionsSendEvent = {
+  sessionKey: string;
+  target: {
+    sessionKey?: string;
+    displayKey?: string;
+  };
+  message: string;
+  task?: PluginHookSessionsSendTask;
+  rawParams: unknown;
+};
+
+export type PluginHookSessionsSendContext = {
+  requesterSessionKey?: string;
+  requesterChannel?: string;
+};
+
+export type PluginHookSessionsSendResult =
+  | { handled: false; reason?: string }
+  | {
+      handled: true;
+      mode: "delegated";
+      dispatch: {
+        kind: "a2a-broker";
+        taskId: string;
+        waitRunId?: string;
+        /**
+         * Plugin-owned, verified first-round reply text for delegated announce seeding.
+         * Core must not derive this from caller-supplied tool args.
+         */
+        roundOneReply?: string;
+        cancelTarget?: PluginHookSessionsSendCancelTarget;
+      };
+    }
+  | { handled: true; mode: "direct"; result: unknown };
 
 export type PluginHookToolContext = {
   agentId?: string;
@@ -884,6 +949,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookMessageSentEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
+  sessions_send: (
+    event: PluginHookSessionsSendEvent,
+    ctx: PluginHookSessionsSendContext,
+  ) => Promise<PluginHookSessionsSendResult | void> | PluginHookSessionsSendResult | void;
   before_tool_call: (
     event: PluginHookBeforeToolCallEvent,
     ctx: PluginHookToolContext,
