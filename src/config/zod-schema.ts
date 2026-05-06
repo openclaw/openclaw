@@ -996,6 +996,12 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        subagentWatchdog: z
+          .object({
+            abortAfterSeconds: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
         push: z
           .object({
             apns: z

@@ -605,6 +605,10 @@ export const FIELD_HELP: Record<string, string> = {
     "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
   "diagnostics.stuckSessionAbortMs":
     "No-progress age threshold in milliseconds before eligible stalled active work may be abort-drained for recovery. Defaults to the safer extended embedded-run recovery window.",
+  "gateway.subagentWatchdog":
+    "Gateway diagnostic watchdog for sub-agent sessions stuck behind blocked tool calls. Defaults to enabled.",
+  "gateway.subagentWatchdog.abortAfterSeconds":
+    "Seconds before the diagnostics loop force-finalizes a processing session classified as blocked_tool_call. Defaults to 600; set 0 to disable.",
   "diagnostics.otel.enabled":
     "Enables OpenTelemetry export pipeline for traces, metrics, and logs based on configured endpoint/protocol settings. Keep disabled unless your collector endpoint and auth are fully configured.",
   "diagnostics.otel.endpoint":

@@ -232,6 +232,11 @@ OpenClaw classifies sessions by the work it can still observe:
   turns behind the lane can resume. When unset, the abort threshold defaults to
   the safer extended window of at least 10 minutes and 5x
   `diagnostics.stuckSessionWarnMs`.
+- `session.watchdog_aborted`: active tool-call work is classified as
+  `blocked_tool_call` past `gateway.subagentWatchdog.abortAfterSeconds`
+  (default 600 seconds). The diagnostic loop force-finalizes the in-memory
+  session tracker entry so the stalled sub-agent lane stops emitting repeat
+  alarms; set the threshold to `0` to disable this watchdog.
 - `session.stuck`: stale session bookkeeping with no active work. This releases
   the affected session lane immediately.
 

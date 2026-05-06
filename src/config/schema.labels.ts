@@ -42,6 +42,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.flags": "Diagnostics Flags",
   "diagnostics.stuckSessionWarnMs": "Session Liveness Threshold (ms)",
   "diagnostics.stuckSessionAbortMs": "Session Abort Threshold (ms)",
+  "gateway.subagentWatchdog": "Sub-agent Watchdog",
+  "gateway.subagentWatchdog.abortAfterSeconds": "Sub-agent Watchdog Abort Threshold (seconds)",
   "diagnostics.otel.enabled": "OpenTelemetry Enabled",
   "diagnostics.otel.endpoint": "OpenTelemetry Endpoint",
   "diagnostics.otel.tracesEndpoint": "OpenTelemetry Traces Endpoint",

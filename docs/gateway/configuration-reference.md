@@ -394,6 +394,9 @@ See [Inferred commitments](/concepts/commitments).
       token: "your-token",
       // password: "your-password",
     },
+    subagentWatchdog: {
+      abortAfterSeconds: 600, // 0 disables
+    },
     trustedProxies: ["10.0.0.1"],
     // Optional. Default false.
     allowRealIpFallback: false,
@@ -454,6 +457,7 @@ See [Inferred commitments](/concepts/commitments).
   `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` does not affect Gateway
   WebSocket clients.
 - `gateway.remote.token` / `.password` are remote-client credential fields. They do not configure gateway auth by themselves.
+- `gateway.subagentWatchdog.abortAfterSeconds`: seconds before the diagnostics loop force-finalizes a `processing` session classified as `blocked_tool_call`. Default `600`; set `0` to disable.
 - `gateway.push.apns.relay.baseUrl`: base HTTPS URL for the external APNs relay used by official/TestFlight iOS builds after they publish relay-backed registrations to the gateway. This URL must match the relay URL compiled into the iOS build.
 - `gateway.push.apns.relay.timeoutMs`: gateway-to-relay send timeout in milliseconds. Defaults to `10000`.
 - Relay-backed registrations are delegated to a specific gateway identity. The paired iOS app fetches `gateway.identity.get`, includes that identity in the relay registration, and forwards a registration-scoped send grant to the gateway. Another gateway cannot reuse that stored registration.
