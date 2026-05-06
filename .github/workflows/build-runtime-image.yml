@@ -1,0 +1,99 @@
+name: build-runtime-image
+
+# Builds and pushes the per-tenant multitenant runtime image to GHCR.
+# Triggered on changes to anything that affects the image, and manually.
+#
+# What it does:
+#   1. Free up disk on the runner (default GH runner has ~14GB; the
+#      multitenant image build is much larger).
+#   2. Buildx-build the image with GHCR-backed layer caching.
+#   3. Push two tags: :<sha> and :latest.
+#   4. Notify saml212/platform-context via repository_dispatch so the
+#      Hetzner deploy can pick up ROCKIELAB_RUNTIME_IMAGE=:<sha>.
+#
+# Required CI secrets (set in saml212/platform-runtime Actions secrets):
+#   - GHCR_TOKEN  (classic PAT with write:packages, read:packages)
+#
+# Optional CI secrets:
+#   - PLATFORM_CONTEXT_DISPATCH_TOKEN  (PAT with repo:repo on platform-context;
+#     for the cross-repo notify step. Skipped if unset.)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.multitenant"
+      - "overlay/multitenant/**"
+      - "apps/broker/**"
+      - "scripts/build-multitenant.sh"
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-runtime-image
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/saml212/rockielab-runtime-multitenant
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Free up runner disk
+        run: |
+          # GH default runners come with caches/SDKs we don't need for this build.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: saml212
+          password: ${{ secrets.GHCR_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.multitenant
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=registry,ref=${{ env.IMAGE }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE }}:buildcache,mode=max
+
+      - name: Notify platform-context (optional)
+        if: ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN != '' }}
+        run: |
+          curl -fsS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.PLATFORM_CONTEXT_DISPATCH_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/saml212/platform-context/dispatches \
+            -d '{"event_type":"runtime-image-built","client_payload":{"image":"${{ env.IMAGE }}:${{ github.sha }}"}}'
+
+      - name: Summary
+        run: |
+          echo "## Pushed runtime image" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.IMAGE }}:${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- \`${{ env.IMAGE }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Set \`ROCKIELAB_RUNTIME_IMAGE=${{ env.IMAGE }}:${{ github.sha }}\` in platform-context's Hetzner .env to roll forward." >> $GITHUB_STEP_SUMMARY
