@@ -1016,6 +1016,11 @@ it.
 For `PermissionRequest`, OpenClaw only returns explicit allow or deny decisions
 when policy decides. A no-decision result is not an allow. Codex treats it as no
 hook decision and falls through to its own guardian or user approval path.
+When an operator chooses `allow-always` for a Codex native permission request,
+OpenClaw remembers that exact provider/session/tool input/cwd fingerprint for a
+bounded session window. The remembered decision is intentionally exact-match
+only: a changed command, arguments, tool payload, or cwd creates a fresh
+approval.
 
 Codex MCP tool approval elicitations are routed through OpenClaw's plugin
 approval flow when Codex marks `_meta.codex_approval_kind` as

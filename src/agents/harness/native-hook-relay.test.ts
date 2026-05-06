@@ -1178,6 +1178,111 @@ describe("native hook relay registry", () => {
     );
   });
 
+  it("reuses allow-always PermissionRequest approvals for identical relay content", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stable-permission-cache",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow-always" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const first = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "browserforce tabs" },
+      },
+    });
+    relay.unregister();
+    registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stable-permission-cache",
+      sessionId: "session-1",
+      runId: "run-2",
+    });
+    const second = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-call-2",
+        tool_input: { command: "browserforce tabs" },
+      },
+    });
+
+    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    expect([first, second].map((response) => JSON.parse(response.stdout))).toEqual([
+      {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
+        },
+      },
+      {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
+        },
+      },
+    ]);
+  });
+
+  it("keeps allow-always PermissionRequest reuse scoped to matching cwd and input", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow-always" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo-a",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      },
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo-b",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      },
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo-a",
+        tool_name: "Bash",
+        tool_input: { command: "npm test -- --changed" },
+      },
+    });
+
+    expect(approvalRequester).toHaveBeenCalledTimes(3);
+  });
+
   it("defers PermissionRequest when OpenClaw approval does not decide", async () => {
     __testing.setNativeHookRelayPermissionApprovalRequesterForTests(
       vi.fn(async () => "defer" as const),
