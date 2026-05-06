@@ -868,6 +868,15 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
+    // registerSubagentRun fires both an in-process listener and a gateway
+    // waitForSubagentCompletion RPC; both can reach this point for the same
+    // runId in embedded mode. Guard with a sync check-then-set so the browser
+    // driver tab-close IPC only fires once per completion.
+    if (entry.browserCleanupDispatchedAt !== undefined) {
+      return;
+    }
+    entry.browserCleanupDispatchedAt = Date.now();
+
     const cleanupBrowserSessions =
       params.cleanupBrowserSessionsForLifecycleEnd ??
       (await loadCleanupBrowserSessionsForLifecycleEnd());

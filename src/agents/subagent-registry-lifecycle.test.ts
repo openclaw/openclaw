@@ -773,4 +773,39 @@ describe("subagent registry lifecycle hardening", () => {
     ).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
+
+  it("dedupes browser cleanup when two callers complete the same run in parallel", async () => {
+    // registerSubagentRun fires both an in-process listener (phase='end') and a
+    // gateway waitForSubagentCompletion RPC; in embedded mode both resolve to
+    // the same runId and call completeSubagentRun. Without a per-entry dispatch
+    // guard, cleanupBrowserSessionsForLifecycleEnd fires once per caller,
+    // duplicating browser driver tab-close IPC.
+    const entry = createRunEntry({
+      expectsCompletionMessage: false,
+    });
+    const runSubagentAnnounceFlow = vi.fn(async () => true);
+
+    const controller = createLifecycleController({
+      entry,
+      runSubagentAnnounceFlow,
+    });
+
+    const completeParams = {
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" as const },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: true,
+    };
+
+    await Promise.all([
+      controller.completeSubagentRun(completeParams),
+      controller.completeSubagentRun(completeParams),
+    ]);
+
+    expect(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    ).toHaveBeenCalledTimes(1);
+    expect(entry.browserCleanupDispatchedAt).toBeTypeOf("number");
+  });
 });
