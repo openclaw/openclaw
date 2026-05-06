@@ -46,9 +46,10 @@ This plan has started landing in slices:
   The shared `kv` table now has a small typed helper for scoped JSON-compatible
   values so low-risk JSON sidecars can move behind the same SQLite connection
   without each feature reimplementing read/write/delete glue.
-- Canonical per-agent session stores use SQLite by default. `openclaw doctor
---fix` imports legacy `sessions.json` indexes into SQLite and removes the JSON
-  index after import, instead of keeping a parallel compatibility/export store.
+- Canonical per-agent session stores use SQLite by default. The `openclaw doctor`
+  fix mode imports legacy `sessions.json` indexes into SQLite and removes the
+  JSON index after import, instead of keeping a startup migration or parallel
+  compatibility/export store.
 - Transcript events have a SQLite store primitive with JSONL import/export.
   Transcript append paths dual-write when the caller already has agent and
   session scope, including gateway-injected assistant messages. Scoped appends
@@ -343,8 +344,8 @@ Migration order:
 2. Add shared SQLite connection and migration helpers.
 3. Move `sessions.json` behind a `SessionStoreBackend` interface.
 4. Make SQLite primary for session entries.
-5. Import old `sessions.json` from `openclaw doctor --fix`, then remove the JSON
-   index after SQLite has the rows.
+5. Import old `sessions.json` only from `openclaw doctor --fix`, then remove the
+   JSON index after SQLite has the rows.
 6. Leave `*.jsonl` transcripts on disk while PI owns transcript semantics.
 7. After session manager ownership moves behind OpenClaw APIs, store transcript
    events in SQLite and export JSONL for compatibility.

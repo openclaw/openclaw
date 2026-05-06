@@ -182,6 +182,18 @@ export function saveSqliteSessionStore(
   }, options);
 }
 
+export function mergeSqliteSessionStore(
+  options: SqliteSessionStoreOptions,
+  incoming: Record<string, SessionEntry>,
+): { imported: number; stored: number } {
+  const mergedStore = mergeSessionStoresByUpdatedAt(loadSqliteSessionStore(options), incoming);
+  saveSqliteSessionStore(options, mergedStore);
+  return {
+    imported: Object.keys(incoming).length,
+    stored: Object.keys(mergedStore).length,
+  };
+}
+
 function resolveSessionEntryUpdatedAt(entry: SessionEntry): number {
   return typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
     ? entry.updatedAt
@@ -218,8 +230,7 @@ export function importJsonSessionStoreToSqlite(params: {
     ...(params.now ? { now: params.now } : {}),
   };
   const importedStore = parseJsonSessionStoreFromPath(params.sourcePath);
-  const mergedStore = mergeSessionStoresByUpdatedAt(loadSqliteSessionStore(options), importedStore);
-  saveSqliteSessionStore(options, mergedStore);
+  const result = mergeSqliteSessionStore(options, importedStore);
   let removedSource = false;
   try {
     fs.rmSync(params.sourcePath, { force: true });
@@ -228,7 +239,7 @@ export function importJsonSessionStoreToSqlite(params: {
     removedSource = false;
   }
   return {
-    imported: Object.keys(importedStore).length,
+    imported: result.imported,
     sourcePath: params.sourcePath,
     removedSource,
   };
