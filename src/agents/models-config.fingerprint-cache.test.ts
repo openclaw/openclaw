@@ -260,6 +260,111 @@ describe("ensureOpenClawModelsJson fingerprint cache", () => {
     expect(resolveImplicitProvidersCallCount).toBe(2);
   });
 
+  it("forces a re-plan on every call while auth-profiles.json stays oversize (Codex P2 round-4 on #73260)", async () => {
+    // Round-4 follow-up: returning `null` for oversize auth-profiles
+    // collapsed every >8 MiB variant onto the same fingerprint
+    // contribution, so credential edits that kept the file oversize
+    // could keep hitting a stale cache.  The fix bypasses the readyCache
+    // entirely while the file is `uncacheable`, so EVERY call must
+    // re-plan — even when the file is byte-identical to the previous
+    // oversize call.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Warm the cache with a small profile.
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "***", // pragma: allowlist secret
+        },
+      },
+    });
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Repeat call with the same small profile — cache hit, no re-plan.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Grow auth-profiles past the cap.  First oversize call: cache miss
+    // (different effective state) → re-plan.
+    const target = path.join(agentDir, "auth-profiles.json");
+    const padding = "x".repeat(10 * 1024 * 1024); // 10 MiB > MAX_AUTH_PROFILES_BYTES
+    const oversizeContents = JSON.stringify({
+      version: 1,
+      padding,
+      profiles: {
+        "anthropic:default": {
+          type: "token",
+          provider: "anthropic",
+          token: "***", // pragma: allowlist secret
+        },
+      },
+    });
+    await fs.writeFile(target, oversizeContents);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+
+    // Repeat oversize call with byte-identical contents.  Under the
+    // round-3 implementation this would hit the cache (null === null);
+    // under the round-4 fix the cache is bypassed and we re-plan again.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(3);
+
+    // Same again — still bypassed.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(4);
+
+    // Restoring a small (different) profile re-enables caching, and
+    // the next call after that should be a cache hit.
+    await writeAuthProfiles(agentDir, {
+      version: 1,
+      profiles: {
+        "google:default": {
+          type: "token",
+          provider: "google",
+          token: "google-restored", // pragma: allowlist secret
+        },
+      },
+    });
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(5);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(5);
+  }, 30_000);
+
+  it("invalidates the cache when models.json becomes unhashable (Codex P1 round-4 on #73260)", async () => {
+    // Round-4 follow-up: the cache-hit predicate used to accept
+    // `currentModelsJsonHash === settled.modelsJsonHash`, but
+    // `readModelsJsonContentHash` returned null for several failure
+    // modes (oversize, symlink, I/O error) in addition to the
+    // legitimate "file absent" case.  An attacker who could put
+    // models.json into any of those states could then mutate its
+    // contents repeatedly while every read returned null, and the
+    // cache would keep hitting.  The fix uses a discriminated outcome
+    // where `uncacheable` never compares equal — not even to itself.
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg = createOpenAiConfig();
+
+    // Warm cache: small models.json gets written, outcome captured as
+    // `{ kind: "hashed", hash: <H> }`.
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Make models.json oversize externally.  Cache-hit predicate must
+    // see `{ uncacheable }` for the current outcome and force a
+    // re-plan even though the captured outcome was `{ hashed, H }`.
+    const modelsPath = path.join(agentDir, "models.json");
+    await fs.writeFile(modelsPath, "x".repeat(2 * 1024 * 1024)); // > MAX_MODELS_JSON_BYTES (1 MiB)
+    await ensureOpenClawModelsJson(cfg, agentDir);
+    expect(resolveImplicitProvidersCallCount).toBe(2);
+  }, 30_000);
+
   it("invalidates the cache when auth-profiles.json transitions to oversize (Aisle/Codex P2 fail-closed on #73260)", async () => {
     // Regression for the size-only sentinel bypass: previously an
     // oversized auth-profiles.json yielded a deterministic
