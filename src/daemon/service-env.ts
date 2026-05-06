@@ -178,21 +178,35 @@ function addCommonUserBinDirs(
   addDefault(`${home}/.local/bin`);
   addDefault(`${home}/.npm-global/bin`);
   addDefault(`${home}/bin`);
-  addExistingDir(dirs, `${home}/.volta/bin`, existsSync);
-  addExistingDir(dirs, `${home}/.asdf/shims`, existsSync);
-  addExistingDir(dirs, `${home}/.bun/bin`, existsSync);
 }
 
-function addCommonEnvConfiguredBinDirs(
+function addStableEnvConfiguredBinDirs(
   dirs: string[],
   env: Record<string, string | undefined> | undefined,
   options: Pick<MinimalServicePathOptions, "cwd" | "home">,
 ): void {
   addEnvConfiguredBinDir(dirs, env?.PNPM_HOME, options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"), options);
+}
+
+function addVersionManagerEnvConfiguredBinDirs(
+  dirs: string[],
+  env: Record<string, string | undefined> | undefined,
+  options: Pick<MinimalServicePathOptions, "cwd" | "home">,
+): void {
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"), options);
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"), options);
+}
+
+function addExistingVersionManagerUserBinDirs(
+  dirs: string[],
+  home: string,
+  existsSync: (candidate: string) => boolean,
+): void {
+  addExistingDir(dirs, `${home}/.volta/bin`, existsSync);
+  addExistingDir(dirs, `${home}/.asdf/shims`, existsSync);
+  addExistingDir(dirs, `${home}/.bun/bin`, existsSync);
 }
 
 // Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
@@ -255,7 +269,8 @@ function resolveDarwinUserBinDirs(
   // Env-configured bin roots (override defaults when present).
   // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
   // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
-  addCommonEnvConfiguredBinDirs(dirs, env, pathOptions);
+  addStableEnvConfiguredBinDirs(dirs, env, pathOptions);
+  addVersionManagerEnvConfiguredBinDirs(dirs, env, pathOptions);
   // nvm: no stable default path, relies on env or user's shell config
   // User must set NVM_DIR and source nvm.sh for it to work
   addEnvConfiguredBinDir(dirs, env?.NVM_DIR, pathOptions);
@@ -265,6 +280,7 @@ function resolveDarwinUserBinDirs(
 
   // Common user bin directories
   addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
+  addExistingVersionManagerUserBinDirs(dirs, home, existsSync);
 
   // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
@@ -282,8 +298,10 @@ function resolveDarwinUserBinDirs(
 }
 
 /**
- * Resolve common user bin directories for Linux.
- * These are paths where npm global installs and node version managers typically place binaries.
+ * Resolve stable user bin directories for Linux.
+ * These cover shared user bin locations, package managers with stable install roots,
+ * and Nix profiles. Linux intentionally leaves version-manager-specific directories
+ * like nvm, fnm, Volta, asdf, and Bun out of the durable service PATH.
  */
 function resolveLinuxUserBinDirs(
   home: string | undefined,
@@ -299,24 +317,16 @@ function resolveLinuxUserBinDirs(
   const pathOptions = { ...options, home };
   const includeMissingUserBinDefaults = options.includeMissingUserBinDefaults ?? true;
 
-  // Env-configured bin roots (override defaults when present).
-  addCommonEnvConfiguredBinDirs(dirs, env, pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"), pathOptions);
-  addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
+  // Env-configured stable bin roots.
+  addStableEnvConfiguredBinDirs(dirs, env, pathOptions);
 
-  // Common user bin directories
+  // Common user bin directories.
   addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
 
   // Nix Home Manager (cross-platform)
   addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
 
-  // Node version managers
-  addExistingDir(dirs, `${home}/.nvm/current/bin`, existsSync); // nvm with current symlink
-  addExistingDir(dirs, `${home}/.local/share/fnm/aliases/default/bin`, existsSync); // fnm default
-  addExistingDir(dirs, `${home}/.local/share/fnm/current/bin`, existsSync); // fnm legacy current symlink
-  addExistingDir(dirs, `${home}/.fnm/aliases/default/bin`, existsSync); // fnm if customized to ~/.fnm
-  addExistingDir(dirs, `${home}/.fnm/current/bin`, existsSync); // fnm legacy current symlink
+  // Package managers with stable Linux install locations.
   addExistingDir(dirs, `${home}/.local/share/pnpm`, existsSync); // pnpm global bin
 
   return dirs;
@@ -334,6 +344,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const includeUserDirs = options.includeUserDirs ?? platform !== "darwin";
 
   const existsSync = options.existsSync ?? fs.existsSync;
+  // Add stable user bin directories for package managers, shared user bins, and Nix profiles.
   const userDirs = includeUserDirs
     ? platform === "linux"
       ? resolveLinuxUserBinDirs(options.home, options.env, existsSync, options)
