@@ -13,8 +13,28 @@ type PersistedEchoEntry = {
 const PERSISTED_ECHO_TTL_MS = 2 * 60 * 1000;
 const MAX_PERSISTED_ECHO_ENTRIES = 256;
 
+// sent-echoes.jsonl carries scope keys + outbound message text + messageIds.
+// A hostile same-UID process could otherwise (a) read the file to enumerate
+// active conversations and outbound content, or (b) inject lines so a future
+// inbound dedupe call wrongly suppresses a legitimate inbound message. Owner-
+// only mode on both the directory and file closes that vector — defaults are
+// 0755/0644 which are world-readable on a multi-user Mac.
+const PERSISTED_ECHO_DIR_MODE = 0o700;
+const PERSISTED_ECHO_FILE_MODE = 0o600;
+
 function resolvePersistedEchoPath(): string {
   return path.join(resolveStateDir(), "imessage", "sent-echoes.jsonl");
+}
+
+function clampPersistedEchoModes(filePath: string): void {
+  // mkdirSync's mode is masked by umask and only applies on creation. If the
+  // dir or file already exists from an older gateway version, clamp now.
+  try {
+    fs.chmodSync(path.dirname(filePath), PERSISTED_ECHO_DIR_MODE);
+    fs.chmodSync(filePath, PERSISTED_ECHO_FILE_MODE);
+  } catch {
+    // best-effort — fs may not support chmod on every platform
+  }
 }
 
 function normalizeText(text: string | undefined): string | undefined {
@@ -102,12 +122,13 @@ function readRecentEntries(): PersistedEchoEntry[] {
 function rewriteRecentEntries(entries: PersistedEchoEntry[]): void {
   const filePath = resolvePersistedEchoPath();
   try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: PERSISTED_ECHO_DIR_MODE });
     fs.writeFileSync(
       filePath,
       entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""),
-      "utf8",
+      { encoding: "utf8", mode: PERSISTED_ECHO_FILE_MODE },
     );
+    clampPersistedEchoModes(filePath);
   } catch (err) {
     reportFailure("write", err);
     // Persistence failed; don't update the in-memory mirror so the next
