@@ -1,7 +1,9 @@
 import { isIP } from "node:net";
 import {
+  isBlockedHostnameOrIp,
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
+  SsrFBlockedError,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
@@ -31,7 +33,10 @@ export type BrowserNavigationPolicyOptions = {
   browserProxyMode?: BrowserNavigationProxyMode;
 };
 
-export type BrowserNavigationProxyMode = "direct" | "explicit-browser-proxy";
+export type BrowserNavigationProxyMode =
+  | "direct"
+  | "explicit-browser-proxy"
+  | "external-browser-proxy";
 
 export type BrowserNavigationRequestLike = {
   url(): string;
@@ -112,6 +117,23 @@ export async function assertBrowserNavigationAllowed(
     throw new InvalidBrowserNavigationUrlError(
       `Navigation blocked: unsupported protocol "${parsed.protocol}"`,
     );
+  }
+
+  // The browser profile manages its own network stack (e.g. `existing-session`
+  // drivers inherit the host browser's proxy/PAC/VPN configuration). Node-side
+  // `getaddrinfo` does not observe where the browser will actually connect —
+  // for example, a split-tunnel VPN can resolve a public hostname to its own
+  // loopback proxy IP on the gateway host, while the browser sends the request
+  // through the VPN to the real public target. DNS-to-IP SSRF checks are not
+  // meaningful in this configuration. Keep the hostname denylist so cloud
+  // metadata services (`metadata.google.internal`), loopback aliases
+  // (`localhost`), and reserved TLDs (`*.local`, `*.internal`, `*.localhost`)
+  // are still rejected as defense-in-depth.
+  if (opts.browserProxyMode === "external-browser-proxy") {
+    if (isBlockedHostnameOrIp(parsed.hostname)) {
+      throw new SsrFBlockedError(`Blocked hostname: ${parsed.hostname}`);
+    }
+    return;
   }
 
   // Browser proxy routing hides the final connect target from this process.

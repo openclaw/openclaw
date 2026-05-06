@@ -51,5 +51,14 @@ export function resolveBrowserNavigationProxyMode(params: {
   ) {
     return "explicit-browser-proxy";
   }
+  // Non-openclaw drivers (e.g. `existing-session` connecting to a user's
+  // system Chrome) cannot have Node-side SSRF enforced against DNS-resolved
+  // IPs — the host browser's own proxy/PAC/VPN stack determines the real
+  // connection target, not `getaddrinfo` on the gateway. Mark these as
+  // external-browser-proxy so `assertBrowserNavigationAllowed` skips the
+  // DNS-to-IP check while still enforcing the hostname denylist.
+  if (params.profile.driver !== "openclaw") {
+    return "external-browser-proxy";
+  }
   return "direct";
 }

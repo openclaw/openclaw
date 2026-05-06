@@ -40,14 +40,28 @@ describe("browser proxy mode", () => {
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "existing-session", cdpIsLoopback: true },
-      }),
-    ).toBe("direct");
-    expect(
-      resolveBrowserNavigationProxyMode({
-        resolved,
         profile: { driver: "openclaw", cdpIsLoopback: false },
       }),
     ).toBe("direct");
+  });
+
+  it("marks non-openclaw drivers as external-browser-proxy so Node-side SSRF skips DNS", () => {
+    // `existing-session` drivers use the host browser's own network stack
+    // (system proxy, PAC, VPN). Node's `getaddrinfo` does not reflect where
+    // the browser actually connects, so DNS-to-IP SSRF checks are meaningless
+    // here. We mark these profiles so the navigation guard takes the external
+    // proxy path (skip DNS check, keep hostname denylist).
+    expect(
+      resolveBrowserNavigationProxyMode({
+        resolved: { extraArgs: [] },
+        profile: { driver: "existing-session", cdpIsLoopback: true },
+      }),
+    ).toBe("external-browser-proxy");
+    expect(
+      resolveBrowserNavigationProxyMode({
+        resolved: { extraArgs: ["--proxy-server=http://127.0.0.1:7890"] },
+        profile: { driver: "existing-session", cdpIsLoopback: false },
+      }),
+    ).toBe("external-browser-proxy");
   });
 });

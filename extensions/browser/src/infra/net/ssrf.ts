@@ -1,4 +1,5 @@
 export {
+  isBlockedHostnameOrIp,
   SsrFBlockedError,
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
