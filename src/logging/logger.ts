@@ -13,6 +13,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { appendRegularFileSync } from "../infra/regular-file.js";
 import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
@@ -597,7 +598,7 @@ function getCurrentLogFileBytes(file: string): number {
 
 function appendLogLine(file: string, line: string): boolean {
   try {
-    fs.appendFileSync(file, line, { encoding: "utf8" });
+    appendRegularFileSync({ filePath: file, content: line });
     return true;
   } catch {
     return false;

@@ -43,7 +43,6 @@ import {
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-import { VOICECLAW_REALTIME_PATH } from "./voiceclaw-realtime/paths.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -70,9 +69,6 @@ let sessionHistoryHttpModulePromise:
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
-let voiceClawRealtimeUpgradeModulePromise:
-  | Promise<typeof import("./voiceclaw-realtime/upgrade.js")>
-  | undefined;
 let canvasAuthModulePromise: Promise<typeof import("./server/http-auth.js")> | undefined;
 let httpAuthUtilsModulePromise: Promise<typeof import("./http-auth-utils.js")> | undefined;
 let pluginRouteRuntimeScopesModulePromise:
@@ -127,11 +123,6 @@ function getSessionKillHttpModule() {
 function getToolsInvokeHttpModule() {
   toolsInvokeHttpModulePromise ??= import("./tools-invoke-http.js");
   return toolsInvokeHttpModulePromise;
-}
-
-function getVoiceClawRealtimeUpgradeModule() {
-  voiceClawRealtimeUpgradeModulePromise ??= import("./voiceclaw-realtime/upgrade.js");
-  return voiceClawRealtimeUpgradeModulePromise;
 }
 
 function getCanvasAuthModule() {
@@ -873,42 +864,6 @@ export function attachGatewayUpgradeHandler(opts: {
         }
       }
       const preauthBudgetKey = resolveRequestClientIp(req, trustedProxies, allowRealIpFallback);
-      if (url.pathname === VOICECLAW_REALTIME_PATH) {
-        if (!preauthConnectionBudget.acquire(preauthBudgetKey)) {
-          writeUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
-          socket.destroy();
-          return;
-        }
-        let budgetReleased = false;
-        const releasePreauthBudget = () => {
-          if (budgetReleased) {
-            return;
-          }
-          budgetReleased = true;
-          preauthConnectionBudget.release(preauthBudgetKey);
-        };
-        socket.once("close", releasePreauthBudget);
-        try {
-          const { handleVoiceClawRealtimeUpgrade } = await getVoiceClawRealtimeUpgradeModule();
-          handleVoiceClawRealtimeUpgrade({
-            req,
-            socket,
-            head,
-            auth: resolvedAuth,
-            config: configSnapshot,
-            trustedProxies,
-            allowRealIpFallback,
-            rateLimiter,
-            releasePreauthBudget,
-          });
-          return;
-        } catch (err) {
-          socket.off("close", releasePreauthBudget);
-          releasePreauthBudget();
-          socket.destroy();
-          throw new Error("VoiceClaw realtime websocket upgrade failed", { cause: err });
-        }
-      }
       if (wss.listenerCount("connection") === 0) {
         writeUpgradeServiceUnavailable(socket, "Gateway websocket handlers unavailable");
         socket.destroy();

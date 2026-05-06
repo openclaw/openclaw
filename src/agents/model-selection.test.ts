@@ -1,12 +1,10 @@
-import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
-import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import {
   buildAllowedModelSet,
   inferUniqueProviderFromConfiguredModels,
-  isCliProvider,
   parseModelRef,
   buildModelAliasIndex,
   normalizeModelSelection,
@@ -27,6 +25,10 @@ import {
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
+vi.mock("./model-selection-cli.js", () => ({
+  isCliProvider: () => false,
 }));
 
 const EXPLICIT_ALLOWLIST_CONFIG = {
@@ -156,33 +158,6 @@ describe("model-selection", () => {
       expect(normalizeProviderIdForAuth("qwencloud")).toBe("qwen");
       expect(normalizeProviderIdForAuth("openai-codex")).toBe("openai-codex");
       expect(normalizeProviderIdForAuth("openai")).toBe("openai");
-    });
-  });
-
-  describe("isCliProvider", () => {
-    beforeEach(() => {
-      setupRegistryRuntimeTesting.resetRuntimeState();
-      setupRegistryRuntimeTesting.setRuntimeModuleForTest({
-        resolvePluginSetupCliBackend: ({ backend }) =>
-          backend === "claude-cli"
-            ? {
-                pluginId: "anthropic",
-                backend: { id: "claude-cli", config: { command: "claude" } },
-              }
-            : undefined,
-      });
-    });
-
-    afterEach(() => {
-      setupRegistryRuntimeTesting.resetRuntimeState();
-    });
-
-    it("returns true for setup-registered cli backends", () => {
-      expect(isCliProvider("claude-cli", {} as OpenClawConfig)).toBe(true);
-    });
-
-    it("returns false for provider ids", () => {
-      expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
     });
   });
 

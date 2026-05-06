@@ -143,6 +143,12 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
+vi.mock("../../channels/plugins/message-tool-api.js", () => ({
+  resolveBundledChannelMessageToolDiscoveryAdapter: () => ({
+    describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+  }),
+}));
+
 vi.mock("./agents-list-tool.js", () => ({
   createAgentsListTool: () => openClawToolsFactoryMocks.tool("agents"),
 }));
