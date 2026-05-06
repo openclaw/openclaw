@@ -553,7 +553,8 @@ pnpm crabbox:run -- --provider blacksmith-testbox \
 Read the final JSON summary. The useful fields are `provider`, `leaseId`, `syncDelegated`, `exitCode`, `commandMs`, and `totalMs`. One-shot Blacksmith-backed Crabbox runs should stop the Testbox automatically; if a run is interrupted or cleanup is unclear, inspect live boxes and stop only the boxes you created:
 
 ```bash
-blacksmith testbox list
+blacksmith testbox list --all
+blacksmith testbox status --id <tbx_id>
 blacksmith testbox stop --id <tbx_id>
 ```
 
@@ -571,6 +572,13 @@ blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90
 blacksmith testbox run --id <tbx_id> "env CI=1 NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
 blacksmith testbox stop --id <tbx_id>
 ```
+
+If `blacksmith testbox list --all` and `blacksmith testbox status` work but new
+warmups sit `queued` with no IP or Actions run URL after a couple of minutes,
+treat it as Blacksmith provider, queue, billing, or org-limit pressure. Stop the
+queued ids you created, avoid starting more Testboxes, and move the proof to the
+owned Crabbox capacity path below while someone checks the Blacksmith dashboard,
+billing, and org limits.
 
 Escalate to owned Crabbox capacity only when Blacksmith is down, quota-limited, missing the needed environment, or owned capacity is explicitly the goal:
 
