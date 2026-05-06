@@ -214,7 +214,7 @@ async function sendTelegramOutbound(params: {
   gatewayClientScopes?: readonly string[] | null;
 }) {
   const send = await resolveTelegramSend(params.deps);
-  return await send(
+  const result = await send(
     params.to,
     params.text,
     buildTelegramSendOptions({
@@ -230,6 +230,13 @@ async function sendTelegramOutbound(params: {
       gatewayClientScopes: params.gatewayClientScopes,
     }),
   );
+  return {
+    ...result,
+    delivery: {
+      ...result.delivery,
+      providerAccepted: true,
+    },
+  };
 }
 
 type TelegramMessageSendSourceResult = {
