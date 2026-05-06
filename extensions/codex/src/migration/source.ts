@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveCodexAppServerRuntimeOptions } from "../app-server/config.js";
 import type { v2 } from "../app-server/protocol-generated/typescript/index.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
@@ -195,6 +196,7 @@ function readCodexPluginConfigFromOpenClawConfig(config: unknown): unknown {
 async function defaultAppServerRequest(params: {
   codexHome: string;
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
 }): Promise<CodexMigrationAppServerRequest> {
   const runtimeOptions = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
   const startOptions = {
@@ -210,6 +212,7 @@ async function defaultAppServerRequest(params: {
       requestParams,
       timeoutMs: CODEX_PLUGIN_DISCOVERY_TIMEOUT_MS,
       startOptions,
+      config: params.config,
     });
 }
 
@@ -232,6 +235,7 @@ async function listAllApps(request: CodexMigrationAppServerRequest): Promise<v2.
 async function discoverInstalledOpenAiCuratedPlugins(params: {
   codexHome: string;
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
   appServerRequest?: CodexMigrationAppServerRequest;
 }): Promise<{ plugins: CodexInstalledPluginSource[]; error?: string }> {
   try {
@@ -241,6 +245,7 @@ async function discoverInstalledOpenAiCuratedPlugins(params: {
       (await defaultAppServerRequest({
         codexHome: params.codexHome,
         pluginConfig: params.pluginConfig,
+        config: params.config,
       }));
     const [listed, apps] = await Promise.all([
       request("plugin/list", {
@@ -284,7 +289,7 @@ async function discoverInstalledOpenAiCuratedPlugins(params: {
 export async function discoverCodexSource(
   input?: string,
   options: {
-    config?: unknown;
+    config?: OpenClawConfig;
     appServerRequest?: CodexMigrationAppServerRequest;
   } = {},
 ): Promise<CodexSource> {
@@ -305,6 +310,7 @@ export async function discoverCodexSource(
   const appServerPlugins = await discoverInstalledOpenAiCuratedPlugins({
     codexHome,
     pluginConfig: readCodexPluginConfigFromOpenClawConfig(options.config),
+    config: options.config,
     appServerRequest: options.appServerRequest,
   });
   const plugins = await discoverPluginDirs(codexHome);
