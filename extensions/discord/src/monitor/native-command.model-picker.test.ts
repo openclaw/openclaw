@@ -654,7 +654,7 @@ describe("Discord model picker interactions", () => {
       mi: "1",
     });
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(store["agent:worker:subagent:bound"]?.providerOverride).toBe("lmstudio");
     expect(store["agent:worker:subagent:bound"]?.modelOverride).toBe(
       "unsloth/gemma-4-26b-a4b-it@iq4_xs",
@@ -705,7 +705,7 @@ describe("Discord model picker interactions", () => {
       createModelsViewSubmitData(),
     );
 
-    const store = loadSessionStore(storePath, { skipCache: true });
+    const store = loadSessionStore(storePath);
     expect(store["agent:worker:subagent:bound"]?.providerOverride).toBeUndefined();
     expect(store["agent:worker:subagent:bound"]?.modelOverride).toBeUndefined();
     expect(

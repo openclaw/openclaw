@@ -724,7 +724,7 @@ describe("plugin run context lifecycle", () => {
             }),
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           expect(stored["agent:main:main"]?.pluginExtensions).toEqual({
             "restart-state-fixture": { workflow: { state: "waiting" } },
           });

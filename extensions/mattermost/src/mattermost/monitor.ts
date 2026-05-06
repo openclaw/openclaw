@@ -1176,7 +1176,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           cfg,
           route: modelSessionRoute,
           data,
-          skipCache: true,
         });
         const view = renderMattermostModelsPickerView({
           ownerUserId: pickerState.ownerUserId,

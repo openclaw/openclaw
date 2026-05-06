@@ -68,7 +68,7 @@ function expectSessionStore(
   storePath: string,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
 ) {
-  expect(loadSessionStore(storePath, { skipCache: true })).toEqual(sessions);
+  expect(loadSessionStore(storePath)).toEqual(sessions);
 }
 
 function readJsonLogs(): Array<Record<string, unknown>> {

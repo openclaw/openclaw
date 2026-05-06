@@ -55,9 +55,7 @@ const { getRuntimeConfig, loadSessionStoreMock, resolveStorePathMock, sessionSto
       sessionStoreEntries: { value: SessionStore };
     } => ({
       getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
-      loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-        (_storePath, _opts) => sessionStoreEntries.value,
-      ),
+      loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(() => sessionStoreEntries.value),
       resolveStorePathMock: vi.fn<ResolveStorePathFn>(
         (storePath?: string) => storePath ?? sessionStorePath,
       ),

@@ -766,7 +766,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      const latest = loadSessionStore(storePath, { skipCache: true });
+      const latest = loadSessionStore(storePath);
       latest[sessionKey] = {
         ...latest[sessionKey],
         pluginDebugEntries: [
@@ -878,7 +878,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      const latest = loadSessionStore(storePath, { skipCache: true });
+      const latest = loadSessionStore(storePath);
       latest[sessionKey] = {
         ...latest[sessionKey],
         pluginDebugEntries: [
@@ -989,7 +989,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
     );
 
     runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
-      const latest = loadSessionStore(storePath, { skipCache: true });
+      const latest = loadSessionStore(storePath);
       latest[sessionKey] = {
         ...latest[sessionKey],
         pluginDebugEntries: [
@@ -1716,7 +1716,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       typingMode: "instant",
     });
 
-    expect(loadSessionStoreSpy).not.toHaveBeenCalledWith(storePath, { skipCache: true });
+    expect(loadSessionStoreSpy).not.toHaveBeenCalledWith(storePath);
     expectReplyText(result, "Normal reply");
   });
 });

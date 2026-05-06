@@ -103,7 +103,7 @@ describe("plugin session extension SessionEntry projection", () => {
             value: { state: "executing", title: "Deploy approval", internal: 7 },
           });
           expect(patchResult.ok).toBe(true);
-          const afterPatch = loadSessionStore(storePath, { skipCache: true });
+          const afterPatch = loadSessionStore(storePath);
           expect(
             (afterPatch["agent:main:main"] as unknown as Record<string, unknown>).approvalSnapshot,
           ).toEqual({ state: "executing", title: "Deploy approval" });
@@ -116,7 +116,7 @@ describe("plugin session extension SessionEntry projection", () => {
             unset: true,
           });
           expect(unsetResult.ok).toBe(true);
-          const afterUnset = loadSessionStore(storePath, { skipCache: true });
+          const afterUnset = loadSessionStore(storePath);
           expect(
             (afterUnset["agent:main:main"] as unknown as Record<string, unknown>).approvalSnapshot,
           ).toBeUndefined();
@@ -188,11 +188,8 @@ describe("plugin session extension SessionEntry projection", () => {
             "ready patch result",
           );
           expect(
-            (
-              loadSessionStore(storePath, { skipCache: true })[
-                "agent:main:main"
-              ] as unknown as Record<string, unknown>
-            ).approvalSnapshot,
+            (loadSessionStore(storePath)["agent:main:main"] as unknown as Record<string, unknown>)
+              .approvalSnapshot,
           ).toEqual({ state: "ready" });
 
           await expectOkResult(
@@ -205,9 +202,10 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
             "throwing projector patch result",
           );
-          const afterThrow = loadSessionStore(storePath, { skipCache: true })[
-            "agent:main:main"
-          ] as unknown as Record<string, unknown>;
+          const afterThrow = loadSessionStore(storePath)["agent:main:main"] as unknown as Record<
+            string,
+            unknown
+          >;
           expect(afterThrow.approvalSnapshot).toBeUndefined();
           expect(extensionNamespace(afterThrow, "failing-promoted-plugin", "workflow")).toEqual({
             state: "bad",
@@ -225,11 +223,8 @@ describe("plugin session extension SessionEntry projection", () => {
             "ready-again patch result",
           );
           expect(
-            (
-              loadSessionStore(storePath, { skipCache: true })[
-                "agent:main:main"
-              ] as unknown as Record<string, unknown>
-            ).approvalSnapshot,
+            (loadSessionStore(storePath)["agent:main:main"] as unknown as Record<string, unknown>)
+              .approvalSnapshot,
           ).toEqual({ state: "ready-again" });
 
           await expectOkResult(
@@ -242,9 +237,10 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
             "promise projector patch result",
           );
-          const afterPromise = loadSessionStore(storePath, { skipCache: true })[
-            "agent:main:main"
-          ] as unknown as Record<string, unknown>;
+          const afterPromise = loadSessionStore(storePath)["agent:main:main"] as unknown as Record<
+            string,
+            unknown
+          >;
           expect(afterPromise.approvalSnapshot).toBeUndefined();
           expect(extensionNamespace(afterPromise, "failing-promoted-plugin", "workflow")).toEqual({
             state: "async-bad",
@@ -449,7 +445,7 @@ describe("plugin session extension SessionEntry projection", () => {
             "cleanup result",
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.pluginExtensions).toBeUndefined();
           expect(entry.approvalSnapshot).toBeUndefined();
@@ -518,7 +514,7 @@ describe("plugin session extension SessionEntry projection", () => {
             "active cleanup result",
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.pluginExtensions).toBeUndefined();
           expect(entry.approvalSnapshot).toBeUndefined();
@@ -599,7 +595,7 @@ describe("plugin session extension SessionEntry projection", () => {
             "restart cleanup result",
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
           expect(entry.pluginExtensionSlotKeys).toBeUndefined();
@@ -705,7 +701,7 @@ describe("plugin session extension SessionEntry projection", () => {
             "mixed restart cleanup result",
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
           expect(entry.legacyApprovalSnapshot).toBeUndefined();
@@ -798,7 +794,7 @@ describe("plugin session extension SessionEntry projection", () => {
             "preserved restart cleanup result",
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
           expect(entry.pluginExtensionSlotKeys).toEqual({
@@ -863,7 +859,7 @@ describe("plugin session extension SessionEntry projection", () => {
             "metadata cleanup result",
           );
 
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
           expect(entry.pluginExtensionSlotKeys).toBeUndefined();
@@ -1036,7 +1032,7 @@ describe("plugin session extension SessionEntry projection", () => {
             value: { state: "executing" },
           });
           expect(result.ok).toBe(true);
-          const stored = loadSessionStore(storePath, { skipCache: true });
+          const stored = loadSessionStore(storePath);
           const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
           expect(entry.approvalSnapshot).toBeUndefined();
         },

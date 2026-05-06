@@ -15,7 +15,7 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
   }
 
   try {
-    const store = loadSessionStore(params.storePath, { skipCache: true });
+    const store = loadSessionStore(params.storePath);
     const level = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing
       ?.reasoningLevel;
     if (level === "on" || level === "stream" || level === "off") {

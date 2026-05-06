@@ -201,9 +201,7 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(hoisted.resolveDefaultSessionStorePathMock).not.toHaveBeenCalled();
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json", {
-      skipCache: true,
-    });
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json");
     expect(hoisted.resolveSessionFilePathOptionsMock).toHaveBeenCalledWith({
       agentId: "target",
       storePath: "/tmp/custom-store/sessions.json",
