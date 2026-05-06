@@ -8,18 +8,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
-import {
-  deferGatewayRestartUntilIdle,
-  emitGatewayRestart,
-  resolveGatewayRestartDeferralTimeoutMs,
-  setGatewaySigusr1RestartPolicy,
-} from "../infra/restart.js";
+import { emitGatewayRestart, setGatewaySigusr1RestartPolicy } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { promoteRestartZombieTaskRuns } from "../tasks/restart-drain.js";
 import {
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
@@ -28,6 +24,10 @@ import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import { startGatewayConfigReloader, type GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
+import {
+  resolveGatewayRestartDrainPolicy,
+  type GatewayRestartDrainPolicy,
+} from "./restart-drain-policy.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { markGatewayModelCatalogStaleForReload } from "./server-model-catalog.js";
@@ -57,6 +57,7 @@ type GatewayHotReloadState = {
 type GatewayReloadLog = {
   info: (msg: string) => void;
   warn: (msg: string) => void;
+  error: (msg: string) => void;
 };
 
 export type GatewayPluginReloadResult = {
@@ -186,6 +187,118 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const shown = blockers.slice(0, 8).map(formatTaskBlocker);
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
+  };
+  const sleepRestartPoll = async (pollMs: number) => {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, pollMs);
+      timer.unref?.();
+    });
+  };
+  const logRestartZombiePromotions = (
+    promotions: ReturnType<typeof promoteRestartZombieTaskRuns>,
+    policy: GatewayRestartDrainPolicy,
+  ) => {
+    for (const promotion of promotions) {
+      const task = promotion.task;
+      params.logReload.warn(
+        `restart promoted zombie background task run: taskId=${task.taskId}${
+          task.runId ? ` runId=${task.runId}` : ""
+        } runtime=${task.runtime} ageMs=${promotion.ageMs} zombieTtlSeconds=${
+          policy.zombieTtlSeconds
+        } error=zombie_promoted_during_restart`,
+      );
+    }
+  };
+  const waitForRestartDrainWindow = async (
+    policy: GatewayRestartDrainPolicy,
+    phase: "initial" | "final",
+  ): Promise<boolean> => {
+    const startedAt = Date.now();
+    let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
+    while (true) {
+      const current = getActiveCounts();
+      if (current.totalActive <= 0) {
+        return true;
+      }
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= policy.drainMs) {
+        return false;
+      }
+      if (Date.now() >= nextStillPendingAt) {
+        const remaining = formatActiveDetails(current);
+        const taskBlockers = formatTaskBlockers();
+        params.logReload.warn(
+          `restart ${phase} drain still waiting after ${elapsedMs}ms with ${remaining.join(
+            ", ",
+          )} active${taskBlockers ? ` (${taskBlockers})` : ""}`,
+        );
+        nextStillPendingAt = Date.now() + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
+      }
+      await sleepRestartPoll(Math.min(CHANNEL_RELOAD_DEFERRAL_POLL_MS, policy.drainMs - elapsedMs));
+    }
+  };
+  const emitRestartAfterDrain = () => {
+    const emitted = emitGatewayRestart();
+    if (!emitted) {
+      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+    }
+  };
+  const drainAndEmitGatewayRestart = async (policy: GatewayRestartDrainPolicy) => {
+    try {
+      if (policy.drainMs <= 0) {
+        params.logReload.warn(
+          "gateway.restart.drainSeconds=0; restarting without active work drain",
+        );
+        return;
+      }
+
+      const initiallyDrained = await waitForRestartDrainWindow(policy, "initial");
+      if (initiallyDrained) {
+        params.logReload.info("all operations and replies completed; restarting gateway now");
+        return;
+      }
+
+      const promotions = promoteRestartZombieTaskRuns({ zombieTtlMs: policy.zombieTtlMs });
+      logRestartZombiePromotions(promotions, policy);
+
+      const remainingAfterPromotion = getActiveCounts();
+      if (remainingAfterPromotion.totalActive <= 0) {
+        params.logReload.warn(
+          `restart drain timeout reached; promoted ${promotions.length} zombie task run(s); restarting gateway now`,
+        );
+        return;
+      }
+
+      const remaining = formatActiveDetails(remainingAfterPromotion);
+      const taskBlockers = formatTaskBlockers();
+      params.logReload.warn(
+        `restart drain timeout reached after ${policy.drainMs}ms; promoted ${
+          promotions.length
+        } zombie task run(s); waiting one additional drain window with ${remaining.join(
+          ", ",
+        )} active${taskBlockers ? ` (${taskBlockers})` : ""}`,
+      );
+
+      const finallyDrained = await waitForRestartDrainWindow(policy, "final");
+      if (finallyDrained) {
+        params.logReload.info("remaining operations and replies completed; restarting gateway now");
+        return;
+      }
+
+      const final = getActiveCounts();
+      const finalDetails = formatActiveDetails(final);
+      const finalTaskBlockers = formatTaskBlockers();
+      params.logReload.error(
+        `restart drain exceeded two ${policy.drainMs}ms window(s) with ${finalDetails.join(
+          ", ",
+        )} still active${finalTaskBlockers ? ` (${finalTaskBlockers})` : ""}; forcing restart`,
+      );
+    } catch (err) {
+      params.logReload.warn(`restart drain failed (${String(err)}); restarting gateway now`);
+    } finally {
+      restartPending = false;
+      emitRestartAfterDrain();
+    }
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
@@ -422,51 +535,14 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         params.logReload.warn(`restart blocked by active background task run(s): ${taskBlockers}`);
       }
 
-      deferGatewayRestartUntilIdle({
-        getPendingCount: () => getActiveCounts().totalActive,
-        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
-          nextConfig.gateway?.reload?.deferralTimeoutMs,
-        ),
-        hooks: {
-          onReady: () => {
-            restartPending = false;
-            params.logReload.info("all operations and replies completed; restarting gateway now");
-          },
-          onStillPending: (_pending, elapsedMs) => {
-            const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
-            params.logReload.warn(
-              `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
-                taskBlockers ? ` (${taskBlockers})` : ""
-              }`,
-            );
-          },
-          onTimeout: (_pending, elapsedMs) => {
-            const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
-            restartPending = false;
-            params.logReload.warn(
-              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
-                taskBlockers ? ` (${taskBlockers})` : ""
-              }; forcing restart`,
-            );
-          },
-          onCheckError: (err) => {
-            restartPending = false;
-            params.logReload.warn(
-              `restart deferral check failed (${String(err)}); restarting gateway now`,
-            );
-          },
-        },
-      });
+      void drainAndEmitGatewayRestart(
+        resolveGatewayRestartDrainPolicy(nextConfig.gateway?.restart),
+      );
       return true;
     }
     // No active operations or pending replies, restart immediately
     params.logReload.warn(`config change requires gateway restart (${reasons})`);
-    const emitted = emitGatewayRestart();
-    if (!emitted) {
-      params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
-    }
+    emitRestartAfterDrain();
     return true;
   };
 

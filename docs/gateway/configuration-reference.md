@@ -549,6 +549,24 @@ See [Multiple Gateways](/gateway/multiple-gateways).
 
 ---
 
+### `gateway.restart`
+
+```json5
+{
+  gateway: {
+    restart: {
+      drainSeconds: 60,
+      zombieTtlSeconds: 300,
+    },
+  },
+}
+```
+
+- `drainSeconds`: maximum time in seconds to wait for active work before restart recovery continues. Default: `60`; set `0` to skip the drain and restart immediately.
+- `zombieTtlSeconds`: running task age in seconds since `lastEventAt` before restart marks it `failed` with `zombie_promoted_during_restart`. Default: `300`.
+
+---
+
 ## Hooks
 
 ```json5

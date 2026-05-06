@@ -520,6 +520,12 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.reload.debounceMs": "Debounce window (ms) before applying config changes.",
   "gateway.reload.deferralTimeoutMs":
     "Optional maximum time (ms) to wait for in-flight operations before forcing a restart. Omit to use the default bounded wait; set 0 to wait indefinitely with periodic still-pending warnings. Lower positive values risk aborting active subagent LLM calls.",
+  "gateway.restart":
+    "Gateway restart drain policy. Bounds restart waiting and promotes stale running task records so recovery is not blocked by zombie background tasks.",
+  "gateway.restart.drainSeconds":
+    "Max seconds to wait for active work before restart continues. Default: 60. Set 0 to skip draining and restart immediately.",
+  "gateway.restart.zombieTtlSeconds":
+    "Seconds since a running task's last event before restart treats it as a zombie and marks it failed. Default: 300.",
   "gateway.nodes.browser.mode":
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",

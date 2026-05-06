@@ -46,7 +46,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   };
 });
 
-function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
+function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
     stop: vi.fn(),
@@ -88,7 +88,7 @@ describe("gateway restart deferral preflight", () => {
   it("logs active task run ids before waiting and when forcing after timeout", async () => {
     const restartTesting = (await import("../infra/restart.js")).__testing;
     restartTesting.resetSigusr1State();
-    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
     hoisted.activeTaskCount.value = 1;
     hoisted.activeTaskBlockers.push({
@@ -121,7 +121,7 @@ describe("gateway restart deferral preflight", () => {
           noopPaths: [],
         },
         {
-          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+          gateway: { restart: { drainSeconds: 1 } },
         },
       );
 
@@ -134,12 +134,65 @@ describe("gateway restart deferral preflight", () => {
 
       await vi.advanceTimersByTimeAsync(1_000);
       await Promise.resolve();
+      expect(signalSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await Promise.resolve();
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
-      expect(logReload.warn).toHaveBeenCalledWith(expect.stringContaining("; forcing restart"));
+      expect(logReload.error).toHaveBeenCalledWith(expect.stringContaining("; forcing restart"));
     } finally {
       hoisted.activeTaskCount.value = 0;
       vi.useRealTimers();
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+    }
+  });
+
+  it("restarts immediately when gateway.restart.drainSeconds is zero", async () => {
+    const restartTesting = (await import("../infra/restart.js")).__testing;
+    restartTesting.resetSigusr1State();
+    const logReload = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    hoisted.activeTaskCount.value = 1;
+    hoisted.activeTaskBlockers.push({
+      taskId: "task-recent",
+      runId: "run-recent",
+      status: "running",
+      runtime: "cli",
+    });
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+
+    try {
+      requestGatewayRestart(
+        {
+          changedPaths: ["gateway.port"],
+          restartGateway: true,
+          restartReasons: ["gateway.port"],
+          hotReasons: [],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {
+          gateway: { restart: { drainSeconds: 0 } },
+        },
+      );
+
+      await Promise.resolve();
+
+      expect(signalSpy).toHaveBeenCalledTimes(1);
+      expect(logReload.warn).toHaveBeenCalledWith(
+        "gateway.restart.drainSeconds=0; restarting without active work drain",
+      );
+    } finally {
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
     }

@@ -927,6 +927,13 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        restart: z
+          .object({
+            drainSeconds: z.number().min(0).optional(),
+            zombieTtlSeconds: z.number().min(0).optional(),
+          })
+          .strict()
+          .optional(),
         tls: z
           .object({
             enabled: z.boolean().optional(),

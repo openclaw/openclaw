@@ -241,6 +241,17 @@ export type DiagnosticRunProgressEvent = DiagnosticBaseEvent & {
   reason: string;
 };
 
+export type DiagnosticTaskZombiePromotedEvent = DiagnosticBaseEvent & {
+  type: "task.zombie_promoted";
+  taskId: string;
+  runtime: string;
+  runId?: string;
+  lastEventAt?: number;
+  ageMs: number;
+  zombieTtlMs: number;
+  reason: "zombie_promoted_during_restart";
+};
+
 export type DiagnosticHeartbeatEvent = DiagnosticBaseEvent & {
   type: "diagnostic.heartbeat";
   webhooks: {
@@ -576,6 +587,7 @@ export type DiagnosticEventPayload =
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
   | DiagnosticRunProgressEvent
+  | DiagnosticTaskZombiePromotedEvent
   | DiagnosticHeartbeatEvent
   | DiagnosticLivenessWarningEvent
   | DiagnosticPhaseCompletedEvent

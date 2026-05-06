@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import type { GatewayRestartDrainPolicy } from "../../gateway/restart-drain-policy.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -9,13 +10,15 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
-const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
+type ResolvedRestartDrainPolicy = Omit<GatewayRestartDrainPolicy, "drainMs"> & {
+  drainMs: RestartDrainTimeoutMs;
+};
 type RestartIntentOptions = {
   force?: boolean;
   waitMs?: number;
@@ -268,22 +271,32 @@ export async function runGatewayLoop(params: {
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
-  const resolveRestartDrainTimeoutMs = async (
+  const resolveRestartDrainPolicyForRequest = async (
     restartIntent?: RestartIntentOptions,
-  ): Promise<RestartDrainTimeoutMs> => {
-    if (restartIntent?.force) {
-      return 0;
-    }
-    if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
-      return restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined;
-    }
+  ): Promise<ResolvedRestartDrainPolicy> => {
     try {
-      const { getRuntimeConfig, resolveGatewayRestartDeferralTimeoutMs } =
+      const { getRuntimeConfig, resolveGatewayRestartDrainPolicy } =
         await loadGatewayLifecycleRuntimeModule();
-      const timeoutMs = getRuntimeConfig().gateway?.reload?.deferralTimeoutMs;
-      return resolveGatewayRestartDeferralTimeoutMs(timeoutMs);
+      const policy = resolveGatewayRestartDrainPolicy(getRuntimeConfig().gateway?.restart);
+      if (restartIntent?.force) {
+        return { ...policy, drainMs: 0, drainSeconds: 0 };
+      }
+      if (typeof restartIntent?.waitMs === "number" && Number.isFinite(restartIntent.waitMs)) {
+        return {
+          ...policy,
+          drainMs: restartIntent.waitMs > 0 ? Math.floor(restartIntent.waitMs) : undefined,
+          drainSeconds:
+            restartIntent.waitMs > 0 ? restartIntent.waitMs / 1000 : policy.drainSeconds,
+        };
+      }
+      return policy;
     } catch {
-      return DEFAULT_RESTART_DRAIN_TIMEOUT_MS;
+      return {
+        drainSeconds: 60,
+        drainMs: 60_000,
+        zombieTtlSeconds: 300,
+        zombieTtlMs: 300_000,
+      };
     }
   };
 
@@ -331,9 +344,10 @@ export async function runGatewayLoop(params: {
     };
 
     void (async () => {
-      const restartDrainTimeoutMs = isRestart
-        ? await resolveRestartDrainTimeoutMs(restartIntent)
-        : 0;
+      const restartDrainPolicy = isRestart
+        ? await resolveRestartDrainPolicyForRequest(restartIntent)
+        : { drainSeconds: 0, drainMs: 0, zombieTtlSeconds: 300, zombieTtlMs: 300_000 };
+      const restartDrainTimeoutMs = restartDrainPolicy.drainMs;
       if (!isRestart) {
         armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
       } else if (restartDrainTimeoutMs !== undefined) {
@@ -392,6 +406,23 @@ export async function runGatewayLoop(params: {
                 `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
               );
             }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
+          const promoteRestartZombies = async () => {
+            const { promoteRestartZombieTaskRuns } = await loadGatewayLifecycleRuntimeModule();
+            const promotions = promoteRestartZombieTaskRuns({
+              zombieTtlMs: restartDrainPolicy.zombieTtlMs,
+            });
+            for (const promotion of promotions) {
+              const task = promotion.task;
+              gatewayLog.warn(
+                `restart promoted zombie background task run: taskId=${task.taskId}${
+                  task.runId ? ` runId=${task.runId}` : ""
+                } runtime=${task.runtime} ageMs=${promotion.ageMs} zombieTtlSeconds=${
+                  restartDrainPolicy.zombieTtlSeconds
+                } error=zombie_promoted_during_restart`,
+              );
+            }
+            return promotions;
+          };
 
           // Reject new enqueues immediately during the drain window so
           // sessions get an explicit restart error instead of silent task loss.
@@ -416,9 +447,12 @@ export async function runGatewayLoop(params: {
             if (restartIntent?.force) {
               gatewayLog.warn("forced restart requested; skipping active work drain");
               abortEmbeddedPiRun(undefined, { mode: "all" });
+            } else if (restartDrainTimeoutMs === 0) {
+              gatewayLog.warn("gateway.restart.drainSeconds=0; skipping active work drain");
+              abortEmbeddedPiRun(undefined, { mode: "all" });
             } else {
               const stillPendingDrainLogger = createStillPendingDrainLogger();
-              const [tasksDrain, runsDrain] = await Promise.all([
+              let [tasksDrain, runsDrain] = await Promise.all([
                 activeTasks > 0
                   ? waitForActiveTasks(restartDrainTimeoutMs)
                   : Promise.resolve({ drained: true }),
@@ -429,10 +463,27 @@ export async function runGatewayLoop(params: {
               if (tasksDrain.drained && runsDrain.drained) {
                 gatewayLog.info("all active work drained");
               } else {
-                gatewayLog.warn("drain timeout reached; proceeding with restart");
-                // Final best-effort abort to avoid carrying active runs into the
-                // next lifecycle when drain time budget is exhausted.
-                abortEmbeddedPiRun(undefined, { mode: "all" });
+                const promotions = await promoteRestartZombies();
+                gatewayLog.warn(
+                  `drain timeout reached; promoted ${promotions.length} zombie task run(s); waiting one additional drain window`,
+                );
+                const secondDrainLogger = createStillPendingDrainLogger();
+                [tasksDrain, runsDrain] = await Promise.all([
+                  activeTasks > 0
+                    ? waitForActiveTasks(restartDrainTimeoutMs)
+                    : Promise.resolve({ drained: true }),
+                  activeRuns > 0
+                    ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
+                    : Promise.resolve({ drained: true }),
+                ]).finally(() => clearInterval(secondDrainLogger));
+                if (tasksDrain.drained && runsDrain.drained) {
+                  gatewayLog.info("remaining active work drained after zombie promotion");
+                } else {
+                  gatewayLog.error("drain timeout reached twice; proceeding with restart");
+                  // Final best-effort abort to avoid carrying active runs into the
+                  // next lifecycle when drain time budget is exhausted.
+                  abortEmbeddedPiRun(undefined, { mode: "all" });
+                }
               }
             }
           }
