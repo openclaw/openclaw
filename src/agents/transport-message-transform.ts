@@ -94,10 +94,6 @@ export function transformTransportMessages(
         continue;
       }
       let normalizedToolCall = block;
-      if (!isSameModel && block.thoughtSignature) {
-        normalizedToolCall = { ...normalizedToolCall };
-        delete normalizedToolCall.thoughtSignature;
-      }
       if (!isSameModel && normalizeToolCallId) {
         const normalizedId = normalizeToolCallId(block.id, model, msg);
         if (normalizedId !== block.id) {

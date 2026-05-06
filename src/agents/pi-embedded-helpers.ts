@@ -47,7 +47,12 @@ export {
 } from "./pi-embedded-helpers/errors.js";
 export type { ProviderRuntimeFailureKind } from "./pi-embedded-helpers/errors.js";
 export { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
-export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
+export {
+  GOOGLE_THOUGHT_SIGNATURE_SENTINEL,
+  ensureGoogleToolCallThoughtSignatures,
+  isGoogleModelApi,
+  sanitizeGoogleTurnOrdering,
+} from "./pi-embedded-helpers/google.js";
 
 export {
   downgradeOpenAIFunctionCallReasoningPairs,
