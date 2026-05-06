@@ -1407,6 +1407,7 @@ export async function startGatewayServer(
           broadcast,
           tailscaleMode,
           resetOnExit: tailscaleConfig.resetOnExit ?? false,
+          preserveFunnel: tailscaleConfig.preserveFunnel ?? false,
           controlUiBasePath,
           logTailscale,
           gatewayPluginConfigAtStart,
