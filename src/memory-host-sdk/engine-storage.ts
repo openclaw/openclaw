@@ -5,15 +5,19 @@ export {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   cosineSimilarity,
+  encodeUserSegment,
   ensureDir,
   hashText,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
   parseEmbedding,
+  PathEncodingError,
   remapChunkLines,
+  resolveUserMemoryDir,
   runWithConcurrency,
   type MemoryChunk,
   type MemoryFileEntry,
+  type MemoryPathEncodingMode,
 } from "./host/internal.js";
 export { readMemoryFile } from "./host/read-file.js";
 export {

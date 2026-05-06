@@ -14,6 +14,14 @@ import {
   type MemoryMultimodalModality,
   type MemoryMultimodalSettings,
 } from "./multimodal.js";
+import { encodeUserSegment, type MemoryPathEncodingMode } from "./path-encoding.js";
+
+export {
+  encodeUserSegment,
+  resolveUserMemoryDir,
+  PathEncodingError,
+  type MemoryPathEncodingMode,
+} from "./path-encoding.js";
 
 export type MemoryFileEntry = {
   path: string;
@@ -72,7 +80,11 @@ export function normalizeExtraMemoryPaths(workspaceDir: string, extraPaths?: str
   return Array.from(new Set(resolved));
 }
 
-export function isMemoryPath(relPath: string, userId?: string): boolean {
+export function isMemoryPath(
+  relPath: string,
+  userId?: string,
+  encoding: MemoryPathEncodingMode = "hash",
+): boolean {
   const normalized = normalizeRelPath(relPath);
   if (!normalized) {
     return false;
@@ -84,7 +96,13 @@ export function isMemoryPath(relPath: string, userId?: string): boolean {
     return false;
   }
   if (userId) {
-    const userPrefix = `memory/${userId}/`;
+    let encodedUser: string;
+    try {
+      encodedUser = encodeUserSegment(userId, encoding);
+    } catch {
+      return false;
+    }
+    const userPrefix = `memory/${encodedUser}/`;
     if (normalized.startsWith(userPrefix)) {
       return true;
     }
@@ -153,6 +171,7 @@ export async function listMemoryFiles(
   extraPaths?: string[],
   multimodal?: MemoryMultimodalSettings,
   userId?: string,
+  encoding: MemoryPathEncodingMode = "hash",
 ): Promise<string[]> {
   const result: string[] = [];
   const memoryFile = path.join(workspaceDir, "MEMORY.md");
@@ -178,13 +197,19 @@ export async function listMemoryFiles(
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
       if (userId) {
-        const userMemoryDir = path.join(memoryDir, userId);
+        let encodedUser: string | null = null;
         try {
-          const userDirStat = await fs.lstat(userMemoryDir);
-          if (!userDirStat.isSymbolicLink() && userDirStat.isDirectory()) {
-            await walkDir(userMemoryDir, result, multimodal);
-          }
+          encodedUser = encodeUserSegment(userId, encoding);
         } catch {}
+        if (encodedUser) {
+          const userMemoryDir = path.join(memoryDir, encodedUser);
+          try {
+            const userDirStat = await fs.lstat(userMemoryDir);
+            if (!userDirStat.isSymbolicLink() && userDirStat.isDirectory()) {
+              await walkDir(userMemoryDir, result, multimodal);
+            }
+          } catch {}
+        }
         await walkRootFiles(memoryDir, result, multimodal);
       } else {
         await walkDir(memoryDir, result);
