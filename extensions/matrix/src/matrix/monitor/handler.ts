@@ -1017,7 +1017,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               timestamp: eventTs ?? undefined,
               messageId,
             };
-            roomHistoryTracker.recordPending(roomId, pendingEntry, _threadRootId);
+            roomHistoryTracker.recordPending(roomId, pendingEntry, threadRootId);
           }
           logger.info("skipping room message", { roomId, reason: "no-mention" });
           await commitInboundEventIfClaimed();
@@ -1136,7 +1136,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   timestamp: eventTs ?? undefined,
                   messageId,
                 },
-                _threadRootId,
+                threadRootId,
               )
             : undefined;
         const inboundHistory = preparedTrigger?.history;
@@ -2208,7 +2208,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           roomId,
           triggerSnapshot,
           messageId,
-          _threadRootId,
+          threadRootId,
         );
       }
       if (!hasFinalInboundReplyDispatch({ queuedFinal, counts })) {
