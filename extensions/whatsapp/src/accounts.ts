@@ -45,6 +45,8 @@ export type ResolvedWhatsAppAccount = {
   direct?: WhatsAppAccountConfig["direct"];
   debounceMs?: number;
   replyToMode?: ReplyToMode;
+  replyToOfflineMessages: boolean;
+  offlineMessageMaxAgeSeconds: number;
 };
 
 export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
@@ -156,6 +158,8 @@ export function resolveWhatsAppAccount(params: {
     direct: merged.direct,
     debounceMs: merged.debounceMs,
     replyToMode: merged.replyToMode,
+    replyToOfflineMessages: merged.replyToOfflineMessages ?? false,
+    offlineMessageMaxAgeSeconds: merged.offlineMessageMaxAgeSeconds ?? 300,
   };
 }
 
