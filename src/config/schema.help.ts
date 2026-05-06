@@ -995,6 +995,12 @@ export const FIELD_HELP: Record<string, string> = {
     "Experimental agent-default flags. Keep these off unless you are intentionally testing a preview surface.",
   "agents.defaults.experimental.localModelLean":
     "Experimental local-model prompt trim. When enabled, OpenClaw drops heavyweight default tools like browser, cron, and message for weaker or smaller local-model backends.",
+  "agents.defaults.experimental.runtimeIsolation":
+    'Experimental command-agent runtime isolation. Set mode="worker" to run /agent command attempts inside a Node worker thread; gateway reply runs remain in-process while their streaming callbacks stay parent-owned.',
+  "agents.defaults.experimental.runtimeIsolation.mode":
+    'Choose the experimental command-agent runtime isolation mode. "off" keeps the current in-process path; "worker" runs /agent command attempts in Node worker threads.',
+  "agents.defaults.experimental.runtimeIsolation.permissions":
+    "Also enable Node permission flags for the worker runtime. More restrictive and runtime-sensitive than worker isolation itself.",
   "agents.defaults.bootstrapPromptTruncationWarning":
     'Inject agent-visible warning text when bootstrap files are truncated: "off", "once" (default), or "always".',
   "agents.defaults.startupContext":

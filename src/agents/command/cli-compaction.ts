@@ -3,6 +3,7 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -31,6 +32,7 @@ type SettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 type CliCompactionDeps = {
+  ensureContextEnginesInitialized: () => void;
   openSessionManager: (sessionFile: string) => SessionManagerLike;
   resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
   createPreparedEmbeddedPiSettingsManager: (params: {
@@ -53,6 +55,7 @@ type CliCompactionDeps = {
 const log = createSubsystemLogger("agents/cli-compaction");
 
 const cliCompactionDeps: CliCompactionDeps = {
+  ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
   resolveContextEngine: resolveContextEngineImpl,
   createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
@@ -69,6 +72,7 @@ export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompaction
 
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, {
+    ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
     openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
     resolveContextEngine: resolveContextEngineImpl,
     createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerImpl,
@@ -201,6 +205,7 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
+  cliCompactionDeps.ensureContextEnginesInitialized();
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({

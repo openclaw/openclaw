@@ -42,6 +42,7 @@ import {
 } from "./agent-scope.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import type { RunAgentAttemptParams } from "./command/attempt-execution.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -72,6 +73,10 @@ import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
+import {
+  runAgentAttemptInWorker,
+  shouldRunAgentCommandAttemptInWorker,
+} from "./worker-runtime/agent-runtime.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -989,7 +994,7 @@ async function agentCommandInternal(
           run: async (providerOverride, modelOverride, runOptions) => {
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
-            return attemptExecutionRuntime.runAgentAttempt({
+            const attemptParams: RunAgentAttemptParams = {
               providerOverride,
               modelOverride,
               modelFallbacksOverride: effectiveFallbacksOverride,
@@ -1039,7 +1044,10 @@ async function agentCommandInternal(
                   lifecycleEnded = true;
                 }
               },
-            });
+            };
+            return shouldRunAgentCommandAttemptInWorker({ config: cfg })
+              ? runAgentAttemptInWorker(attemptParams)
+              : attemptExecutionRuntime.runAgentAttempt(attemptParams);
           },
         });
         result = fallbackResult.result;

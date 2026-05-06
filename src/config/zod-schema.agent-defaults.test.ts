@@ -64,6 +64,21 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it("accepts experimental.runtimeIsolation", () => {
+    const result = AgentDefaultsSchema.parse({
+      experimental: {
+        runtimeIsolation: {
+          mode: "worker",
+          permissions: true,
+        },
+      },
+    })!;
+    expect(result.experimental?.runtimeIsolation).toEqual({
+      mode: "worker",
+      permissions: true,
+    });
+  });
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

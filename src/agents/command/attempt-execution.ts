@@ -23,6 +23,7 @@ import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
+import type { RunEmbeddedPiAgentParams } from "../pi-embedded-runner/run/params.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import {
@@ -345,7 +346,7 @@ export async function persistCliTurnTranscript(params: {
   });
 }
 
-export function runAgentAttempt(params: {
+export type RunAgentAttemptParams = {
   providerOverride: string;
   modelOverride: string;
   originalProvider: string;
@@ -382,7 +383,9 @@ export function runAgentAttempt(params: {
   sessionHasHistory?: boolean;
   suppressPromptPersistenceOnRetry?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
-}) {
+};
+
+export function runAgentAttempt(params: RunAgentAttemptParams) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
@@ -583,7 +586,7 @@ export function runAgentAttempt(params: {
     });
   }
 
-  return runEmbeddedPiAgent({
+  const embeddedRunParams: RunEmbeddedPiAgentParams = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.sessionAgentId,
@@ -640,7 +643,9 @@ export function runAgentAttempt(params: {
     onUserMessagePersisted: params.onUserMessagePersisted,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
-  });
+  };
+
+  return runEmbeddedPiAgent(embeddedRunParams);
 }
 
 function resolveSessionPinnedAgentHarnessId(params: {

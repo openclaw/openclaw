@@ -21,11 +21,67 @@ Treat them differently from normal config:
 
 ## Currently documented flags
 
-| Surface                  | Key                                                       | Use it when                                                                                                    | More                                                                                          |
-| ------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Local model runtime      | `agents.defaults.experimental.localModelLean`             | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                             | [Local Models](/gateway/local-models)                                                         |
-| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory` | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost         | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
-| Structured planning tool | `tools.experimental.planTool`                             | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
+| Surface                         | Key                                                       | Use it when                                                                                                    | More                                                                                          |
+| ------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Local model runtime             | `agents.defaults.experimental.localModelLean`             | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                             | [Local Models](/gateway/local-models)                                                         |
+| Agent command runtime isolation | `agents.defaults.experimental.runtimeIsolation`           | You want `/agent` command attempts to run in a Node worker compartment while testing parallel-agent isolation  | [Agent command runtime isolation](#agent-command-runtime-isolation)                           |
+| Memory search                   | `agents.defaults.memorySearch.experimental.sessionMemory` | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost         | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
+| Structured planning tool        | `tools.experimental.planTool`                             | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
+
+## Agent command runtime isolation
+
+`agents.defaults.experimental.runtimeIsolation.mode: "worker"` runs `/agent`
+command attempts in a Node worker thread. The parent process still owns command
+routing, model fallback policy, final session-store updates, delivery, and
+lifecycle reporting; the worker owns the in-repo command runtime attempt itself.
+
+Normal inbound Gateway replies remain on the in-process embedded runner for now.
+That path owns live streaming and delivery callbacks in the parent process and
+needs a dedicated callback bridge before it can move into this worker
+compartment.
+
+This is a compartment boundary, not a general speed switch. It can help when
+several in-repo command agents run at once and you want each run to have its own
+event loop, worker lifetime, and future filesystem permission scope. It will not
+make remote model calls faster, and CLI/ACP harnesses such as Codex may still
+spawn their own child processes inside the worker.
+
+Session-store writes still go through the normal `updateSessionStore(...)` path.
+That writer uses a `sessions.json.lock` file lock so worker-thread updates for
+different agents do not overwrite each other when they share the same store.
+
+### Enable
+
+```json5
+{
+  agents: {
+    defaults: {
+      experimental: {
+        runtimeIsolation: {
+          mode: "worker",
+        },
+      },
+    },
+  },
+}
+```
+
+For developer-only overrides, `OPENCLAW_AGENT_RUNTIME_WORKER=1` forces the
+worker path and `OPENCLAW_AGENT_RUNTIME_WORKER=0` forces the in-process path.
+The older `OPENCLAW_AGENT_WORKER_EXPERIMENT` env var is also accepted while the
+experiment is in flight.
+
+### Worker permissions
+
+`runtimeIsolation.permissions: true` also starts the worker with Node permission
+flags scoped to the agent workspace, agent directory, session transcript,
+session store and lock files, OpenClaw runtime bundle/development source,
+bundled plugin source, and runtime dependencies.
+
+Keep this off unless you are explicitly testing filesystem hardening. Node
+permission behavior is stricter and more runtime-sensitive than worker
+isolation itself, so package reads or child-process based harnesses may need
+additional design before this becomes broadly usable.
 
 ## Local model lean mode
 

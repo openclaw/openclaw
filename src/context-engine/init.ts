@@ -1,7 +1,8 @@
 import { registerLegacyContextEngine } from "./legacy.registration.js";
+import { getContextEngineFactory } from "./registry.js";
 
 /**
- * Ensures all built-in context engines are registered exactly once.
+ * Ensures all built-in context engines are registered.
  *
  * The legacy engine is always registered as a safe fallback so that
  * `resolveContextEngine()` can resolve the default "legacy" slot without
@@ -13,7 +14,7 @@ import { registerLegacyContextEngine } from "./legacy.registration.js";
 let initialized = false;
 
 export function ensureContextEnginesInitialized(): void {
-  if (initialized) {
+  if (initialized && getContextEngineFactory("legacy")) {
     return;
   }
   initialized = true;

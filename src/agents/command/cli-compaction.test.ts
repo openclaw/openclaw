@@ -5,6 +5,10 @@ import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  clearContextEnginesForOwner,
+  listContextEngineIds,
+} from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
   resetCliCompactionTestDeps,
@@ -166,5 +170,57 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("registers the built-in context engines before parent-side CLI transcript persistence", async () => {
+    const sessionKey = "agent:main:explicit:worker";
+    const sessionId = "session-worker";
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    clearContextEnginesForOwner("core");
+    expect(listContextEngineIds()).not.toContain("legacy");
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 100,
+      totalTokensFresh: true,
+    };
+    setCliCompactionTestDeps({
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      applyPiAutoCompactionGuard: () => {},
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 100,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+
+    expect(updatedEntry).toBe(sessionEntry);
+    expect(listContextEngineIds()).toContain("legacy");
   });
 });

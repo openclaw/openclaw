@@ -1,7 +1,14 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearSessionStoreCacheForTest,
   getSessionStoreWriterQueueSizeForTest,
+  loadSessionStore,
   withSessionStoreWriterForTest,
 } from "./store.js";
 
@@ -14,6 +21,9 @@ const createDeferred = <T>() => {
   });
   return { promise, resolve, reject };
 };
+
+const execFileAsync = promisify(execFile);
+const testDir = path.dirname(fileURLToPath(import.meta.url));
 
 describe("session store writer", () => {
   afterEach(() => {
@@ -52,5 +62,46 @@ describe("session store writer", () => {
       /storePath must be a non-empty string/,
     );
     expect(getSessionStoreWriterQueueSizeForTest()).toBe(0);
+  });
+
+  it("serializes session store updates across worker threads", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-store-writer-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      await fs.writeFile(storePath, "{}\n", "utf8");
+      const source = `
+        const { updateSessionStore } = await import("./src/config/sessions/store.ts");
+
+        await updateSessionStore(process.env.OPENCLAW_TEST_STORE_PATH, async (store) => {
+          store[process.env.OPENCLAW_TEST_SESSION_KEY] = {
+            sessionId: process.env.OPENCLAW_TEST_SESSION_KEY,
+            updatedAt: Date.now()
+          };
+          await new Promise((resolve) => setTimeout(resolve, 75));
+        });
+      `;
+      const workers = Array.from({ length: 4 }, (_, index) =>
+        execFileAsync(process.execPath, ["--import", "tsx", "--eval", source], {
+          cwd: path.resolve(testDir, "../../.."),
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_SESSION_KEY: `agent:worker:${index}`,
+            OPENCLAW_TEST_STORE_PATH: storePath,
+          },
+        }),
+      );
+
+      await Promise.all(workers);
+
+      const store = loadSessionStore(storePath, { skipCache: true });
+      expect(Object.keys(store).toSorted()).toEqual([
+        "agent:worker:0",
+        "agent:worker:1",
+        "agent:worker:2",
+        "agent:worker:3",
+      ]);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });

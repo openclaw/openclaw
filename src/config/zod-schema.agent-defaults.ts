@@ -105,6 +105,13 @@ export const AgentDefaultsSchema = z
     experimental: z
       .object({
         localModelLean: z.boolean().optional(),
+        runtimeIsolation: z
+          .object({
+            mode: z.union([z.literal("off"), z.literal("worker")]).optional(),
+            permissions: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
