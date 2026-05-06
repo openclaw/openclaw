@@ -1,5 +1,12 @@
 import { writeSync } from "node:fs";
-import { type Api, completeSimple, getModels, type Model } from "@mariozechner/pi-ai";
+import {
+  type Api,
+  completeSimple,
+  getModels,
+  getProviders,
+  type KnownProvider,
+  type Model,
+} from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -93,6 +100,11 @@ function logProgress(message: string): void {
   writeSync(2, `[live] ${message}\n`);
 }
 
+function resolveKnownProvider(provider: string): KnownProvider | undefined {
+  const normalized = provider.trim();
+  return getProviders().find((knownProvider) => knownProvider === normalized);
+}
+
 function loadPrioritizedHighSignalModels(): Model<Api>[] {
   const idsByProvider = new Map<string, Set<string>>();
   for (const ref of listPrioritizedHighSignalLiveModelRefs()) {
@@ -107,7 +119,11 @@ function loadPrioritizedHighSignalModels(): Model<Api>[] {
   const models: Model<Api>[] = [];
   const seen = new Set<string>();
   for (const [provider, ids] of idsByProvider) {
-    for (const model of getModels(provider)) {
+    const knownProvider = resolveKnownProvider(provider);
+    if (!knownProvider) {
+      continue;
+    }
+    for (const model of getModels(knownProvider)) {
       const id = model.id.toLowerCase();
       if (!ids.has(id)) {
         continue;

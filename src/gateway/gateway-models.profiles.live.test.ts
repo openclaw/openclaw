@@ -8,6 +8,8 @@ import {
   clampThinkingLevel,
   type Api,
   getModels,
+  getProviders,
+  type KnownProvider,
   type Model,
   type ModelThinkingLevel,
 } from "@mariozechner/pi-ai";
@@ -1410,6 +1412,11 @@ type LiveModelRegistry = {
   getAll(): Array<Model<Api>>;
 };
 
+function resolveKnownProvider(provider: string): KnownProvider | undefined {
+  const normalized = provider.trim();
+  return getProviders().find((knownProvider) => knownProvider === normalized);
+}
+
 function toGatewayLiveModel(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
@@ -1431,7 +1438,6 @@ function toGatewayLiveModel(params: {
     provider: params.provider,
     baseUrl,
     reasoning: params.modelConfig.reasoning ?? false,
-    thinkingLevelMap: params.modelConfig.thinkingLevelMap,
     input: input.length > 0 ? input : ["text"],
     cost: params.modelConfig.cost ?? {
       input: 0,
@@ -1441,7 +1447,7 @@ function toGatewayLiveModel(params: {
     },
     contextWindow: params.modelConfig.contextWindow ?? 128_000,
     maxTokens: params.modelConfig.maxTokens ?? 16_384,
-    compat: params.modelConfig.compat ?? params.providerConfig.compat,
+    compat: params.modelConfig.compat,
   };
 }
 
@@ -1495,7 +1501,11 @@ function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array
     if (!provider) {
       continue;
     }
-    for (const model of getModels(provider)) {
+    const knownProvider = resolveKnownProvider(provider);
+    if (!knownProvider) {
+      continue;
+    }
+    for (const model of getModels(knownProvider)) {
       const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
       if (seen.has(key)) {
         continue;
