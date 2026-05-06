@@ -1816,6 +1816,22 @@ describe("planOpenAIWebSocketRequestPayload", () => {
     expect(plan.mode).toBe("incremental");
     expect(plan.payload.previous_response_id).toBe("resp_prev");
     expect(plan.payload.input).toEqual([{ type: "message", role: "user", content: "Next" }]);
+    expect(plan.debug).toEqual({
+      mode: "incremental",
+      previousResponseId: "resp_prev",
+      baselineLength: 2,
+      fullInputLength: 3,
+      suffixLength: 1,
+      suffixItems: [
+        {
+          index: 0,
+          type: "message",
+          role: "user",
+          contentKind: "text",
+          contentLength: 4,
+        },
+      ],
+    });
   });
 
   it("falls back to full context when non-input fields differ", () => {
@@ -1847,6 +1863,67 @@ describe("planOpenAIWebSocketRequestPayload", () => {
     expect(plan.mode).toBe("full_context");
     expect(plan.payload.previous_response_id).toBeUndefined();
     expect(plan.payload.input).toEqual(fullPayload.input);
+    expect(plan.debug).toMatchObject({
+      mode: "full_context",
+      previousResponseId: "resp_prev",
+      baselineLength: 2,
+      fullInputLength: 3,
+      suffixLength: 3,
+    });
+  });
+
+  it("records redacted suffix summaries for tool lineage debugging", () => {
+    const previousInputItems: InputItem[] = [{ type: "message", role: "user", content: "Hello" }];
+    const previousRequest: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      input: previousInputItems,
+    };
+    const fullPayload: ResponseCreateEvent = {
+      type: "response.create",
+      model: "gpt-5.4",
+      input: [
+        ...previousInputItems,
+        {
+          type: "function_call",
+          id: "fc_1",
+          call_id: "call_1",
+          name: "lookup",
+          arguments: '{"secret":true}',
+        },
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: "tool output with private data",
+        },
+      ],
+    };
+
+    const plan = planOpenAIWebSocketRequestPayload({
+      fullPayload,
+      previousRequestPayload: previousRequest,
+      previousResponseId: "resp_prev",
+      previousResponseInputItems: [],
+    });
+
+    expect(plan.debug.suffixItems).toEqual([
+      {
+        index: 0,
+        type: "function_call",
+        id: "fc_1",
+        callId: "call_1",
+        name: "lookup",
+        argumentsLength: 15,
+      },
+      {
+        index: 1,
+        type: "function_call_output",
+        callId: "call_1",
+        outputLength: 29,
+      },
+    ]);
+    expect(JSON.stringify(plan.debug)).not.toContain("secret");
+    expect(JSON.stringify(plan.debug)).not.toContain("private data");
   });
 
   it("falls back to full context when the input is not a strict response-chain extension", () => {
