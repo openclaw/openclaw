@@ -130,6 +130,7 @@ describe("handleControlUiHttpRequest", () => {
     url: string;
     method: "GET" | "HEAD";
     basePath?: string;
+    config?: NonNullable<Parameters<typeof handleControlUiAssistantMediaRequest>[2]>["config"];
     auth?: ResolvedGatewayAuth;
     headers?: IncomingMessage["headers"];
     trustedProxies?: string[];
@@ -146,6 +147,7 @@ describe("handleControlUiHttpRequest", () => {
       res,
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
+        ...(params.config ? { config: params.config } : {}),
         ...(params.auth ? { auth: params.auth } : {}),
         ...(params.trustedProxies ? { trustedProxies: params.trustedProxies } : {}),
       },
@@ -329,6 +331,41 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
+      },
+    });
+  });
+
+  it("uses configured thumbnail sizing for assistant media previews", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-thumb-",
+      fn: async (tmpRoot) => {
+        const sharp = (await import("sharp")).default;
+        const filePath = path.join(tmpRoot, "wide.png");
+        await sharp({
+          create: {
+            width: 120,
+            height: 40,
+            channels: 4,
+            background: { r: 24, g: 64, b: 128, alpha: 1 },
+          },
+        })
+          .png()
+          .toFile(filePath);
+
+        const { res, handled, end } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&thumbnail=1&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+          config: { gateway: { controlUi: { imageThumbnailMaxSide: 60 } } },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        const thumbnail = end.mock.calls[0]?.[0];
+        expect(Buffer.isBuffer(thumbnail)).toBe(true);
+        const metadata = await sharp(thumbnail as Buffer).metadata();
+        expect(metadata.width).toBe(60);
+        expect(metadata.height).toBe(20);
       },
     });
   });

@@ -728,11 +728,12 @@ export function createGatewayHttpServer(opts: {
               res,
               {
                 auth: resolvedAuth,
-                trustedProxies,
-                allowRealIpFallback,
-                rateLimiter,
-              },
-            ),
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+              thumbnailMaxSide: configSnapshot.gateway?.controlUi?.imageThumbnailMaxSide,
+            },
+          ),
         });
       }
 

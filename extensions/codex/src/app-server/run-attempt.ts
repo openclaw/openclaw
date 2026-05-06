@@ -114,7 +114,7 @@ import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
-const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 20 * 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;

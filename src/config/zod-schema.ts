@@ -833,6 +833,7 @@ export const OpenClawSchema = z
                   "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
               })
               .optional(),
+            imageThumbnailMaxSide: z.number().int().min(32).max(4096).optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),

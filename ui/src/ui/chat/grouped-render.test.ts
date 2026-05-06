@@ -850,6 +850,11 @@ describe("grouped chat rendering", () => {
       "Replying to current message",
     );
     expect(container.querySelector(".chat-message-image")).not.toBeNull();
+    expect(
+      [...container.querySelectorAll<HTMLButtonElement>(".chat-image-action")].map((button) =>
+        button.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Open image", "Download image", "Copy image"]);
     expect(container.querySelector("audio")).not.toBeNull();
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent).toContain(
       "Voice note",
@@ -898,7 +903,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user&thumbnail=1",
     );
 
     container = renderUserMedia({
@@ -913,7 +918,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fuser-upload.png&mediaTicket=ticket-user&thumbnail=1",
     );
 
     container = renderUserMedia({
@@ -930,8 +935,8 @@ describe("grouped chat rendering", () => {
         image.getAttribute("src"),
       ),
     ).toEqual([
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ffirst.png&mediaTicket=ticket-user",
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&mediaTicket=ticket-user",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ffirst.png&mediaTicket=ticket-user&thumbnail=1",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Fsecond.jpg&mediaTicket=ticket-user&thumbnail=1",
     ]);
 
     const assistantContainer = document.createElement("div");
@@ -1029,13 +1034,127 @@ describe("grouped chat rendering", () => {
       },
       { interval: 1, timeout: 100 },
     );
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    try {
+      container
+        .querySelector<HTMLButtonElement>('[aria-label="Open image"]')
+        ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(openSpy).toHaveBeenCalledWith(
+        new URL(
+          "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+          window.location.href,
+        ).toString(),
+        "_blank",
+        "noopener,noreferrer",
+      );
+    } finally {
+      openSpy.mockRestore();
+    }
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+      "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/thumbnail",
       expect.objectContaining({
         method: "GET",
         credentials: "same-origin",
       }),
     );
+  });
+
+  it("scales generated image frames to the painted image size", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const objectUrl = "blob:generated-preview";
+    vi.stubGlobal(
+      "URL",
+      Object.assign(URL, {
+        createObjectURL: vi.fn(() => objectUrl),
+        revokeObjectURL: vi.fn(),
+      }),
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        blob: async () => new Blob(["png"], { type: "image/png" }),
+      })) as unknown as typeof fetch,
+    );
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Generated image 1",
+            width: 1024,
+            height: 1024,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(
+          objectUrl,
+        );
+      },
+      { interval: 1, timeout: 100 },
+    );
+
+    const frame = container.querySelector<HTMLElement>(".chat-image-frame");
+    const image = container.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(frame?.classList.contains("chat-image-frame--sized")).toBe(true);
+    expect(frame?.style.getPropertyValue("--chat-image-frame-width")).toBe("200px");
+    expect(image?.getAttribute("width")).toBe("200");
+    expect(image?.getAttribute("height")).toBe("200");
+  });
+
+  it("reserves generated image frame space while the blob preview loads", () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise(() => {
+            // Keep the managed-image fetch pending so the placeholder remains rendered.
+          }),
+      ) as unknown as typeof fetch,
+    );
+
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/00000000-0000-4000-8000-000000000000/full",
+            alt: "Generated image 1",
+            width: 1024,
+            height: 1024,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        showToolCalls: false,
+        assistantAttachmentAuthToken: "session-token",
+      },
+    );
+
+    const frame = container.querySelector<HTMLElement>(".chat-image-frame");
+    expect(frame?.classList.contains("chat-image-frame--pending")).toBe(true);
+    expect(frame?.style.getPropertyValue("--chat-image-frame-width")).toBe("200px");
+    expect(frame?.style.getPropertyValue("--chat-image-frame-aspect")).toBe("200 / 200");
+    expect(container.querySelector(".chat-message-image")).toBeNull();
   });
 
   it("does not send auth to cross-origin managed-image-looking URLs", async () => {
@@ -1181,8 +1300,9 @@ describe("grouped chat rendering", () => {
     const docLink = container.querySelector<HTMLAnchorElement>(
       ".chat-assistant-attachment-card__link",
     );
+    expect(container.querySelector(".chat-image-actions")).not.toBeNull();
     expect(image?.getAttribute("src")).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-local",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-local&thumbnail=1",
     );
     expect(docLink?.getAttribute("href")).toBe(
       "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&mediaTicket=ticket-local",
@@ -1233,7 +1353,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-old",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-old&thumbnail=1",
     );
 
     vi.advanceTimersByTime(1_001);
@@ -1243,7 +1363,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-new",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-new&thumbnail=1",
     );
     vi.useRealTimers();
     vi.unstubAllGlobals();
@@ -1305,7 +1425,7 @@ describe("grouped chat rendering", () => {
     expect(
       container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
     ).toBe(
-      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-fresh",
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest+image.png&mediaTicket=ticket-fresh&thumbnail=1",
     );
     expect(container.textContent).not.toContain("Unavailable");
     vi.unstubAllGlobals();

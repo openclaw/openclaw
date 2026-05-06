@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Slack/streaming: keep the newest rich progress lines when Block Kit limits trim long progress drafts. Thanks @vincentkoc.
 - Channels/streaming: cap progress-draft tool lines by default so edited progress boxes avoid jumpy reflow from long wrapped lines.
 - Control UI/chat: add an agent-first filter to the chat session picker, keep chat controls/composer responsive across phone/tablet/desktop widths, keep desktop chat controls on one row, avoid duplicate avatar refreshes during initial chat load, and hide that row while scrolling down the transcript. Thanks @BunsDev.
+- Control UI/WebChat: add open, download, and copy actions for generated chat images, with stable rounded thumbnail frames while managed image previews load.
 - Control UI/chat: collapse consecutive duplicate text messages into one bubble with a count so repeated text-only messages stay compact without hiding nearby context.
 - Agents/subagents: preserve every grouped child result when direct completion fallback has to bypass the requester-agent announce turn. Thanks @vincentkoc.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
@@ -1174,6 +1175,7 @@ Docs: https://docs.openclaw.ai
 - Models/DeepInfra: declare DeepInfra manifest catalog discovery and derive its runtime fallback catalog from the manifest, restoring provider-filtered `models list --all --provider deepinfra` rows without duplicated static model data. Thanks @shakkernerd.
 - CLI/update: verify managed gateway restarts against the installed service port instead of the caller shell port, so package updates do not report a healthy daemon as failed when profiles use different gateway ports. Thanks @vincentkoc.
 - Gateway/agent: reject strict `openclaw agent --deliver` requests with missing delivery targets before starting the agent run, so users do not wait for a completed turn that cannot send anywhere. Thanks @vincentkoc.
+- Gateway/WebChat: replace a raw Codex `MEDIA:` transcript turn with the normalized inline image message instead of appending a duplicate assistant reply in the Control UI. Thanks @Ittiz.
 - Setup/import: honor non-interactive `--import-from` onboarding flags by running the migration import path instead of silently completing normal setup without importing anything. Thanks @vincentkoc.
 - Discord/voice: run voice-channel turns under a voice-output policy that hides the agent `tts` tool and asks for spoken reply text, so `/vc join` sessions synthesize and play agent replies instead of ending with `NO_REPLY`. Fixes #61536. Thanks @aounakram.
 - Doctor/plugins: keep plain `doctor --non-interactive` from installing bundled plugin runtime dependencies, so headless health checks report missing deps while `doctor --fix` remains the explicit repair path. Thanks @vincentkoc.

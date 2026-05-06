@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -118,9 +119,17 @@ type ImageRenderOptions = {
 
 type RenderableImageBlock = ImageBlock & {
   displayUrl: string;
+  previewUrl?: string;
+};
+
+type ImageActionOptions = ImageRenderOptions & {
+  label?: string;
 };
 
 type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
+
+const CHAT_IMAGE_MAX_WIDTH = 300;
+const CHAT_IMAGE_MAX_HEIGHT = 200;
 
 const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
@@ -741,7 +750,12 @@ function resolveRenderableMessageImages(
     const displayUrl = canProxyLocalImage
       ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket)
       : img.url;
-    return [{ ...img, displayUrl }];
+    const previewUrl = canProxyLocalImage
+      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket, {
+          thumbnail: true,
+        })
+      : displayUrl;
+    return [{ ...img, displayUrl, previewUrl }];
   });
 }
 
@@ -750,24 +764,21 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
     return nothing;
   }
 
-  const openImage = (url: string) => {
-    openExternalUrlSafe(url, { allowDataImage: true });
-  };
-
   const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
-    <img
-      src=${previewUrl}
-      alt=${img.alt ?? "Attached image"}
-      class="chat-message-image"
-      width=${img.width ?? nothing}
-      height=${img.height ?? nothing}
-      @click=${() => openImage(previewUrl)}
-    />
+    ${renderImageFrame({
+      previewUrl,
+      openUrl: img.displayUrl,
+      actionUrl: img.displayUrl,
+      alt: img.alt ?? "Attached image",
+      width: img.width,
+      height: img.height,
+      actionOptions: { ...opts, label: img.alt },
+    })}
   `;
 
   const renderImage = (img: RenderableImageBlock) => {
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
-      return renderImageElement(img, img.displayUrl);
+      return renderImageElement(img, img.previewUrl ?? img.displayUrl);
     }
     const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts).then((previewUrl) => {
       if (!previewUrl) {
@@ -775,7 +786,7 @@ function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderO
       }
       return renderImageElement(img, previewUrl);
     });
-    return until(preview, nothing);
+    return until(preview, renderImagePlaceholderFrame(img));
   };
 
   return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;
@@ -892,6 +903,7 @@ function buildAssistantAttachmentUrl(
   source: string,
   basePath?: string,
   mediaTicket?: string | null,
+  opts?: { thumbnail?: boolean },
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
@@ -902,6 +914,9 @@ function buildAssistantAttachmentUrl(
   const normalizedMediaTicket = mediaTicket?.trim();
   if (normalizedMediaTicket) {
     params.set("mediaTicket", normalizedMediaTicket);
+  }
+  if (opts?.thumbnail) {
+    params.set("thumbnail", "1");
   }
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
@@ -942,12 +957,23 @@ function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): s
   return `${normalizedBasePath}${source}`;
 }
 
+function buildManagedOutgoingImagePreviewFetchUrl(source: string, basePath?: string): string {
+  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, basePath);
+  try {
+    const parsed = new URL(fetchUrl, window.location.origin);
+    parsed.pathname = parsed.pathname.replace(/\/full$/u, "/thumbnail");
+    return fetchUrl.startsWith("http") ? parsed.toString() : `${parsed.pathname}${parsed.search}`;
+  } catch {
+    return fetchUrl.replace(/\/full(?=$|\?)/u, "/thumbnail");
+  }
+}
+
 async function resolveManagedOutgoingImageBlobUrl(
   source: string,
   opts?: ImageRenderOptions,
 ): Promise<string | null> {
   const authToken = opts?.authToken?.trim() ?? "";
-  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
+  const fetchUrl = buildManagedOutgoingImagePreviewFetchUrl(source, opts?.basePath);
   const cacheKey = `${fetchUrl}::${authToken}`;
   const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
   if (cached) {
@@ -994,7 +1020,250 @@ async function resolveManagedOutgoingImageBlobUrl(
   return pending;
 }
 
-function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
+function buildManagedOutgoingImageHeaders(source: string, authToken?: string | null): Headers {
+  const headers = new Headers({ Accept: "image/*" });
+  const normalizedAuthToken = authToken?.trim();
+  if (normalizedAuthToken) {
+    headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
+  }
+  const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
+  if (requesterSessionKey) {
+    headers.set("x-openclaw-requester-session-key", requesterSessionKey);
+  }
+  return headers;
+}
+
+async function fetchImageBlobForAction(source: string, opts?: ImageActionOptions): Promise<Blob> {
+  const isManagedImage = isManagedOutgoingImageSource(source);
+  const fetchUrl = isManagedImage
+    ? buildManagedOutgoingImageFetchUrl(source, opts?.basePath)
+    : source;
+  const res = await fetch(fetchUrl, {
+    method: "GET",
+    headers: isManagedImage
+      ? buildManagedOutgoingImageHeaders(source, opts?.authToken)
+      : new Headers({ Accept: "image/*" }),
+    credentials: "same-origin",
+  });
+  if (!res.ok) {
+    throw new Error(`Image request failed with HTTP ${res.status}`);
+  }
+  const blob = await res.blob();
+  if (!blob.type.startsWith("image/")) {
+    throw new Error(`Expected image response, got ${blob.type || "unknown content type"}`);
+  }
+  return blob;
+}
+
+function imageExtensionForMimeType(mimeType: string): string {
+  switch (mimeType.toLowerCase()) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/avif":
+      return "avif";
+    case "image/png":
+    default:
+      return "png";
+  }
+}
+
+function imageDownloadFileName(label: string | undefined, source: string, blob: Blob): string {
+  const rawName = sanitizeImageFileName(label?.trim() || labelForMediaPath(source) || "image");
+  const stem = rawName.replace(/\.[a-z0-9]{2,5}$/i, "") || "image";
+  return `${stem}.${imageExtensionForMimeType(blob.type || "image/png")}`;
+}
+
+function sanitizeImageFileName(value: string): string {
+  const invalid = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*"]);
+  let output = "";
+  for (const char of value) {
+    output += char.charCodeAt(0) < 32 || invalid.has(char) ? "_" : char;
+  }
+  return output;
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const blobUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = blobUrl;
+  anchor.download = fileName;
+  anchor.rel = "noreferrer";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 30_000);
+}
+
+async function convertImageBlobToPng(blob: Blob): Promise<Blob> {
+  if (blob.type === "image/png" || typeof createImageBitmap !== "function") {
+    return blob;
+  }
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return blob;
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((pngBlob) => {
+        if (pngBlob) {
+          resolve(pngBlob);
+        } else {
+          reject(new Error("Could not convert image for clipboard"));
+        }
+      }, "image/png");
+    });
+  } finally {
+    bitmap.close();
+  }
+}
+
+async function downloadImageAction(source: string, opts?: ImageActionOptions) {
+  try {
+    const blob = await fetchImageBlobForAction(source, opts);
+    downloadBlob(blob, imageDownloadFileName(opts?.label, source, blob));
+  } catch (err) {
+    console.warn("Could not download image", err);
+    openExternalUrlSafe(source, { allowDataImage: true });
+  }
+}
+
+async function copyImageAction(source: string, opts?: ImageActionOptions) {
+  try {
+    if (!navigator.clipboard?.write || typeof ClipboardItem === "undefined") {
+      throw new Error("Image clipboard writes are not available");
+    }
+    const blob = await convertImageBlobToPng(await fetchImageBlobForAction(source, opts));
+    const clipboardType = blob.type || "image/png";
+    await navigator.clipboard.write([new ClipboardItem({ [clipboardType]: blob })]);
+  } catch (err) {
+    console.warn("Could not copy image", err);
+  }
+}
+
+function renderImageActions(params: {
+  openUrl: string;
+  actionUrl: string;
+  actionOptions?: ImageActionOptions;
+}) {
+  const stop = (evt: Event) => evt.stopPropagation();
+  return html`
+    <div class="chat-image-actions" @click=${stop}>
+      <button
+        type="button"
+        class="chat-image-action"
+        title="Open image"
+        aria-label="Open image"
+        @click=${() => openExternalUrlSafe(params.openUrl, { allowDataImage: true })}
+      >
+        ${icons.externalLink}
+      </button>
+      <button
+        type="button"
+        class="chat-image-action"
+        title="Download image"
+        aria-label="Download image"
+        @click=${() => downloadImageAction(params.actionUrl, params.actionOptions)}
+      >
+        ${icons.download}
+      </button>
+      <button
+        type="button"
+        class="chat-image-action"
+        title="Copy image"
+        aria-label="Copy image"
+        @click=${() => copyImageAction(params.actionUrl, params.actionOptions)}
+      >
+        ${icons.copy}
+      </button>
+    </div>
+  `;
+}
+
+function renderImageFrame(params: {
+  previewUrl: string;
+  openUrl: string;
+  actionUrl: string;
+  alt: string;
+  width?: number;
+  height?: number;
+  actionOptions?: ImageActionOptions;
+}) {
+  const displaySize = resolveChatImageDisplaySize(params.width, params.height);
+  return html`
+    <span
+      class="chat-image-frame ${displaySize ? "chat-image-frame--sized" : ""}"
+      style=${renderChatImageFrameStyle(displaySize)}
+    >
+      <img
+        src=${params.previewUrl}
+        alt=${params.alt}
+        class="chat-message-image"
+        width=${displaySize?.width ?? nothing}
+        height=${displaySize?.height ?? nothing}
+        @click=${() => openExternalUrlSafe(params.openUrl, { allowDataImage: true })}
+      />
+      ${renderImageActions({
+        openUrl: params.openUrl,
+        actionUrl: params.actionUrl,
+        actionOptions: params.actionOptions,
+      })}
+    </span>
+  `;
+}
+
+function renderImagePlaceholderFrame(img: RenderableImageBlock) {
+  const displaySize = resolveChatImageDisplaySize(img.width, img.height);
+  if (!displaySize) {
+    return nothing;
+  }
+  return html`
+    <span
+      class="chat-image-frame chat-image-frame--sized chat-image-frame--pending"
+      aria-label=${img.alt ?? "Loading image"}
+      role="img"
+      style=${renderChatImageFrameStyle(displaySize)}
+    ></span>
+  `;
+}
+
+function renderChatImageFrameStyle(displaySize: { width: number; height: number } | null) {
+  if (!displaySize) {
+    return nothing;
+  }
+  return styleMap({
+    "--chat-image-frame-width": `${displaySize.width}px`,
+    "--chat-image-frame-aspect": `${displaySize.width} / ${displaySize.height}`,
+  });
+}
+
+function resolveChatImageDisplaySize(
+  width: number | undefined,
+  height: number | undefined,
+): { width: number; height: number } | null {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || !width || !height) {
+    return null;
+  }
+  const scale = Math.min(1, CHAT_IMAGE_MAX_WIDTH / width, CHAT_IMAGE_MAX_HEIGHT / height);
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+function buildAssistantAttachmentMetaUrl(
+  source: string,
+  basePath?: string,
+): string {
   const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
 }
@@ -1189,6 +1458,7 @@ function renderAssistantAttachments(
           availability.status === "available"
             ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
             : null;
+        const mediaTicket = availability.status === "available" ? availability.mediaTicket : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
             return renderAssistantAttachmentStatusCard({
@@ -1198,14 +1468,15 @@ function renderAssistantAttachments(
               reason: availability.status === "unavailable" ? availability.reason : undefined,
             });
           }
-          return html`
-            <img
-              src=${attachmentUrl}
-              alt=${attachment.label}
-              class="chat-message-image"
-              @click=${() => openExternalUrlSafe(attachmentUrl, { allowDataImage: true })}
-            />
-          `;
+          return renderImageFrame({
+            previewUrl: buildAssistantAttachmentUrl(attachment.url, basePath, mediaTicket, {
+              thumbnail: true,
+            }),
+            openUrl: attachmentUrl,
+            actionUrl: attachmentUrl,
+            alt: attachment.label,
+            actionOptions: { basePath, authToken, localMediaPreviewRoots, label: attachment.label },
+          });
         }
         if (attachment.kind === "audio") {
           return html`
