@@ -3347,13 +3347,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("rewrites a no-visible-response DM turn through silent-reply fallback", async () => {
+  it("does not synthesize a silent-reply fallback for no-visible-response DM turns (#78188)", async () => {
+    // Regression for #78188: Telegram DMs were emitting "All quiet on my
+    // side." (a NO_REPLY rewrite) every time the agent decided not to
+    // reply, which spammed users and burned credits on every unwanted
+    // message. DM turns must stay quiet when there's no visible response.
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
     });
-    deliverReplies.mockResolvedValueOnce({ delivered: true });
 
     await dispatchWithContext({
       context: createContext({
@@ -3377,11 +3380,54 @@ describe("dispatchTelegramMessage draft streaming", () => {
       } as unknown as OpenClawConfig,
     });
 
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("still synthesizes a silent-reply fallback for no-visible-response group turns", async () => {
+    // Group/forum chats keep the existing behavior: members benefit from a
+    // visible signal that the bot heard the mention but had nothing to add.
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+    });
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        isGroup: true,
+        chatId: -1001234,
+        primaryCtx: {
+          message: { chat: { id: -1001234, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -1001234, type: "supergroup" },
+          message_id: 11,
+        } as TelegramMessageContext["msg"],
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-1001234",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              direct: "disallow",
+              group: "allow",
+              internal: "allow",
+            },
+            silentReplyRewrite: {
+              group: true,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
     expect(deliverReplies).toHaveBeenCalledTimes(1);
     const deliveredReplies = deliverReplies.mock.calls[0]?.[0]?.replies;
     expect(Array.isArray(deliveredReplies)).toBe(true);
     expect(deliveredReplies?.[0]?.text).toEqual(expect.any(String));
-    expect(deliveredReplies?.[0]?.text?.trim()).not.toBe("NO_REPLY");
   });
 
   it("does not add silent-reply fallback for message-tool-only turns", async () => {
