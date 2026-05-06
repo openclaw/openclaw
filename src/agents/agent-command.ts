@@ -24,7 +24,10 @@ import {
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  shouldClearStoredModelOverride,
+} from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -774,10 +777,18 @@ async function agentCommandInternal(
       if (overrideModel) {
         const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
         const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-        if (!allowAnyModel && !allowedModelKeys.has(key)) {
+        if (
+          shouldClearStoredModelOverride({
+            cfg,
+            provider: normalizedOverride.provider,
+            modelAllowed: allowedModelKeys.has(key),
+            allowAnyModel,
+          })
+        ) {
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+            cfg,
           });
           if (updated) {
             await persistSessionEntry({

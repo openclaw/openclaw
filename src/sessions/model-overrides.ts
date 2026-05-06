@@ -1,4 +1,5 @@
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type ModelOverrideSelection = {
@@ -10,16 +11,24 @@ export type ModelOverrideSelection = {
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;
+  cfg?: OpenClawConfig;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
   selectionSource?: "auto" | "user";
   markLiveSwitchPending?: boolean;
-}): { updated: boolean } {
+}): { updated: boolean; error?: string } {
   const { entry, selection, profileOverride } = params;
   const profileOverrideSource = params.profileOverrideSource ?? "user";
   const selectionSource = params.selectionSource ?? "user";
   let updated = false;
   let selectionUpdated = false;
+
+  if (!selection.isDefault && !isConfiguredModelProvider(params.cfg, selection.provider)) {
+    return {
+      updated: false,
+      error: `model provider not configured: ${selection.provider}`,
+    };
+  }
 
   if (selection.isDefault) {
     if (entry.providerOverride) {
@@ -124,4 +133,27 @@ export function applyModelOverrideToSessionEntry(params: {
   }
 
   return { updated };
+}
+
+export function isConfiguredModelProvider(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): boolean {
+  const providers = cfg?.models?.providers;
+  if (!providers || Object.keys(providers).length === 0) {
+    return true;
+  }
+  return Object.prototype.hasOwnProperty.call(providers, provider);
+}
+
+export function shouldClearStoredModelOverride(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelAllowed: boolean;
+  allowAnyModel: boolean;
+}): boolean {
+  if (!isConfiguredModelProvider(params.cfg, params.provider)) {
+    return true;
+  }
+  return !params.allowAnyModel && !params.modelAllowed;
 }

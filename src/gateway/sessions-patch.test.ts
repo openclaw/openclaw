@@ -543,6 +543,28 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid groupActivation");
   });
 
+  test("rejects session model overrides for unconfigured split providers", async () => {
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: { model: { primary: "openrouter/anthropic/claude-haiku-4.5" } },
+        },
+        models: {
+          providers: {
+            openrouter: { baseUrl: "https://openrouter.ai/api/v1", models: [] },
+          },
+        },
+      } as OpenClawConfig,
+      patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-haiku-4.5" },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-haiku-4.5", name: "haiku" },
+        { provider: "openrouter", id: "anthropic/claude-haiku-4.5", name: "haiku via openrouter" },
+      ],
+    });
+
+    expectPatchError(result, "model provider not configured: anthropic");
+  });
+
   test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
       agentPrimaryModel: "synthetic/hf:moonshotai/Kimi-K2.5",

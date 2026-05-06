@@ -408,6 +408,7 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        cfg,
         markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
@@ -441,15 +442,19 @@ export async function applySessionsPatchToStore(params: {
       const isDefault =
         resolved.ref.provider === resolvedDefault.provider &&
         resolved.ref.model === resolvedDefault.model;
-      applyModelOverrideToSessionEntry({
+      const applied = applyModelOverrideToSessionEntry({
         entry: next,
         selection: {
           provider: resolved.ref.provider,
           model: resolved.ref.model,
           isDefault,
         },
+        cfg,
         markLiveSwitchPending: true,
       });
+      if (applied.error) {
+        return invalid(applied.error);
+      }
     }
   }
 

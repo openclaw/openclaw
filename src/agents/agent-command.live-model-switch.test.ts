@@ -241,6 +241,8 @@ vi.mock("../sessions/level-overrides.js", () => ({
 
 vi.mock("../sessions/model-overrides.js", () => ({
   applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  shouldClearStoredModelOverride: (params: { allowAnyModel: boolean; modelAllowed: boolean }) =>
+    !params.allowAnyModel && !params.modelAllowed,
 }));
 
 vi.mock("../sessions/send-policy.js", () => ({

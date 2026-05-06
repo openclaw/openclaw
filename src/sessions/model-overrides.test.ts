@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
-import { applyModelOverrideToSessionEntry } from "./model-overrides.js";
+import {
+  applyModelOverrideToSessionEntry,
+  shouldClearStoredModelOverride,
+} from "./model-overrides.js";
 
 function applyOpenAiSelection(entry: SessionEntry) {
   return applyModelOverrideToSessionEntry({
@@ -121,6 +124,37 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect((entry.updatedAt ?? 0) > before).toBe(true);
   });
 
+  it("refuses non-default overrides for providers missing from configured providers", () => {
+    const before = Date.now() - 5_000;
+    const entry: SessionEntry = {
+      sessionId: "sess-bad-provider",
+      updatedAt: before,
+    };
+
+    const result = applyModelOverrideToSessionEntry({
+      entry,
+      cfg: {
+        models: {
+          providers: {
+            openrouter: { models: [], baseUrl: "https://openrouter.ai/api/v1" },
+          },
+        },
+      } as never,
+      selection: {
+        provider: "anthropic",
+        model: "claude-haiku-4.5",
+      },
+    });
+
+    expect(result).toEqual({
+      updated: false,
+      error: "model provider not configured: anthropic",
+    });
+    expect(entry.providerOverride).toBeUndefined();
+    expect(entry.modelOverride).toBeUndefined();
+    expect(entry.updatedAt).toBe(before);
+  });
+
   it("marks non-default overrides with the provided source", () => {
     const entry: SessionEntry = {
       sessionId: "sess-5a",
@@ -140,6 +174,40 @@ describe("applyModelOverrideToSessionEntry", () => {
     expect(entry.providerOverride).toBe("anthropic");
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
     expect(entry.modelOverrideSource).toBe("auto");
+  });
+
+  it("clears stored overrides for unconfigured providers even when all models are allowed", () => {
+    const clear = shouldClearStoredModelOverride({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: { models: [], baseUrl: "https://openrouter.ai/api/v1" },
+          },
+        },
+      } as never,
+      provider: "anthropic",
+      modelAllowed: false,
+      allowAnyModel: true,
+    });
+
+    expect(clear).toBe(true);
+  });
+
+  it("keeps stored overrides for configured providers when all models are allowed", () => {
+    const clear = shouldClearStoredModelOverride({
+      cfg: {
+        models: {
+          providers: {
+            openrouter: { models: [], baseUrl: "https://openrouter.ai/api/v1" },
+          },
+        },
+      } as never,
+      provider: "openrouter",
+      modelAllowed: false,
+      allowAnyModel: true,
+    });
+
+    expect(clear).toBe(false);
   });
 
   it("sets liveModelSwitchPending only when explicitly requested", () => {
