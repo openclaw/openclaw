@@ -75,20 +75,23 @@ export function createLineWebhookMiddleware(
         id: `${Date.now()}:line:webhook`,
         channel: "line",
         message: body,
-        ackPolicy: body.events?.length ? "after_agent_dispatch" : "after_receive_record",
+        ackPolicy: "after_receive_record",
         onAck: () => {
           res.status(200).json({ status: "ok" });
         },
       });
 
-      if (body.events && body.events.length > 0) {
-        logVerbose(`line: received ${body.events.length} webhook events`);
-        await onEvents(body);
+      if (receiveContext.shouldAckAfter("receive_record")) {
+        await receiveContext.ack();
       }
 
-      const ackStage = body.events?.length ? "agent_dispatch" : "receive_record";
-      if (receiveContext.shouldAckAfter(ackStage)) {
-        await receiveContext.ack();
+      if (body.events && body.events.length > 0) {
+        logVerbose(`line: received ${body.events.length} webhook events`);
+        void (async () => {
+          await onEvents(body);
+        })().catch((err) => {
+          runtime?.error?.(danger(`line: webhook processing failed: ${String(err)}`));
+        });
       }
     } catch (err) {
       await receiveContext?.nack(err);

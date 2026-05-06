@@ -285,7 +285,7 @@ describe("LINE webhook shared POST contract", () => {
   );
 
   it.each(sharedWebhookPostContractCases)(
-    "$name returns 500 when event processing fails and does not acknowledge with 200",
+    "$name acks with 200 even when event processing fails and routes the error to runtime",
     async ({ invoke }) => {
       const result = await invoke({
         failWith: new Error("transient failure"),
@@ -293,10 +293,11 @@ describe("LINE webhook shared POST contract", () => {
         signed: true,
       });
 
-      expect(result.status).toBe(500);
-      expect(result.body).toEqual({ error: "Internal server error" });
+      expect(result.status).toBe(200);
       expect(result.dispatched).toHaveBeenCalledTimes(1);
-      expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      });
     },
   );
 });
@@ -418,14 +419,14 @@ describe("createLineNodeWebhookHandler", () => {
     expect(payload.events).toEqual([{ type: "message" }]);
   });
 
-  it("releases authenticated requests before event processing completes", async () => {
+  it("acknowledges with 200 before event processing completes", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
-    let releaseAuthenticated: (() => void) | undefined;
+    let releaseHandle!: () => void;
     const bot = {
       handleWebhook: vi.fn(
         async () =>
           await new Promise<void>((resolve) => {
-            releaseAuthenticated = resolve;
+            releaseHandle = resolve;
           }),
       ),
     };
@@ -440,21 +441,45 @@ describe("createLineNodeWebhookHandler", () => {
     });
 
     const { res } = createRes();
-    const request = runSignedPost({ handler, rawBody, secret: SECRET, res });
+    await runSignedPost({ handler, rawBody, secret: SECRET, res });
+
+    expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
 
     await vi.waitFor(() => {
-      expect(onRequestAuthenticated).toHaveBeenCalledTimes(1);
       expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     });
 
-    expect(res.headersSent).toBe(false);
-    if (!releaseAuthenticated) {
-      throw new Error("Expected LINE authenticated request release callback to be initialized");
-    }
-    releaseAuthenticated();
-    await request;
+    releaseHandle();
+  });
+
+  it("acks with 200 and logs the error when event processing fails", async () => {
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const failingBot = {
+      handleWebhook: vi.fn(async () => {
+        throw new Error("transient failure");
+      }),
+    };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const failingHandler = createLineNodeWebhookHandler({
+      channelSecret: SECRET,
+      bot: failingBot,
+      runtime,
+      readBody: async () => rawBody,
+    });
+
+    const { res } = createRes();
+    await runSignedPost({ handler: failingHandler, rawBody, secret: SECRET, res });
 
     expect(res.statusCode).toBe(200);
+    expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+
+    await vi.waitFor(() => {
+      expect(failingBot.handleWebhook).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {
@@ -574,5 +599,33 @@ describe("createLineWebhookMiddleware", () => {
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith({ error: "Invalid webhook payload" });
     expect(onEvents).not.toHaveBeenCalled();
+  });
+
+  it("acks with 200 and logs the error when event processing fails", async () => {
+    const onEvents = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const rawBody = JSON.stringify({ events: [{ type: "message" }] });
+    const middleware = createLineWebhookMiddleware({
+      channelSecret: SECRET,
+      onEvents,
+      runtime,
+    });
+
+    const req = {
+      headers: { "x-line-signature": sign(rawBody, SECRET) },
+      body: rawBody,
+    } as any;
+    const res = createMiddlewareRes();
+
+    await middleware(req, res, {} as any);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ status: "ok" });
+    await vi.waitFor(() => {
+      expect(onEvents).toHaveBeenCalledTimes(1);
+      expect(runtime.error).toHaveBeenCalled();
+    });
   });
 });

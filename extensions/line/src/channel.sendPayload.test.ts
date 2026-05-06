@@ -543,12 +543,15 @@ describe("line outbound sendPayload", () => {
         adapter: linePlugin.message!,
         proofs: {
           after_receive_record: () => {
+            expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_receive_record");
             expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
               "after_receive_record",
             );
           },
           after_agent_dispatch: () => {
-            expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_agent_dispatch");
+            expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
+              "after_agent_dispatch",
+            );
           },
         },
       }),
