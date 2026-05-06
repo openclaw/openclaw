@@ -30,6 +30,7 @@ import {
   convertGoogleMeetTtsAudioForBridge,
   extendGoogleMeetOutputEchoSuppression,
   isGoogleMeetLikelyAssistantEchoTranscript,
+  GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
   resolveGoogleMeetRealtimeProvider,
   resolveGoogleMeetRealtimeTranscriptionProvider,
   startCommandAgentAudioBridge,
@@ -315,6 +316,7 @@ describe("google-meet plugin", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     chromeTransportTesting.setDepsForTest(null);
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
@@ -1250,14 +1252,16 @@ describe("google-meet plugin", () => {
         introSent: true,
       },
     });
-    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith({
-      config: expect.objectContaining({ defaultTransport: "twilio" }),
-      dialInNumber: "+15551234567",
-      dtmfSequence: "123456#",
-      logger: expect.objectContaining({ info: expect.any(Function) }),
-      message: "Say exactly: I'm here and listening.",
-      sessionKey: expect.stringMatching(/^voice:google-meet:meet_/),
-    });
+    expect(voiceCallMocks.joinMeetViaVoiceCallGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ defaultTransport: "twilio" }),
+        dialInNumber: "+15551234567",
+        dtmfSequence: "123456#",
+        logger: expect.objectContaining({ info: expect.any(Function) }),
+        message: "Say exactly: I'm here and listening.",
+        sessionKey: expect.stringMatching(/^voice:google-meet:meet_/),
+      }),
+    );
   });
 
   it("passes the caller session key through tool joins for agent context forking", async () => {
@@ -2762,6 +2766,7 @@ describe("google-meet plugin", () => {
         url: "https://meet.google.com/abc-defg-hij",
       });
       const { methods } = setup({
+        realtime: { introMessage: "" },
         chrome: {
           audioBridgeCommand: ["bridge", "start"],
           waitForInCallMs: 1,
@@ -3781,6 +3786,7 @@ describe("google-meet plugin", () => {
       const { methods, runCommandWithTimeout } = setup({
         defaultMode: "bidi",
         chrome: {
+          waitForInCallMs: 1,
           audioBridgeHealthCommand: ["bridge", "status"],
           audioBridgeCommand: ["bridge", "start"],
         },
@@ -3822,6 +3828,7 @@ describe("google-meet plugin", () => {
   });
 
   it("uses realtime transcription plus regular TTS in Chrome agent mode", async () => {
+    vi.useFakeTimers();
     let callbacks: Parameters<RealtimeTranscriptionProviderPlugin["createSession"]>[0] | undefined;
     const sendAudio = vi.fn();
     const sttSession = {
@@ -3919,7 +3926,7 @@ describe("google-meet plugin", () => {
     );
     inputStdout.write(Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]));
     callbacks?.onTranscript?.("Please summarize the launch.");
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
 
     expect(sendAudio).toHaveBeenCalledWith(expect.any(Buffer));
     expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalled();
@@ -3938,6 +3945,23 @@ describe("google-meet plugin", () => {
       realtimeTranscriptLines: 2,
       lastRealtimeTranscriptRole: "assistant",
     });
+    const talkEventTypes = handle.getHealth().recentTalkEvents?.map((event) => event.type) ?? [];
+    expect(talkEventTypes).toEqual([
+      "session.started",
+      "session.ready",
+      "turn.started",
+      "input.audio.delta",
+      "input.audio.committed",
+      "transcript.done",
+      "output.text.done",
+      "output.audio.started",
+      "output.audio.delta",
+      "output.audio.done",
+      "turn.ended",
+    ]);
+    expect(talkEventTypes.indexOf("output.text.done")).toBeLessThan(
+      talkEventTypes.indexOf("output.audio.started"),
+    );
     await handle.stop();
   });
 
@@ -4160,6 +4184,21 @@ describe("google-meet plugin", () => {
         undefined,
       );
     });
+    expect(handle.getHealth().recentTalkEvents?.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "session.started",
+        "session.ready",
+        "input.audio.delta",
+        "output.audio.delta",
+        "output.audio.done",
+        "transcript.done",
+        "output.text.done",
+        "tool.call",
+        "tool.progress",
+        "tool.result",
+        "turn.ended",
+      ]),
+    );
     expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         messageProvider: "google-meet",
@@ -4497,7 +4536,7 @@ describe("google-meet plugin", () => {
             if (pullCount === 1) {
               return { bridgeId: "bridge-1", base64: Buffer.from([9, 8, 7]).toString("base64") };
             }
-            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            await new Promise((resolve) => setTimeout(resolve, 10));
             return { bridgeId: "bridge-1" };
           }
           return { ok: true };
@@ -4637,6 +4676,24 @@ describe("google-meet plugin", () => {
       lastRealtimeEventDetail: "status=completed",
       clearCount: 1,
     });
+    const talkEvents = handle.getHealth().recentTalkEvents ?? [];
+    expect(talkEvents.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "session.started",
+        "session.ready",
+        "input.audio.delta",
+        "output.audio.delta",
+        "output.audio.done",
+        "output.text.done",
+        "tool.call",
+        "tool.progress",
+        "tool.result",
+        "turn.ended",
+      ]),
+    );
+    expect(talkEvents[0]).toMatchObject({
+      sessionId: "google-meet:meet-1:bridge-1:node-realtime",
+    });
 
     await handle.stop();
 
@@ -4683,7 +4740,7 @@ describe("google-meet plugin", () => {
             if (pullCount === 2) {
               return { bridgeId: "bridge-1", base64: Buffer.from([5, 4, 3]).toString("base64") };
             }
-            await new Promise((resolve) => setTimeout(resolve, 1_000));
+            await new Promise((resolve) => setTimeout(resolve, 10));
             return { bridgeId: "bridge-1" };
           }
           return { ok: true };
