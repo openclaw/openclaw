@@ -292,7 +292,7 @@ const BILLING_402_PLAN_HINTS = [
   "subscription",
 ] as const;
 
-const PERIODIC_402_HINTS = ["daily", "weekly", "monthly"] as const;
+const PERIODIC_402_HINTS = ["daily", "weekly", "monthly", "billing cycle", "next cycle"] as const;
 const RETRYABLE_402_RETRY_HINTS = ["try again", "retry", "temporary", "cooldown"] as const;
 const RETRYABLE_402_LIMIT_HINTS = ["usage limit", "rate limit", "organization usage"] as const;
 const RETRYABLE_402_SCOPED_HINTS = ["organization", "workspace"] as const;
@@ -520,12 +520,14 @@ function hasQuotaRefreshWindowSignal(text: string): boolean {
 function hasRetryable402TransientSignal(text: string): boolean {
   const hasPeriodicHint = includesAnyHint(text, PERIODIC_402_HINTS);
   const hasSpendLimit = text.includes("spend limit") || text.includes("spending limit");
+  const hasCycleRefreshHint = text.includes("billing cycle") || text.includes("next cycle");
   const hasScopedHint = includesAnyHint(text, RETRYABLE_402_SCOPED_HINTS);
   return (
     (includesAnyHint(text, RETRYABLE_402_RETRY_HINTS) &&
       includesAnyHint(text, RETRYABLE_402_LIMIT_HINTS)) ||
     (hasPeriodicHint && (text.includes("usage limit") || hasSpendLimit)) ||
     (hasPeriodicHint && text.includes("limit") && text.includes("reset")) ||
+    (hasCycleRefreshHint && text.includes("usage limit")) ||
     (hasScopedHint &&
       text.includes("limit") &&
       (hasSpendLimit || includesAnyHint(text, RETRYABLE_402_SCOPED_RESULT_HINTS)))
