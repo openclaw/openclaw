@@ -51,6 +51,20 @@ export function hasControlCommand(
   return false;
 }
 
+function stripLeadingAddressingPrefixes(text: string): string {
+  let current = text.trimStart();
+  while (current) {
+    const next = current
+      .replace(/^<at\b[^>]*>[^<]*<\/at>\s*/iu, "")
+      .replace(/^@[^\s/]+(?=\s|\/|$)\s*/u, "");
+    if (next === current) {
+      return current;
+    }
+    current = next.trimStart();
+  }
+  return current;
+}
+
 export function isControlCommandMessage(
   text?: string,
   cfg?: OpenClawConfig,
@@ -63,12 +77,13 @@ export function isControlCommandMessage(
   if (!trimmed) {
     return false;
   }
-  if (hasControlCommand(trimmed, cfg, options)) {
+  const stripped = stripInboundMetadata(trimmed);
+  const commandText = stripLeadingAddressingPrefixes(stripped);
+  if (hasControlCommand(commandText, cfg, options)) {
     return true;
   }
-  const stripped = stripInboundMetadata(trimmed);
   const normalized =
-    normalizeOptionalLowercaseString(normalizeCommandBody(stripped, options)) ?? "";
+    normalizeOptionalLowercaseString(normalizeCommandBody(commandText, options)) ?? "";
   return isAbortTrigger(normalized);
 }
 
