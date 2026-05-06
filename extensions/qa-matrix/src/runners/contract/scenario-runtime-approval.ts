@@ -251,14 +251,6 @@ function assertApprovalDecisionResult(params: {
   }
 }
 
-function assertApprovalResolveResult(result: unknown) {
-  const resolved =
-    typeof result === "object" && result !== null ? (result as { ok?: unknown }) : null;
-  if (resolved?.ok !== true) {
-    throw new Error(`approval resolve result was ${formatApprovalResultValue(result)}`);
-  }
-}
-
 function formatApprovalResultValue(value: unknown) {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return String(value);
@@ -333,24 +325,6 @@ async function waitForApprovalDecision(params: {
   return await gatewayCall(
     method,
     { id: params.approvalId },
-    {
-      expectFinal: true,
-      timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    },
-  );
-}
-
-async function resolveApprovalDecision(params: {
-  approvalId: string;
-  context: MatrixQaScenarioContext;
-  decision: MatrixQaApprovalDecision;
-  kind: MatrixQaApprovalKind;
-}) {
-  const gatewayCall = requireMatrixQaGatewayCall(params.context);
-  const method = params.kind === "exec" ? "exec.approval.resolve" : "plugin.approval.resolve";
-  return await gatewayCall(
-    method,
-    { decision: params.decision, id: params.approvalId },
     {
       expectFinal: true,
       timeoutMs: MATRIX_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
@@ -616,13 +590,22 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   if (channelApproval.event.approval?.id !== dmApproval.event.approval?.id) {
     throw new Error("target=both delivered different approval ids to channel and DM");
   }
-  const result = await resolveApprovalDecision({
-    approvalId,
+  const reaction = await reactToApproval({
     context,
     decision: "allow-once",
+    roomId: context.roomId,
+    targetEventId: channelApproval.event.eventId,
+  });
+  const result = await waitForApprovalDecision({
+    approvalId,
+    context,
     kind: "exec",
   });
-  assertApprovalResolveResult(result);
+  assertApprovalDecisionResult({
+    approvalId,
+    decision: "allow-once",
+    result,
+  });
   const lateDuplicate = await client.waitForOptionalRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
@@ -643,13 +626,17 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
         buildMatrixApprovalArtifact(channelApproval.event),
         buildMatrixApprovalArtifact(dmApproval.event),
       ],
+      reactionEventId: reaction.eventId,
+      reactionTargetEventId: reaction.reaction?.eventId,
       token,
     },
     details: [
       `channel approval event: ${channelApproval.event.eventId}`,
       `dm approval event: ${dmApproval.event.eventId}`,
       `approval id: ${approvalId}`,
-      `decision: allow-once via gateway resolve`,
+      `decision: allow-once`,
+      `reaction event: ${reaction.eventId}`,
+      `reaction target: ${reaction.reaction?.eventId ?? "<missing>"}`,
     ].join("\n"),
   } satisfies MatrixQaScenarioExecution;
 }

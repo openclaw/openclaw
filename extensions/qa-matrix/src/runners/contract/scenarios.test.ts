@@ -609,7 +609,7 @@ describe("matrix live qa scenarios", () => {
       roomId: "!driver-dm:matrix-qa.test",
     });
     let approvalId = "";
-    context.gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
+    const gatewayCall = vi.fn().mockImplementation(async (method: string, ...args: unknown[]) => {
       if (method === "exec.approval.request") {
         const payload = args.find(
           (arg): arg is { id?: string } => typeof arg === "object" && arg !== null && "id" in arg,
@@ -617,11 +617,12 @@ describe("matrix live qa scenarios", () => {
         approvalId = payload?.id ?? "";
         return { id: approvalId, status: "accepted" };
       }
-      if (method === "exec.approval.resolve") {
-        return { ok: true };
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "allow-once", id: approvalId };
       }
       throw new Error(`unexpected gateway method ${method}`);
     });
+    context.gatewayCall = gatewayCall;
 
     const buildApprovalEvent = (eventId: string, roomId: string) =>
       matrixQaMessageEvent({
@@ -642,12 +643,37 @@ describe("matrix live qa scenarios", () => {
     const waitForRoomEvent = vi.fn().mockImplementation(async () => {
       const channelApproval = buildApprovalEvent("$approval-both-channel", "!main:matrix-qa.test");
       const dmApproval = buildApprovalEvent("$approval-both-dm", "!driver-dm:matrix-qa.test");
-      context.observedEvents.push(channelApproval, dmApproval);
+      context.observedEvents.push(channelApproval, dmApproval, {
+        eventId: "$approval-both-option",
+        kind: "reaction",
+        reaction: {
+          eventId: "$approval-both-channel",
+          key: "✅",
+        },
+        roomId: "!main:matrix-qa.test",
+        sender: "@sut:matrix-qa.test",
+        type: "m.reaction",
+      });
       return { event: channelApproval, since: "driver-sync-approval" };
     });
     const waitForOptionalRoomEvent = vi.fn().mockResolvedValue({
       matched: false,
       since: "driver-sync-late-window",
+    });
+    const sendReaction = vi.fn().mockResolvedValue("$approval-both-driver-reaction");
+    const waitForDriverReaction = vi.fn().mockResolvedValue({
+      event: {
+        eventId: "$approval-both-driver-reaction",
+        kind: "reaction",
+        reaction: {
+          eventId: "$approval-both-channel",
+          key: "✅",
+        },
+        roomId: "!main:matrix-qa.test",
+        sender: "@driver:matrix-qa.test",
+        type: "m.reaction",
+      } satisfies MatrixQaObservedEvent,
+      since: "driver-sync-driver-reaction",
     });
     createMatrixQaClient
       .mockReturnValueOnce({
@@ -656,6 +682,10 @@ describe("matrix live qa scenarios", () => {
       })
       .mockReturnValueOnce({
         waitForRoomEvent,
+      })
+      .mockReturnValueOnce({
+        sendReaction,
+        waitForRoomEvent: waitForDriverReaction,
       });
 
     const scenario = MATRIX_QA_SCENARIOS.find(
@@ -669,11 +699,15 @@ describe("matrix live qa scenarios", () => {
           { eventId: "$approval-both-channel", roomId: "!main:matrix-qa.test" },
           { eventId: "$approval-both-dm", roomId: "!driver-dm:matrix-qa.test" },
         ],
+        reactionEventId: "$approval-both-driver-reaction",
+        reactionTargetEventId: "$approval-both-channel",
       },
     });
 
     expect(waitForRoomEvent).toHaveBeenCalledTimes(1);
-    expect(createMatrixQaClient).toHaveBeenCalledTimes(2);
+    expect(waitForDriverReaction).toHaveBeenCalledTimes(1);
+    expect(gatewayCall.mock.calls.at(-1)?.[0]).toBe("exec.approval.waitDecision");
+    expect(createMatrixQaClient).toHaveBeenCalledTimes(3);
   });
 
   it("lets explicit Matrix scenario ids override the selected profile", () => {
