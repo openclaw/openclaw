@@ -112,6 +112,13 @@ export function resolveConfiguredBindingRoute(
 export function resolveRuntimeConversationBindingRoute(
   params: {
     route: ResolvedAgentRoute;
+    /**
+     * Optional predicate that returns `true` when the bound session key still has a
+     * durable store entry. When provided and the target session is missing, the stale
+     * binding is removed and the default (fresh) route is returned instead of routing
+     * to a phantom session that would produce ephemeral, un-persisted turns.
+     */
+    targetSessionExists?: (sessionKey: string) => boolean;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
   const bindingRecord = getSessionBindingService().resolveByConversation(
@@ -125,14 +132,34 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
-  getSessionBindingService().touch(bindingRecord.bindingId);
+  // Plugin-owned bindings never rewrite the channel route, so session existence is
+  // irrelevant for them. Touch and return immediately to preserve existing behavior.
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
+    getSessionBindingService().touch(bindingRecord.bindingId);
     return {
       bindingRecord,
       route: params.route,
     };
   }
 
+  // Drop bindings whose target session no longer exists rather than routing messages
+  // to a phantom session key that silently creates ephemeral, non-persistent sessions.
+  if (params.targetSessionExists && !params.targetSessionExists(boundSessionKey)) {
+    logVerbose(
+      `dropping stale binding ${bindingRecord.bindingId}: target session ${boundSessionKey} no longer exists`,
+    );
+    void getSessionBindingService()
+      .unbind({ targetSessionKey: boundSessionKey, reason: "stale-target" })
+      .catch((err: unknown) => {
+        logVerbose(`stale-target unbind failed for ${boundSessionKey}: ${String(err)}`);
+      });
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
+  getSessionBindingService().touch(bindingRecord.bindingId);
   const boundAgentId = resolveAgentIdFromSessionKey(boundSessionKey) || params.route.agentId;
   return {
     bindingRecord,
