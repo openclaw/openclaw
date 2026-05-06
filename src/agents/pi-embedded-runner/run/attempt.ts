@@ -110,6 +110,7 @@ import {
   applyPiAutoCompactionGuard,
   applyPiCompactionSettingsFromConfig,
   isSilentOverflowProneModel,
+  resolveEffectiveCompactionMode,
 } from "../../pi-settings.js";
 import {
   createClientToolNameConflictError,
@@ -1456,6 +1457,7 @@ export async function runEmbeddedAttempt(
       const piAutoCompactionGuardArgs = {
         settingsManager,
         contextEngineInfo: activeContextEngine?.info,
+        compactionMode: resolveEffectiveCompactionMode(params.config),
         silentOverflowProneProvider: isSilentOverflowProneModel({
           provider: params.provider,
           modelId: params.modelId,

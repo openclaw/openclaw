@@ -4,11 +4,15 @@ import type { Duplex } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  createTalkSessionController,
   createRealtimeVoiceBridgeSession,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
+  type TalkEvent,
+  type TalkEventInput,
+  type TalkSessionController,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
@@ -41,6 +45,7 @@ const CONSULT_TRANSCRIPT_SETTLE_MS = 350;
 const CONSULT_TRANSCRIPT_SETTLE_MAX_MS = 1_000;
 const MAX_PARTIAL_USER_TRANSCRIPT_CHARS = 1_200;
 const RECENT_FINAL_USER_TRANSCRIPT_TTL_MS = 2_000;
+const BARGE_IN_REQUIRED_LOUD_CHUNKS = 2;
 
 function normalizePath(pathname: string): string {
   const trimmed = pathname.trim();
@@ -242,6 +247,36 @@ type NativeConsultState = {
 };
 
 type TelephonyCloseReason = "completed" | "error";
+
+function appendRecentTalkEventMetadata(
+  call: CallRecord | null | undefined,
+  event: TalkEvent,
+): void {
+  if (!call) {
+    return;
+  }
+  const metadata = call.metadata ?? {};
+  const previous = Array.isArray(metadata.recentTalkEvents) ? metadata.recentTalkEvents : [];
+  metadata.lastTalkEventAt = event.timestamp;
+  metadata.lastTalkEventType = event.type;
+  metadata.recentTalkEvents = [
+    ...previous,
+    {
+      id: event.id,
+      brain: event.brain,
+      mode: event.mode,
+      provider: event.provider,
+      seq: event.seq,
+      sessionId: event.sessionId,
+      timestamp: event.timestamp,
+      transport: event.transport,
+      type: event.type,
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      ...(event.final !== undefined ? { final: event.final } : {}),
+    },
+  ].slice(-12);
+  call.metadata = metadata;
+}
 
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
@@ -471,6 +506,49 @@ export class RealtimeCallHandler {
     }
 
     const { callId, initialGreetingInstructions } = registration;
+    const callRecord = this.manager.getCallByProviderCallId(callSid);
+    const talk: TalkSessionController = createTalkSessionController({
+      sessionId: `voice-call:${callId}:realtime`,
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: this.realtimeProvider.id,
+    });
+    const rememberTalkEvent = (event: TalkEvent | undefined): TalkEvent | undefined => {
+      if (event) {
+        appendRecentTalkEventMetadata(callRecord, event);
+      }
+      return event;
+    };
+    const emitTalkEvent = (input: TalkEventInput): TalkEvent => {
+      return rememberTalkEvent(talk.emit(input)) as TalkEvent;
+    };
+    const ensureTalkTurn = (): string => {
+      const turn = talk.ensureTurn({
+        payload: { callId, providerCallId: callSid },
+      });
+      rememberTalkEvent(turn.event);
+      return turn.turnId;
+    };
+    const endTalkTurn = (reason = "completed"): void => {
+      const ended = talk.endTurn({
+        payload: { callId, providerCallId: callSid, reason },
+      });
+      if (ended.ok) {
+        rememberTalkEvent(ended.event);
+      }
+    };
+    const finishOutputAudio = (reason: string): void => {
+      rememberTalkEvent(
+        talk.finishOutputAudio({
+          payload: { callId, providerCallId: callSid, reason },
+        }),
+      );
+    };
+    emitTalkEvent({
+      type: "session.started",
+      payload: { callId, providerCallId: callSid, streamSid },
+    });
     console.log(
       `[voice-call] Realtime bridge starting for call ${callId} (providerCallId=${callSid}, initialGreeting=${initialGreetingInstructions ? "queued" : "absent"})`,
     );
@@ -516,7 +594,9 @@ export class RealtimeCallHandler {
         }
       },
     });
-    const speechDetector = new RealtimeMulawSpeechStartDetector();
+    const speechDetector = new RealtimeMulawSpeechStartDetector({
+      requiredLoudChunks: BARGE_IN_REQUIRED_LOUD_CHUNKS,
+    });
     const session = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       providerConfig: this.providerConfig,
@@ -527,6 +607,18 @@ export class RealtimeCallHandler {
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
+          const turnId = ensureTalkTurn();
+          rememberTalkEvent(
+            talk.startOutputAudio({
+              turnId,
+              payload: { callId, providerCallId: callSid },
+            }).event,
+          );
+          emitTalkEvent({
+            type: "output.audio.delta",
+            turnId,
+            payload: { byteLength: muLaw.length },
+          });
           audioPacer.sendAudio(muLaw);
         },
         clearAudio: () => {
@@ -534,12 +626,37 @@ export class RealtimeCallHandler {
           console.log(
             `[voice-call] realtime outbound audio clear requested callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
           );
+          finishOutputAudio("clear");
         },
         sendMark: (markName) => {
           audioPacer.sendMark(markName);
         },
       },
       onTranscript: (role, text, isFinal) => {
+        const turnId = ensureTalkTurn();
+        const eventType =
+          role === "assistant"
+            ? isFinal
+              ? "output.text.done"
+              : "output.text.delta"
+            : isFinal
+              ? "transcript.done"
+              : "transcript.delta";
+        const payload = role === "assistant" ? { text } : { role, text };
+        emitTalkEvent({
+          type: eventType,
+          turnId,
+          payload,
+          final: isFinal,
+        });
+        if (role === "user" && isFinal) {
+          emitTalkEvent({
+            type: "input.audio.committed",
+            turnId,
+            payload: { callId, providerCallId: callSid },
+            final: true,
+          });
+        }
         if (!isFinal) {
           if (role === "user" && text.trim()) {
             const transcript = this.recordPartialUserTranscript(callId, text);
@@ -590,6 +707,14 @@ export class RealtimeCallHandler {
         });
       },
       onToolCall: (toolEvent, session) => {
+        const turnId = ensureTalkTurn();
+        emitTalkEvent({
+          type: "tool.call",
+          turnId,
+          itemId: toolEvent.itemId,
+          callId: toolEvent.callId,
+          payload: { name: toolEvent.name, args: toolEvent.args },
+        });
         console.log(
           `[voice-call] realtime tool call received callId=${callId} providerCallId=${callSid} tool=${toolEvent.name}`,
         );
@@ -599,10 +724,54 @@ export class RealtimeCallHandler {
           toolEvent.callId || toolEvent.itemId,
           toolEvent.name,
           toolEvent.args,
+          turnId,
+          emitTalkEvent,
         );
+      },
+      onEvent: (event) => {
+        if (event.type === "input_audio_buffer.speech_started") {
+          ensureTalkTurn();
+          return;
+        }
+        if (event.type === "input_audio_buffer.speech_stopped") {
+          const turnId = talk.activeTurnId;
+          if (!turnId) {
+            return;
+          }
+          emitTalkEvent({
+            type: "input.audio.committed",
+            turnId,
+            payload: { callId, providerCallId: callSid, source: event.type },
+            final: true,
+          });
+          return;
+        }
+        if (event.type === "response.done") {
+          finishOutputAudio("response.done");
+          endTalkTurn("response.done");
+          return;
+        }
+        if (event.type === "error") {
+          emitTalkEvent({
+            type: "session.error",
+            payload: { message: event.detail ?? "Realtime provider error" },
+            final: true,
+          });
+        }
+      },
+      onReady: () => {
+        emitTalkEvent({
+          type: "session.ready",
+          payload: { callId, providerCallId: callSid },
+        });
       },
       onError: (error) => {
         console.error("[voice-call] realtime voice error:", error.message);
+        emitTalkEvent({
+          type: "session.error",
+          payload: { message: error.message },
+          final: true,
+        });
       },
       onClose: (reason) => {
         this.activeBridgesByCallId.delete(callId);
@@ -610,6 +779,12 @@ export class RealtimeCallHandler {
         this.activeTelephonyClosersByCallId.delete(callId);
         this.activeTelephonyClosersByCallId.delete(callSid);
         this.clearUserTranscriptState(callId);
+        finishOutputAudio(reason);
+        emitTalkEvent({
+          type: "session.closed",
+          payload: { reason },
+          final: true,
+        });
         if (reason !== "error") {
           return;
         }
@@ -639,11 +814,25 @@ export class RealtimeCallHandler {
     const sendAudioToSession = session.sendAudio.bind(session);
     session.sendAudio = (audio) => {
       if (speechDetector.accept(audio)) {
+        const interruptedTurnId = ensureTalkTurn();
         const clearedBytes = audioPacer.clearAudio();
         console.log(
           `[voice-call] realtime outbound audio cleared by barge-in callId=${callId} providerCallId=${callSid} queuedBytes=${clearedBytes}`,
         );
+        finishOutputAudio("barge-in");
+        const cancelled = talk.cancelTurn({
+          turnId: interruptedTurnId,
+          payload: { callId, providerCallId: callSid, reason: "barge-in" },
+        });
+        if (cancelled.ok) {
+          rememberTalkEvent(cancelled.event);
+        }
       }
+      emitTalkEvent({
+        type: "input.audio.delta",
+        turnId: ensureTalkTurn(),
+        payload: { byteLength: audio.length },
+      });
       sendAudioToSession(audio);
     };
     const closeSession = session.close.bind(session);
@@ -961,9 +1150,49 @@ export class RealtimeCallHandler {
     bridgeCallId: string,
     name: string,
     args: unknown,
+    turnId: string,
+    emitTalkEvent?: (input: TalkEventInput) => TalkEvent,
   ): Promise<void> {
     const handler = this.toolHandlers.get(name);
     const startedAt = Date.now();
+    const hasResultError = (result: unknown): boolean => {
+      return Boolean(
+        result && typeof result === "object" && !Array.isArray(result) && "error" in result,
+      );
+    };
+    const emitFinalToolEvent = (result: unknown): void => {
+      emitTalkEvent?.({
+        type: hasResultError(result) ? "tool.error" : "tool.result",
+        turnId,
+        callId: bridgeCallId,
+        payload: { name, result },
+        final: true,
+      });
+    };
+    const submitFinalToolResult = (result: unknown): void => {
+      bridge.submitToolResult(bridgeCallId, result);
+      emitFinalToolEvent(result);
+    };
+    const submitWorkingResponse = () => {
+      if (
+        handler &&
+        name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
+        bridge.bridge.supportsToolResultContinuation &&
+        !this.config.fastContext.enabled
+      ) {
+        emitTalkEvent?.({
+          type: "tool.progress",
+          turnId,
+          callId: bridgeCallId,
+          payload: { name, status: "working" },
+        });
+        bridge.submitToolResult(
+          bridgeCallId,
+          buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
+          { willContinue: true },
+        );
+      }
+    };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       this.lastProviderConsultAtByCallId.set(callId, Date.now());
       const timer = this.forcedConsultTimersByCallId.get(callId);
@@ -974,7 +1203,7 @@ export class RealtimeCallHandler {
       const forcedConsult = this.forcedConsultsByCallId.get(callId);
       if (forcedConsult) {
         if (forcedConsult.completedAt) {
-          bridge.submitToolResult(bridgeCallId, {
+          submitFinalToolResult({
             status: "already_delivered",
             message: "OpenClaw already delivered this consult result internally. Do not repeat it.",
           });
@@ -984,23 +1213,9 @@ export class RealtimeCallHandler {
         const result = await forcedConsult.promise.catch((error: unknown) => ({
           error: formatErrorMessage(error),
         }));
-        bridge.submitToolResult(bridgeCallId, result);
+        submitFinalToolResult(result);
         return;
       }
-
-      const submitWorkingResponse = () => {
-        if (
-          handler &&
-          bridge.bridge.supportsToolResultContinuation &&
-          !this.config.fastContext.enabled
-        ) {
-          bridge.submitToolResult(
-            bridgeCallId,
-            buildRealtimeVoiceAgentConsultWorkingResponse("caller"),
-            { willContinue: true },
-          );
-        }
-      };
 
       const existingNativeConsult = this.nativeConsultsInFlightByCallId.get(callId);
       if (existingNativeConsult) {
@@ -1008,7 +1223,7 @@ export class RealtimeCallHandler {
           `[voice-call] realtime tool call sharing in-flight agent consult callId=${callId} ageMs=${Date.now() - existingNativeConsult.startedAt}`,
         );
         submitWorkingResponse();
-        bridge.submitToolResult(bridgeCallId, await existingNativeConsult.promise);
+        submitFinalToolResult(await existingNativeConsult.promise);
         return;
       }
 
@@ -1047,7 +1262,7 @@ export class RealtimeCallHandler {
         console.log(
           `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
         );
-        bridge.submitToolResult(bridgeCallId, result);
+        submitFinalToolResult(result);
         if (status === "ok") {
           this.consumePartialUserTranscript(callId, state.partialUserTranscript);
         }
@@ -1084,7 +1299,7 @@ export class RealtimeCallHandler {
     console.log(
       `[voice-call] realtime tool call completed callId=${callId} tool=${name} status=${status} elapsedMs=${Date.now() - startedAt}${error ? ` error=${error}` : ""}`,
     );
-    bridge.submitToolResult(bridgeCallId, result);
+    submitFinalToolResult(result);
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME && status === "ok") {
       this.consumePartialUserTranscript(callId, context.partialUserTranscript);
     }

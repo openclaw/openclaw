@@ -27,6 +27,7 @@ import {
   type GatewayService,
 } from "../../daemon/service.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
+import { pathExists } from "../../infra/fs-safe.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
@@ -177,15 +178,6 @@ function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
     record.source === "git" ||
     record.source === "marketplace"
   );
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 export async function collectMissingPluginInstallPayloads(params: {
@@ -1686,6 +1678,23 @@ function createUpdatedChannelSnapshot(
   };
 }
 
+async function maybeRepairLegacyConfigForUpdateChannel(params: {
+  configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+  jsonMode: boolean;
+}): Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> {
+  if (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0) {
+    return params.configSnapshot;
+  }
+
+  const { repairLegacyConfigForUpdateChannel } =
+    await import("../../commands/doctor/legacy-config-repair.js");
+  const { snapshot, repaired } = await repairLegacyConfigForUpdateChannel(params);
+  if (!params.jsonMode && repaired) {
+    defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
+  }
+  return snapshot;
+}
+
 async function writePostCorePluginUpdateResultFile(
   filePath: string | undefined,
   result: PostCorePluginUpdateResult,
@@ -1947,17 +1956,24 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     includeRegistry: false,
   });
 
-  const configSnapshot = await readConfigFileSnapshot();
-  const storedChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
-
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
     defaultRuntime.exit(1);
     return;
   }
+
+  let configSnapshot = await readConfigFileSnapshot();
+  if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
+    configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
+      configSnapshot,
+      jsonMode: Boolean(opts.json),
+    });
+  }
+  const storedChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+
   if (opts.channel && !configSnapshot.valid) {
     const issues = formatConfigIssueLines(configSnapshot.issues, "-");
     defaultRuntime.error(["Config is invalid; cannot set update channel.", ...issues].join("\n"));

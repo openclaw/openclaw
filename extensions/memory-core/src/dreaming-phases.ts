@@ -18,6 +18,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -443,11 +444,11 @@ function normalizeMemoryDay(value: unknown): string | undefined {
 async function readDailyIngestionState(workspaceDir: string): Promise<DailyIngestionState> {
   const statePath = resolveDailyIngestionStatePath(workspaceDir);
   try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    return normalizeDailyIngestionState(JSON.parse(raw) as unknown);
+    return normalizeDailyIngestionState(
+      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, statePath)),
+    );
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
+    if (err instanceof SyntaxError) {
       return { version: 1, files: {} };
     }
     throw err;
@@ -459,10 +460,9 @@ async function writeDailyIngestionState(
   state: DailyIngestionState,
 ): Promise<void> {
   const statePath = resolveDailyIngestionStatePath(workspaceDir);
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, statePath);
+  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, statePath), state, {
+    trailingNewline: true,
+  });
 }
 
 type SessionIngestionFileState = {
@@ -556,11 +556,11 @@ function normalizeSessionIngestionState(raw: unknown): SessionIngestionState {
 async function readSessionIngestionState(workspaceDir: string): Promise<SessionIngestionState> {
   const statePath = resolveSessionIngestionStatePath(workspaceDir);
   try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    return normalizeSessionIngestionState(JSON.parse(raw) as unknown);
+    return normalizeSessionIngestionState(
+      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, statePath)),
+    );
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === "ENOENT" || err instanceof SyntaxError) {
+    if (err instanceof SyntaxError) {
       return { version: 3, files: {}, seenMessages: {} };
     }
     throw err;
@@ -572,10 +572,9 @@ async function writeSessionIngestionState(
   state: SessionIngestionState,
 ): Promise<void> {
   const statePath = resolveSessionIngestionStatePath(workspaceDir);
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
-  const tmpPath = `${statePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tmpPath, `${JSON.stringify(state, null, 2)}\n`, "utf-8");
-  await fs.rename(tmpPath, statePath);
+  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, statePath), state, {
+    trailingNewline: true,
+  });
 }
 
 function trimTrackedSessionScopes(
@@ -714,7 +713,11 @@ async function appendSessionCorpusLines(params: {
         ? normalizedExisting.slice(0, -1).split("\n").length
         : normalizedExisting.split("\n").length;
   const payload = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
-  await fs.appendFile(absolutePath, payload, "utf-8");
+  await appendRegularFile({
+    filePath: absolutePath,
+    content: payload,
+    rejectSymlinkParents: true,
+  });
   return params.lines.map((entry, index) => {
     const lineNumber = existingLineCount + index + 1;
     return {

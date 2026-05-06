@@ -3945,6 +3945,23 @@ describe("google-meet plugin", () => {
       realtimeTranscriptLines: 2,
       lastRealtimeTranscriptRole: "assistant",
     });
+    const talkEventTypes = handle.getHealth().recentTalkEvents?.map((event) => event.type) ?? [];
+    expect(talkEventTypes).toEqual([
+      "session.started",
+      "session.ready",
+      "turn.started",
+      "input.audio.delta",
+      "input.audio.committed",
+      "transcript.done",
+      "output.text.done",
+      "output.audio.started",
+      "output.audio.delta",
+      "output.audio.done",
+      "turn.ended",
+    ]);
+    expect(talkEventTypes.indexOf("output.text.done")).toBeLessThan(
+      talkEventTypes.indexOf("output.audio.started"),
+    );
     await handle.stop();
   });
 
@@ -4167,6 +4184,21 @@ describe("google-meet plugin", () => {
         undefined,
       );
     });
+    expect(handle.getHealth().recentTalkEvents?.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "session.started",
+        "session.ready",
+        "input.audio.delta",
+        "output.audio.delta",
+        "output.audio.done",
+        "transcript.done",
+        "output.text.done",
+        "tool.call",
+        "tool.progress",
+        "tool.result",
+        "turn.ended",
+      ]),
+    );
     expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
         messageProvider: "google-meet",
@@ -4643,6 +4675,24 @@ describe("google-meet plugin", () => {
       lastRealtimeEventType: "server:response.done",
       lastRealtimeEventDetail: "status=completed",
       clearCount: 1,
+    });
+    const talkEvents = handle.getHealth().recentTalkEvents ?? [];
+    expect(talkEvents.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "session.started",
+        "session.ready",
+        "input.audio.delta",
+        "output.audio.delta",
+        "output.audio.done",
+        "output.text.done",
+        "tool.call",
+        "tool.progress",
+        "tool.result",
+        "turn.ended",
+      ]),
+    );
+    expect(talkEvents[0]).toMatchObject({
+      sessionId: "google-meet:meet-1:bridge-1:node-realtime",
     });
 
     await handle.stop();

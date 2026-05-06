@@ -2330,6 +2330,193 @@ describe("update-cli", () => {
     );
   });
 
+  it("repairs legacy config before persisting a requested update channel", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfig = {
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+        telegram: {
+          streaming: "block",
+        },
+      },
+    } as OpenClawConfig;
+    const migratedConfig = {
+      channels: {
+        slack: {
+          streaming: {
+            mode: "partial",
+            nativeTransport: false,
+          },
+        },
+        telegram: {
+          streaming: {
+            mode: "block",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot)
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: legacyConfig,
+        resolved: legacyConfig,
+        sourceConfig: legacyConfig,
+        config: legacyConfig,
+        runtimeConfig: legacyConfig,
+        valid: false,
+        hash: "legacy-hash",
+        issues: [
+          {
+            path: "channels.slack.streaming",
+            message: "Invalid input: expected object, received string",
+          },
+        ],
+        legacyIssues: [
+          {
+            path: "channels.slack",
+            message: "legacy slack streaming keys",
+          },
+          {
+            path: "channels.telegram",
+            message: "legacy telegram streaming keys",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...baseSnapshot,
+        parsed: migratedConfig,
+        resolved: migratedConfig,
+        sourceConfig: migratedConfig,
+        config: migratedConfig,
+        runtimeConfig: migratedConfig,
+        valid: true,
+        hash: "migrated-hash",
+      });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(2);
+    expect(replaceConfigFile).toHaveBeenNthCalledWith(1, {
+      nextConfig: expect.objectContaining({
+        channels: expect.objectContaining({
+          slack: expect.objectContaining({
+            streaming: expect.objectContaining({
+              mode: "partial",
+              nativeTransport: false,
+            }),
+          }),
+          telegram: expect.objectContaining({
+            streaming: expect.objectContaining({
+              mode: "block",
+            }),
+          }),
+        }),
+      }),
+      baseHash: "legacy-hash",
+      writeOptions: {
+        allowConfigSizeDrop: true,
+        skipOutputLogs: false,
+      },
+    });
+    expect(replaceConfigFile).toHaveBeenNthCalledWith(2, {
+      nextConfig: {
+        ...migratedConfig,
+        update: {
+          channel: "beta",
+        },
+      },
+      baseHash: "migrated-hash",
+    });
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  });
+
+  it("does not auto-repair legacy config when authored includes are present", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfigWithInclude = {
+      $include: "./channels.json5",
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+      },
+    } as unknown as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      parsed: legacyConfigWithInclude,
+      resolved: legacyConfigWithInclude,
+      sourceConfig: legacyConfigWithInclude,
+      config: legacyConfigWithInclude,
+      runtimeConfig: legacyConfigWithInclude,
+      valid: false,
+      hash: "legacy-include-hash",
+      issues: [
+        {
+          path: "channels.slack.streaming",
+          message: "Invalid input: expected object, received string",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "channels.slack",
+          message: "legacy slack streaming keys",
+        },
+      ],
+    });
+
+    await updateCommand({ channel: "beta", yes: true });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("does not repair legacy config during a dry run", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    const legacyConfig = {
+      channels: {
+        slack: {
+          streaming: "partial",
+          nativeStreaming: false,
+        },
+      },
+    } as OpenClawConfig;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce({
+      ...baseSnapshot,
+      parsed: legacyConfig,
+      resolved: legacyConfig,
+      sourceConfig: legacyConfig,
+      config: legacyConfig,
+      runtimeConfig: legacyConfig,
+      valid: false,
+      hash: "legacy-hash",
+      issues: [
+        {
+          path: "channels.slack.streaming",
+          message: "Invalid input: expected object, received string",
+        },
+      ],
+      legacyIssues: [
+        {
+          path: "channels.slack",
+          message: "legacy slack streaming keys",
+        },
+      ],
+    });
+
+    await updateCommand({ dryRun: true, channel: "beta", yes: true });
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("does not persist the requested channel when the package update fails", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);

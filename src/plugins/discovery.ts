@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -415,7 +415,7 @@ function readPackageManifest(
   rootRealPath?: string,
 ): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: dir,
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),

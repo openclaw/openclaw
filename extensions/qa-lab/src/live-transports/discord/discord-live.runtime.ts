@@ -215,10 +215,14 @@ type DiscordStatusReactionTimeline = {
 
 type DiscordThreadReplyAttachmentEvidence = {
   attachmentFilenames: string[];
+  channelId?: string;
+  discordWebUrl?: string;
   expectedAttachmentFilename: string;
+  guildId?: string;
   htmlPath?: string;
   messageContent?: string;
   messageId?: string;
+  parentMessageId?: string;
   scenarioId: DiscordQaScenarioId;
   scenarioTitle: string;
   screenshotPath?: string;
@@ -229,6 +233,8 @@ type DiscordThreadReplyAttachmentEvidence = {
 };
 
 const DISCORD_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_CONTENT";
+const DISCORD_QA_CAPTURE_UI_METADATA_ENV = "OPENCLAW_QA_DISCORD_CAPTURE_UI_METADATA";
+const DISCORD_QA_KEEP_THREADS_ENV = "OPENCLAW_QA_DISCORD_KEEP_THREADS";
 const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 const DISCORD_QA_ENV_KEYS = [
   "OPENCLAW_QA_DISCORD_GUILD_ID",
@@ -772,6 +778,9 @@ async function writeDiscordThreadReplyAttachmentEvidence(params: {
   outputDir: string;
 }) {
   const htmlPath = path.join(params.outputDir, `${params.evidence.scenarioId}-attachment.html`);
+  const uiPath = params.evidence.discordWebUrl
+    ? path.join(params.outputDir, `${params.evidence.scenarioId}-ui.json`)
+    : undefined;
   const screenshotPath = path.join(
     params.outputDir,
     `${params.evidence.scenarioId}-attachment.png`,
@@ -785,8 +794,33 @@ async function writeDiscordThreadReplyAttachmentEvidence(params: {
     threadName: params.evidence.threadName,
   });
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
+  if (uiPath) {
+    await fs.writeFile(
+      uiPath,
+      `${JSON.stringify(
+        {
+          attachmentFilenames: params.evidence.attachmentFilenames,
+          channelId: params.evidence.channelId,
+          discordWebUrl: params.evidence.discordWebUrl,
+          expectedAttachmentFilename: params.evidence.expectedAttachmentFilename,
+          guildId: params.evidence.guildId,
+          messageContent: params.evidence.messageContent,
+          messageId: params.evidence.messageId,
+          parentMessageId: params.evidence.parentMessageId,
+          scenarioId: params.evidence.scenarioId,
+          scenarioTitle: params.evidence.scenarioTitle,
+          status: params.evidence.status,
+          threadId: params.evidence.threadId,
+          threadName: params.evidence.threadName,
+        },
+        null,
+        2,
+      )}\n`,
+      { encoding: "utf8", mode: 0o600 },
+    );
+  }
   const screenshot = await writeHtmlScreenshot({ htmlPath, screenshotPath });
-  return { htmlPath, ...screenshot };
+  return { htmlPath, ...(uiPath ? { uiPath } : {}), ...screenshot };
 }
 
 async function observeStatusReactionTimeline(params: {
@@ -845,6 +879,16 @@ function compareDiscordSnowflakes(a: string, b: string) {
   const left = BigInt(a);
   const right = BigInt(b);
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function buildDiscordWebMessageUrl(params: {
+  guildId: string;
+  messageId?: string;
+  threadId: string;
+}) {
+  return `https://discord.com/channels/${params.guildId}/${params.threadId}${
+    params.messageId ? `/${params.messageId}` : ""
+  }`;
 }
 
 function normalizeDiscordObservedMessage(message: DiscordMessage): DiscordObservedMessage | null {
@@ -944,6 +988,8 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
   sutAccountId: string;
   sutBotId: string;
 }) {
+  const captureUiMetadata = isTruthyOptIn(process.env[DISCORD_QA_CAPTURE_UI_METADATA_ENV]);
+  const keepThread = isTruthyOptIn(process.env[DISCORD_QA_KEEP_THREADS_ENV]);
   const threadName = `mantis-thread-filepath-${randomUUID().slice(0, 8)}`;
   const parent = await sendChannelMessage(
     params.runtimeEnv.driverBotToken,
@@ -1003,8 +1049,21 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
     const status = attachmentFilenames.includes(params.scenarioRun.expectedAttachmentFilename)
       ? "pass"
       : "fail";
+    const discordWebUrl = buildDiscordWebMessageUrl({
+      guildId: params.runtimeEnv.guildId,
+      messageId: reply?.id,
+      threadId: thread.id,
+    });
     const evidence: DiscordThreadReplyAttachmentEvidence = {
       attachmentFilenames,
+      ...(captureUiMetadata
+        ? {
+            channelId: params.runtimeEnv.channelId,
+            discordWebUrl,
+            guildId: params.runtimeEnv.guildId,
+            parentMessageId: parent.id,
+          }
+        : {}),
       expectedAttachmentFilename: params.scenarioRun.expectedAttachmentFilename,
       messageContent: reply?.content,
       messageId: reply?.id,
@@ -1032,13 +1091,16 @@ async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
         attachmentSource: attachmentPath,
         html: artifactEvidence.htmlPath,
         ...(artifactEvidence.screenshotPath ? { screenshot: artifactEvidence.screenshotPath } : {}),
+        ...(artifactEvidence.uiPath ? { ui: artifactEvidence.uiPath } : {}),
       },
     } satisfies DiscordQaScenarioResult;
   } finally {
-    await archiveDiscordThread({
-      token: params.runtimeEnv.driverBotToken,
-      threadId: thread.id,
-    }).catch(() => {});
+    if (!keepThread) {
+      await archiveDiscordThread({
+        token: params.runtimeEnv.driverBotToken,
+        threadId: thread.id,
+      }).catch(() => {});
+    }
   }
 }
 
@@ -1630,6 +1692,7 @@ export const __testing = {
   assertDiscordScenarioReply,
   assertDiscordApplicationCommandsRegistered,
   buildDiscordQaConfig,
+  buildDiscordWebMessageUrl,
   buildObservedMessagesArtifact,
   findScenario,
   getCurrentDiscordUser,
