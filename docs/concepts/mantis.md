@@ -89,6 +89,23 @@ directory, installs dependencies, builds each ref, runs the scenario with
 and `mantis-report.md`. For the first Discord scenario, a successful verification
 means baseline status is `fail` and candidate status is `pass`.
 
+The second Discord before/after probe targets thread attachments:
+
+```bash
+pnpm openclaw qa mantis run \
+  --transport discord \
+  --scenario discord-thread-reply-filepath-attachment \
+  --baseline <bug-ref> \
+  --candidate <fix-ref> \
+  --output-dir .artifacts/qa-e2e/mantis/local-discord-thread-attachment
+```
+
+That scenario posts a parent message with the driver bot, creates a real Discord
+thread, calls OpenClaw's `message.thread-reply` action with a repo-local
+`filePath`, then polls the thread for the SUT reply and attachment filename. The
+baseline screenshot shows the reply with no attachment; the candidate screenshot
+shows the expected `mantis-thread-report.md` attachment.
+
 The first VM/browser primitive is the desktop smoke:
 
 ```bash
