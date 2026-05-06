@@ -24,7 +24,7 @@
     "install": {
       "npmSpec": "@openclaw/codex",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.1-beta.1"
+      "minHostVersion": ">=2026.5.1"
     },
     "compat": {
       "pluginApi": ">=2026.5.6"

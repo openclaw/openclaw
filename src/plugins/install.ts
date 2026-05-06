@@ -61,6 +61,10 @@ export { resolvePluginInstallDir } from "./install-paths.js";
 
 const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 
+export function clearPluginInstallRuntimeCache() {
+  pluginInstallRuntimePromise = undefined;
+}
+
 async function loadPluginInstallRuntime() {
   return await pluginInstallRuntimeLoader.load();
 }
