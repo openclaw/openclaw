@@ -689,4 +689,122 @@ describe("handleInlineActions", () => {
     );
     expect(toolExecute).toHaveBeenCalled();
   });
+
+  it("does not execute inline tool dispatch targets denied by tool policy", async () => {
+    const typing = createTypingController();
+    const toolExecute = vi.fn(async () => ({ content: "sent" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "message",
+        execute: toolExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/send_status hello",
+      CommandBody: "/send_status hello",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "send_status",
+        skillName: "send-status",
+        description: "Send a status update",
+        dispatch: {
+          kind: "tool",
+          toolName: "message",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/send-status.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/send_status hello",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/send_status hello",
+          commandBodyNormalized: "/send_status hello",
+        },
+        overrides: {
+          cfg: { commands: { text: true }, tools: { deny: ["message"] } },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool not available: message" },
+    });
+    expect(toolExecute).not.toHaveBeenCalled();
+  });
+
+  it("does not execute inline tool dispatch targets outside tool allowlists", async () => {
+    const typing = createTypingController();
+    const messageExecute = vi.fn(async () => ({ content: "sent" }));
+    const sessionsExecute = vi.fn(async () => ({ content: "listed" }));
+    createOpenClawToolsMock.mockReturnValue([
+      {
+        name: "message",
+        execute: messageExecute,
+      },
+      {
+        name: "sessions_list",
+        execute: sessionsExecute,
+      },
+    ]);
+
+    const ctx = buildTestCtx({
+      Body: "/send_status hello",
+      CommandBody: "/send_status hello",
+    });
+    const skillCommands: SkillCommandSpec[] = [
+      {
+        name: "send_status",
+        skillName: "send-status",
+        description: "Send a status update",
+        dispatch: {
+          kind: "tool",
+          toolName: "message",
+          argMode: "raw",
+        },
+        sourceFilePath: "/tmp/plugin/commands/send-status.md",
+      },
+    ];
+
+    const result = await handleInlineActions(
+      createHandleInlineActionsInput({
+        ctx,
+        typing,
+        cleanedBody: "/send_status hello",
+        command: {
+          isAuthorizedSender: true,
+          senderId: "sender-1",
+          senderIsOwner: true,
+          abortKey: "sender-1",
+          rawBodyNormalized: "/send_status hello",
+          commandBodyNormalized: "/send_status hello",
+        },
+        overrides: {
+          cfg: { commands: { text: true }, tools: { allow: ["sessions_list"] } },
+          allowTextCommands: true,
+          skillCommands,
+        },
+      }),
+    );
+
+    expect(result).toEqual({
+      kind: "reply",
+      reply: { text: "❌ Tool not available: message" },
+    });
+    expect(messageExecute).not.toHaveBeenCalled();
+    expect(sessionsExecute).not.toHaveBeenCalled();
+  });
 });
