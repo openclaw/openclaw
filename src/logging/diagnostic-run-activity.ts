@@ -294,6 +294,28 @@ export function getDiagnosticSessionActivitySnapshot(
   };
 }
 
+/** Test helper: synchronously registers an active tool call for a session (avoids async event dispatch). */
+export function markDiagnosticToolStartedForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  toolName: string;
+  toolCallId?: string;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
+  if (!activity) {
+    return;
+  }
+  const now = Date.now();
+  const key = `${params.sessionId ?? params.sessionKey ?? "unknown"}:${params.toolCallId ?? params.toolName}`;
+  activity.activeTools.set(key, {
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    startedAt: now,
+    lastProgressAt: now,
+  });
+  touchSessionActivity(activity, `tool:${params.toolName}:started`, now);
+}
+
 export function markDiagnosticRunProgressForTest(params: {
   sessionId?: string;
   sessionKey?: string;

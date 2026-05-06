@@ -13,6 +13,7 @@ import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
@@ -33,6 +34,7 @@ import {
   diagnosticLogger,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
+  resolveSubagentWatchdogThresholdMs,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
@@ -477,6 +479,57 @@ describe("stuck session diagnostics threshold", () => {
       allowActiveAbort: true,
       stateGeneration: expect.any(Number),
     });
+  });
+
+  it("auto-aborts blocked_tool_call sessions exactly once with the subagent watchdog", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: { enabled: true, stuckSessionWarnMs: 10_000 },
+          gateway: { subagentWatchdog: { abortAfterSeconds: 10 } },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      // Use synchronous helper — avoids async event dispatch under fake timers
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-1",
+      });
+
+      // First tick: stalled alarm fires AND watchdog aborts (ageMs=30s > threshold=10s)
+      vi.advanceTimersByTime(30_000);
+      expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" })).toMatchObject({
+        state: "idle",
+        queueDepth: 0,
+      });
+
+      // Second tick: session is now idle — no additional watchdog event
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.filter((e) => e.type === "session.stalled")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "session.watchdog_aborted")).toHaveLength(1);
+    expect(events.find((e) => e.type === "session.watchdog_aborted")).toMatchObject({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: 30_000,
+      reason: "blocked_tool_call",
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("reason=watchdog_aborted_blocked_tool_call"),
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("marks diagnostic session state idle only after a mutating recovery outcome", async () => {
@@ -1090,6 +1143,17 @@ describe("stuck session diagnostics threshold", () => {
       ),
     ).toBe(48 * 60 * 60_000);
     expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(10 * 60_000);
+    expect(resolveSubagentWatchdogThresholdMs()).toBe(600_000);
+    expect(
+      resolveSubagentWatchdogThresholdMs({
+        gateway: { subagentWatchdog: { abortAfterSeconds: 10 } },
+      }),
+    ).toBe(10_000);
+    expect(
+      resolveSubagentWatchdogThresholdMs({
+        gateway: { subagentWatchdog: { abortAfterSeconds: 0 } },
+      }),
+    ).toBe(0);
   });
 });
 

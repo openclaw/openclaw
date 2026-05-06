@@ -457,6 +457,10 @@ export type GatewayConfig = {
   reload?: GatewayReloadConfig;
   tls?: GatewayTlsConfig;
   http?: GatewayHttpConfig;
+  subagentWatchdog?: {
+    /** Auto-abort sessions stuck in blocked_tool_call after this many seconds. Default: 600. Set to 0 to disable. */
+    abortAfterSeconds?: number;
+  };
   push?: GatewayPushConfig;
   nodes?: GatewayNodesConfig;
   /**

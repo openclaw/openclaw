@@ -264,6 +264,10 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
         record.toolName = event.activeToolName;
       }
       break;
+    case "session.watchdog_aborted":
+      assignReasonCode(record, event.reason);
+      record.ageMs = event.ageMs;
+      break;
     case "session.recovery.requested":
       record.outcome = event.state;
       record.action = event.allowActiveAbort ? "abort" : "recover";

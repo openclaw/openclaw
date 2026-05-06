@@ -175,6 +175,14 @@ export type DiagnosticSessionStalledEvent = DiagnosticSessionAttentionBaseEvent 
   classification: "blocked_tool_call" | "stalled_agent_run";
 };
 
+export type DiagnosticSessionWatchdogAbortedEvent = DiagnosticBaseEvent & {
+  type: "session.watchdog_aborted";
+  sessionKey?: string;
+  sessionId?: string;
+  ageMs: number;
+  reason: "blocked_tool_call";
+};
+
 export type DiagnosticSessionStuckEvent = DiagnosticSessionAttentionBaseEvent & {
   type: "session.stuck";
   classification: "stale_session_state";
@@ -569,6 +577,7 @@ export type DiagnosticEventPayload =
   | DiagnosticSessionStateEvent
   | DiagnosticSessionLongRunningEvent
   | DiagnosticSessionStalledEvent
+  | DiagnosticSessionWatchdogAbortedEvent
   | DiagnosticSessionStuckEvent
   | DiagnosticSessionRecoveryRequestedEvent
   | DiagnosticSessionRecoveryCompletedEvent

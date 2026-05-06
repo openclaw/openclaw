@@ -75,6 +75,7 @@ const MIN_STUCK_SESSION_WARN_MS = 1_000;
 const MAX_STUCK_SESSION_WARN_MS = 24 * 60 * 60 * 1000;
 const MIN_STALLED_EMBEDDED_RUN_ABORT_MS = 10 * 60_000;
 const STALLED_EMBEDDED_RUN_ABORT_WARN_MULTIPLIER = 5;
+const DEFAULT_SUBAGENT_WATCHDOG_ABORT_AFTER_SECONDS = 600;
 const RECENT_DIAGNOSTIC_ACTIVITY_MS = 120_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
@@ -443,6 +444,17 @@ export function resolveStuckSessionAbortMs(
     return resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs);
   }
   return Math.max(stuckSessionWarnMs, rounded);
+}
+
+export function resolveSubagentWatchdogThresholdMs(config?: OpenClawConfig): number {
+  const raw = config?.gateway?.subagentWatchdog?.abortAfterSeconds;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_SUBAGENT_WATCHDOG_ABORT_AFTER_SECONDS * 1000;
+  }
+  if (raw <= 0) {
+    return 0;
+  }
+  return Math.floor(raw * 1000);
 }
 
 function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
@@ -925,6 +937,7 @@ export function logActiveRuns() {
 }
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
+const watchdogAbortedSessions = new Set<string>();
 
 export function startDiagnosticHeartbeat(
   config?: OpenClawConfig,
@@ -950,6 +963,7 @@ export function startDiagnosticHeartbeat(
     }
     const stuckSessionWarnMs = resolveStuckSessionWarnMs(heartbeatConfig);
     const stuckSessionAbortMs = resolveStuckSessionAbortMs(heartbeatConfig, stuckSessionWarnMs);
+    const watchdogThresholdMs = resolveSubagentWatchdogThresholdMs(heartbeatConfig);
     const now = Date.now();
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot(now);
@@ -998,7 +1012,7 @@ export function startDiagnosticHeartbeat(
         diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
       });
 
-    for (const [, state] of diagnosticSessionStates) {
+    for (const [sessionStateKey, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
       if (state.state === "processing" && ageMs > stuckSessionWarnMs) {
         const classification = logSessionAttention({
@@ -1042,6 +1056,32 @@ export function startDiagnosticHeartbeat(
             },
           });
         }
+        const watchdogSessionKey = state.sessionKey ?? state.sessionId ?? sessionStateKey;
+        if (
+          watchdogThresholdMs > 0 &&
+          classification?.eventType === "session.stalled" &&
+          classification.classification === "blocked_tool_call" &&
+          ageMs >= watchdogThresholdMs &&
+          !watchdogAbortedSessions.has(watchdogSessionKey)
+        ) {
+          watchdogAbortedSessions.add(watchdogSessionKey);
+          state.state = "idle";
+          state.queueDepth = 0;
+          diag.warn(
+            `subagent watchdog: auto-aborting blocked_tool_call session sessionId=${
+              state.sessionId ?? "unknown"
+            } sessionKey=${state.sessionKey ?? "unknown"} age=${Math.round(
+              ageMs / 1000,
+            )}s reason=watchdog_aborted_blocked_tool_call`,
+          );
+          emitDiagnosticEvent({
+            type: "session.watchdog_aborted",
+            sessionId: state.sessionId,
+            sessionKey: state.sessionKey,
+            ageMs,
+            reason: "blocked_tool_call",
+          });
+        }
       }
     }
   }, 30_000);
@@ -1063,6 +1103,7 @@ export function getDiagnosticSessionStateCountForTest(): number {
 }
 
 export function resetDiagnosticStateForTest(): void {
+  watchdogAbortedSessions.clear();
   resetDiagnosticSessionRecoveryCoordinatorForTest();
   resetDiagnosticSessionStateForTest();
   resetDiagnosticActivityForTest();
