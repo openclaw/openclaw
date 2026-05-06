@@ -64,6 +64,18 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  assertConfigWriteAllowedInCurrentMode: () => {
+    if (process.env.OPENCLAW_NIX_MODE === "1") {
+      throw new Error(
+        [
+          "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
+          "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
+          "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+          "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
+        ].join("\n"),
+      );
+    }
+  },
   ConfigMutationConflictError: class ConfigMutationConflictError extends Error {
     readonly currentHash: string | null;
 
@@ -595,6 +607,16 @@ describe("update-cli", () => {
         timeout: 30_000,
       }),
     );
+  });
+
+  it("refuses mutating updates in Nix mode before update side effects", async () => {
+    await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
+      await expect(updateCommand({ yes: true })).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+    });
+
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
   it("logs friendly hint with manual refresh command when completion cache write times out", async () => {

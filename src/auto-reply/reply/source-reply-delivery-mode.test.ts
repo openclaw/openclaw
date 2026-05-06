@@ -87,15 +87,35 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("automatic");
   });
 
-  it("treats native and text commands as explicit replies in groups", () => {
-    for (const CommandSource of ["native", "text"] as const) {
-      expect(
-        resolveSourceReplyDeliveryMode({
-          cfg: emptyConfig,
-          ctx: { ChatType: "group", CommandSource },
-        }),
-      ).toBe("automatic");
-    }
+  it("treats native and authorized text commands as explicit replies in groups", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", CommandSource: "native" },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "group",
+          CommandSource: "text",
+          CommandAuthorized: true,
+          CommandBody: "/status",
+        },
+      }),
+    ).toBe("automatic");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "group",
+          CommandSource: "text",
+          CommandAuthorized: false,
+          CommandBody: "/status",
+        },
+      }),
+    ).toBe("message_tool_only");
   });
 
   it("falls back to automatic when message tool is unavailable", () => {
@@ -179,12 +199,20 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     });
   });
 
-  it("keeps native and text command replies visible in groups", () => {
-    for (const CommandSource of ["native", "text"] as const) {
+  it("keeps native and authorized text command replies visible in groups", () => {
+    for (const ctx of [
+      { ChatType: "group", CommandSource: "native" },
+      {
+        ChatType: "group",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        CommandBody: "/status",
+      },
+    ] as const) {
       expect(
         resolveSourceReplyVisibilityPolicy({
           cfg: emptyConfig,
-          ctx: { ChatType: "group", CommandSource },
+          ctx,
           sendPolicy: "allow",
         }),
       ).toMatchObject({

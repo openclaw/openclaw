@@ -39,6 +39,16 @@ export type ToolOutcomeObservation = {
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
+export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  if (err === signal.reason) {
+    return true;
+  }
+  return err instanceof Error && err.name === "AbortError";
+}
+
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -47,6 +57,7 @@ export type HookContext = {
   sessionId?: string;
   runId?: string;
   trace?: DiagnosticTraceContext;
+  channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
 };
@@ -114,19 +125,6 @@ function mergeParamsWithApprovalOverrides(
   return originalParams;
 }
 
-function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (err === signal.reason) {
-    return true;
-  }
-  if (err instanceof Error && err.name === "AbortError") {
-    return true;
-  }
-  return false;
-}
-
 function unwrapErrorCause(err: unknown): unknown {
   try {
     if (!(err instanceof Error)) {
@@ -180,6 +178,7 @@ async function requestPluginToolApproval(params: {
         title: approval.title,
         description: approval.description,
         severity: approval.severity,
+        allowedDecisions: approval.allowedDecisions,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
@@ -504,6 +503,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
+      ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
     const trustedPolicyResult = await runTrustedToolPolicies(
       {

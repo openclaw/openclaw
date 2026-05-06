@@ -68,6 +68,13 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexStatusCommandText(text)).toBe(true);
   });
 
+  it("accepts natural running-session status prose with the session id", () => {
+    const text =
+      "Session is running on `codex/gpt-5.5` with low thinking. Context is about 9% used, no compactions, and the current session is `agent:dev:live-codex-harness`.";
+
+    expect(isExpectedCodexStatusCommandText(text)).toBe(true);
+  });
+
   it("accepts the current status card emitted by OpenAI Codex", () => {
     const text = [
       "Current session status:",
@@ -277,6 +284,7 @@ describe("gateway codex harness live helpers", () => {
       ].join("\n"),
       ["Available model overrides here:", "", "- `gpt-5.4`"].join("\n"),
       ["Available model overrides:", "", "- `gpt-5.4`"].join("\n"),
+      ["Available model overrides listed for this session:", "", "- `gpt-5.5`"].join("\n"),
       ["Available models:", "", "- `gpt-5.4`", "- `gpt-5.4-mini`"].join("\n"),
       [
         "Available model overrides exposed in this session are:",
