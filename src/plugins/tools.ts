@@ -13,6 +13,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginMetadataManifestView } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -591,6 +592,26 @@ function createCachedDescriptorPluginTool(params: {
   return tool;
 }
 
+function registryHasPluginHooks(registry: PluginRegistry, pluginId: string): boolean {
+  return (
+    (registry.hooks ?? []).some((entry) => entry.pluginId === pluginId) ||
+    (registry.typedHooks ?? []).some((entry) => entry.pluginId === pluginId)
+  );
+}
+
+function liveRegistryAlreadyOwnsPluginToolsAndHooks(params: { pluginId: string }): boolean {
+  for (const registry of [getActivePluginChannelRegistry(), getActivePluginRegistry()]) {
+    if (
+      registry &&
+      registryHasScopedPluginTools(registry, [params.pluginId]) &&
+      registryHasPluginHooks(registry, params.pluginId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveCachedPluginTools(params: {
   snapshot: PluginMetadataManifestView;
   config: PluginLoadOptions["config"];
@@ -652,6 +673,13 @@ function resolveCachedPluginTools(params: {
       continue;
     }
     if (params.existingNormalized.has(normalizeToolName(plugin.id))) {
+      continue;
+    }
+    if (
+      liveRegistryAlreadyOwnsPluginToolsAndHooks({
+        pluginId: plugin.id,
+      })
+    ) {
       continue;
     }
     const cached = readCachedPluginToolDescriptors(
