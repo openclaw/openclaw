@@ -96,7 +96,7 @@ const NARRATIVE_SYSTEM_PROMPT = [
 // restart. 60 s gives realistic latency headroom while still capping the
 // worst case at one minute, well below the multi-minute stall the original
 // comment warned against.
-const NARRATIVE_TIMEOUT_MS = 60_000;
+export const DEFAULT_NARRATIVE_TIMEOUT_MS = 60_000;
 const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
 const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
 const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
@@ -882,9 +882,16 @@ export async function generateAndAppendDreamNarrative(params: {
   nowMs?: number;
   timezone?: string;
   model?: string;
+  timeoutMs?: number;
   logger: Logger;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const timeoutMs =
+    typeof params.timeoutMs === "number" &&
+    Number.isFinite(params.timeoutMs) &&
+    params.timeoutMs > 0
+      ? Math.floor(params.timeoutMs)
+      : DEFAULT_NARRATIVE_TIMEOUT_MS;
 
   if (params.data.snippets.length === 0 && !params.data.promotions?.length) {
     return;
@@ -925,7 +932,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
         const result = await params.subagent.waitForRun({
           runId,
-          timeoutMs: NARRATIVE_TIMEOUT_MS,
+          timeoutMs,
         });
 
         if (result.status === "ok") {

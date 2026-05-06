@@ -115,10 +115,11 @@ The sweep includes the primary runtime workspace and any configured agent worksp
 
 Default cadence behavior:
 
-| Setting              | Default       |
-| -------------------- | ------------- |
-| `dreaming.frequency` | `0 3 * * *`   |
-| `dreaming.model`     | default model |
+| Setting                                 | Default       |
+| --------------------------------------- | ------------- |
+| `dreaming.frequency`                    | `0 3 * * *`   |
+| `dreaming.model`                        | default model |
+| `dreaming.execution.defaults.timeoutMs` | `60000` ms    |
 
 ## Quick start
 
@@ -216,6 +217,9 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 </ParamField>
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
+</ParamField>
+<ParamField path="execution.defaults.timeoutMs" type="integer" default="60000">
+  Optional Dream Diary narrative subagent wait timeout, in milliseconds. Phase-level `phases.<phase>.execution.timeoutMs` overrides this for `light`, `rem`, or `deep`.
 </ParamField>
 
 <Warning>

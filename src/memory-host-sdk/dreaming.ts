@@ -299,13 +299,14 @@ function resolveExecutionConfig(
   fallback: MemoryDreamingExecutionConfig,
 ): MemoryDreamingExecutionConfig {
   const record = asNullableRecord(value);
-  const maxOutputTokens = normalizeOptionalPositiveInt(record?.maxOutputTokens);
-  const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs);
+  const maxOutputTokens =
+    normalizeOptionalPositiveInt(record?.maxOutputTokens) ?? fallback.maxOutputTokens;
+  const timeoutMs = normalizeOptionalPositiveInt(record?.timeoutMs) ?? fallback.timeoutMs;
   const temperatureRaw = record?.temperature;
   const temperature =
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
       ? Math.min(2, temperatureRaw)
-      : undefined;
+      : fallback.temperature;
   const model = normalizeTrimmedString(record?.model) ?? fallback.model;
 
   return {
