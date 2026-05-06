@@ -443,6 +443,34 @@ describe("mattermostPlugin", () => {
         }),
       );
     });
+
+    it("forwards mediaLocalRoots on send action with media", async () => {
+      const cfg = createMattermostTestConfig();
+      const mediaLocalRoots = ["/tmp/workspace-agent123"];
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "check this file",
+            media: "/tmp/workspace-agent123/output.png",
+          },
+          cfg,
+          accountId: "default",
+          mediaLocalRoots,
+        }),
+      );
+
+      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
+        "channel:CHAN1",
+        "check this file",
+        expect.objectContaining({
+          mediaUrl: "/tmp/workspace-agent123/output.png",
+          mediaLocalRoots,
+        }),
+      );
+    });
   });
 
   describe("outbound", () => {
