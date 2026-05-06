@@ -1,6 +1,9 @@
 import type { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
-import { createGatewayEventLoopHealthMonitor } from "./event-loop-health.js";
+import {
+  classifyGatewayEventLoopHealthReasons,
+  createGatewayEventLoopHealthMonitor,
+} from "./event-loop-health.js";
 
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
 type DelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
@@ -71,6 +74,44 @@ function createMonitorHarness(params?: { cpuMsPerWallMs?: number; utilization?: 
   };
 }
 
+describe("classifyGatewayEventLoopHealthReasons", () => {
+  it("does not degrade on utilization or CPU from a sub-second sample", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 250,
+        delayP99Ms: 20,
+        delayMaxMs: 25,
+        utilization: 1,
+        cpuCoreRatio: 1,
+      }),
+    ).toEqual([]);
+  });
+
+  it("degrades on utilization and CPU after a sustained sample window", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 1_000,
+        delayP99Ms: 20,
+        delayMaxMs: 25,
+        utilization: 0.99,
+        cpuCoreRatio: 0.95,
+      }),
+    ).toEqual(["event_loop_utilization", "cpu"]);
+  });
+
+  it("still degrades on event-loop delay from a short sample", () => {
+    expect(
+      classifyGatewayEventLoopHealthReasons({
+        intervalMs: 250,
+        delayP99Ms: 20,
+        delayMaxMs: 1_500,
+        utilization: 0.1,
+        cpuCoreRatio: 0.1,
+      }),
+    ).toEqual(["event_loop_delay"]);
+  });
+});
+
 describe("createGatewayEventLoopHealthMonitor", () => {
   it("waits for a sustained sample window before reporting CPU-only saturation", () => {
     const harness = createMonitorHarness();
@@ -117,5 +158,26 @@ describe("createGatewayEventLoopHealthMonitor", () => {
       utilization: 0.2,
       cpuCoreRatio: 0.1,
     });
+  });
+
+  it("keeps rate baselines and the last snapshot until a full sample window is available", () => {
+    const harness = createMonitorHarness({ cpuMsPerWallMs: 0.1, utilization: 0.2 });
+    harness.setNow(1_000);
+    const first = harness.monitor.snapshot();
+
+    expect(first).toEqual(expect.objectContaining({ intervalMs: 1_000 }));
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
+    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
+
+    harness.setNow(1_250);
+    expect(harness.monitor.snapshot()).toBe(first);
+    expect(harness.cpuUsage).toHaveBeenCalledTimes(3);
+    expect(harness.eventLoopUtilization).toHaveBeenCalledTimes(3);
+
+    harness.setNow(2_000);
+    const second = harness.monitor.snapshot();
+
+    expect(second).toEqual(expect.objectContaining({ intervalMs: 1_000 }));
+    expect(second).not.toBe(first);
   });
 });
