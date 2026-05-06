@@ -13,7 +13,7 @@ agent (with a session switcher for other sessions).
 - **Remote mode**: forwards the Gateway control port over SSH and uses that
   tunnel as the data plane.
 
-## Launch & debugging
+## Launch and debugging
 
 - Manual: Lobster menu → “Open Chat”.
 - Auto‑open for testing:

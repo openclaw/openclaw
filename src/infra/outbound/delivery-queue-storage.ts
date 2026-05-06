@@ -1,16 +1,30 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import type { RenderedMessageBatchPlanItem } from "../../channels/message/types.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { ReplyToMode } from "../../config/types.js";
+import { replaceFileAtomic } from "../replace-file.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
+import type { OutboundIdentity } from "./identity.js";
 import type { OutboundMirror } from "./mirror.js";
 import type { OutboundSessionContext } from "./session-context.js";
 import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
+
+export type QueuedRenderedMessageBatchPlan = {
+  payloadCount: number;
+  textCount: number;
+  mediaCount: number;
+  voiceCount: number;
+  presentationCount: number;
+  interactiveCount: number;
+  channelDataCount: number;
+  items: readonly RenderedMessageBatchPlanItem[];
+};
 
 export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
@@ -22,10 +36,13 @@ export type QueuedDeliveryPayload = {
    * should produce the same result on replay.
    */
   payloads: ReplyPayload[];
+  /** Replayable projection summary captured when the durable send intent is created. */
+  renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   threadId?: string | number | null;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
   formatting?: OutboundDeliveryFormattingOptions;
+  identity?: OutboundIdentity;
   bestEffort?: boolean;
   gifPlayback?: boolean;
   forceDocument?: boolean;
@@ -43,6 +60,8 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  platformSendStartedAt?: number;
+  recoveryState?: "send_attempt_started" | "unknown_after_send";
 }
 
 export function resolveQueueDir(stateDir?: string): string {
@@ -83,12 +102,12 @@ async function unlinkBestEffort(filePath: string): Promise<void> {
 }
 
 async function writeQueueEntry(filePath: string, entry: QueuedDelivery): Promise<void> {
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
+  await replaceFileAtomic({
+    filePath,
+    content: JSON.stringify(entry, null, 2),
     mode: 0o600,
+    tempPrefix: ".delivery-queue",
   });
-  await fs.promises.rename(tmp, filePath);
 }
 
 async function readQueueEntry(filePath: string): Promise<QueuedDelivery> {
@@ -144,10 +163,12 @@ export async function enqueueDelivery(
     to: params.to,
     accountId: params.accountId,
     payloads: params.payloads,
+    renderedBatchPlan: params.renderedBatchPlan,
     threadId: params.threadId,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
     formatting: params.formatting,
+    identity: params.identity,
     bestEffort: params.bestEffort,
     gifPlayback: params.gifPlayback,
     forceDocument: params.forceDocument,
@@ -195,6 +216,28 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   entry.retryCount += 1;
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
+  await writeQueueEntry(filePath, entry);
+}
+
+export async function markDeliveryPlatformSendAttemptStarted(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
+  entry.recoveryState = "send_attempt_started";
+  await writeQueueEntry(filePath, entry);
+}
+
+export async function markDeliveryPlatformOutcomeUnknown(
+  id: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  const entry = await readQueueEntry(filePath);
+  entry.platformSendStartedAt = entry.platformSendStartedAt ?? Date.now();
+  entry.recoveryState = "unknown_after_send";
   await writeQueueEntry(filePath, entry);
 }
 

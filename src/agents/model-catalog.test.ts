@@ -92,8 +92,8 @@ describe("loadModelCatalog", () => {
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
-    vi.doMock("./agent-paths.js", () => ({
-      resolveOpenClawAgentDir: () => "/tmp/openclaw",
+    vi.doMock("./agent-scope.js", () => ({
+      resolveDefaultAgentDir: () => "/tmp/openclaw",
     }));
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
@@ -143,7 +143,7 @@ describe("loadModelCatalog", () => {
   afterAll(() => {
     vi.doUnmock("node:fs/promises");
     vi.doUnmock("./models-config.js");
-    vi.doUnmock("./agent-paths.js");
+    vi.doUnmock("./agent-scope.js");
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
     vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
     vi.doUnmock("../plugins/plugin-metadata-snapshot.js");
