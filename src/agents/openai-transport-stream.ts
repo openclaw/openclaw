@@ -491,6 +491,34 @@ async function processResponsesStream(
           partial: output,
         });
       }
+    } else if (type === "response.reasoning_text.done") {
+      const text = stringifyUnknown(event.text);
+      if (text) {
+        if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
+          // Standard path: provider sent output_item.added(reasoning) before this event.
+          // Finalize the active reasoning block with the complete text.
+          currentBlock.thinking = text;
+          stream.push({
+            type: "thinking_end",
+            contentIndex: blockIndex(),
+            content: text,
+            partial: output,
+          });
+          currentBlock = null;
+        } else if (!output.content.some((b) => b.type === "thinking")) {
+          // LM Studio path: provider skips output_item.added for reasoning and delivers
+          // the full thinking text in one shot via this event. Only insert when no
+          // thinking block exists yet to avoid duplicates, and only when no text blocks
+          // have been emitted yet to avoid retroactively shifting stream indexes.
+          if (!output.content.some((b) => b.type === "text")) {
+            const thinkingBlock: Record<string, unknown> = { type: "thinking", thinking: text };
+            output.content.unshift(thinkingBlock);
+            stream.push({ type: "thinking_start", contentIndex: 0, partial: output });
+            stream.push({ type: "thinking_delta", contentIndex: 0, delta: text, partial: output });
+            stream.push({ type: "thinking_end", contentIndex: 0, content: text, partial: output });
+          }
+        }
+      }
     } else if (type === "response.output_text.delta" || type === "response.refusal.delta") {
       if (currentItem?.type === "message" && currentBlock?.type === "text") {
         currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
@@ -2009,4 +2037,5 @@ export const __testing = {
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  processResponsesStream,
 };
