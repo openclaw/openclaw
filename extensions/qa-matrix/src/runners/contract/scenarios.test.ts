@@ -3333,27 +3333,34 @@ describe("matrix live qa scenarios", () => {
   it("waits for a real Matrix image attachment after image generation", async () => {
     const primeRoom = vi.fn().mockResolvedValue("driver-sync-start");
     const sendTextMessage = vi.fn().mockResolvedValue("$image-generate-trigger");
-    const waitForRoomEvent = vi.fn().mockResolvedValue({
-      event: {
-        kind: "message",
-        roomId: "!media:matrix-qa.test",
-        eventId: "$sut-image",
-        sender: "@sut:matrix-qa.test",
-        type: "m.room.message",
-        body: "Protocol note: generated the QA lighthouse image successfully.",
-        msgtype: "m.image",
-        attachment: {
-          kind: "image",
-          filename: "qa-lighthouse.png",
+    const waitForOptionalRoomEvent = vi
+      .fn()
+      .mockResolvedValueOnce({
+        matched: false,
+        since: "driver-sync-start",
+      })
+      .mockResolvedValueOnce({
+        event: {
+          kind: "message",
+          roomId: "!media:matrix-qa.test",
+          eventId: "$sut-image",
+          sender: "@sut:matrix-qa.test",
+          type: "m.room.message",
+          body: "Protocol note: generated the QA lighthouse image successfully.",
+          msgtype: "m.image",
+          attachment: {
+            kind: "image",
+            filename: "qa-lighthouse.png",
+          },
         },
-      },
-      since: "driver-sync-next",
-    });
+        matched: true,
+        since: "driver-sync-next",
+      });
 
     createMatrixQaClient.mockReturnValue({
       primeRoom,
       sendTextMessage,
-      waitForRoomEvent,
+      waitForOptionalRoomEvent,
     });
 
     const scenario = MATRIX_QA_SCENARIOS.find(
@@ -3407,7 +3414,7 @@ describe("matrix live qa scenarios", () => {
     });
 
     expect(sendTextMessage).toHaveBeenCalledWith({
-      body: expect.stringContaining("Image generation check: generate a QA lighthouse image"),
+      body: expect.stringContaining("/tool image_generate action=generate"),
       mentionUserIds: ["@sut:matrix-qa.test"],
       roomId: "!media:matrix-qa.test",
     });
