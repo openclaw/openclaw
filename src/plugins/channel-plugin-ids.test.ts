@@ -330,6 +330,14 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "external-legacy-hook",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "lossless-claw",
         kind: "context-engine",
         channels: [],
@@ -931,6 +939,29 @@ describe("resolveGatewayStartupPluginIds", () => {
         memorySlot: "none",
       }),
       expected: ["external-hook-capability"],
+    });
+  });
+
+  it("loads explicitly enabled legacy external hook plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        enabledPluginIds: ["external-legacy-hook"],
+        allowPluginIds: ["external-legacy-hook"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: ["external-legacy-hook"],
+    });
+  });
+
+  it("does not ambient-load legacy external hook plugins at startup", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        allowPluginIds: ["external-legacy-hook"],
+        noConfiguredChannels: true,
+        memorySlot: "none",
+      }),
+      expected: [],
     });
   });
 

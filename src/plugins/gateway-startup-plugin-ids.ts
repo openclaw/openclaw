@@ -427,9 +427,11 @@ function hasHookRuntimeStartupIntent(params: {
   if (params.manifest?.activation?.onCapabilities?.includes("hook")) {
     return true;
   }
-  return hasExplicitHookPolicyConfig(
-    params.activationSourcePlugins.entries[params.plugin.pluginId],
-  );
+  const entry = params.activationSourcePlugins.entries[params.plugin.pluginId];
+  if (params.plugin.origin !== "bundled" && entry?.enabled === true) {
+    return true;
+  }
+  return hasExplicitHookPolicyConfig(entry);
 }
 
 function canStartExplicitHookPlugin(params: {
