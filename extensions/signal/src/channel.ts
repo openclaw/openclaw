@@ -302,6 +302,7 @@ async function sendSignalOutboundChunked(params: {
   text: string;
   accountId?: string | null;
   replyToId?: string | null;
+  abortSignal?: AbortSignal;
   deps?: { [channelId: string]: unknown };
 }): Promise<{ channel: string; messageId: string }> {
   const limit = resolveTextChunkLimit(params.cfg, "signal", params.accountId ?? undefined, {
@@ -330,6 +331,7 @@ async function sendSignalOutboundChunked(params: {
     if (!chunk) {
       continue;
     }
+    params.abortSignal?.throwIfAborted();
     const result = await send(params.to, chunk.text, {
       cfg: params.cfg,
       maxBytes,
@@ -519,6 +521,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
               if (!mediaUrl) {
                 continue;
               }
+              ctx.abortSignal?.throwIfAborted();
               const result = await sendSignalOutbound({
                 cfg: ctx.cfg,
                 to: ctx.to,
@@ -541,6 +544,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             text,
             accountId: ctx.accountId,
             replyToId: ctx.replyToId,
+            abortSignal: ctx.abortSignal,
             deps: ctx.deps,
           });
         },
