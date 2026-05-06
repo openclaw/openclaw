@@ -101,12 +101,16 @@ function formatAccountLine(params: {
   return `- ${label}: ${bits.join(", ")}`;
 }
 
-function formatCatalogOnlyLine(entry: ChannelPluginCatalogEntry): string {
+function formatCatalogOnlyLine(params: {
+  entry: ChannelPluginCatalogEntry;
+  installed: boolean;
+}): string {
+  const { entry, installed } = params;
   const channelText = theme.accent(entry.meta.label ?? entry.id);
   const bits: string[] = [
-    formatInstalled(false),
+    formatInstalled(installed),
     formatConfigured(false),
-    theme.muted("not enabled"),
+    formatEnabled(false),
   ];
   return `- ${channelText}: ${bits.join(", ")}`;
 }
@@ -209,13 +213,19 @@ export async function channelsListCommand(
     });
   }
 
-  // --all also surfaces catalog entries whose plugin package is not yet
-  // installed. These have no in-memory plugin object, so we render a
-  // catalog-only line that advertises the channel as installable.
+  // --all also surfaces catalog entries that are not already represented
+  // by a plugin row above. Two shapes land here:
+  //   1. Catalog plugin package is not yet installed on disk — rendered as
+  //      `not installed, not configured, disabled` so the channel still
+  //      appears in the listing as installable.
+  //   2. Catalog plugin package IS installed but the user has no config
+  //      entry for the channel, AND the read-only loader did not surface
+  //      a plugin object for it (because it only activates based on
+  //      configured channels). These would otherwise silently disappear
+  //      from the listing — render them as `installed, not configured,
+  //      disabled` so operators can tell the plugin is ready to configure.
   const catalogOnlyLines: ChannelPluginCatalogEntry[] = showAll
-    ? catalogEntries
-        .filter((entry) => !renderedChannelIds.has(entry.id))
-        .filter((entry) => !installedByChannelId.get(entry.id))
+    ? catalogEntries.filter((entry) => !renderedChannelIds.has(entry.id))
     : [];
 
   if (opts.json) {
@@ -245,10 +255,11 @@ export async function channelsListCommand(
     }
     if (showAll) {
       for (const entry of catalogOnlyLines) {
+        const installed = isInstalled(entry.id);
         chat[entry.id] = {
           accounts: [],
-          installed: false,
-          origin: "installable",
+          installed,
+          origin: installed ? "available" : "installable",
         };
       }
     }
@@ -278,7 +289,12 @@ export async function channelsListCommand(
       );
     }
     for (const entry of catalogOnlyLines) {
-      lines.push(formatCatalogOnlyLine(entry));
+      lines.push(
+        formatCatalogOnlyLine({
+          entry,
+          installed: isInstalled(entry.id),
+        }),
+      );
     }
   }
 
