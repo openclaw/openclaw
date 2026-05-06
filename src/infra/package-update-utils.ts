@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "./boundary-file-read.js";
+import { openRootFileSync } from "./boundary-file-read.js";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -30,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "installed package directory",
@@ -53,9 +53,19 @@ export async function readInstalledPackageVersion(dir: string): Promise<string |
   return typeof manifest?.version === "string" ? manifest.version : undefined;
 }
 
-export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
+export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
   const manifest = readInstalledPackageManifest(dir);
   const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
+  return Object.fromEntries(
+    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
+      const [, value] = entry;
+      return typeof value === "string";
+    }),
+  );
+}
+
+export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
+  const peerDependencies = readInstalledPackagePeerDependencies(dir);
   if (!Object.hasOwn(peerDependencies, "openclaw")) {
     return false;
   }
