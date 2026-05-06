@@ -77,4 +77,6 @@ export type TtsConfig = {
   maxTextLength?: number;
   /** API request timeout (ms). */
   timeoutMs?: number;
+  /** Skip emoji and symbol characters from TTS input (prevents "checkmark" being spoken). */
+  skipEmojiSymbols?: boolean;
 };

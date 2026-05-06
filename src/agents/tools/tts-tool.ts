@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveEffectiveTtsConfig } from "../../tts/tts-config.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
@@ -53,6 +54,26 @@ function sanitizeTranscriptForToolContent(text: string): string {
     });
 }
 
+/**
+ * Strip emoji and symbol characters from text for TTS.
+ * Prevents TTS from speaking "checkmark" for "✓" or "copyright" for "©".
+ */
+function stripEmojiAndSymbols(text: string): string {
+  // Unicode ranges for emoji and symbols
+  // Emoji: \u{1F300}-\u{1F9FF}, \u{2600}-\u{27BF}, etc.
+  // Symbols: \u{00A9}, \u{00AE}, \u{2122}, etc.
+  return (
+    text
+      // Match emoji characters (common ranges)
+      .replace(
+        /[\u{1F300}-\u{1F9FF}\u{2600}-\u{27BF}\u{2B50}-\u{2B55}\u{2934}-\u{2935}\u{2B05}-\u{2B07}\u{2B1B}-\u{2B1C}\u{3297}\u{3299}\u{3030}\u{303D}\u{26A0}\u{26A1}\u{26AA}-\u{26AB}\u{26B0}-\u{26B1}\u{26BD}-\u{26BE}\u{26C4}-\u{26C5}\u{26CE}\u{26CF}\u{26D1}\u{26D3}-\u{26D4}\u{26E9}\u{26F0}-\u{26F5}\u{26F7}-\u{26FA}\u{26FD}]/gu,
+        "",
+      )
+      // Match common symbols (©, ®, ™, etc.)
+      .replace(/[\u00A9\u00AE\u2122\u2120\u24C5\u24C6\u24DC\u24DD\u24DE\u24DF]/g, "")
+  );
+}
+
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
@@ -73,8 +94,16 @@ export function createTtsTool(opts?: {
       const channel = readStringParam(params, "channel");
       const timeoutMs = readTtsTimeoutMs(params);
       const cfg = opts?.config ?? getRuntimeConfig();
+      const effectiveTts = resolveEffectiveTtsConfig(cfg, opts?.agentId);
+
+      // Strip emoji/symbols if configured via messages.tts.skipEmojiSymbols
+      let processedText = text;
+      if (effectiveTts.skipEmojiSymbols) {
+        processedText = stripEmojiAndSymbols(processedText);
+      }
+
       const result = await textToSpeech({
-        text,
+        text: processedText,
         cfg,
         channel: channel ?? opts?.agentChannel,
         timeoutMs,
@@ -88,8 +117,11 @@ export function createTtsTool(opts?: {
         // still delivered via details.media. Sanitize first so a crafted
         // utterance cannot inject reply directives when the tool output is
         // rendered in verbose mode.
+        const resultText = effectiveTts.skipEmojiSymbols ? processedText : text;
         return {
-          content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
+          content: [
+            { type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(resultText)}` },
+          ],
           details: {
             audioPath: result.audioPath,
             provider: result.provider,
