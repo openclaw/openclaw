@@ -10,7 +10,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const TEST_FILE_GLOBS = ["src", "test", "packages", "extensions", "scripts"];
 const TEST_FILE_PATTERN =
   /(?:\.test(?:-[^./]+)?|\.test-helpers|\.test-harness|\.test-support)\.ts$/u;
-const MKDTEMP_PATTERN = /\bmkdtemp(?:Sync)?\s*\(/gu;
+const MKDTEMP_PATTERN = /\bmkdtemp(?:Sync)?\s*\(/u;
 const CLEANUP_CALL_PATTERN = /\brm(?:Sync)?\s*\(/u;
 const AFTER_EACH_PATTERN = /\bafterEach\s*\(/u;
 const AFTER_ALL_PATTERN = /\bafterAll\s*\(/u;
@@ -38,21 +38,22 @@ function collectCleanupSignals(source) {
 }
 
 function classifyCleanupRisk(source) {
-  const mkdtempMatches = source.match(MKDTEMP_PATTERN) ?? [];
-  if (mkdtempMatches.length === 0) {
+  if (!MKDTEMP_PATTERN.test(source)) {
     return null;
   }
   const cleanup = collectCleanupSignals(source);
-  if (cleanup.hasAfterEach || cleanup.hasAfterAll || cleanup.hasFinally) {
+  if (
+    cleanup.hasCleanupCall &&
+    (cleanup.hasAfterEach || cleanup.hasAfterAll || cleanup.hasFinally)
+  ) {
     return null;
   }
   return {
-    mkdtempCount: mkdtempMatches.length,
-    cleanup,
     severity: cleanup.hasCleanupCall ? "warning" : "error",
     reason: cleanup.hasCleanupCall
-      ? "uses mkdtemp without afterEach/afterAll/finally cleanup scope"
+      ? "uses mkdtemp without file-level afterEach/afterAll/finally cleanup scope"
       : "uses mkdtemp without any obvious cleanup",
+    cleanup,
   };
 }
 
@@ -97,9 +98,7 @@ export async function main(argv = process.argv.slice(2), io) {
     writeStderr("Test temp-dir cleanup findings:\n");
     for (const finding of findings) {
       const severity = finding.severity === "error" ? "error" : "warn";
-      writeStderr(
-        `- [${severity}] ${finding.file} mkdtemp=${finding.mkdtempCount}: ${finding.reason}\n`,
-      );
+      writeStderr(`- [${severity}] ${finding.file}: ${finding.reason}\n`);
     }
     writeStderr(
       "Use afterEach/afterAll or try/finally around mkdtemp-created directories so /tmp residue does not leak across runs.\n",
