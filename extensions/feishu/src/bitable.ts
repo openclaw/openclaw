@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuToolClient } from "./tool-account.js";
+import { createFeishuToolClient, resolveAnyEnabledFeishuToolsConfig } from "./tool-account.js";
 
 // ============ Helpers ============
 
@@ -577,6 +577,11 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
 
   const accounts = listEnabledFeishuAccounts(api.config);
   if (accounts.length === 0) {
+    return;
+  }
+
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
+  if (!toolsCfg.bitable) {
     return;
   }
 
