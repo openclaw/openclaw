@@ -10,6 +10,13 @@ import {
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
 
 const refreshQueuedFollowupSessionMock = vi.fn();
+const retireSessionMcpRuntimeMock = vi.fn<
+  (params: {
+    sessionId?: string | null;
+    reason: string;
+    onError?: (error: unknown, sessionId: string, reason: string) => void;
+  }) => Promise<boolean>
+>(async () => true);
 const errorMock = vi.fn();
 
 describe("resetReplyRunSession", () => {
@@ -18,10 +25,13 @@ describe("resetReplyRunSession", () => {
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reset-run-"));
     refreshQueuedFollowupSessionMock.mockReset();
+    retireSessionMcpRuntimeMock.mockReset();
+    retireSessionMcpRuntimeMock.mockImplementation(async () => true);
     errorMock.mockReset();
     setAgentRunnerSessionResetTestDeps({
       generateSecureUuid: () => "00000000-0000-0000-0000-000000000123",
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
+      retireSessionMcpRuntime: retireSessionMcpRuntimeMock as never,
       error: errorMock,
     });
   });
@@ -94,6 +104,13 @@ describe("resetReplyRunSession", () => {
       nextSessionId: activeSessionEntry?.sessionId,
       nextSessionFile: activeSessionEntry?.sessionFile,
     });
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session",
+        reason: "reply-run-session-reset",
+        onError: expect.any(Function),
+      }),
+    );
     expect(errorMock).toHaveBeenCalledWith("reset 00000000-0000-0000-0000-000000000123");
 
     const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
@@ -101,6 +118,44 @@ describe("resetReplyRunSession", () => {
     };
     expect(persisted.main.sessionId).toBe(activeSessionEntry?.sessionId);
     expect(persisted.main.fallbackNoticeReason).toBeUndefined();
+  });
+
+  it("keeps the reset successful even when MCP runtime disposal fails", async () => {
+    retireSessionMcpRuntimeMock.mockImplementationOnce(async ({ sessionId, reason, onError }) => {
+      onError?.(new Error("boom"), sessionId ?? "", reason);
+      return false;
+    });
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      sessionFile: path.join(rootDir, "session.jsonl"),
+    };
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    const reset = await resetReplyRunSession({
+      options: {
+        failureLabel: "compaction failure",
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey: "main",
+      queueKey: "main",
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: () => {},
+      onNewSession: () => {},
+    });
+
+    expect(reset).toBe(true);
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "session", reason: "reply-run-session-reset" }),
+    );
+    expect(errorMock).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to retire bundle MCP runtime for reset session session"),
+    );
   });
 
   it("cleans up the old transcript when requested", async () => {
@@ -131,6 +186,45 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
+    await expect(fs.access(oldTranscriptPath)).rejects.toThrow();
+  });
+
+  it("still cleans up the old transcript when MCP runtime disposal fails", async () => {
+    retireSessionMcpRuntimeMock.mockImplementationOnce(async ({ sessionId, reason, onError }) => {
+      onError?.(new Error("boom"), sessionId ?? "", reason);
+      return false;
+    });
+    const storePath = path.join(rootDir, "sessions.json");
+    const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");
+    await fs.writeFile(oldTranscriptPath, "old", "utf8");
+    const sessionEntry: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: 1,
+      sessionFile: oldTranscriptPath,
+    };
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    const reset = await resetReplyRunSession({
+      options: {
+        failureLabel: "role ordering conflict",
+        cleanupTranscripts: true,
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey: "main",
+      queueKey: "main",
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: () => {},
+      onNewSession: () => {},
+    });
+
+    expect(reset).toBe(true);
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "old-session", reason: "reply-run-session-reset" }),
+    );
     await expect(fs.access(oldTranscriptPath)).rejects.toThrow();
   });
 });
