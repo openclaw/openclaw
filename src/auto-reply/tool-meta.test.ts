@@ -58,6 +58,28 @@ describe("tool meta formatting", () => {
     expect(out).toBe("🛠️ Exec: elevated · `cd ~/dir && gemini 2>&1`");
   });
 
+  it("keeps default English aggregate labels unchanged", () => {
+    const out = formatToolAggregate("exec", ["pnpm test src/auto-reply/tool-meta.test.ts"], {
+      markdown: true,
+    });
+    expect(out).toBe("🛠️ Exec: `pnpm test src/auto-reply/tool-meta.test.ts`");
+  });
+
+  it("localizes tool labels and common exec action hints", () => {
+    const out = formatToolAggregate("exec", ["pnpm test src/auto-reply/tool-meta.test.ts"], {
+      markdown: true,
+      locale: "zh-CN",
+    });
+    expect(out).toBe("🛠️ 执行命令: 运行测试 · `pnpm test src/auto-reply/tool-meta.test.ts`");
+  });
+
+  it("recognizes standalone tail -n as a log-tracking hint", () => {
+    const out = formatToolAggregate("exec", ["tail -n 50 /var/log/openclaw.log"], {
+      locale: "zh-CN",
+    });
+    expect(out).toBe("🛠️ 执行命令: 跟踪日志 · tail -n 50 /var/log/openclaw.log");
+  });
+
   it("formats prefixes with default labels", () => {
     vi.stubEnv("HOME", home);
     expect(formatToolPrefix(undefined, undefined)).toBe("🧩 Tool");

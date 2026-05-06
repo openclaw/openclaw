@@ -217,6 +217,7 @@ export function buildEmbeddedRunPayloads(params: {
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
+  const toolSummaryLocale = params.config?.agents?.defaults?.toolSummaries?.locale;
   const suppressAssistantArtifacts = params.didSendDeterministicApprovalPrompt === true;
   const lastAssistantErrored = params.lastAssistant?.stopReason === "error";
   const errorText =
@@ -258,6 +259,7 @@ export function buildEmbeddedRunPayloads(params: {
     for (const { toolName, meta } of params.toolMetas) {
       const agg = formatToolAggregate(toolName, meta ? [meta] : [], {
         markdown: useMarkdown,
+        locale: toolSummaryLocale,
       });
       const {
         text: cleanedText,
@@ -421,7 +423,7 @@ export function buildEmbeddedRunPayloads(params: {
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
-        { markdown: useMarkdown },
+        { markdown: useMarkdown, locale: toolSummaryLocale },
       );
       const errorSuffix =
         warningPolicy.includeDetails && params.lastToolError.error
