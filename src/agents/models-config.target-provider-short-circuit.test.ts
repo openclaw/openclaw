@@ -567,6 +567,130 @@ describe("ensureOpenClawModelsJson targetProvider short-circuit", () => {
     expect(resolveImplicitProvidersCallCount).toBe(1);
   });
 
+  it("hit-on-env-marker-with-unset-config: accepts disk env-var-name marker when config has no apiKey and env is set (Codex P2 round-6)", async () => {
+    // Codex P2 round-6 on PR #73261: when config omits apiKey, the
+    // planner persists `apiKey: "OPENAI_API_KEY"` (the env-var name
+    // as marker) via `resolveMissingProviderApiKey`. The previous
+    // round-5 fix rejected ANY non-empty disk apiKey in this case,
+    // which silently disabled the short-circuit for every implicit-
+    // discovery setup that uses env-var-derived auth (the dominant
+    // case). After this fix the short-circuit must accept the env-
+    // marker on disk iff the corresponding env var is currently set.
+    //
+    // The implicit-discovery planner is mocked in this suite to keep
+    // tests fast and deterministic, so we can't rely on it to write
+    // the env marker into models.json. Instead we cold-start the
+    // suite to populate models.json with the configured provider,
+    // then manually inject the env-var-name marker into disk to
+    // simulate the post-`resolveMissingProviderApiKey` state, then
+    // verify the second short-circuit pass accepts it.
+    process.env.OPENAI_API_KEY = "sk-env-derived-value";
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+
+    // Cold start: planner writes models.json (without an apiKey
+    // because the suite mocks `resolveImplicitProviders`).
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Inject the env-var-name marker the way the real planner's
+    // `resolveMissingProviderApiKey` would.
+    const targetPath = path.join(agentDir, "models.json");
+    const parsed = JSON.parse(await fs.readFile(targetPath, "utf8"));
+    parsed.providers.openai.apiKey = "OPENAI_API_KEY";
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    // Second pass: short-circuit must accept the env-marker since
+    // env["OPENAI_API_KEY"] is still populated. Implicit-discovery
+    // count must stay at zero — the perf path is back.
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(0);
+  });
+
+  it("miss-on-env-marker-with-unset-env: rejects disk env-var-name marker when config has no apiKey but the env var is now unset (Codex P2 round-6)", async () => {
+    // Liveness check: even when disk holds a recognizable env-var
+    // name, if the env var is no longer populated the planner could
+    // not legitimately have written that value AND there's no usable
+    // credential, so we must fall through to full planning.
+    process.env.OPENAI_API_KEY = "sk-env-derived-value";
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Inject the env-var-name marker (as the real planner would).
+    const targetPath = path.join(agentDir, "models.json");
+    const parsed = JSON.parse(await fs.readFile(targetPath, "utf8"));
+    parsed.providers.openai.apiKey = "OPENAI_API_KEY";
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+
+    // Now wipe the env var: the marker is stale.
+    delete process.env.OPENAI_API_KEY;
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+  });
+
+  it("miss-on-env-marker-name-mismatch: rejects disk apiKey that's a string but doesn't match the resolved env-var name (Codex P2 round-6)", async () => {
+    // If the disk apiKey is a string that doesn't correspond to the
+    // planner's chosen env-var name for this provider, fall through.
+    // This guards against an attacker hand-editing models.json to
+    // point apiKey at an unrelated env var.
+    process.env.OPENAI_API_KEY = "sk-env-derived-value";
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions" as const,
+            models: [],
+          },
+        },
+      },
+    };
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+
+    // Hand-edit disk to point at a different env var that doesn't
+    // map to the openai provider.
+    const targetPath = path.join(agentDir, "models.json");
+    const parsed = JSON.parse(await fs.readFile(targetPath, "utf8"));
+    parsed.providers.openai.apiKey = "UNRELATED_TOKEN_VAR";
+    await fs.writeFile(targetPath, JSON.stringify(parsed));
+    process.env.UNRELATED_TOKEN_VAR = "some-unrelated-value";
+
+    resetModelsJsonReadyCacheForTest();
+    resolveImplicitProvidersCallCount = 0;
+    await ensureOpenClawModelsJson(cfg, agentDir, { targetProvider: "openai" });
+    expect(resolveImplicitProvidersCallCount).toBe(1);
+    delete process.env.UNRELATED_TOKEN_VAR;
+  });
+
   it("miss-on-malformed-disk-apiKey: non-string disk apiKey rejects the short-circuit when config has no key", async () => {
     // Codex P2 on PR #73261: the previous fail-open branch accepted
     // any non-string disk apiKey when config had no apiKey, leaving

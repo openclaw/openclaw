@@ -22,6 +22,10 @@ import {
 } from "./agent-scope.js";
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import {
+  resolveAwsSdkApiKeyVarName,
+  resolveEnvApiKeyVarName,
+} from "./models-config.providers.secret-helpers.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
 
@@ -599,6 +603,64 @@ function resolveConfiguredApiKeyForCompare(
 }
 
 /**
+ * When `configuredProvider.apiKey` is unset, decide whether a non-empty
+ * disk apiKey value matches what `planOpenClawModelsJson` would persist
+ * via `resolveMissingProviderApiKey` (Codex P2 round-6 on PR #73261).
+ *
+ * The planner's "missing apiKey" path writes one of:
+ *  1. The env-var name itself (e.g. `"OPENAI_API_KEY"`) when an env-
+ *     derived marker is appropriate — the dominant case.  Disk holds
+ *     the env var name, and we accept it iff the env var is currently
+ *     populated (matches the same liveness check
+ *     `resolveConfiguredApiKeyForCompare` applies for env-source
+ *     refs).
+ *  2. The AWS SDK env-var name (auth: "aws-sdk" branch) for AWS
+ *     credential chains.  Same liveness check.
+ *  3. The literal resolved value from a plaintext profile or a
+ *     non-default `providerApiKeyResolver`.  We can't verify those
+ *     here without re-running the planner, so this helper conservatively
+ *     returns false for them — the perf cost is bounded (one full
+ *     plan per restart that produces an unchanged disk shape).  When
+ *     we add profile/state into the short-circuit context we should
+ *     extend this helper symmetrically.
+ *
+ * Returns true iff the disk value matches case (1) or (2).  Returns
+ * false otherwise (caller falls through to full planning).
+ */
+function diskApiKeyMatchesUnsetConfigPlannerOutput(params: {
+  diskApiKey: unknown;
+  providerKey: string;
+  providerAuth: unknown;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  const { diskApiKey, providerKey, providerAuth, env } = params;
+  if (typeof diskApiKey !== "string" || diskApiKey.length === 0) {
+    return false;
+  }
+  // Match `resolveMissingProviderApiKey`'s decision tree.  The aws-sdk
+  // branch fires when `auth === "aws-sdk"`, otherwise the env-name
+  // branch is consulted.  We do not invoke any provider-specific
+  // `providerApiKeyResolver` here because the resolver may have
+  // arbitrary side-effects in tests, and its env-name marker is
+  // already covered by the env path below for any resolver that
+  // returns an env var name.
+  if (providerAuth === "aws-sdk") {
+    const awsEnvVar = resolveAwsSdkApiKeyVarName(env);
+    if (awsEnvVar && awsEnvVar === diskApiKey) {
+      const value = env[awsEnvVar];
+      return typeof value === "string" && value.length > 0;
+    }
+    return false;
+  }
+  const envVarName = resolveEnvApiKeyVarName(providerKey, env);
+  if (envVarName && envVarName === diskApiKey) {
+    const value = env[envVarName];
+    return typeof value === "string" && value.length > 0;
+  }
+  return false;
+}
+
+/**
  * Maximum recursion depth when comparing disk-controlled values during
  * the short-circuit check (Codex P2 / Aisle medium #3 on PR #73261).
  * Bounds the recursive walk so a deeply-nested adversarial models.json
@@ -789,12 +851,26 @@ async function readExistingProviderMatchesConfig(
     }
   } else if (
     diskProvider.apiKey !== undefined &&
-    !(typeof diskProvider.apiKey === "string" && diskProvider.apiKey.length === 0)
+    !(typeof diskProvider.apiKey === "string" && diskProvider.apiKey.length === 0) &&
+    !diskApiKeyMatchesUnsetConfigPlannerOutput({
+      diskApiKey: diskProvider.apiKey,
+      providerKey: targetProvider,
+      providerAuth: configuredProvider.auth,
+      env,
+    })
   ) {
-    // Codex P2 on PR #73261: when config has no apiKey, accept only
-    // "absent" (undefined) or empty-string on disk.  Reject any other
-    // shape (number, null, object, array, non-empty string) — these
-    // indicate a malformed disk row and the planner should rewrite.
+    // Codex P2 on PR #73261: when config has no apiKey, accept either
+    // "absent" (undefined) / empty-string on disk OR a value that
+    // matches what `planOpenClawModelsJson` would have persisted via
+    // `resolveMissingProviderApiKey`.  Without the second case, every
+    // common implicit-discovery setup (provider has models, auth comes
+    // from env-var-derived markers like `OPENAI_API_KEY` or AWS SDK
+    // env names) would always miss the short-circuit on every restart
+    // and re-run full implicit discovery, negating the perf path even
+    // though disk and config are semantically aligned.  Anything else
+    // (number, null, object, array, or a string not derivable from
+    // the planner's env/aws-sdk paths) still falls through to full
+    // planning, which will rewrite the file.
     return false;
   }
 
