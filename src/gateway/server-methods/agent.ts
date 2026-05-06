@@ -472,20 +472,20 @@ function dispatchAgentRunFromGateway(params: {
     })
     .catch((err) => {
       const aborted = isAbortError(err);
+      const renderedErr = formatForLog(err);
       if (shouldTrackTask) {
-        const error = String(err);
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
           status: resolveFailedTrackedAgentTaskStatus(err),
-          error,
-          terminalSummary: error,
+          error: renderedErr,
+          terminalSummary: renderedErr,
         });
       }
-      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
-        summary: aborted ? "aborted" : String(err),
+        summary: aborted ? "aborted" : renderedErr,
         ...(aborted ? { stopReason: "rpc" } : {}),
       };
       setGatewayDedupeEntry({
@@ -1181,7 +1181,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedChannel,
         });
         if (!shouldDowngrade) {
-          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
           return;
         }
         deliveryDowngradeReason = String(err);
@@ -1423,11 +1423,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         });
         dispatched = true;
       } catch (err) {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+        const error = errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err));
         const payload = {
           runId,
           status: "error" as const,
-          summary: String(err),
+          summary: formatForLog(err),
         };
         setGatewayDedupeEntry({
           dedupe: context.dedupe,
