@@ -7,9 +7,10 @@ import {
   resolveTeamGroupId,
   stripHtmlFromTeamsMessage,
 } from "./graph-thread.js";
-import { fetchGraphJson } from "./graph.js";
+import { fetchGraphAbsoluteUrl, fetchGraphJson } from "./graph.js";
 
 vi.mock("./graph.js", () => ({
+  fetchGraphAbsoluteUrl: vi.fn(),
   fetchGraphJson: vi.fn(),
 }));
 
@@ -117,6 +118,7 @@ describe("fetchChannelMessage", () => {
 describe("fetchThreadReplies", () => {
   beforeEach(() => {
     vi.mocked(fetchGraphJson).mockReset();
+    vi.mocked(fetchGraphAbsoluteUrl).mockReset();
   });
 
   it("fetches replies with correct path and default limit", async () => {
@@ -156,6 +158,55 @@ describe("fetchThreadReplies", () => {
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
     expect(result).toEqual([]);
+  });
+
+  it("follows pagination and keeps the most recent replies", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      value: [{ id: "reply-1" }, { id: "reply-2" }],
+      "@odata.nextLink":
+        "https://graph.microsoft.com/v1.0/teams/group-1/channels/channel-1/messages/msg-1/replies?$skiptoken=page2",
+    } as never);
+    vi.mocked(fetchGraphAbsoluteUrl).mockResolvedValueOnce({
+      value: [{ id: "reply-3" }, { id: "reply-4" }],
+    } as never);
+
+    const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1", 2);
+
+    expect(result).toEqual([{ id: "reply-3" }, { id: "reply-4" }]);
+    expect(fetchGraphAbsoluteUrl).toHaveBeenCalledWith({
+      token: "tok",
+      url: "https://graph.microsoft.com/v1.0/teams/group-1/channels/channel-1/messages/msg-1/replies?$skiptoken=page2",
+    });
+  });
+
+  it("stops paginating after the hard page cap", async () => {
+    const makePageResponse = (pageNum: number) => ({
+      value: [{ id: `reply-${pageNum}` }],
+      "@odata.nextLink": `https://graph.microsoft.com/v1.0/replies?page=${pageNum + 1}`,
+    });
+
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce(makePageResponse(1) as never);
+    for (let i = 2; i <= 10; i++) {
+      vi.mocked(fetchGraphAbsoluteUrl).mockResolvedValueOnce(makePageResponse(i) as never);
+    }
+
+    const result = await fetchThreadReplies("tok", "g", "c", "m", 50);
+
+    expect(result).toHaveLength(10);
+    expect(fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(9);
+  });
+
+  it("returns already-fetched replies when a later page fails", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValueOnce({
+      value: [{ id: "reply-1" }, { id: "reply-2" }],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/replies?page=2",
+    } as never);
+    vi.mocked(fetchGraphAbsoluteUrl).mockRejectedValueOnce(new Error("timeout") as never);
+
+    const result = await fetchThreadReplies("tok", "group-1", "channel-1", "msg-1", 50);
+
+    expect(result).toEqual([{ id: "reply-1" }, { id: "reply-2" }]);
+    expect(fetchGraphAbsoluteUrl).toHaveBeenCalledTimes(1);
   });
 });
 

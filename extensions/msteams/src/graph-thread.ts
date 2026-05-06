@@ -1,4 +1,4 @@
-import { fetchGraphJson, type GraphResponse } from "./graph.js";
+import { fetchGraphAbsoluteUrl, fetchGraphJson, type GraphPagedResponse } from "./graph.js";
 
 export type GraphThreadMessage = {
   id?: string;
@@ -9,6 +9,9 @@ export type GraphThreadMessage = {
   body?: { content?: string; contentType?: string };
   createdDateTime?: string;
 };
+
+/** Maximum number of reply pages to follow so thread enrichment stays bounded. */
+const THREAD_REPLIES_MAX_PAGES = 10;
 
 // TTL cache for team ID -> group GUID mapping.
 const teamGroupIdCache = new Map<string, { groupId: string; expiresAt: number }>();
@@ -93,12 +96,10 @@ export async function fetchChannelMessage(
 /**
  * Fetch thread replies for a channel message, ordered chronologically.
  *
- * **Limitation:** The Graph API replies endpoint (`/messages/{id}/replies`) does not
- * support `$orderby`, so results are always returned in ascending (oldest-first) order.
- * Combined with the `$top` cap of 50, this means only the **oldest 50 replies** are
- * returned for long threads — newer replies are silently omitted. There is currently no
- * Graph API workaround for this; pagination via `@odata.nextLink` can retrieve more
- * replies but still in ascending order only.
+ * Graph returns replies oldest-first and does not support `$orderby`, so this helper
+ * follows `@odata.nextLink` pagination under a hard page cap, then keeps the most
+ * recent `limit` replies from the collected window. This favors the newest thread
+ * context without turning one inbound message into unbounded Graph traffic.
  */
 export async function fetchThreadReplies(
   token: string,
@@ -108,12 +109,37 @@ export async function fetchThreadReplies(
   limit = 50,
 ): Promise<GraphThreadMessage[]> {
   const top = Math.min(Math.max(limit, 1), 50);
-  // NOTE: Graph replies endpoint returns oldest-first and does not support $orderby.
-  // For threads with >50 replies, only the oldest 50 are returned. The most recent
-  // replies (often the most relevant context) may be truncated.
   const path = `/teams/${encodeURIComponent(groupId)}/channels/${encodeURIComponent(channelId)}/messages/${encodeURIComponent(messageId)}/replies?$top=${top}&$select=id,from,body,createdDateTime`;
-  const res = await fetchGraphJson<GraphResponse<GraphThreadMessage>>({ token, path });
-  return res.value ?? [];
+  const replies: GraphThreadMessage[] = [];
+
+  let res = await fetchGraphJson<GraphPagedResponse<GraphThreadMessage>>({ token, path });
+  let pages = 1;
+
+  while (true) {
+    replies.push(...(res.value ?? []));
+
+    const nextLink = res["@odata.nextLink"];
+    if (!nextLink || pages >= THREAD_REPLIES_MAX_PAGES) {
+      break;
+    }
+
+    try {
+      res = await fetchGraphAbsoluteUrl<GraphPagedResponse<GraphThreadMessage>>({
+        token,
+        url: nextLink,
+      });
+    } catch {
+      // Preserve already-fetched replies so thread enrichment stays best-effort
+      // even when a later pagination request fails.
+      break;
+    }
+    pages++;
+  }
+
+  if (replies.length <= top) {
+    return replies;
+  }
+  return replies.slice(-top);
 }
 
 /**
