@@ -158,8 +158,6 @@ export function createBlockReplyDeliveryHandler(params: {
         payload: blockPayload,
       });
     } else if (blockHasMedia) {
-      // Media-bearing block replies (including text+media tool attachments) are not reliably
-      // reconstructible from the assistant's final text, so send them directly when streaming is off.
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,
