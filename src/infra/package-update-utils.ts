@@ -1,6 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { openBoundaryFileSync } from "./boundary-file-read.js";
+import { openRootFileSync } from "./boundary-file-read.js";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -24,9 +24,13 @@ export function expectedIntegrityForUpdate(
   return integrity;
 }
 
-export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {
   const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "installed package directory",
@@ -35,12 +39,42 @@ export async function readInstalledPackageVersion(dir: string): Promise<string |
     return undefined;
   }
   try {
-    const raw = fsSync.readFileSync(opened.fd, "utf-8");
-    const parsed = JSON.parse(raw) as { version?: unknown };
-    return typeof parsed.version === "string" ? parsed.version : undefined;
+    const parsed = JSON.parse(fsSync.readFileSync(opened.fd, "utf-8")) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
   } catch {
     return undefined;
   } finally {
     fsSync.closeSync(opened.fd);
+  }
+}
+
+export async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  const manifest = readInstalledPackageManifest(dir);
+  return typeof manifest?.version === "string" ? manifest.version : undefined;
+}
+
+export function readInstalledPackagePeerDependencies(dir: string): Record<string, string> {
+  const manifest = readInstalledPackageManifest(dir);
+  const peerDependencies = isRecord(manifest?.peerDependencies) ? manifest.peerDependencies : {};
+  return Object.fromEntries(
+    Object.entries(peerDependencies).filter((entry): entry is [string, string] => {
+      const [, value] = entry;
+      return typeof value === "string";
+    }),
+  );
+}
+
+export function installedPackageNeedsOpenClawPeerLinkRepair(dir: string): boolean {
+  const peerDependencies = readInstalledPackagePeerDependencies(dir);
+  if (!Object.hasOwn(peerDependencies, "openclaw")) {
+    return false;
+  }
+
+  try {
+    fsSync.statSync(path.join(dir, "node_modules", "openclaw"));
+    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === "ENOENT" || code === "ENOTDIR";
   }
 }

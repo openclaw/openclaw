@@ -29,6 +29,14 @@ OpenClaw loads skills from these sources, **highest precedence first**:
 
 If a skill name conflicts, the highest source wins.
 
+Codex CLI's native `$CODEX_HOME/skills` directory is not one of these OpenClaw
+skill roots. In Codex harness mode, local app-server launches use isolated
+per-agent Codex homes, so personal Codex CLI skills are not loaded implicitly.
+Use `openclaw migrate codex --dry-run` to inventory them and
+`openclaw migrate codex` to choose skill directories with an interactive
+checkbox prompt before copying them into the current OpenClaw agent workspace.
+For non-interactive runs, repeat `--skill <name>` for the exact skills to copy.
+
 ## Per-agent vs shared skills
 
 In **multi-agent** setups each agent has its own workspace:
@@ -72,7 +80,7 @@ allowlists decide which skills an agent can actually use.
     - Omit `agents.list[].skills` to inherit `agents.defaults.skills`.
     - Set `agents.list[].skills: []` for no skills.
     - A non-empty `agents.list[].skills` list is the **final** set for that
-      agent — it does not merge with defaults.
+      agent - it does not merge with defaults.
     - The effective allowlist applies across prompt building, skill
       slash-command discovery, sandbox sync, and skill snapshots.
   </Accordion>
@@ -84,7 +92,7 @@ Plugins can ship their own skills by listing `skills` directories in
 `openclaw.plugin.json` (paths relative to the plugin root). Plugin skills
 load when the plugin is enabled. This is the right place for tool-specific
 operating guides that are too long for the tool description but should be
-available whenever the plugin is installed — for example, the browser
+available whenever the plugin is installed - for example, the browser
 plugin ships a `browser-automation` skill for multi-step browser control.
 
 Plugin skill directories are merged into the same low-precedence path as
@@ -130,6 +138,15 @@ Native `openclaw skills install` installs into the active workspace
 `./skills` under your current working directory (or falls back to the
 configured OpenClaw workspace). OpenClaw picks that up as
 `<workspace>/skills` on the next session.
+Configured skill roots also support one grouping level, such as
+`skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
+kept under a shared folder without broad recursive scanning.
+
+ClawHub skill pages expose the latest security scan state before install,
+with scanner detail pages for VirusTotal, ClawScan, and static analysis.
+`openclaw skills install <slug>` remains only the install path; publishers
+recover false positives through the ClawHub dashboard or
+`clawhub skill rescan <slug>`.
 
 ## Security
 
@@ -141,7 +158,7 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
 
 - Workspace and extra-dir skill discovery only accepts skill roots and `SKILL.md` files whose resolved realpath stays inside the configured root.
 - Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
-- `openclaw skills install <slug>` is different — it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
+- `openclaw skills install <slug>` is different - it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 
 For a broader threat model and checklists, see [Security](/gateway/security).
@@ -171,7 +188,9 @@ instructions to reference the skill folder path.
   When `true`, the skill is exposed as a user slash command.
 </ParamField>
 <ParamField path="disable-model-invocation" type="boolean" default="false">
-  When `true`, the skill is excluded from the model prompt (still available via user invocation).
+  When `true`, OpenClaw keeps the skill's instructions out of the agent's normal
+  prompt. The skill is still installed and can still be run explicitly as a
+  slash command when `user-invocable` is also `true`.
 </ParamField>
 <ParamField path="command-dispatch" type='"tool"'>
   When set to `tool`, the slash command bypasses the model and dispatches directly to a tool.
@@ -283,13 +302,15 @@ metadata:
     - If multiple installers are listed, the gateway picks a single preferred option (brew when available, otherwise node).
     - If all installers are `download`, OpenClaw lists each entry so you can see the available artifacts.
     - Installer specs can include `os: ["darwin"|"linux"|"win32"]` to filter options by platform.
-    - Node installs honor `skills.install.nodeManager` in `openclaw.json` (default: npm; options: npm/pnpm/yarn/bun). This only affects skill installs; the Gateway runtime should still be Node — Bun is not recommended for WhatsApp/Telegram.
+    - Node installs honor `skills.install.nodeManager` in `openclaw.json` (default: npm; options: npm/pnpm/yarn/bun). This only affects skill installs; the Gateway runtime should still be Node - Bun is not recommended for WhatsApp/Telegram.
     - Gateway-backed installer selection is preference-driven: when install specs mix kinds, OpenClaw prefers Homebrew when `skills.install.preferBrew` is enabled and `brew` exists, then `uv`, then the configured node manager, then other fallbacks like `go` or `download`.
     - If every install spec is `download`, OpenClaw surfaces all download options instead of collapsing to one preferred installer.
+
   </Accordion>
   <Accordion title="Per-installer details">
     - **Go installs:** if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew's `bin` when possible.
     - **Download installs:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
+
   </Accordion>
 </AccordionGroup>
 
@@ -322,6 +343,10 @@ under `skills.entries` in `~/.openclaw/openclaw.json`:
 
 <ParamField path="enabled" type="boolean">
   `false` disables the skill even if it is bundled or installed.
+  The bundled `coding-agent` skill is opt-in: set
+  `skills.entries.coding-agent.enabled: true` before exposing it to agents,
+  then make sure one of `claude`, `codex`, `opencode`, or `pi` is installed and
+  authenticated for its own CLI.
 </ParamField>
 <ParamField path="apiKey" type='string | { source, provider, id }'>
   Convenience for skills that declare `metadata.openclaw.primaryEnv`. Supports plaintext or SecretRef.
@@ -337,7 +362,7 @@ under `skills.entries` in `~/.openclaw/openclaw.json`:
 </ParamField>
 
 If the skill name contains hyphens, quote the key (JSON5 allows quoted
-keys). Config keys match the **skill name** by default — if a skill
+keys). Config keys match the **skill name** by default - if a skill
 defines `metadata.openclaw.skillKey`, use that key under `skills.entries`.
 
 <Note>
@@ -439,7 +464,7 @@ skill plus your actual field lengths.
 
 OpenClaw ships a baseline set of skills as **bundled skills** with the
 install (npm package or OpenClaw.app). `~/.openclaw/skills` exists for
-local overrides — for example, pinning or patching a skill without
+local overrides - for example, pinning or patching a skill without
 changing the bundled copy. Workspace skills are user-owned and override
 both on name conflicts.
 
@@ -450,9 +475,9 @@ schema: [Skills config](/tools/skills-config).
 
 ## Related
 
-- [ClawHub](/tools/clawhub) — public skills registry
-- [Creating skills](/tools/creating-skills) — building custom skills
-- [Plugins](/tools/plugin) — plugin system overview
-- [Skill Workshop plugin](/plugins/skill-workshop) — generate skills from agent work
-- [Skills config](/tools/skills-config) — skill configuration reference
-- [Slash commands](/tools/slash-commands) — all available slash commands
+- [ClawHub](/tools/clawhub) - public skills registry
+- [Creating skills](/tools/creating-skills) - building custom skills
+- [Plugins](/tools/plugin) - plugin system overview
+- [Skill Workshop plugin](/plugins/skill-workshop) - generate skills from agent work
+- [Skills config](/tools/skills-config) - skill configuration reference
+- [Slash commands](/tools/slash-commands) - all available slash commands

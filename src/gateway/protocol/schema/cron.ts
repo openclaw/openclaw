@@ -25,11 +25,15 @@ const CronSessionTargetSchema = Type.Union([
   Type.String({ pattern: "^session:.+" }),
 ]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
-const CronRunStatusSchema = Type.Union([
-  Type.Literal("ok"),
-  Type.Literal("error"),
-  Type.Literal("skipped"),
-]);
+function cronRunStatusSchema(options: Record<string, unknown> = {}) {
+  return Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")], options);
+}
+
+const CronRunStatusSchema = cronRunStatusSchema();
+const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
+  deprecated: true,
+  description: "Deprecated alias for lastRunStatus.",
+});
 const CronSortDirSchema = Type.Union([Type.Literal("asc"), Type.Literal("desc")]);
 const CronJobsEnabledFilterSchema = Type.Union([
   Type.Literal("all"),
@@ -65,8 +69,44 @@ const CronFailoverReasonSchema = Type.Union([
   Type.Literal("billing"),
   Type.Literal("timeout"),
   Type.Literal("model_not_found"),
+  Type.Literal("empty_response"),
+  Type.Literal("no_error_details"),
+  Type.Literal("unclassified"),
   Type.Literal("unknown"),
 ]);
+const CronRunDiagnosticSeveritySchema = Type.Union([
+  Type.Literal("info"),
+  Type.Literal("warn"),
+  Type.Literal("error"),
+]);
+const CronRunDiagnosticSourceSchema = Type.Union([
+  Type.Literal("cron-preflight"),
+  Type.Literal("cron-setup"),
+  Type.Literal("model-preflight"),
+  Type.Literal("agent-run"),
+  Type.Literal("tool"),
+  Type.Literal("exec"),
+  Type.Literal("delivery"),
+]);
+const CronRunDiagnosticSchema = Type.Object(
+  {
+    ts: Type.Integer({ minimum: 0 }),
+    source: CronRunDiagnosticSourceSchema,
+    severity: CronRunDiagnosticSeveritySchema,
+    message: Type.String(),
+    toolName: Type.Optional(Type.String()),
+    exitCode: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+const CronRunDiagnosticsSchema = Type.Object(
+  {
+    summary: Type.Optional(Type.String()),
+    entries: Type.Array(CronRunDiagnosticSchema),
+  },
+  { additionalProperties: false },
+);
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -161,6 +201,7 @@ export const CronFailureAlertSchema = Type.Object(
     channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
     to: Type.Optional(Type.String()),
     cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    includeSkipped: Type.Optional(Type.Boolean()),
     mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook")])),
     accountId: Type.Optional(NonEmptyString),
   },
@@ -179,6 +220,7 @@ export const CronFailureDestinationSchema = Type.Object(
 
 const CronDeliverySharedProperties = {
   channel: Type.Optional(Type.Union([Type.Literal("last"), NonEmptyString])),
+  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
   failureDestination: Type.Optional(CronFailureDestinationSchema),
@@ -234,11 +276,34 @@ export const CronJobStateSchema = Type.Object(
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunStatus: Type.Optional(CronRunStatusSchema),
-    lastStatus: Type.Optional(CronRunStatusSchema),
+    lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
+    lastError: Type.Optional(Type.String()),
+    lastDiagnostics: Type.Optional(CronRunDiagnosticsSchema),
+    lastDiagnosticSummary: Type.Optional(Type.String()),
+    lastErrorReason: Type.Optional(CronFailoverReasonSchema),
+    lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastDelivered: Type.Optional(Type.Boolean()),
+    lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastDeliveryError: Type.Optional(Type.String()),
+    lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+const CronJobStatePatchSchema = Type.Object(
+  {
+    nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastRunStatus: Type.Optional(CronRunStatusSchema),
+    lastStatus: Type.Optional(DeprecatedCronRunStatusSchema),
     lastError: Type.Optional(Type.String()),
     lastErrorReason: Type.Optional(CronFailoverReasonSchema),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
+    consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDelivered: Type.Optional(Type.Boolean()),
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
@@ -278,6 +343,7 @@ export const CronListParamsSchema = Type.Object(
     enabled: Type.Optional(CronJobsEnabledFilterSchema),
     sortBy: Type.Optional(CronJobsSortBySchema),
     sortDir: Type.Optional(CronSortDirSchema),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -308,7 +374,7 @@ export const CronJobPatchSchema = Type.Object(
     payload: Type.Optional(CronPayloadPatchSchema),
     delivery: Type.Optional(CronDeliveryPatchSchema),
     failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
-    state: Type.Optional(Type.Partial(CronJobStateSchema)),
+    state: Type.Optional(CronJobStatePatchSchema),
   },
   { additionalProperties: false },
 );
@@ -350,11 +416,13 @@ export const CronRunLogEntrySchema = Type.Object(
     status: Type.Optional(CronRunStatusSchema),
     error: Type.Optional(Type.String()),
     summary: Type.Optional(Type.String()),
+    diagnostics: Type.Optional(CronRunDiagnosticsSchema),
     delivered: Type.Optional(Type.Boolean()),
     deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     deliveryError: Type.Optional(Type.String()),
     sessionId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
+    runId: Type.Optional(NonEmptyString),
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

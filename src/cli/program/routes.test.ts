@@ -7,22 +7,17 @@ const modelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const tasksListJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const agentsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../config-cli.js", () => ({
   runConfigGet: runConfigGetMock,
   runConfigUnset: runConfigUnsetMock,
 }));
 
-vi.mock("../../commands/models.js", () => ({
-  modelsListCommand: modelsListCommandMock,
-  modelsStatusCommand: modelsStatusCommandMock,
-}));
-vi.mock("../../commands/models/list.js", () => ({
-  modelsListCommand: modelsListCommandMock,
-  modelsStatusCommand: modelsStatusCommandMock,
-}));
 vi.mock("../../commands/models/list.list-command.js", () => ({
   modelsListCommand: modelsListCommandMock,
 }));
@@ -38,12 +33,25 @@ vi.mock("../../commands/status-json.js", () => ({
   statusJsonCommand: statusJsonCommandMock,
 }));
 
+vi.mock("../../commands/tasks-json.js", () => ({
+  tasksListJsonCommand: tasksListJsonCommandMock,
+  tasksAuditJsonCommand: tasksAuditJsonCommandMock,
+}));
+
+vi.mock("../../commands/tasks.js", () => {
+  throw new Error("routed task JSON commands must not import the full tasks command module");
+});
+
 vi.mock("../../commands/channels/list.js", () => ({
   channelsListCommand: channelsListCommandMock,
 }));
 
 vi.mock("../../commands/channels/status.js", () => ({
   channelsStatusCommand: channelsStatusCommandMock,
+}));
+
+vi.mock("../../commands/agents.js", () => ({
+  agentsListCommand: agentsListCommandMock,
 }));
 
 describe("program routes", () => {
@@ -75,6 +83,34 @@ describe("program routes", () => {
   it("matches channel read-only routes without plugin preload", () => {
     expect(expectRoute(["channels", "list"])?.loadPlugins).toBeUndefined();
     expect(expectRoute(["channels", "status"])?.loadPlugins).toBeUndefined();
+  });
+
+  it("matches agents read-only routes without plugin preload", () => {
+    expect(expectRoute(["agents"])?.loadPlugins).toBeUndefined();
+    expect(expectRoute(["agents", "list"])?.loadPlugins).toBeUndefined();
+  });
+
+  it("passes parsed agents list flags through", async () => {
+    await expect(expectRoute(["agents"])?.run(["node", "openclaw", "agents"])).resolves.toBe(true);
+    expect(agentsListCommandMock).toHaveBeenCalledWith(
+      { json: false, bindings: false },
+      expect.any(Object),
+    );
+
+    await expect(
+      expectRoute(["agents", "list"])?.run([
+        "node",
+        "openclaw",
+        "agents",
+        "list",
+        "--json",
+        "--bindings",
+      ]),
+    ).resolves.toBe(true);
+    expect(agentsListCommandMock).toHaveBeenLastCalledWith(
+      { json: true, bindings: true },
+      expect.any(Object),
+    );
   });
 
   it("passes parsed channel read-only route flags through", async () => {
@@ -375,5 +411,118 @@ describe("program routes", () => {
       }),
       expect.any(Object),
     );
+  });
+
+  it("routes tasks list JSON through the lean task JSON command", async () => {
+    const rootRoute = expectRoute(["tasks"]);
+    expect(rootRoute?.loadPlugins).toBeUndefined();
+    expect(rootRoute?.canRun?.(["node", "openclaw", "tasks"])).toBe(false);
+    await expect(
+      rootRoute?.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "--json",
+        "--runtime",
+        "cli",
+        "--status=running",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
+      { json: true, runtime: "cli", status: "running" },
+      expect.any(Object),
+    );
+
+    const listRoute = expectRoute(["tasks", "list"]);
+    expect(listRoute?.loadPlugins).toBeUndefined();
+    await expect(
+      listRoute?.run(["node", "openclaw", "tasks", "list", "--json", "--runtime=cron"]),
+    ).resolves.toBe(true);
+    expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
+      { json: true, runtime: "cron", status: undefined },
+      expect.any(Object),
+    );
+  });
+
+  it("routes parent task filter values that command-path discovery sees as positionals", async () => {
+    const separateValueArgv = [
+      "node",
+      "openclaw",
+      "tasks",
+      "--json",
+      "--runtime",
+      "cli",
+      "--status",
+      "running",
+    ];
+    const separateValueRoute = findRoutedCommand(["tasks", "cli"], separateValueArgv);
+    expect(separateValueRoute).not.toBeNull();
+    await expect(separateValueRoute?.run(separateValueArgv)).resolves.toBe(true);
+    expect(tasksListJsonCommandMock).toHaveBeenCalledWith(
+      { json: true, runtime: "cli", status: "running" },
+      expect.any(Object),
+    );
+
+    const parentOptionBeforeSubcommandArgv = [
+      "node",
+      "openclaw",
+      "tasks",
+      "--runtime",
+      "cli",
+      "list",
+      "--json",
+    ];
+    const parentOptionBeforeSubcommandRoute = findRoutedCommand(
+      ["tasks", "cli"],
+      parentOptionBeforeSubcommandArgv,
+    );
+    expect(parentOptionBeforeSubcommandRoute).not.toBeNull();
+    await expect(
+      parentOptionBeforeSubcommandRoute?.run(parentOptionBeforeSubcommandArgv),
+    ).resolves.toBe(true);
+    expect(tasksListJsonCommandMock).toHaveBeenLastCalledWith(
+      { json: true, runtime: "cli", status: undefined },
+      expect.any(Object),
+    );
+  });
+
+  it("routes tasks audit JSON through the lean task JSON command", async () => {
+    const route = expectRoute(["tasks", "audit"]);
+    expect(route?.loadPlugins).toBeUndefined();
+    expect(route?.canRun?.(["node", "openclaw", "tasks", "audit"])).toBe(false);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "audit",
+        "--json",
+        "--severity",
+        "error",
+        "--code=stale_running",
+        "--limit",
+        "5",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksAuditJsonCommandMock).toHaveBeenCalledWith(
+      { json: true, severity: "error", code: "stale_running", limit: 5 },
+      expect.any(Object),
+    );
+  });
+
+  it("returns false for task JSON routes when option values are missing or unknown", async () => {
+    await expectRunFalse(["tasks"], ["node", "openclaw", "tasks", "--json", "--runtime"]);
+    await expectRunFalse(["tasks", "list"], ["node", "openclaw", "tasks", "list"]);
+    await expectRunFalse(
+      ["tasks", "audit"],
+      ["node", "openclaw", "tasks", "audit", "--json", "--limit"],
+    );
+    await expectRunFalse(
+      ["tasks", "audit"],
+      ["node", "openclaw", "tasks", "audit", "--json", "--unknown"],
+    );
+    expect(
+      findRoutedCommand(["tasks", "cli"], ["node", "openclaw", "tasks", "--runtime", "cli"]),
+    ).toBeNull();
   });
 });

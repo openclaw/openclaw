@@ -4,7 +4,7 @@ import { vi } from "vitest";
 
 type SessionStore = Record<string, Record<string, unknown>>;
 
-export function resolveSubagentSessionStorePath(stateDir: string, agentId: string): string {
+function resolveSubagentSessionStorePath(stateDir: string, agentId: string): string {
   return path.join(stateDir, "agents", agentId, "sessions", "sessions.json");
 }
 
@@ -65,7 +65,7 @@ export function createSubagentRegistryTestDeps(
     cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
     ensureContextEnginesInitialized: vi.fn(),
     ensureRuntimePluginsLoaded: vi.fn(),
-    loadConfig: vi.fn(() => ({})),
+    getRuntimeConfig: vi.fn(() => ({})),
     resolveAgentTimeoutMs: vi.fn(() => 100),
     resolveContextEngine: vi.fn(async () => ({
       info: { id: "test", name: "Test", version: "0.0.1" },

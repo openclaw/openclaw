@@ -3,12 +3,12 @@ import Contacts
 import CoreLocation
 import CoreMotion
 import CryptoKit
+import Darwin
 import EventKit
 import Foundation
-import Darwin
-import OpenClawKit
 import Network
 import Observation
+import OpenClawKit
 import os
 import Photos
 import ReplayKit
@@ -28,7 +28,9 @@ final class GatewayConnectionController {
         let fingerprintSha256: String
         let isManual: Bool
 
-        var id: String { self.stableID }
+        var id: String {
+            self.stableID
+        }
     }
 
     private(set) var gateways: [GatewayDiscoveryModel.DiscoveredGateway] = []
@@ -85,7 +87,6 @@ final class GatewayConnectionController {
         self.discovery.start()
         self.updateFromDiscovery()
     }
-
 
     /// Returns `nil` when a connect attempt was started, otherwise returns a user-facing error.
     func connectWithDiagnostics(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async -> String? {
@@ -177,7 +178,7 @@ final class GatewayConnectionController {
             guard let fp = await self.probeTLSFingerprint(url: url) else {
                 self.appModel?.gatewayStatusText =
                     "TLS handshake failed for \(host):\(resolvedPort). "
-                    + "Remote gateways must use HTTPS/WSS."
+                        + "Remote gateways must use HTTPS/WSS."
                 return
             }
             self.pendingTrustConnect = (url: url, stableID: stableID, isManual: true)
@@ -557,11 +558,11 @@ final class GatewayConnectionController {
     private func resolveHostPortFromBonjourEndpoint(_ endpoint: NWEndpoint) async -> (host: String, port: Int)? {
         switch endpoint {
         case let .hostPort(host, port):
-            return (host: host.debugDescription, port: Int(port.rawValue))
+            (host: host.debugDescription, port: Int(port.rawValue))
         case let .service(name, type, domain, _):
-            return await Self.resolveBonjourServiceToHostPort(name: name, type: type, domain: domain)
+            await Self.resolveBonjourServiceToHostPort(name: name, type: type, domain: domain)
         default:
-            return nil
+            nil
         }
     }
 
@@ -569,8 +570,8 @@ final class GatewayConnectionController {
         name: String,
         type: String,
         domain: String,
-        timeoutSeconds: TimeInterval = 3.0
-    ) async -> (host: String, port: Int)? {
+        timeoutSeconds: TimeInterval = 3.0) async -> (host: String, port: Int)?
+    {
         // NetService callbacks are delivered via a run loop. If we resolve from a thread without one,
         // we can end up never receiving callbacks, which in turn leaks the continuation and leaves
         // the UI stuck "connecting". Keep the whole lifecycle on the main run loop and always
@@ -636,8 +637,8 @@ final class GatewayConnectionController {
                 }
 
                 guard let addrs = svc.addresses else { return nil }
-                    for addrData in addrs {
-                        let host = addrData.withUnsafeBytes { ptr -> String? in
+                for addrData in addrs {
+                    let host = addrData.withUnsafeBytes { ptr -> String? in
                         guard let base = ptr.baseAddress, !ptr.isEmpty else { return nil }
                         var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
 
@@ -688,58 +689,13 @@ final class GatewayConnectionController {
     }
 
     private func shouldRequireTLS(host: String) -> Bool {
-        !Self.isLoopbackHost(host)
+        !LoopbackHost.isLocalNetworkHost(host)
     }
 
     private func shouldForceTLS(host: String) -> Bool {
         let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if trimmed.isEmpty { return false }
         return trimmed.hasSuffix(".ts.net") || trimmed.hasSuffix(".ts.net.")
-    }
-
-    private static func isLoopbackHost(_ rawHost: String) -> Bool {
-        var host = rawHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !host.isEmpty else { return false }
-
-        if host.hasPrefix("[") && host.hasSuffix("]") {
-            host.removeFirst()
-            host.removeLast()
-        }
-        if host.hasSuffix(".") {
-            host.removeLast()
-        }
-        if let zoneIndex = host.firstIndex(of: "%") {
-            host = String(host[..<zoneIndex])
-        }
-        if host.isEmpty { return false }
-
-        if host == "localhost" || host == "0.0.0.0" || host == "::" {
-            return true
-        }
-        return Self.isLoopbackIPv4(host) || Self.isLoopbackIPv6(host)
-    }
-
-    private static func isLoopbackIPv4(_ host: String) -> Bool {
-        var addr = in_addr()
-        let parsed = host.withCString { inet_pton(AF_INET, $0, &addr) == 1 }
-        guard parsed else { return false }
-        let value = UInt32(bigEndian: addr.s_addr)
-        let firstOctet = UInt8((value >> 24) & 0xFF)
-        return firstOctet == 127
-    }
-
-    private static func isLoopbackIPv6(_ host: String) -> Bool {
-        var addr = in6_addr()
-        let parsed = host.withCString { inet_pton(AF_INET6, $0, &addr) == 1 }
-        guard parsed else { return false }
-        return withUnsafeBytes(of: &addr) { rawBytes in
-            let bytes = rawBytes.bindMemory(to: UInt8.self)
-            let isV6Loopback = bytes[0..<15].allSatisfy { $0 == 0 } && bytes[15] == 1
-            if isV6Loopback { return true }
-
-            let isMappedV4 = bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xFF && bytes[11] == 0xFF
-            return isMappedV4 && bytes[12] == 127
-        }
     }
 
     private func manualStableID(host: String, port: Int) -> String {
@@ -764,7 +720,8 @@ final class GatewayConnectionController {
 
     private func resolvedClientId(defaults: UserDefaults, stableID: String?) -> String {
         if let stableID,
-           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID) {
+           let override = GatewaySettingsStore.loadGatewayClientIdOverride(stableID: stableID)
+        {
             return override
         }
         let manualClientId = defaults.string(forKey: "gateway.manual.clientId")?
@@ -781,7 +738,7 @@ final class GatewayConnectionController {
         }
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedHost.isEmpty else { return nil }
-        if useTLS && self.shouldForceTLS(host: trimmedHost) {
+        if useTLS, self.shouldForceTLS(host: trimmedHost) {
             return 443
         }
         return 18789
@@ -819,6 +776,7 @@ final class GatewayConnectionController {
         if locationMode != .off { caps.append(OpenClawCapability.location.rawValue) }
 
         caps.append(OpenClawCapability.device.rawValue)
+        caps.append(OpenClawCapability.talk.rawValue)
         if WatchMessagingService.isSupportedOnDevice() {
             caps.append(OpenClawCapability.watch.rawValue)
         }
@@ -929,9 +887,9 @@ final class GatewayConnectionController {
     private static func isLocationAuthorized(status: CLAuthorizationStatus) -> Bool {
         switch status {
         case .authorizedAlways, .authorizedWhenInUse:
-            return true
+            true
         default:
-            return false
+            false
         }
     }
 
@@ -1045,8 +1003,8 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
     func urlSession(
         _ session: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
+        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
+    {
         guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
               let trust = challenge.protectionSpace.serverTrust
         else {

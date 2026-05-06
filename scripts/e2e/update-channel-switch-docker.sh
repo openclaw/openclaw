@@ -1,21 +1,37 @@
 #!/usr/bin/env bash
+# Exercises package-to-git and git-to-package update channel switching in Docker.
+# Both package and git fixtures are derived from the same prepared npm tarball.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}")"
+# Bare lanes mount the package artifact instead of baking app sources into the image.
+docker_e2e_package_mount_args "$PACKAGE_TGZ"
+OPENCLAW_TEST_STATE_SCRIPT_B64="$(
+  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+    --label update-channel-switch \
+    --scenario update-stable |
+    base64 |
+    tr -d '\n'
+)"
 
-docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "" "$SKIP_BUILD"
+docker_e2e_build_or_reuse "$IMAGE_NAME" update-channel-switch "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
 echo "Running update channel switch E2E..."
-docker run --rm \
+docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
+  -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
   bash -lc 'set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export npm_config_loglevel=error
 export npm_config_fund=false
@@ -29,48 +45,45 @@ export OPENCLAW_DISABLE_BUNDLED_PLUGINS=1
 export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 
-cat > /app/.gitignore <<'"'"'GITIGNORE'"'"'
-node_modules
-**/node_modules/
-dist
-dist-runtime
-.turbo
-coverage
-GITIGNORE
-
-node --import tsx scripts/write-package-dist-inventory.ts
+package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+git_root="/tmp/openclaw-git"
+mkdir -p "$git_root"
+# Build the fake git install from the packed package contents, not the checkout.
+tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
+# The package-derived fixture can carry patchedDependencies whose targets are
+# absent from the trimmed tarball install; that should not block update preflight.
+node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
+(
+  cd "$git_root"
+  if ! npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+    cat /tmp/openclaw-git-install.log >&2 || true
+    exit 1
+  fi
+)
+node scripts/e2e/lib/update-channel-switch/assertions.mjs write-control-ui "$git_root"
 
 git config --global user.email "docker-e2e@openclaw.local"
 git config --global user.name "OpenClaw Docker E2E"
 git config --global gc.auto 0
-git -C /app init -q
-git -C /app config gc.auto 0
-git -C /app add -A
-git -C /app commit -qm "test fixture"
-fixture_sha="$(git -C /app rev-parse HEAD)"
+git -C "$git_root" init -q
+git -C "$git_root" config gc.auto 0
+git -C "$git_root" add -A
+git -C "$git_root" add -f dist/control-ui/index.html
+git -C "$git_root" commit -qm "test fixture"
+fixture_sha="$(git -C "$git_root" rev-parse HEAD)"
 
-pkg_tgz="$(npm pack --ignore-scripts --silent --pack-destination /tmp /app | tail -n 1 | tr -d "\r")"
-pkg_tgz_path="/tmp/$pkg_tgz"
-if [ ! -f "$pkg_tgz_path" ]; then
-  echo "npm pack failed (expected $pkg_tgz_path)"
-  exit 1
-fi
+pkg_tgz_path="$package_tgz"
 
 npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"
+package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
+OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
+  node scripts/e2e/lib/package-compat.mjs "$package_version"
+)"
+export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
-home_dir="$(mktemp -d /tmp/openclaw-update-channel-switch-home.XXXXXX)"
-export HOME="$home_dir"
-mkdir -p "$HOME/.openclaw"
-cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
-{
-  "update": {
-    "channel": "stable"
-  },
-  "plugins": {}
-}
-JSON
+openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 
-export OPENCLAW_GIT_DIR=/app
+export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
 
 echo "==> package -> git dev channel"
@@ -82,40 +95,12 @@ printf "%s\n" "$dev_json"
 if [ "$dev_status" -ne 0 ]; then
   exit "$dev_status"
 fi
-DEV_JSON="$dev_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.DEV_JSON);
-if (payload.status !== "ok") {
-  throw new Error(`expected dev update status ok, got ${payload.status}`);
-}
-if (payload.mode !== "git") {
-  throw new Error(`expected dev update mode git, got ${payload.mode}`);
-}
-if (payload.postUpdate?.plugins?.status !== "ok") {
-  throw new Error(`expected plugin post-update ok, got ${JSON.stringify(payload.postUpdate?.plugins)}`);
-}
-NODE
-
-node - <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-const path = require("node:path");
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (config.update?.channel !== "dev") {
-  throw new Error(`expected persisted update.channel dev, got ${JSON.stringify(config.update?.channel)}`);
-}
-NODE
+UPDATE_JSON="$dev_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update dev
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.STATUS_JSON);
-if (payload.update?.installKind !== "git") {
-  throw new Error(`expected git install after dev switch, got ${payload.update?.installKind}`);
-}
-if (payload.channel?.value !== "dev" || payload.channel?.source !== "config") {
-  throw new Error(`expected dev config channel after dev switch, got ${JSON.stringify(payload.channel)}`);
-}
-NODE
+STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind git
 
 echo "==> git -> package stable channel"
 set +e
@@ -126,40 +111,12 @@ printf "%s\n" "$stable_json"
 if [ "$stable_status" -ne 0 ]; then
   exit "$stable_status"
 fi
-STABLE_JSON="$stable_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.STABLE_JSON);
-if (payload.status !== "ok") {
-  throw new Error(`expected stable update status ok, got ${payload.status}`);
-}
-if (!["npm", "pnpm", "bun"].includes(payload.mode)) {
-  throw new Error(`expected package-manager mode after stable switch, got ${payload.mode}`);
-}
-if (payload.postUpdate?.plugins?.status !== "ok") {
-  throw new Error(`expected plugin post-update ok, got ${JSON.stringify(payload.postUpdate?.plugins)}`);
-}
-NODE
-
-node - <<'"'"'NODE'"'"'
-const fs = require("node:fs");
-const path = require("node:path");
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-if (config.update?.channel !== "stable") {
-  throw new Error(`expected persisted update.channel stable, got ${JSON.stringify(config.update?.channel)}`);
-}
-NODE
+UPDATE_JSON="$stable_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update stable
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 status_json="$(openclaw update status --json)"
 printf "%s\n" "$status_json"
-STATUS_JSON="$status_json" node - <<'"'"'NODE'"'"'
-const payload = JSON.parse(process.env.STATUS_JSON);
-if (payload.update?.installKind !== "package") {
-  throw new Error(`expected package install after stable switch, got ${payload.update?.installKind}`);
-}
-if (payload.channel?.value !== "stable" || payload.channel?.source !== "config") {
-  throw new Error(`expected stable config channel after stable switch, got ${JSON.stringify(payload.channel)}`);
-}
-NODE
+STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
 echo "OK"
 '

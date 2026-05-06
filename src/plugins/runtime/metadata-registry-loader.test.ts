@@ -7,6 +7,7 @@ const loadOpenClawPluginsMock = vi.fn();
 let loadPluginMetadataRegistrySnapshot: typeof import("./metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot;
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfigMock(),
   loadConfig: () => loadConfigMock(),
 }));
 
@@ -97,6 +98,47 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
         config: { plugins: {} },
         logger,
         workspaceDir: "/workspace",
+        mode: "validate",
+      }),
+    );
+  });
+
+  it("honors explicit load options when reusing a resolved runtime context", () => {
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const env = { HOME: "/tmp/context-home" } as NodeJS.ProcessEnv;
+    const manifestRegistry = { plugins: [], diagnostics: [] };
+
+    loadPluginMetadataRegistrySnapshot({
+      config: { plugins: { allow: ["compat-provider"] } },
+      activationSourceConfig: { plugins: { allow: ["raw-plugin"] } },
+      workspaceDir: "/compat-workspace",
+      env,
+      logger,
+      manifestRegistry,
+      runtimeContext: {
+        rawConfig: { plugins: { allow: ["raw-plugin"] } },
+        config: { plugins: { allow: ["raw-plugin"] } },
+        activationSourceConfig: { plugins: { allow: ["raw-plugin"] } },
+        autoEnabledReasons: {},
+        workspaceDir: "/context-workspace",
+        env,
+        logger,
+      },
+    });
+
+    expect(applyPluginAutoEnableMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: { plugins: { allow: ["compat-provider"] } },
+        activationSourceConfig: { plugins: { allow: ["raw-plugin"] } },
+        workspaceDir: "/compat-workspace",
+        env,
+        logger,
+        manifestRegistry,
         mode: "validate",
       }),
     );

@@ -3,9 +3,9 @@
 import { execFileSync, execSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdtempSync,
   mkdirSync,
-  realpathSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -14,84 +14,93 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
-  isBundledRuntimeDepsInstallStagePath,
+  isLegacyPluginDependencyInstallStagePath,
+  LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   writePackageDistInventory,
 } from "../src/infra/package-dist-inventory.ts";
-import {
-  resolveBundledRuntimeDependencyInstallRoot,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
-} from "../src/plugins/bundled-runtime-deps.ts";
+import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
-import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
-  collectBuiltBundledPluginStagedRuntimeDependencyErrors,
-  collectBundledPluginRootRuntimeMirrorErrors,
-  collectBundledPluginRuntimeDependencySpecs,
-  collectRootDistBundledRuntimeMirrors,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+  collectRootPackageExcludedExtensionDirs,
+  listBundledPluginPackArtifacts,
+} from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
+import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
-import { discoverBundledPluginRuntimeDeps } from "./postinstall-bundled-plugins.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export {
-  collectBuiltBundledPluginStagedRuntimeDependencyErrors,
-  collectBundledPluginRootRuntimeMirrorErrors,
-  collectRootDistBundledRuntimeMirrors,
-  packageNameFromSpecifier,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 
+const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
-  ...listStaticExtensionAssetOutputs(),
+  ...listStaticExtensionAssetOutputs().filter((relativePath) => {
+    const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
+    return !match || !rootPackageExcludedExtensionDirs.has(match[1]);
+  }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
+  "scripts/lib/official-external-channel-catalog.json",
+  "scripts/lib/official-external-plugin-catalog.json",
+  "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
   "dist/plugin-sdk/compat.js",
   "dist/plugin-sdk/root-alias.cjs",
+  "dist/task-registry-control.runtime.js",
   "dist/build-info.json",
   "dist/channel-catalog.json",
   "dist/control-ui/index.html",
 ];
 const forbiddenPrefixes = [
+  ...LOCAL_BUILD_METADATA_DIST_PATHS,
   "dist-runtime/",
   "dist/OpenClaw.app/",
   "dist/extensions/qa-channel/",
   "dist/extensions/qa-lab/",
+  "dist/plugin-sdk/extensions/qa-channel/",
   "dist/plugin-sdk/extensions/qa-lab/",
+  "dist/plugin-sdk/qa-channel.",
+  "dist/plugin-sdk/qa-channel-protocol.",
   "dist/plugin-sdk/qa-lab.",
   "dist/plugin-sdk/qa-runtime.",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts",
+  "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-lab.d.ts",
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
   "dist/qa-runtime-",
   "dist/plugin-sdk/.tsbuildinfo",
   "docs/.generated/",
+  "docs/channels/qa-channel.md",
   "qa/",
 ];
 const forbiddenPrivateQaContentMarkers = [
   "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
+  "qa-channel.js",
+  "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
@@ -100,11 +109,33 @@ const appcastPath = resolve("appcast.xml");
 const laneBuildMin = 1_000_000_000;
 const laneFloorAdoptionDateKey = 20260227;
 const SAFE_UNIX_SMOKE_PATH = "/usr/bin:/bin";
+export const MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES = 2 * 1024 * 1024;
+export const CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS = [
+  "openclaw/plugin-sdk/agent-runtime-test-contracts",
+  "openclaw/plugin-sdk/plugin-test-contracts",
+  "openclaw/plugin-sdk/provider-test-contracts",
+] as const;
+export const CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS = [
+  "openclaw/plugin-sdk/plugin-test-contracts",
+] as const;
 export const PACKED_CLI_SMOKE_COMMANDS = [
   ["--help"],
+  ["onboard", "--help"],
+  ["doctor", "--help"],
   ["status", "--json", "--timeout", "1"],
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
+] as const;
+export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = [
+  "doctor",
+  "--fix",
+  "--non-interactive",
+] as const;
+export const PACKED_COMPLETION_SMOKE_ARGS = [
+  "completion",
+  "--write-state",
+  "--shell",
+  "zsh",
 ] as const;
 
 function collectBundledExtensions(): BundledExtension[] {
@@ -131,26 +162,18 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-  };
-  const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
+  const bundledPackageDependencySpecs = collectBundledPluginPackageDependencySpecs(
     resolve("extensions"),
   );
-  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
-    bundledRuntimeDependencySpecs,
-    distDir: resolve("dist"),
-  });
-  const rootMirrorErrors = collectBundledPluginRootRuntimeMirrorErrors({
-    bundledRuntimeDependencySpecs,
-    requiredRootMirrors,
-    rootPackageJson: rootPackage,
-  });
-  const builtArtifactErrors = collectBuiltBundledPluginStagedRuntimeDependencyErrors({
-    bundledPluginsDir: resolve("dist/extensions"),
-  });
-  const errors = [...manifestErrors, ...rootMirrorErrors, ...builtArtifactErrors];
+  const dependencyConflictErrors = [...bundledPackageDependencySpecs.entries()]
+    .flatMap(([dependencyName, record]) =>
+      record.conflicts.map(
+        (conflict) =>
+          `bundled plugin package dependency '${dependencyName}' has conflicting specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
+      ),
+    )
+    .toSorted((left, right) => left.localeCompare(right));
+  const errors = [...manifestErrors, ...dependencyConflictErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of errors) {
@@ -279,8 +302,22 @@ export function createPackedCliSmokeEnv(
     AWS_CONFIG_FILE: homeDir ? join(homeDir, ".aws", "config") : undefined,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     OPENCLAW_NO_ONBOARD: "1",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     OPENCLAW_SUPPRESS_NOTES: "1",
     ...overrides,
+  };
+}
+
+export function createPackedCompletionSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  overrides: NodeJS.ProcessEnv = {},
+): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    ...overrides,
+    OPENCLAW_SUPPRESS_NOTES: "1",
+    OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
+    [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
   };
 }
 
@@ -292,108 +329,7 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
   });
 }
 
-export function collectInstalledBundledPluginRuntimeDepErrors(packageRoot: string): string[] {
-  const extensionsDir = join(packageRoot, "dist", "extensions");
-  if (!existsSync(extensionsDir)) {
-    return [];
-  }
-  const runtimeDeps = discoverBundledPluginRuntimeDeps({ extensionsDir });
-  return runtimeDeps
-    .filter((dep) => !existsSync(join(packageRoot, dep.sentinelPath)))
-    .map((dep) => {
-      const owners = dep.pluginIds.length > 0 ? dep.pluginIds.join(", ") : "unknown";
-      return `bundled plugin runtime dependency '${dep.name}@${dep.version}' (owners: ${owners}) is missing at ${dep.sentinelPath}.`;
-    })
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function bundledRuntimeDependencySentinelPath(
-  packageRoot: string,
-  pluginId: string,
-  dependencyName: string,
-): string {
-  return join(
-    packageRoot,
-    "dist",
-    "extensions",
-    pluginId,
-    "node_modules",
-    ...dependencyName.split("/"),
-    "package.json",
-  );
-}
-
-export function bundledRuntimeDependencySentinelCandidates(
-  packageRoot: string,
-  pluginId: string,
-  dependencyName: string,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const dependencyParts = dependencyName.split("/");
-  const packageRoots = [
-    packageRoot,
-    (() => {
-      try {
-        return realpathSync(packageRoot);
-      } catch {
-        return packageRoot;
-      }
-    })(),
-  ];
-  const runtimeRoots = packageRoots.flatMap((root) => [
-    resolveBundledRuntimeDependencyPackageInstallRoot(root, { env }),
-    resolveBundledRuntimeDependencyInstallRoot(join(root, "dist", "extensions", pluginId), {
-      env,
-    }),
-  ]);
-  return [
-    bundledRuntimeDependencySentinelPath(packageRoot, pluginId, dependencyName),
-    join(packageRoot, "dist", "extensions", "node_modules", ...dependencyParts, "package.json"),
-    join(packageRoot, "node_modules", ...dependencyParts, "package.json"),
-    ...runtimeRoots.map((root) => join(root, "node_modules", ...dependencyParts, "package.json")),
-  ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index);
-}
-
-function assertBundledRuntimeDependencyAbsent(params: {
-  packageRoot: string;
-  pluginId: string;
-  dependencyName: string;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  const sentinelPath = bundledRuntimeDependencySentinelCandidates(
-    params.packageRoot,
-    params.pluginId,
-    params.dependencyName,
-    params.env,
-  ).find((candidate) => existsSync(candidate));
-  if (sentinelPath) {
-    throw new Error(
-      `release-check: ${params.pluginId} runtime dependency ${params.dependencyName} was installed before plugin activation (${sentinelPath}).`,
-    );
-  }
-}
-
-function assertBundledRuntimeDependencyPresent(params: {
-  packageRoot: string;
-  pluginId: string;
-  dependencyName: string;
-  env?: NodeJS.ProcessEnv;
-}): void {
-  const sentinelPath = bundledRuntimeDependencySentinelCandidates(
-    params.packageRoot,
-    params.pluginId,
-    params.dependencyName,
-    params.env,
-  ).find((candidate) => existsSync(candidate));
-  if (sentinelPath) {
-    return;
-  }
-  throw new Error(
-    `release-check: ${params.pluginId} runtime dependency ${params.dependencyName} was not installed during plugin activation.`,
-  );
-}
-
-function writePackedBundledPluginActivationConfig(homeDir: string): void {
+export function writePackedBundledPluginActivationConfig(homeDir: string): void {
   const configPath = join(homeDir, ".openclaw", "openclaw.json");
   mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
   writeFileSync(
@@ -402,11 +338,11 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
       {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-4.1-mini" },
+            model: { primary: "openai/gpt-5.5" },
           },
         },
         channels: {
-          feishu: {
+          matrix: {
             enabled: true,
           },
         },
@@ -422,7 +358,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
         plugins: {
           enabled: true,
           entries: {
-            feishu: {
+            matrix: {
               enabled: true,
             },
           },
@@ -436,31 +372,53 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
 }
 
 function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
-  const lazyDeps = [
-    { pluginId: "browser", dependencyName: "playwright-core" },
-    { pluginId: "feishu", dependencyName: "@larksuiteoapi/node-sdk" },
-  ] as const;
-
   const homeDir = join(tmpRoot, "activation-home");
   mkdirSync(homeDir, { recursive: true });
   const env = createPackedCliSmokeEnv(process.env, {
     HOME: homeDir,
     OPENAI_API_KEY: "sk-openclaw-release-check",
   });
-  for (const dep of lazyDeps) {
-    assertBundledRuntimeDependencyAbsent({ packageRoot, env, ...dep });
-  }
 
   writePackedBundledPluginActivationConfig(homeDir);
+  execFileSync(
+    process.execPath,
+    [join(packageRoot, "openclaw.mjs"), ...PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS],
+    {
+      cwd: packageRoot,
+      stdio: "inherit",
+      env,
+    },
+  );
   execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
     cwd: packageRoot,
     stdio: "inherit",
     env,
   });
+}
 
-  for (const dep of lazyDeps) {
-    assertBundledRuntimeDependencyPresent({ packageRoot, env, ...dep });
+function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
+  const runtimePath = join(packageRoot, "dist", "task-registry-control.runtime.js");
+  if (!existsSync(runtimePath)) {
+    throw new Error("release-check: packed task-registry control runtime is missing.");
   }
+  const runtimeImportExpression = [
+    `(0, Function)("specifier", "return " + "im" + "port(specifier)")`,
+    `(${JSON.stringify(pathToFileURL(runtimePath).href)})`,
+  ].join("");
+  const source = `
+const runtime = await ${runtimeImportExpression};
+if (typeof runtime.getAcpSessionManager !== "function") {
+  throw new Error("missing getAcpSessionManager export");
+}
+if (typeof runtime.killSubagentRunAdmin !== "function") {
+  throw new Error("missing killSubagentRunAdmin export");
+}
+`;
+  execFileSync(process.execPath, ["--input-type=module", "--eval", source], {
+    cwd: packageRoot,
+    stdio: "inherit",
+    env: createPackedCliSmokeEnv(process.env),
+  });
 }
 
 function runPackedCliSmoke(params: {
@@ -525,6 +483,7 @@ function runPackedBundledChannelEntrySmoke(): void {
     });
     runPackedBundledPluginPostinstall(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
+    runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     execFileSync(
       process.execPath,
       [
@@ -543,17 +502,14 @@ function runPackedBundledChannelEntrySmoke(): void {
 
     execFileSync(
       process.execPath,
-      [join(packageRoot, "openclaw.mjs"), "completion", "--write-state"],
+      [join(packageRoot, "openclaw.mjs"), ...PACKED_COMPLETION_SMOKE_ARGS],
       {
         cwd: packageRoot,
         stdio: "inherit",
-        env: {
-          ...process.env,
+        env: createPackedCompletionSmokeEnv(process.env, {
           HOME: homeDir,
           OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_SUPPRESS_NOTES: "1",
-          OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
-        },
+        }),
       },
     );
 
@@ -582,11 +538,32 @@ export function collectMissingPackPaths(paths: Iterable<string>): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+export function resolveMissingPackBuildHint(missing: readonly string[]): string | null {
+  const needsControlUiBuild = missing.includes("dist/control-ui/index.html");
+  const needsRuntimeBuild = missing.some(
+    (path) =>
+      path !== "dist/control-ui/index.html" &&
+      (path === "dist/build-info.json" || path.startsWith("dist/")),
+  );
+
+  if (!needsControlUiBuild && !needsRuntimeBuild) {
+    return null;
+  }
+
+  if (needsControlUiBuild && needsRuntimeBuild) {
+    return "release-check: build and Control UI artifacts are missing. Run `pnpm build && pnpm ui:build` before `pnpm release:check`.";
+  }
+  if (needsControlUiBuild) {
+    return "release-check: Control UI artifacts are missing. Run `pnpm ui:build` before `pnpm release:check`.";
+  }
+  return "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.";
+}
+
 export function collectForbiddenPackPaths(paths: Iterable<string>): string[] {
   return [...paths]
     .filter(
       (path) =>
-        isBundledRuntimeDepsInstallStagePath(path) ||
+        isLegacyPluginDependencyInstallStagePath(path) ||
         forbiddenPrefixes.some((prefix) => path.startsWith(prefix)) ||
         /(^|\/)\.openclaw-runtime-deps-[^/]+(\/|$)/u.test(path) ||
         path.endsWith("/.openclaw-runtime-deps-stamp.json") ||
@@ -602,9 +579,6 @@ export function collectForbiddenPackContentPaths(
   const textPathPattern = /\.(?:[cm]?js|d\.ts|json|md|mjs|cjs)$/u;
   return [...paths]
     .filter((packedPath) => {
-      if (packedPath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
-        return false;
-      }
       if (!forbiddenPrivateQaContentScanPrefixes.some((prefix) => packedPath.startsWith(prefix))) {
         return false;
       }
@@ -779,9 +753,61 @@ async function checkPluginSdkExports() {
   }
 }
 
+export function collectCriticalPluginSdkEntrypointSizeErrors(rootDir = process.cwd()): string[] {
+  const errors: string[] = [];
+  for (const specifier of CRITICAL_PLUGIN_SDK_SIZE_CHECK_SPECIFIERS) {
+    const subpath = specifier.slice("openclaw/plugin-sdk/".length);
+    const relativePath = `dist/plugin-sdk/${subpath}.js`;
+    const filePath = resolve(rootDir, relativePath);
+    if (!existsSync(filePath)) {
+      errors.push(`${relativePath} is missing.`);
+      continue;
+    }
+    const stat = lstatSync(filePath);
+    if (!stat.isFile()) {
+      errors.push(`${relativePath} is not a file.`);
+      continue;
+    }
+    if (stat.size > MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES) {
+      errors.push(
+        `${relativePath} is ${stat.size} bytes, exceeding ${MAX_CRITICAL_PLUGIN_SDK_ENTRYPOINT_BYTES} bytes. Keep public SDK test-contract entrypoints lazy and avoid bundling compiler/runtime internals.`,
+      );
+    }
+  }
+  return errors;
+}
+
+function runCriticalPluginSdkEntrypointImportSmoke() {
+  const script = [
+    `const specifiers = ${JSON.stringify(CRITICAL_PLUGIN_SDK_IMPORT_SMOKE_SPECIFIERS)};`,
+    `const importModule = new Function("specifier", "return imp" + "ort(specifier)");`,
+    "for (const specifier of specifiers) {",
+    "  await importModule(specifier);",
+    "}",
+  ].join("\n");
+  execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+  });
+}
+
 async function main() {
   checkAppcastSparkleVersions();
+  checkCliBootstrapExternalImports({
+    logger: {
+      error: (message: string) => console.error(`release-check: ${message}`),
+    },
+  });
   await checkPluginSdkExports();
+  const criticalPluginSdkEntrypointErrors = collectCriticalPluginSdkEntrypointSizeErrors();
+  if (criticalPluginSdkEntrypointErrors.length > 0) {
+    console.error("release-check: critical plugin-sdk entrypoint validation failed:");
+    for (const error of criticalPluginSdkEntrypointErrors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+  runCriticalPluginSdkEntrypointImportSmoke();
   checkBundledExtensionMetadata();
   await writePackageDistInventory(process.cwd());
 
@@ -812,17 +838,9 @@ async function main() {
       for (const path of missing) {
         console.error(`  - ${path}`);
       }
-      if (
-        missing.some(
-          (path) =>
-            path === "dist/build-info.json" ||
-            path === "dist/control-ui/index.html" ||
-            path.startsWith("dist/"),
-        )
-      ) {
-        console.error(
-          "release-check: build artifacts are missing. Run `pnpm build` before `pnpm release:check`.",
-        );
+      const buildHint = resolveMissingPackBuildHint(missing);
+      if (buildHint) {
+        console.error(buildHint);
       }
     }
     if (forbidden.length > 0) {

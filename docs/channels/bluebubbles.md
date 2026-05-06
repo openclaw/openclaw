@@ -66,7 +66,8 @@ Current OpenClaw releases bundle BlueBubbles, so normal packaged builds do not n
 - Always set a webhook password.
 - Webhook authentication is always required. OpenClaw rejects BlueBubbles webhook requests unless they include a password/guid that matches `channels.bluebubbles.password` (for example `?password=<password>` or `x-password`), regardless of loopback/proxy topology.
 - Password authentication is checked before reading/parsing full webhook bodies.
-  </Warning>
+
+</Warning>
 
 ## Keeping Messages.app alive (VM / headless setups)
 
@@ -177,10 +178,12 @@ openclaw channels add bluebubbles --http-url http://192.168.1.100:1234 --passwor
       - `openclaw pairing list bluebubbles`
       - `openclaw pairing approve bluebubbles <CODE>`
     - Pairing is the default token exchange. Details: [Pairing](/channels/pairing)
+
   </Tab>
   <Tab title="Groups">
     - `channels.bluebubbles.groupPolicy = open | allowlist | disabled` (default: `allowlist`).
     - `channels.bluebubbles.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+
   </Tab>
 </Tabs>
 
@@ -264,15 +267,7 @@ With the BlueBubbles Private API enabled, inbound messages arrive with short mes
     bluebubbles: {
       groups: {
         "iMessage;+;chat-family": {
-          systemPrompt: [
-            "When replying in this group, always call action=reply with the",
-            "[[reply_to:N]] messageId from context so your response threads",
-            "under the triggering message. Never send a new unlinked message.",
-            "",
-            "For short acknowledgements ('ok', 'got it', 'on it'), use",
-            "action=react with an appropriate tapback emoji (❤️, 👍, 😂, ‼️, ❓)",
-            "instead of sending a text reply.",
-          ].join(" "),
+          systemPrompt: "When replying in this group, always call action=reply with the [[reply_to:N]] messageId from context so your response threads under the triggering message. Never send a new unlinked message. For short acknowledgements ('ok', 'got it', 'on it'), use action=react with an appropriate tapback emoji (❤️, 👍, 😂, ‼️, ❓) instead of sending a text reply.",
         },
       },
     },
@@ -386,13 +381,14 @@ BlueBubbles supports advanced message actions when enabled in config:
     - **reply**: Reply to a specific message (`messageId`, `text`, `to`).
     - **sendWithEffect**: Send with iMessage effect (`text`, `to`, `effectId`).
     - **renameGroup**: Rename a group chat (`chatGuid`, `displayName`).
-    - **setGroupIcon**: Set a group chat's icon/photo (`chatGuid`, `media`) — flaky on macOS 26 Tahoe (API may return success but the icon does not sync).
+    - **setGroupIcon**: Set a group chat's icon/photo (`chatGuid`, `media`) - flaky on macOS 26 Tahoe (API may return success but the icon does not sync).
     - **addParticipant**: Add someone to a group (`chatGuid`, `address`).
     - **removeParticipant**: Remove someone from a group (`chatGuid`, `address`).
     - **leaveGroup**: Leave a group chat (`chatGuid`).
     - **upload-file**: Send media/files (`to`, `buffer`, `filename`, `asVoice`).
       - Voice memos: set `asVoice: true` with **MP3** or **CAF** audio to send as an iMessage voice message. BlueBubbles converts MP3 → CAF when sending voice memos.
     - Legacy alias: `sendAttachment` still works, but `upload-file` is the canonical action name.
+
   </Accordion>
 </AccordionGroup>
 
@@ -416,12 +412,12 @@ See [Configuration](/gateway/configuration) for template variables.
 
 ## Coalescing split-send DMs (command + URL in one composition)
 
-When a user types a command and a URL together in iMessage — e.g. `Dump https://example.com/article` — Apple splits the send into **two separate webhook deliveries**:
+When a user types a command and a URL together in iMessage - e.g. `Dump https://example.com/article` - Apple splits the send into **two separate webhook deliveries**:
 
 1. A text message (`"Dump"`).
 2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
 
-The two webhooks arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 — at which point the command context is already lost.
+The two webhooks arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent receives the command alone on turn 1, replies (often "send me the URL"), and only sees the URL on turn 2 - at which point the command context is already lost.
 
 `channels.bluebubbles.coalesceSameSenderDms` opts a DM into merging consecutive same-sender webhooks into a single agent turn. Group chats continue to key per-message so multi-user turn structure is preserved.
 
@@ -450,7 +446,7 @@ The two webhooks arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coa
     }
     ```
 
-    With the flag on and no explicit `messages.inbound.byChannel.bluebubbles`, the debounce window widens to **2500 ms** (the default for non-coalescing is 500 ms). The wider window is required — Apple's split-send cadence of 0.8-2.0 s does not fit in the tighter default.
+    With the flag on and no explicit `messages.inbound.byChannel.bluebubbles`, the debounce window widens to **2500 ms** (the default for non-coalescing is 500 ms). The wider window is required - Apple's split-send cadence of 0.8-2.0 s does not fit in the tighter default.
 
     To tune the window yourself:
 
@@ -471,8 +467,9 @@ The two webhooks arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coa
   </Tab>
   <Tab title="Trade-offs">
     - **Added latency for DM control commands.** With the flag on, DM control-command messages (like `Dump`, `Save`, etc.) now wait up to the debounce window before dispatching, in case a payload webhook is coming. Group-chat commands keep instant dispatch.
-    - **Merged output is bounded** — merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source `messageId` still reaches inbound-dedupe so a later MessagePoller replay of any individual event is recognized as a duplicate.
+    - **Merged output is bounded** - merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source `messageId` still reaches inbound-dedupe so a later MessagePoller replay of any individual event is recognized as a duplicate.
     - **Opt-in, per-channel.** Other channels (Telegram, WhatsApp, Slack, …) are unaffected.
+
   </Tab>
 </Tabs>
 
@@ -497,7 +494,7 @@ If the flag is on and split-sends still arrive as two turns, check each layer:
     grep coalesceSameSenderDms ~/.openclaw/openclaw.json
     ```
 
-    Then `openclaw gateway restart` — the flag is read at debouncer-registry creation.
+    Then `openclaw gateway restart` - the flag is read at debouncer-registry creation.
 
   </Accordion>
   <Accordion title="Debounce window wide enough for your setup">
@@ -511,13 +508,13 @@ If the flag is on and split-sends still arrive as two turns, check each layer:
 
   </Accordion>
   <Accordion title="Session JSONL timestamps ≠ webhook arrival">
-    Session event timestamps (`~/.openclaw/agents/<id>/sessions/*.jsonl`) reflect when the gateway hands a message to the agent, **not** when the webhook arrived. A queued-second message tagged `[Queued messages while agent was busy]` means the first turn was still running when the second webhook arrived — the coalesce bucket had already flushed. Tune the window against the BB server log, not the session log.
+    Session event timestamps (`~/.openclaw/agents/<id>/sessions/*.jsonl`) reflect when the gateway hands a message to the agent, **not** when the webhook arrived. A queued-second message tagged `[Queued messages while agent was busy]` means the first turn was still running when the second webhook arrived - the coalesce bucket had already flushed. Tune the window against the BB server log, not the session log.
   </Accordion>
   <Accordion title="Memory pressure slowing reply dispatch">
     On smaller machines (8 GB), agent turns can take long enough that the coalesce bucket flushes before the reply completes, and the URL lands as a queued second turn. Check `memory_pressure` and `ps -o rss -p $(pgrep openclaw-gateway)`; if the gateway is over ~500 MB RSS and the compressor is active, close other heavy processes or bump to a larger host.
   </Accordion>
   <Accordion title="Reply-quote sends are a different path">
-    If the user tapped `Dump` as a **reply** to an existing URL-balloon (iMessage shows a "1 Reply" badge on the Dump bubble), the URL lives in `replyToBody`, not in a second webhook. Coalescing does not apply — that's a skill/prompt concern, not a debouncer concern.
+    If the user tapped `Dump` as a **reply** to an existing URL-balloon (iMessage shows a "1 Reply" badge on the Dump bubble), the URL lives in `replyToBody`, not in a second webhook. Coalescing does not apply - that's a skill/prompt concern, not a debouncer concern.
   </Accordion>
 </AccordionGroup>
 
@@ -551,6 +548,7 @@ Full configuration: [Configuration](/gateway/configuration)
     - `channels.bluebubbles.serverUrl`: BlueBubbles REST API base URL.
     - `channels.bluebubbles.password`: API password.
     - `channels.bluebubbles.webhookPath`: Webhook endpoint path (default: `/bluebubbles-webhook`).
+
   </Accordion>
   <Accordion title="Access policy">
     - `channels.bluebubbles.dmPolicy`: `pairing | allowlist | open | disabled` (default: `pairing`).
@@ -559,6 +557,7 @@ Full configuration: [Configuration](/gateway/configuration)
     - `channels.bluebubbles.groupAllowFrom`: Group sender allowlist.
     - `channels.bluebubbles.enrichGroupParticipantsFromContacts`: On macOS, optionally enrich unnamed group participants from local Contacts after gating passes. Default: `false`.
     - `channels.bluebubbles.groups`: Per-group config (`requireMention`, etc.).
+
   </Accordion>
   <Accordion title="Delivery and chunking">
     - `channels.bluebubbles.sendReadReceipts`: Send read receipts (default: `true`).
@@ -566,6 +565,7 @@ Full configuration: [Configuration](/gateway/configuration)
     - `channels.bluebubbles.textChunkLimit`: Outbound chunk size in chars (default: 4000).
     - `channels.bluebubbles.sendTimeoutMs`: Per-request timeout in ms for outbound text sends via `/api/v1/message/text` (default: 30000). Raise on macOS 26 setups where Private API iMessage sends can stall for 60+ seconds inside the iMessage framework; for example `45000` or `60000`. Probes, chat lookups, reactions, edits, and health checks currently keep the shorter 10s default; broadening coverage to reactions and edits is planned as a follow-up. Per-account override: `channels.bluebubbles.accounts.<accountId>.sendTimeoutMs`.
     - `channels.bluebubbles.chunkMode`: `length` (default) splits only when exceeding `textChunkLimit`; `newline` splits on blank lines (paragraph boundaries) before length chunking.
+
   </Accordion>
   <Accordion title="Media and history">
     - `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
@@ -573,10 +573,13 @@ Full configuration: [Configuration](/gateway/configuration)
     - `channels.bluebubbles.coalesceSameSenderDms`: Merge consecutive same-sender DM webhooks into one agent turn so Apple's text+URL split-send arrives as a single message (default: `false`). See [Coalescing split-send DMs](#coalescing-split-send-dms-command--url-in-one-composition) for scenarios, window tuning, and trade-offs. Widens the default inbound debounce window from 500 ms to 2500 ms when enabled without an explicit `messages.inbound.byChannel.bluebubbles`.
     - `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).
     - `channels.bluebubbles.dmHistoryLimit`: DM history limit.
+    - `channels.bluebubbles.replyContextApiFallback`: When an inbound reply lands without `replyToBody`/`replyToSender` and the in-memory reply-context cache misses, fetch the original message from the BlueBubbles HTTP API as a best-effort fallback (default: `false`). Useful for multi-instance deployments sharing one BlueBubbles account, after process restarts, or after long-lived TTL/LRU cache eviction. The fetch is SSRF-guarded by the same policy as every other BlueBubbles client request, never throws, and populates the cache so subsequent replies amortize. Per-account override: `channels.bluebubbles.accounts.<accountId>.replyContextApiFallback`. A channel-level setting propagates to accounts that omit the flag.
+
   </Accordion>
   <Accordion title="Actions and accounts">
     - `channels.bluebubbles.actions`: Enable/disable specific actions.
     - `channels.bluebubbles.accounts`: Multi-account configuration.
+
   </Accordion>
 </AccordionGroup>
 
@@ -614,15 +617,15 @@ When the same handle has both an iMessage and an SMS chat on the Mac (for exampl
 - Edit/unsend require macOS 13+ and a compatible BlueBubbles server version. On macOS 26 (Tahoe), edit is currently broken due to private API changes.
 - Group icon updates can be flaky on macOS 26 (Tahoe): the API may return success but the new icon does not sync.
 - OpenClaw auto-hides known-broken actions based on the BlueBubbles server's macOS version. If edit still appears on macOS 26 (Tahoe), disable it manually with `channels.bluebubbles.actions.edit=false`.
-- `coalesceSameSenderDms` enabled but split-sends (e.g. `Dump` + URL) still arrive as two turns: see the [split-send coalescing troubleshooting](#split-send-coalescing-troubleshooting) checklist — common causes are too-tight debounce window, session-log timestamps misread as webhook arrival, or a reply-quote send (which uses `replyToBody`, not a second webhook).
+- `coalesceSameSenderDms` enabled but split-sends (e.g. `Dump` + URL) still arrive as two turns: see the [split-send coalescing troubleshooting](#split-send-coalescing-troubleshooting) checklist - common causes are too-tight debounce window, session-log timestamps misread as webhook arrival, or a reply-quote send (which uses `replyToBody`, not a second webhook).
 - For status/health info: `openclaw status --all` or `openclaw status --deep`.
 
 For general channel workflow reference, see [Channels](/channels) and the [Plugins](/tools/plugin) guide.
 
 ## Related
 
-- [Channel Routing](/channels/channel-routing) — session routing for messages
-- [Channels Overview](/channels) — all supported channels
-- [Groups](/channels/groups) — group chat behavior and mention gating
-- [Pairing](/channels/pairing) — DM authentication and pairing flow
-- [Security](/gateway/security) — access model and hardening
+- [Channel Routing](/channels/channel-routing) - session routing for messages
+- [Channels Overview](/channels) - all supported channels
+- [Groups](/channels/groups) - group chat behavior and mention gating
+- [Pairing](/channels/pairing) - DM authentication and pairing flow
+- [Security](/gateway/security) - access model and hardening

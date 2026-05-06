@@ -2,11 +2,12 @@ import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuConversationId } from "./conversation-id.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { downloadMessageResourceFeishu } from "./media.js";
+import { isFeishuBroadcastMention } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import { getFeishuRuntime } from "./runtime.js";
 import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
 
-export type FeishuMention = {
+type FeishuMention = {
   key: string;
   id: {
     open_id?: string;
@@ -36,11 +37,11 @@ type FeishuMessageLike = {
   };
 };
 
-export type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
+type GroupSessionScope = "group" | "group_sender" | "group_topic" | "group_topic_sender";
 
 type FeishuLogger = (...args: unknown[]) => void;
 
-export type ResolvedFeishuGroupSession = {
+type ResolvedFeishuGroupSession = {
   peerId: string;
   parentPeer: { kind: "group"; id: string } | null;
   groupSessionScope: GroupSessionScope;
@@ -249,15 +250,16 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
   if (!botOpenId) {
     return false;
   }
-  if ((event.message.content ?? "").includes("@_all")) {
-    return true;
-  }
   const mentions = event.message.mentions ?? [];
   if (mentions.length > 0) {
-    return mentions.some((mention) => mention.id.open_id === botOpenId);
+    return mentions.some(
+      (mention) => !isFeishuBroadcastMention(mention) && mention.id.open_id === botOpenId,
+    );
   }
   if (event.message.message_type === "post") {
-    return parsePostContent(event.message.content).mentionedOpenIds.some((id) => id === botOpenId);
+    return parsePostContent(event.message.content).mentionedOpenIds.some(
+      (id) => id.trim().toLowerCase() !== "all" && id === botOpenId,
+    );
   }
   return false;
 }
@@ -297,7 +299,7 @@ export function normalizeFeishuCommandProbeBody(text: string): string {
     .trim();
 }
 
-export function parseMediaKeys(
+function parseMediaKeys(
   content: string,
   messageType: string,
 ): { imageKey?: string; fileKey?: string; fileName?: string } {

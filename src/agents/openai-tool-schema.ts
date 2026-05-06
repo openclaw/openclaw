@@ -1,8 +1,5 @@
 import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
-export {
-  resolveOpenAIStrictToolSetting,
-  resolvesToNativeOpenAIStrictTools,
-} from "./openai-strict-tool-setting.js";
+export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 
 type ToolWithParameters = {
   name?: unknown;
@@ -70,7 +67,7 @@ export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
 }
 
-export type OpenAIStrictToolSchemaDiagnostic = {
+type OpenAIStrictToolSchemaDiagnostic = {
   toolIndex: number;
   toolName?: string;
   violations: string[];

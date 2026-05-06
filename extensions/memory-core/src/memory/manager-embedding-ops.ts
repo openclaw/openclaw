@@ -7,14 +7,12 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { type SessionFileEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
   remapChunkLines,
   type MemoryChunk,
-  type MemoryFileEntry,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -55,6 +53,17 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
+type MemoryIndexEntry = {
+  path: string;
+  absPath: string;
+  mtimeMs: number;
+  size: number;
+  hash: string;
+  kind?: "markdown" | "multimodal";
+  contentText?: string;
+  lineMap?: number[];
+};
+
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
   providerId?: string;
@@ -85,6 +94,21 @@ export function resolveEmbeddingTimeoutMs(params: {
   return params.providerId === "local"
     ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS
     : EMBEDDING_BATCH_TIMEOUT_REMOTE_MS;
+}
+
+export function resolveMemoryIndexConcurrency(params: {
+  batch: { enabled: boolean; concurrency: number };
+  configuredNonBatchConcurrency?: number;
+  providerId?: string;
+}): number {
+  if (params.batch.enabled) {
+    return params.batch.concurrency;
+  }
+  const configured = params.configuredNonBatchConcurrency;
+  if (typeof configured === "number" && Number.isFinite(configured)) {
+    return Math.max(1, Math.floor(configured));
+  }
+  return params.providerId === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
 }
 
 export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
@@ -192,7 +216,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
 
   private async embedChunksWithBatch(
     chunks: MemoryChunk[],
-    _entry: MemoryFileEntry | SessionFileEntry,
+    _entry: MemoryIndexEntry,
     source: MemorySource,
   ): Promise<number[][]> {
     const provider = this.provider;
@@ -498,7 +522,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return this.batch.enabled ? this.batch.concurrency : EMBEDDING_INDEX_CONCURRENCY;
+    return resolveMemoryIndexConcurrency({
+      batch: this.batch,
+      configuredNonBatchConcurrency: this.settings.remote?.nonBatchConcurrency,
+      providerId: this.provider?.id,
+    });
   }
 
   private clearIndexedFileData(pathname: string, source: MemorySource): void {
@@ -525,7 +553,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
   }
 
-  private upsertFileRecord(entry: MemoryFileEntry | SessionFileEntry, source: MemorySource): void {
+  private upsertFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
     this.db
       .prepare(
         `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
@@ -548,7 +576,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
    * Pass an empty embeddings array to skip vector writes (FTS-only mode).
    */
   private writeChunks(
-    entry: MemoryFileEntry | SessionFileEntry,
+    entry: MemoryIndexEntry,
     source: MemorySource,
     model: string,
     chunks: MemoryChunk[],
@@ -615,7 +643,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   protected async indexFile(
-    entry: MemoryFileEntry | SessionFileEntry,
+    entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ) {
     // FTS-only mode: no embedding provider, but we can still build a FTS index

@@ -12,6 +12,8 @@ let listThinkingLevelOptions: typeof import("./thinking.js").listThinkingLevelOp
 let listThinkingLevels: typeof import("./thinking.js").listThinkingLevels;
 let normalizeReasoningLevel: typeof import("./thinking.js").normalizeReasoningLevel;
 let normalizeThinkLevel: typeof import("./thinking.js").normalizeThinkLevel;
+let isThinkingLevelSupported: typeof import("./thinking.js").isThinkingLevelSupported;
+let formatThinkingLevels: typeof import("./thinking.js").formatThinkingLevels;
 let resolveSupportedThinkingLevel: typeof import("./thinking.js").resolveSupportedThinkingLevel;
 let resolveThinkingDefaultForModel: typeof import("./thinking.js").resolveThinkingDefaultForModel;
 
@@ -42,6 +44,8 @@ beforeEach(async () => {
     listThinkingLevels,
     normalizeReasoningLevel,
     normalizeThinkLevel,
+    isThinkingLevelSupported,
+    formatThinkingLevels,
     resolveSupportedThinkingLevel,
     resolveThinkingDefaultForModel,
   } = await loadFreshThinkingModuleForTest());
@@ -168,6 +172,77 @@ describe("listThinkingLevels", () => {
 
     expect(listThinkingLevels("demo", "demo-model")).toEqual(["off", "low"]);
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
+  });
+
+  it("passes catalog reasoning into provider thinking profiles for support checks", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
+      levels:
+        context.reasoning === true
+          ? [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }, { id: "max" }]
+          : [{ id: "off" }],
+      defaultLevel: "off",
+    }));
+    const catalog = [{ provider: "ollama", id: "gpt-oss:20b", name: "gpt-oss", reasoning: true }];
+
+    expect(
+      isThinkingLevelSupported({
+        provider: "ollama",
+        model: "gpt-oss:20b",
+        level: "max",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(formatThinkingLevels("ollama", "gpt-oss:20b", ", ", catalog)).toBe(
+      "off, low, medium, high, max",
+    );
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "ollama",
+        model: "gpt-oss:20b",
+        level: "max",
+        catalog,
+      }),
+    ).toBe("max");
+  });
+
+  it("uses catalog compat reasoning efforts to expose xhigh for configured custom models", () => {
+    const catalog = [
+      {
+        provider: "gmn",
+        id: "gpt-5.4",
+        name: "GPT 5.4 via GMN",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("gmn", "gpt-5.4", catalog)).toContain("xhigh");
+    expect(formatThinkingLevels("gmn", "gpt-5.4", ", ", catalog)).toBe(
+      "off, minimal, low, medium, high, xhigh",
+    );
+    expect(
+      isThinkingLevelSupported({
+        provider: "gmn",
+        model: "gpt-5.4",
+        level: "xhigh",
+        catalog,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not let catalog xhigh compat override binary thinking providers", () => {
+    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+    const catalog = [
+      {
+        provider: "zai",
+        id: "glm-4.7",
+        name: "GLM 4.7",
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ];
+
+    expect(listThinkingLevels("zai", "glm-4.7", catalog)).toEqual(["off", "low"]);
+    expect(listThinkingLevelLabels("zai", "glm-4.7", catalog)).toEqual(["off", "on"]);
   });
 
   it("maps stale unsupported levels to the largest profile level", () => {

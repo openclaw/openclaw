@@ -89,6 +89,8 @@ const finalizeSetupWizard = vi.hoisted(() =>
 const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
 const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 const setupInternalHooks = vi.hoisted(() => vi.fn(async (cfg) => cfg));
+const detectSetupMigrationSources = vi.hoisted(() => vi.fn(async () => []));
+const runSetupMigrationImport = vi.hoisted(() => vi.fn(async () => {}));
 
 const setupChannels = vi.hoisted(() => vi.fn(async (cfg) => cfg));
 const setupSkills = vi.hoisted(() => vi.fn(async (cfg) => cfg));
@@ -106,7 +108,7 @@ function providerPluginStub(
 }
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
-const writeConfigFile = vi.hoisted(() => vi.fn(async () => {}));
+const replaceConfigFile = vi.hoisted(() => vi.fn(async () => ({ config: {} })));
 const resolveGatewayPort = vi.hoisted(() =>
   vi.fn((_cfg?: unknown, env?: NodeJS.ProcessEnv) => {
     const raw = env?.OPENCLAW_GATEWAY_PORT ?? process.env.OPENCLAW_GATEWAY_PORT;
@@ -206,11 +208,16 @@ vi.mock("../commands/onboard-hooks.js", () => ({
   setupInternalHooks,
 }));
 
+vi.mock("./setup.migration-import.js", () => ({
+  detectSetupMigrationSources,
+  runSetupMigrationImport,
+}));
+
 vi.mock("../config/config.js", () => ({
   DEFAULT_GATEWAY_PORT: 18789,
   createConfigIO,
   resolveGatewayPort,
-  writeConfigFile,
+  replaceConfigFile,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -455,10 +462,9 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
-
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
-    writeConfigFile.mockClear();
+    replaceConfigFile.mockClear();
 
     const workspaceDir = await makeCaseDir("skip-bootstrap-");
     const prompter = buildWizardPrompter({});
@@ -482,14 +488,17 @@ describe("runSetupWizard", () => {
       prompter,
     );
 
-    expect(writeConfigFile).toHaveBeenCalledWith(
+    expect(replaceConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            skipBootstrap: true,
-            workspace: workspaceDir,
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({
+              skipBootstrap: true,
+              workspace: workspaceDir,
+            }),
           }),
         }),
+        writeOptions: expect.objectContaining({ allowConfigSizeDrop: true }),
       }),
     );
     expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(

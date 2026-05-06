@@ -49,6 +49,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       sandboxWorkspaceDir,
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
+      params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
     if (cfg.workspaceAccess !== "rw") {
       try {
@@ -184,7 +185,8 @@ export async function resolveSandboxContext(params: {
     ? await (async () => {
         // Sandbox browser bridge server runs on a loopback TCP port; always wire up
         // the same auth that loopback browser clients will send (token/password).
-        const cfgForAuth = params.config ?? (await import("../../config/config.js")).loadConfig();
+        const cfgForAuth =
+          params.config ?? (await import("../../config/config.js")).getRuntimeConfig();
         let browserAuth = resolveBrowserControlAuth(cfgForAuth);
         try {
           const ensured = await ensureBrowserControlAuth({ cfg: cfgForAuth });

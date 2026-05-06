@@ -165,10 +165,6 @@ function createIsolatedRootHelpRenderContext(
     NO_COLOR: "1",
     OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "",
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
-    OPENCLAW_PLUGIN_DISCOVERY_CACHE_MS: "0",
-    OPENCLAW_PLUGIN_MANIFEST_CACHE_MS: "0",
     OPENCLAW_STATE_DIR: stateDir,
   };
   const config: OpenClawConfig = {
@@ -320,6 +316,9 @@ export async function writeCliStartupMetadata(options?: {
   distDir?: string;
   outputPath?: string;
   extensionsDir?: string;
+  renderBundledRootHelpText?: typeof renderBundledRootHelpText;
+  renderSourceRootHelpText?: typeof renderSourceRootHelpText;
+  renderSourceBrowserHelpText?: typeof renderSourceBrowserHelpText;
 }): Promise<void> {
   const resolvedDistDir = options?.distDir ?? distDir;
   const resolvedOutputPath = options?.outputPath ?? outputPath;
@@ -356,11 +355,16 @@ export async function writeCliStartupMetadata(options?: {
 
   let rootHelpText: string;
   try {
-    rootHelpText = await renderBundledRootHelpText(resolvedDistDir, renderContext);
+    rootHelpText = await (options?.renderBundledRootHelpText ?? renderBundledRootHelpText)(
+      resolvedDistDir,
+      renderContext,
+    );
   } catch {
-    rootHelpText = renderSourceRootHelpText(renderContext);
+    rootHelpText = (options?.renderSourceRootHelpText ?? renderSourceRootHelpText)(renderContext);
   }
-  const browserHelpText = renderSourceBrowserHelpText(renderContext);
+  const browserHelpText = (options?.renderSourceBrowserHelpText ?? renderSourceBrowserHelpText)(
+    renderContext,
+  );
 
   mkdirSync(resolvedDistDir, { recursive: true });
   writeFileSync(

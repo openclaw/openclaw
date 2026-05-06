@@ -8,7 +8,7 @@ vi.mock("../../config/config.js", async () => {
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
   return {
     ...actual,
-    loadConfig: () => loadConfigMock(),
+    getRuntimeConfig: () => loadConfigMock(),
   };
 });
 
@@ -23,7 +23,7 @@ describe("agents_list tool", () => {
       agents: {
         defaults: {
           model: "anthropic/claude-opus-4.5",
-          agentRuntime: { id: "pi", fallback: "pi" },
+          agentRuntime: { id: "pi" },
           subagents: { allowAgents: ["codex"] },
         },
         list: [
@@ -32,7 +32,7 @@ describe("agents_list tool", () => {
             id: "codex",
             name: "Codex",
             model: "openai/gpt-5.5",
-            agentRuntime: { id: "codex", fallback: "none" },
+            agentRuntime: { id: "codex" },
           },
         ],
       },
@@ -48,23 +48,42 @@ describe("agents_list tool", () => {
       requester: "main",
       agents: [
         {
-          id: "main",
-          configured: true,
-          model: "anthropic/claude-opus-4.5",
-          agentRuntime: { id: "pi", source: "defaults" },
-        },
-        {
           id: "codex",
           name: "Codex",
           configured: true,
           model: "openai/gpt-5.5",
-          agentRuntime: { id: "codex", fallback: "none", source: "agent" },
+          agentRuntime: { id: "codex", source: "agent" },
         },
       ],
     });
   });
 
-  it("marks OPENCLAW_AGENT_RUNTIME as the effective runtime source", async () => {
+  it("returns requester as the only target when no subagent allowlist is configured", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [{ id: "main", default: true }, { id: "codex" }],
+      },
+    } satisfies OpenClawConfig);
+
+    const { createAgentsListTool } = await import("./agents-list-tool.js");
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+
+    expect(result.details).toMatchObject({
+      requester: "main",
+      allowAny: false,
+      agents: [
+        {
+          id: "main",
+          configured: true,
+        },
+      ],
+    });
+  });
+
+  it("reports env-forced plugin runtime selections", async () => {
     vi.stubEnv("OPENCLAW_AGENT_RUNTIME", "codex");
     loadConfigMock.mockReturnValue({
       agents: {
@@ -86,6 +105,36 @@ describe("agents_list tool", () => {
         {
           id: "main",
           agentRuntime: { id: "codex", source: "env" },
+        },
+      ],
+    });
+  });
+
+  it("reports per-agent runtime overrides", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "auto" },
+          subagents: { allowAgents: ["strict"] },
+        },
+        list: [
+          { id: "main", default: true },
+          { id: "strict", agentRuntime: { id: "codex" } },
+        ],
+      },
+    } satisfies OpenClawConfig);
+
+    const { createAgentsListTool } = await import("./agents-list-tool.js");
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+
+    expect(result.details).toMatchObject({
+      agents: [
+        {
+          id: "strict",
+          agentRuntime: { id: "codex", source: "agent" },
         },
       ],
     });

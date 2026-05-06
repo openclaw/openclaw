@@ -294,7 +294,6 @@ describe("deviceHandlers", () => {
       {
         deviceId: " device-1 ",
         role: "operator",
-        token: "new-token",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
       },
@@ -329,6 +328,37 @@ describe("deviceHandlers", () => {
         deviceId: " device-1 ",
         role: "operator",
         token: "new-token",
+        scopes: ["operator.pairing"],
+        rotatedAtMs: 789,
+      },
+      undefined,
+    );
+  });
+
+  it("omits rotated tokens when an admin rotates another device token", async () => {
+    mockPairedOperatorDevice();
+    mockRotateOperatorTokenSuccess();
+    const opts = createOptions(
+      "device.token.rotate",
+      {
+        deviceId: "device-1",
+        role: "operator",
+        scopes: ["operator.pairing"],
+      },
+      {
+        client: createClient(["operator.admin", "operator.pairing"], "admin-device", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await deviceHandlers["device.token.rotate"](opts);
+
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        deviceId: "device-1",
+        role: "operator",
         scopes: ["operator.pairing"],
         rotatedAtMs: 789,
       },
@@ -579,6 +609,49 @@ describe("deviceHandlers", () => {
       false,
       undefined,
       expect.objectContaining({ message: "device pairing approval denied" }),
+    );
+  });
+
+  it("allows admins to approve another device", async () => {
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-2",
+      device: {
+        deviceId: "device-2",
+        publicKey: "pk-2",
+        approvedAtMs: 200,
+        createdAtMs: 150,
+      },
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-2" },
+      {
+        client: createClient(["operator.admin"], "device-1", {
+          isDeviceTokenAuth: true,
+        }),
+      },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(getPendingDevicePairingMock).not.toHaveBeenCalled();
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-2", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        requestId: "req-2",
+        device: {
+          deviceId: "device-2",
+          publicKey: "pk-2",
+          approvedAtMs: 200,
+          createdAtMs: 150,
+          tokens: undefined,
+        },
+      },
+      undefined,
     );
   });
 

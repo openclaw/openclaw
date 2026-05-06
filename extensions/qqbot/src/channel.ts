@@ -1,5 +1,11 @@
 import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import {
+  createMessageReceiptFromOutboundResults,
+  defineChannelMessageAdapter,
+  type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-message";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
@@ -10,6 +16,8 @@ import {
   DEFAULT_ACCOUNT_ID,
   resolveQQBotAccount,
 } from "./bridge/config.js";
+import type { GatewayContext } from "./bridge/gateway.js";
+import { toGatewayAccount, writeOpenClawConfigThroughRuntime } from "./bridge/narrowing.js";
 import { getQQBotRuntime } from "./bridge/runtime.js";
 import { qqbotSetupWizard } from "./bridge/setup/surface.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
@@ -19,20 +27,149 @@ import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
 } from "./engine/messaging/target-parser.js";
-// Re-export text helpers from core/.
-export { chunkText, TEXT_CHUNK_LIMIT } from "./engine/utils/text-chunk.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
-let _gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
+let gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
 function loadGatewayModule(): Promise<typeof import("./bridge/gateway.js")> {
-  _gatewayModulePromise ??= import("./bridge/gateway.js");
-  return _gatewayModulePromise;
+  gatewayModulePromise ??= import("./bridge/gateway.js");
+  return gatewayModulePromise;
 }
+
+function createQQBotSendReceipt(params: {
+  messageId?: string;
+  target: string;
+  kind: MessageReceiptPartKind;
+}) {
+  const messageId = params.messageId?.trim();
+  return createMessageReceiptFromOutboundResults({
+    results: messageId
+      ? [
+          {
+            channel: "qqbot",
+            messageId,
+            conversationId: params.target,
+          },
+        ]
+      : [],
+    threadId: params.target,
+    kind: params.kind,
+  });
+}
+
+async function sendQQBotText(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text: string;
+  accountId?: string | null;
+  replyToId?: string | null;
+}) {
+  // Ensure bridge/gateway.ts module-level registrations (audio adapter factory,
+  // platform adapter, etc.) have executed before engine code runs.
+  await loadGatewayModule();
+  const account = resolveQQBotAccount(params.cfg, params.accountId);
+  const { sendText } = await import("./engine/messaging/outbound.js");
+  const result = await sendText({
+    to: params.to,
+    text: params.text,
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    account: toGatewayAccount(account),
+  });
+  return {
+    channel: "qqbot" as const,
+    messageId: result.messageId ?? "",
+    receipt: createQQBotSendReceipt({
+      messageId: result.messageId,
+      target: params.to,
+      kind: "text",
+    }),
+    meta: result.error ? { error: result.error } : undefined,
+  };
+}
+
+async function sendQQBotMedia(params: {
+  cfg: OpenClawConfig;
+  to: string;
+  text?: string | null;
+  mediaUrl?: string | null;
+  accountId?: string | null;
+  replyToId?: string | null;
+}) {
+  // Same guard as sendText — ensure adapters are registered.
+  await loadGatewayModule();
+  const account = resolveQQBotAccount(params.cfg, params.accountId);
+  const { sendMedia } = await import("./engine/messaging/outbound.js");
+  const result = await sendMedia({
+    to: params.to,
+    text: params.text ?? "",
+    mediaUrl: params.mediaUrl ?? "",
+    accountId: params.accountId,
+    replyToId: params.replyToId,
+    account: toGatewayAccount(account),
+  });
+  return {
+    channel: "qqbot" as const,
+    messageId: result.messageId ?? "",
+    receipt: createQQBotSendReceipt({
+      messageId: result.messageId,
+      target: params.to,
+      kind: "media",
+    }),
+    meta: result.error ? { error: result.error } : undefined,
+  };
+}
+
+function toQQBotMessageSendResult(result: Awaited<ReturnType<typeof sendQQBotText>>) {
+  return {
+    messageId: result.messageId,
+    receipt: result.receipt,
+  } satisfies ChannelMessageSendResult;
+}
+
+const qqbotMessageAdapter = defineChannelMessageAdapter({
+  id: "qqbot",
+  durableFinal: {
+    capabilities: {
+      text: true,
+      media: true,
+      replyTo: true,
+    },
+  },
+  send: {
+    text: async (ctx) =>
+      toQQBotMessageSendResult(
+        await sendQQBotText({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          text: ctx.text,
+          accountId: ctx.accountId,
+          replyToId: ctx.replyToId,
+        }),
+      ),
+    media: async (ctx) =>
+      toQQBotMessageSendResult(
+        await sendQQBotMedia({
+          cfg: ctx.cfg,
+          to: ctx.to,
+          text: ctx.text,
+          mediaUrl: ctx.mediaUrl,
+          accountId: ctx.accountId,
+          replyToId: ctx.replyToId,
+        }),
+      ),
+  },
+});
 
 const EXEC_APPROVAL_COMMAND_RE =
   /\/approve(?:@[^\s]+)?\s+[A-Za-z0-9][A-Za-z0-9._:-]*\s+(?:allow-once|allow-always|always|deny)\b/i;
+
+function persistAccountCredentialSnapshot(account: ResolvedQQBotAccount): void {
+  if (account.appId && account.clientSecret) {
+    saveCredentialBackup(account.accountId, account.appId, account.clientSecret);
+  }
+}
 
 function shouldSuppressLocalQQBotApprovalPrompt(params: {
   cfg: OpenClawConfig;
@@ -92,7 +229,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     ...qqbotSetupAdapterShared,
   },
   approvalCapability: getQQBotApprovalCapability(),
+  message: qqbotMessageAdapter,
   messaging: {
+    targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
     targetResolver: {
@@ -113,38 +252,23 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         payload,
         hint,
       }),
-    sendText: async ({ to, text, accountId, replyToId, cfg }) => {
-      // Ensure bridge/gateway.ts module-level registrations (audio adapter factory,
-      // platform adapter, etc.) have executed before engine code runs.
-      await loadGatewayModule();
-      const account = resolveQQBotAccount(cfg, accountId);
-      const { sendText } = await import("./engine/messaging/outbound.js");
-      const result = await sendText({ to, text, accountId, replyToId, account: account as never });
-      return {
-        channel: "qqbot" as const,
-        messageId: result.messageId ?? "",
-        meta: result.error ? { error: result.error } : undefined,
-      };
-    },
-    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
-      // Same guard as sendText — ensure adapters are registered.
-      await loadGatewayModule();
-      const account = resolveQQBotAccount(cfg, accountId);
-      const { sendMedia } = await import("./engine/messaging/outbound.js");
-      const result = await sendMedia({
+    sendText: async ({ to, text, accountId, replyToId, cfg }) =>
+      await sendQQBotText({
+        cfg,
         to,
-        text: text ?? "",
-        mediaUrl: mediaUrl ?? "",
+        text,
         accountId,
         replyToId,
-        account: account as never,
-      });
-      return {
-        channel: "qqbot" as const,
-        messageId: result.messageId ?? "",
-        meta: result.error ? { error: result.error } : undefined,
-      };
-    },
+      }),
+    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) =>
+      await sendQQBotMedia({
+        cfg,
+        to,
+        text,
+        mediaUrl,
+        accountId,
+        replyToId,
+      }),
   },
   gateway: {
     startAccount: async (ctx) => {
@@ -163,11 +287,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
               appId: backup.appId,
               clientSecret: backup.clientSecret,
             });
-            const runtime = getQQBotRuntime();
-            const configApi = runtime.config as {
-              writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
-            };
-            await configApi.writeConfigFile(nextCfg);
+            await writeOpenClawConfigThroughRuntime(getQQBotRuntime(), nextCfg);
             cfg = nextCfg;
             account = resolveQQBotAccount(nextCfg, account.accountId);
             log?.info(
@@ -195,7 +315,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         abortSignal,
         cfg,
         log,
-        channelRuntime: ctx.channelRuntime as never,
+        channelRuntime: ctx.channelRuntime as GatewayContext["channelRuntime"],
         onReady: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
           ctx.setStatus({
@@ -206,9 +326,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           });
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
-          if (account.appId && account.clientSecret) {
-            saveCredentialBackup(account.accountId, account.appId, account.clientSecret);
-          }
+          persistAccountCredentialSnapshot(account);
         },
         onResumed: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway resumed`);
@@ -218,9 +336,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             connected: true,
             lastConnectedAt: Date.now(),
           });
-          if (account.appId && account.clientSecret) {
-            saveCredentialBackup(account.accountId, account.appId, account.clientSecret);
-          }
+          persistAccountCredentialSnapshot(account);
         },
         onError: (error) => {
           log?.error(`[qqbot:${account.accountId}] Gateway error: ${error.message}`);
@@ -238,11 +354,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       );
 
       if (changed) {
-        const runtime = getQQBotRuntime();
-        const configApi = runtime.config as {
-          writeConfigFile: (cfg: OpenClawConfig) => Promise<void>;
-        };
-        await configApi.writeConfigFile(nextCfg as OpenClawConfig);
+        await writeOpenClawConfigThroughRuntime(getQQBotRuntime(), nextCfg as OpenClawConfig);
       }
 
       const resolved = resolveQQBotAccount((changed ? nextCfg : cfg) as OpenClawConfig, accountId);

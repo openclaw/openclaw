@@ -8,6 +8,7 @@ export type GatewayServiceInstallArgs = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: GatewayServiceEnv;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
   description?: string;
 };
 
@@ -29,11 +30,13 @@ export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;
 };
 
+export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
+
 export type GatewayServiceCommandConfig = {
   programArguments: string[];
   workingDirectory?: string;
   environment?: Record<string, string>;
-  environmentValueSources?: Record<string, "inline" | "file">;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource>;
   sourcePath?: string;
 };
 
@@ -46,10 +49,20 @@ export type GatewayServiceState = {
   runtime?: GatewayServiceRuntime;
 };
 
+export type GatewayServiceStartRepairIssue = {
+  code: "missing-program" | "temporary-program" | "version-mismatch";
+  message: string;
+};
+
 export type GatewayServiceStartResult =
   | { outcome: "started"; state: GatewayServiceState }
   | { outcome: "scheduled"; state: GatewayServiceState }
-  | { outcome: "missing-install"; state: GatewayServiceState };
+  | { outcome: "missing-install"; state: GatewayServiceState }
+  | {
+      outcome: "repair-required";
+      state: GatewayServiceState;
+      issues: GatewayServiceStartRepairIssue[];
+    };
 
 export type GatewayServiceRenderArgs = {
   description?: string;

@@ -8,8 +8,6 @@ read_when:
 title: "macOS VMs"
 ---
 
-# OpenClaw on macOS VMs (Sandboxing)
-
 ## Recommended default (most users)
 
 - **Small Linux VPS** for an always-on Gateway and low cost. See [VPS hosting](/vps).
@@ -92,7 +90,9 @@ lume create openclaw --os macos --ipsw latest
 
 This downloads macOS and creates the VM. A VNC window opens automatically.
 
-Note: The download can take a while depending on your connection.
+<Note>
+The download can take a while depending on your connection.
+</Note>
 
 ---
 

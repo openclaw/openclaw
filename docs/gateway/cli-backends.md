@@ -178,6 +178,12 @@ that agent. To force a different Claude mode, set explicit raw backend args
 such as `--permission-mode default` or `--permission-mode acceptEdits` under
 `agents.defaults.cliBackends.claude-cli.args` and matching `resumeArgs`.
 
+The bundled Anthropic `claude-cli` backend also maps OpenClaw `/think` levels
+to Claude Code's native `--effort` flag for non-off levels. `minimal` and
+`low` map to `low`, `adaptive` and `medium` map to `medium`, and `high`,
+`xhigh`, and `max` map directly. Other CLI backends need their owning plugin to
+declare an equivalent argv mapper before `/think` can affect the spawned CLI.
+
 Before OpenClaw can use the bundled `claude-cli` backend, Claude Code itself
 must already be logged in on the same host:
 
@@ -210,6 +216,12 @@ binary is not already on `PATH`.
   ids are verified against an existing readable project transcript before
   resume, so phantom bindings are cleared with `reason=transcript-missing`
   instead of silently starting a fresh Claude CLI session under `--resume`.
+- Claude live sessions keep bounded JSONL output guards. Defaults allow up to
+  8 MiB and 20,000 raw JSONL lines per turn. Tool-heavy Claude turns can raise
+  them per backend with
+  `agents.defaults.cliBackends.claude-cli.reliability.outputLimits.maxTurnRawChars`
+  and `maxTurnLines`; OpenClaw clamps those settings to 64 MiB and 100,000
+  lines.
 - Stored CLI sessions are provider-owned continuity. The implicit daily session
   reset does not cut them; `/reset` and explicit `session.reset` policies still
   do.
@@ -223,6 +235,27 @@ Serialization notes:
   account identity when the CLI exposes one. OAuth access and refresh token
   rotation does not cut the stored CLI session. If a CLI does not expose a
   stable OAuth account id, OpenClaw lets that CLI enforce resume permissions.
+
+## Fallback prelude from claude-cli sessions
+
+When a `claude-cli` attempt fails over to a non-CLI candidate in
+[`agents.defaults.model.fallbacks`](/concepts/model-failover), OpenClaw seeds
+the next attempt with a context prelude harvested from Claude Code's local
+JSONL transcript at `~/.claude/projects/`. Without this seed, the fallback
+provider would start cold because OpenClaw's own session transcript is empty
+for `claude-cli` runs.
+
+- The prelude prefers the latest `/compact` summary or `compact_boundary`
+  marker, then appends the most recent post-boundary turns up to a char
+  budget. Pre-boundary turns are dropped because the summary already represents
+  them.
+- Tool blocks are coalesced to compact `(tool call: name)` and
+  `(tool result: …)` hints to keep the prompt budget honest. The summary is
+  labeled `(truncated)` if it overflows.
+- Same-provider `claude-cli` to `claude-cli` fallbacks rely on Claude's own
+  `--resume` and skip the prelude.
+- The seed reuses the existing Claude session-file path validation, so
+  arbitrary paths cannot be read.
 
 ## Images (pass-through)
 

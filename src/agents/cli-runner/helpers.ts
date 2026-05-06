@@ -6,9 +6,12 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { privateFileStore } from "../../infra/private-file-store.js";
+import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
@@ -27,6 +30,7 @@ import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
+import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import { sanitizeImageBlocks } from "../tool-images.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 export { buildCliSupervisorScopeKey, resolveCliNoOutputTimeoutMs } from "./reliability.js";
@@ -69,6 +73,8 @@ export function buildSystemPrompt(params: {
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  silentReplyPromptMode?: SilentReplyPromptMode;
   ownerNumbers?: string[];
   heartbeatPrompt?: string;
   docsPath?: string;
@@ -107,6 +113,8 @@ export function buildSystemPrompt(params: {
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
@@ -221,7 +229,7 @@ function resolveCliImageRoot(params: { backend: CliBackendConfig; workspaceDir: 
   return path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images");
 }
 
-export function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
+function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""): string {
   if (!paths.length) {
     return prompt;
   }
@@ -277,14 +285,14 @@ export async function writeCliImages(params: {
     workspaceDir: params.workspaceDir,
   });
   await fs.mkdir(imageRoot, { recursive: true, mode: 0o700 });
+  const store = privateFileStore(imageRoot);
   const paths: string[] = [];
   for (let i = 0; i < params.images.length; i += 1) {
     const image = params.images[i];
     const fileName = path.basename(resolveCliImagePath(image));
-    const filePath = path.join(imageRoot, fileName);
     const buffer = Buffer.from(image.data, "base64");
-    await fs.writeFile(filePath, buffer, { mode: 0o600 });
-    paths.push(filePath);
+    await store.writeText(fileName, buffer);
+    paths.push(store.path(fileName));
   }
   // Keep content-addressed image paths stable across Claude CLI runs so prompt
   // text and argv don't churn on every turn with fresh temp-dir suffixes.
@@ -302,19 +310,17 @@ export async function writeCliSystemPromptFile(params: {
   ) {
     return { cleanup: async () => {} };
   }
-  const tempDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-system-prompt-"),
-  );
-  const filePath = path.join(tempDir, "system-prompt.md");
-  await fs.writeFile(filePath, stripSystemPromptCacheBoundary(params.systemPrompt), {
-    encoding: "utf-8",
-    mode: 0o600,
+  const workspace = await tempWorkspace({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-cli-system-prompt-",
   });
+  const filePath = await workspace.write(
+    "system-prompt.md",
+    stripSystemPromptCacheBoundary(params.systemPrompt),
+  );
   return {
     filePath,
-    cleanup: async () => {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    },
+    cleanup: async () => await workspace.cleanup(),
   };
 }
 

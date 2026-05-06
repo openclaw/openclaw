@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
-  typeof import("../plugin-sdk/inbound-reply-dispatch.js").recordInboundSessionAndDispatchReply
+  typeof import("../plugin-sdk/channel-message.js").recordChannelMessageReplyDispatch
 >[0];
 
 const mocks = vi.hoisted(() => {
@@ -74,7 +73,7 @@ const mocks = vi.hoisted(() => {
     ackDelivery: vi.fn(async () => {}),
     failDelivery: vi.fn(async () => {}),
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     enqueueSessionDelivery: vi.fn(async (payload: Record<string, unknown>) => {
       state.queuedSessionDelivery = payload;
       return "session-delivery-1";
@@ -122,6 +121,9 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.unmock("./server-restart-sentinel.js");
+vi.resetModules();
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveSessionAgentId: mocks.resolveSessionAgentId,
 }));
@@ -158,21 +160,20 @@ vi.mock("../utils/delivery-context.shared.js", () => ({
 }));
 
 vi.mock("../channels/plugins/index.js", async () => {
-  return await mergeMockedModule(
-    await vi.importActual<typeof import("../channels/plugins/index.js")>(
-      "../channels/plugins/index.js",
-    ),
-    (actual) => ({
-      getChannelPlugin: mocks.getChannelPlugin,
-      normalizeChannelId: mocks.normalizeChannelId.mockImplementation(
-        (channel?: string | null) =>
-          actual.normalizeChannelId(channel) ??
-          (typeof channel === "string" && channel.trim().length > 0
-            ? channel.trim().toLowerCase()
-            : null),
-      ),
-    }),
+  const actual = await vi.importActual<typeof import("../channels/plugins/index.js")>(
+    "../channels/plugins/index.js",
   );
+  return {
+    ...actual,
+    getChannelPlugin: mocks.getChannelPlugin,
+    normalizeChannelId: mocks.normalizeChannelId.mockImplementation(
+      (channel?: string | null) =>
+        actual.normalizeChannelId(channel) ??
+        (typeof channel === "string" && channel.trim().length > 0
+          ? channel.trim().toLowerCase()
+          : null),
+    ),
+  };
 });
 
 vi.mock("../infra/outbound/targets.js", () => ({
@@ -193,28 +194,32 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
 }));
 
-vi.mock("../plugin-sdk/inbound-reply-dispatch.js", () => ({
-  recordInboundSessionAndDispatchReply: mocks.recordInboundSessionAndDispatchReply,
+vi.mock("../plugin-sdk/channel-message.js", () => ({
+  recordChannelMessageReplyDispatch: mocks.recordInboundSessionAndDispatchReply,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {
-  return await mergeMockedModule(
-    await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-      "../infra/heartbeat-wake.js",
-    ),
-    () => ({
-      requestHeartbeatNow: mocks.requestHeartbeatNow,
-    }),
+  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
+    "../infra/heartbeat-wake.js",
   );
+  return {
+    ...actual,
+    requestHeartbeat: mocks.requestHeartbeat,
+  };
 });
 
-vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({
+vi.mock("../logging/subsystem.js", () => {
+  const logger = {
     info: mocks.logInfo,
     warn: mocks.logWarn,
     error: mocks.logError,
-  })),
-}));
+    child: vi.fn(),
+  };
+  logger.child.mockReturnValue(logger);
+  return {
+    createSubsystemLogger: vi.fn(() => logger),
+  };
+});
 
 vi.mock("./server-methods/agent-timestamp.js", () => ({
   injectTimestamp: mocks.injectTimestamp,
@@ -269,7 +274,7 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.ackDelivery.mockClear();
     mocks.failDelivery.mockClear();
     mocks.enqueueSystemEvent.mockClear();
-    mocks.requestHeartbeatNow.mockClear();
+    mocks.requestHeartbeat.mockClear();
     mocks.enqueueSessionDelivery.mockClear();
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
@@ -314,7 +319,9 @@ describe("scheduleRestartSentinelWake", () => {
         sessionKey: "agent:main:main",
       }),
     );
-    expect(mocks.requestHeartbeatNow).toHaveBeenCalledWith({
+    expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
+      source: "restart-sentinel",
+      intent: "immediate",
       reason: "wake",
       sessionKey: "agent:main:main",
     });
@@ -351,7 +358,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.ackDelivery).toHaveBeenCalledWith("queue-1");
     expect(mocks.failDelivery).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
     expect(mocks.logWarn).toHaveBeenCalledWith(
       expect.stringContaining("retrying in 1000ms"),
       expect.objectContaining({
@@ -754,11 +761,15 @@ describe("scheduleRestartSentinelWake", () => {
         }),
       }),
     );
-    expect(mocks.requestHeartbeatNow).toHaveBeenNthCalledWith(1, {
+    expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(1, {
+      source: "restart-sentinel",
+      intent: "immediate",
       reason: "wake",
       sessionKey: "agent:main:main",
     });
-    expect(mocks.requestHeartbeatNow).toHaveBeenNthCalledWith(2, {
+    expect(mocks.requestHeartbeat).toHaveBeenNthCalledWith(2, {
+      source: "restart-sentinel",
+      intent: "immediate",
       reason: "wake",
       sessionKey: "agent:main:main",
     });
@@ -894,7 +905,7 @@ describe("scheduleRestartSentinelWake", () => {
         sessionKey: "agent:main:main",
       }),
     );
-    expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(2);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(2);
     expect(mocks.logWarn).not.toHaveBeenCalled();
   });
 
@@ -969,7 +980,7 @@ describe("scheduleRestartSentinelWake", () => {
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith("restart message", {
       sessionKey: "agent:main:main",
     });
-    expect(mocks.requestHeartbeatNow).not.toHaveBeenCalled();
+    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
@@ -1037,7 +1048,7 @@ describe("scheduleRestartSentinelWake", () => {
       channel: "qa-channel",
       to: "channel:qa-room",
     });
-    mocks.requestHeartbeatNow.mockImplementation(() => {
+    mocks.requestHeartbeat.mockImplementation(() => {
       mocks.deliveryContextFromSession.mockReturnValue({
         channel: "qa-channel",
         to: "heartbeat",
@@ -1050,7 +1061,7 @@ describe("scheduleRestartSentinelWake", () => {
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.requestHeartbeatNow).toHaveBeenCalledTimes(1);
+    expect(mocks.requestHeartbeat).toHaveBeenCalledTimes(1);
     expect(mocks.resolveOutboundTarget).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "qa-channel",

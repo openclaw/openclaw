@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
-import { writeJsonAtomic } from "./json-files.js";
+import { resolveRuntimeServiceVersion } from "../version.js";
+import { writeJson } from "./json-files.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -83,8 +84,72 @@ export async function writeRestartSentinel(
 ) {
   const filePath = resolveRestartSentinelPath(env);
   const data: RestartSentinel = { version: 1, payload };
-  await writeJsonAtomic(filePath, data, { trailingNewline: true, ensureDirMode: 0o700 });
+  await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
   return filePath;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {
+  return JSON.parse(JSON.stringify(payload)) as RestartSentinelPayload;
+}
+
+async function rewriteRestartSentinel(
+  rewrite: (payload: RestartSentinelPayload) => RestartSentinelPayload | null,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  const current = await readRestartSentinel(env);
+  if (!current) {
+    return null;
+  }
+  const nextPayload = rewrite(cloneRestartSentinelPayload(current.payload));
+  if (!nextPayload) {
+    return null;
+  }
+  await writeRestartSentinel(nextPayload, env);
+  return {
+    version: 1,
+    payload: nextPayload,
+  };
+}
+
+export async function finalizeUpdateRestartSentinelRunningVersion(
+  version = resolveRuntimeServiceVersion(process.env),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  return await rewriteRestartSentinel((payload) => {
+    if (payload.kind !== "update") {
+      return null;
+    }
+    const stats = payload.stats ? { ...payload.stats } : {};
+    const after = isPlainRecord(stats.after) ? { ...stats.after } : {};
+    after.version = version;
+    stats.after = after;
+    return {
+      ...payload,
+      stats,
+    };
+  }, env);
+}
+
+export async function markUpdateRestartSentinelFailure(
+  reason: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<RestartSentinel | null> {
+  return await rewriteRestartSentinel((payload) => {
+    if (payload.kind !== "update") {
+      return null;
+    }
+    const stats = payload.stats ? { ...payload.stats } : {};
+    stats.reason = reason;
+    return {
+      ...payload,
+      status: "error",
+      stats,
+    };
+  }, env);
 }
 
 export async function removeRestartSentinelFile(filePath: string | null | undefined) {

@@ -14,6 +14,13 @@ export type AgentRuntimeThinkLevel =
   | "max";
 
 export type AgentRuntimePromptMode = "full" | "minimal" | "none";
+export type AgentRuntimePromptTrigger =
+  | "cron"
+  | "heartbeat"
+  | "manual"
+  | "memory"
+  | "overflow"
+  | "user";
 
 export type AgentRuntimeFailoverReason =
   | "auth"
@@ -25,6 +32,9 @@ export type AgentRuntimeFailoverReason =
   | "timeout"
   | "model_not_found"
   | "session_expired"
+  | "empty_response"
+  | "no_error_details"
+  | "unclassified"
   | "unknown";
 
 export type AgentRuntimeConfig = unknown;
@@ -171,6 +181,7 @@ export type AgentRuntimeSystemPromptContributionContext = {
   runtimeChannel?: string;
   runtimeCapabilities?: string[];
   agentId?: string;
+  trigger?: AgentRuntimePromptTrigger;
 };
 
 export type AgentRuntimeFollowupFallbackRouteResult = {
@@ -193,6 +204,7 @@ export type AgentRuntimeTranscriptPolicy = {
   };
   sanitizeThinkingSignatures: boolean;
   dropThinkingBlocks: boolean;
+  dropReasoningFromHistory?: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;

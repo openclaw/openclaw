@@ -1,6 +1,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-type DiscoveredModel = { id: string; contextWindow?: number; contextTokens?: number };
+type DiscoveredModel = {
+  id: string;
+  provider?: string;
+  contextWindow?: number;
+  contextTokens?: number;
+};
 type ContextModule = typeof import("./context.js");
 
 const contextTestState = vi.hoisted(() => {
@@ -17,15 +22,11 @@ const contextTestState = vi.hoisted(() => {
 });
 
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => contextTestState.loadConfigImpl(),
+  getRuntimeConfig: () => contextTestState.loadConfigImpl(),
 }));
 
 vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
-}));
-
-vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
 }));
 
 vi.mock("./pi-model-discovery-runtime.js", () => ({
@@ -34,17 +35,17 @@ vi.mock("./pi-model-discovery-runtime.js", () => ({
 }));
 
 function mockContextDeps(params: {
-  loadConfig: () => unknown;
+  getRuntimeConfig: () => unknown;
   discoveredModels?: DiscoveredModel[];
 }) {
-  contextTestState.loadConfigImpl = params.loadConfig;
+  contextTestState.loadConfigImpl = params.getRuntimeConfig;
   contextTestState.discoveredModels = params.discoveredModels ?? [];
   contextTestState.ensureOpenClawModelsJson.mockClear();
   return { ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson };
 }
 
 function mockContextModuleDeps(loadConfigImpl: () => unknown) {
-  return mockContextDeps({ loadConfig: loadConfigImpl });
+  return mockContextDeps({ getRuntimeConfig: loadConfigImpl });
 }
 
 // Shared mock setup used by multiple tests.
@@ -53,7 +54,7 @@ function mockDiscoveryDeps(
   configModels?: Record<string, { models: Array<{ id: string; contextWindow: number }> }>,
 ) {
   mockContextDeps({
-    loadConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
+    getRuntimeConfig: () => ({ models: configModels ? { providers: configModels } : {} }),
     discoveredModels: models,
   });
 }
@@ -203,6 +204,10 @@ describe("lookupContextTokens", () => {
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat"])).toBe(true);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "chat", "--help"])).toBe(false);
     expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "matrix", "encryption", "help"]),
+    ).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "help", "matrix"])).toBe(false);
+    expect(
       shouldEagerWarmContextWindowCache(["node", "openclaw", "browser", "status", "--help"]),
     ).toBe(false);
     expect(
@@ -218,6 +223,10 @@ describe("lookupContextTokens", () => {
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "logs", "--limit", "5"])).toBe(
       false,
     );
+    expect(
+      shouldEagerWarmContextWindowCache(["node", "openclaw", "memory", "search", "--json"]),
+    ).toBe(false);
+    expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "message", "read"])).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "status", "--json"])).toBe(false);
     expect(shouldEagerWarmContextWindowCache(["node", "openclaw", "sessions", "--json"])).toBe(
       false,
@@ -271,6 +280,27 @@ describe("lookupContextTokens", () => {
     await flushAsyncWarmup();
     // Conservative minimum: bare-id cache feeds runtime flush/compaction paths.
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(128_000);
+  });
+
+  it("skips model normalization during warmup but preserves provider-owned context metadata", async () => {
+    mockDiscoveryDeps([
+      {
+        id: "anthropic/claude-opus-4.7-20260219",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    const { lookupContextTokens } = await importContextModule();
+    lookupContextTokens("anthropic/claude-opus-4.7-20260219");
+    await flushAsyncWarmup();
+
+    expect(contextTestState.discoverModels).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringMatching(/\/\.openclaw\/agents\/main\/agent$/),
+      { normalizeModels: false },
+    );
+    expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 
   it("resolveContextTokensForModel returns discovery value when provider-qualified entry exists in cache", async () => {

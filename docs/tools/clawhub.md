@@ -29,7 +29,7 @@ Site: [clawhub.ai](https://clawhub.ai)
     ```
   </Step>
   <Step title="Use">
-    Start a new OpenClaw session — it picks up the new skill.
+    Start a new OpenClaw session - it picks up the new skill.
   </Step>
   <Step title="Publish (optional)">
     For registry-authenticated workflows (publish, sync, manage), install
@@ -60,20 +60,35 @@ Site: [clawhub.ai](https://clawhub.ai)
   </Tab>
   <Tab title="Plugins">
     ```bash
+    openclaw plugins search "calendar"
     openclaw plugins install clawhub:<package>
     openclaw plugins update --all
     ```
 
-    Bare npm-safe plugin specs are also tried against ClawHub before npm:
+    `plugins search` queries the ClawHub plugin catalog and prints install-ready
+    package names. Use `clawhub:<package>` when you want ClawHub resolution.
+    Bare npm-safe plugin specs install from npm during the launch cutover:
 
     ```bash
     openclaw plugins install openclaw-codex-app-server
     ```
 
+    `npm:<package>` is also npm-only and is useful when a spec could otherwise
+    be ambiguous:
+
+    ```bash
+    openclaw plugins install npm:openclaw-codex-app-server
+    ```
+
     Plugin installs validate advertised `pluginApi` and
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing
-    the package.
+    the package. When a package version publishes a ClawPack artifact,
+    OpenClaw prefers the exact uploaded npm-pack `.tgz`, verifies the ClawHub
+    digest header and downloaded bytes, and records the artifact kind, npm
+    integrity, npm shasum, tarball name, and ClawPack digest metadata for later
+    updates. Older package versions without ClawPack metadata still use the
+    legacy package archive verification path.
 
   </Tab>
 </Tabs>
@@ -121,33 +136,49 @@ shared, and gated, see [Skills](/tools/skills).
 
 ## Service features
 
-| Feature            | Notes                                                      |
-| ------------------ | ---------------------------------------------------------- |
-| Public browsing    | Skills and their `SKILL.md` content are publicly viewable. |
-| Search             | Embedding-powered (vector search), not just keywords.      |
-| Versioning         | Semver, changelogs, and tags (including `latest`).         |
-| Downloads          | Zip per version.                                           |
-| Stars and comments | Community feedback.                                        |
-| Moderation         | Approvals and audits.                                      |
-| CLI-friendly API   | Suitable for automation and scripting.                     |
+| Feature                  | Notes                                                               |
+| ------------------------ | ------------------------------------------------------------------- |
+| Public browsing          | Skills and their `SKILL.md` content are publicly viewable.          |
+| Search                   | Embedding-powered (vector search), not just keywords.               |
+| Versioning               | Semver, changelogs, and tags (including `latest`).                  |
+| Downloads                | Zip per version.                                                    |
+| Stars and comments       | Community feedback.                                                 |
+| Security scan summaries  | Detail pages show the latest scan state before install or download. |
+| Scanner detail pages     | VirusTotal, ClawScan, and static-analysis results have deep links.  |
+| Owner recovery dashboard | Publishers can see scan-held owned content from `/dashboard`.       |
+| Owner-requested rescans  | Owners can request limited rescans for false-positive recovery.     |
+| Moderation               | Approvals and audits.                                               |
+| CLI-friendly API         | Suitable for automation and scripting.                              |
 
 ## Security and moderation
 
-ClawHub is open by default — anyone can upload skills, but a GitHub
+ClawHub is open by default - anyone can upload skills, but a GitHub
 account must be **at least one week old** to publish. This slows down
 abuse without blocking legitimate contributors.
 
 <AccordionGroup>
+  <Accordion title="Security scans">
+    ClawHub runs automated security checks on published skills and plugin
+    releases. Public detail pages summarize the current result, and scanner
+    rows link to dedicated detail pages for VirusTotal, ClawScan, and static
+    analysis.
+
+    Scan-held or blocked releases may be unavailable on public catalog and
+    install surfaces while still visible to their owner in `/dashboard`.
+
+  </Accordion>
   <Accordion title="Reporting">
     - Any signed-in user can report a skill.
     - Report reasons are required and recorded.
     - Each user can have up to 20 active reports at a time.
     - Skills with more than 3 unique reports are auto-hidden by default.
+
   </Accordion>
   <Accordion title="Moderation">
     - Moderators can view hidden skills, unhide them, delete them, or ban users.
     - Abusing the report feature can result in account bans.
     - Interested in becoming a moderator? Ask in the OpenClaw Discord and contact a moderator or maintainer.
+
   </Accordion>
 </AccordionGroup>
 
@@ -190,9 +221,9 @@ publish/sync.
 
     Login options:
 
-    - `--token <token>` — paste an API token.
-    - `--label <label>` — label stored for browser login tokens (default: `CLI token`).
-    - `--no-browser` — do not open a browser (requires `--token`).
+    - `--token <token>` - paste an API token.
+    - `--label <label>` - label stored for browser login tokens (default: `CLI token`).
+    - `--no-browser` - do not open a browser (requires `--token`).
 
   </Accordion>
   <Accordion title="Search">
@@ -200,7 +231,28 @@ publish/sync.
     clawhub search "query"
     ```
 
-    - `--limit <n>` — max results.
+    Searches skills. For plugin/package discovery, use `clawhub package explore`.
+
+    - `--limit <n>` - max results.
+
+  </Accordion>
+  <Accordion title="Browse / inspect plugins">
+    ```bash
+    clawhub package explore --family code-plugin
+    clawhub package explore "episodic-claw" --family code-plugin
+    clawhub package inspect episodic-claw
+    ```
+
+    `package explore` and `package inspect` are the ClawHub CLI surfaces for plugin/package discovery and metadata inspection. Native OpenClaw installs still use `openclaw plugins install clawhub:<package>`.
+
+    Options:
+
+    - `--family skill|code-plugin|bundle-plugin` - filter package family.
+    - `--official` - show only official packages.
+    - `--executes-code` - show only packages that execute code.
+    - `--version <version>` / `--tag <tag>` - inspect a specific package version.
+    - `--versions`, `--files`, `--file <path>` - inspect package history and files.
+    - `--json` - machine-readable output.
 
   </Accordion>
   <Accordion title="Install / update / list">
@@ -213,8 +265,8 @@ publish/sync.
 
     Options:
 
-    - `--version <version>` — install or update to a specific version (single slug only on `update`).
-    - `--force` — overwrite if the folder already exists, or when local files do not match any published version.
+    - `--version <version>` - install or update to a specific version (single slug only on `update`).
+    - `--force` - overwrite if the folder already exists, or when local files do not match any published version.
     - `clawhub list` reads `.clawhub/lock.json`.
 
   </Accordion>
@@ -225,11 +277,11 @@ publish/sync.
 
     Options:
 
-    - `--slug <slug>` — skill slug.
-    - `--name <name>` — display name.
-    - `--version <version>` — semver version.
-    - `--changelog <text>` — changelog text (can be empty).
-    - `--tags <tags>` — comma-separated tags (default: `latest`).
+    - `--slug <slug>` - skill slug.
+    - `--name <name>` - display name.
+    - `--version <version>` - semver version.
+    - `--changelog <text>` - changelog text (can be empty).
+    - `--tags <tags>` - comma-separated tags (default: `latest`).
 
   </Accordion>
   <Accordion title="Publish plugins">
@@ -242,9 +294,26 @@ publish/sync.
 
     Options:
 
-    - `--dry-run` — build the exact publish plan without uploading anything.
-    - `--json` — emit machine-readable output for CI.
-    - `--source-repo`, `--source-commit`, `--source-ref` — optional overrides when auto-detection is not enough.
+    - `--dry-run` - build the exact publish plan without uploading anything.
+    - `--json` - emit machine-readable output for CI.
+    - `--source-repo`, `--source-commit`, `--source-ref` - optional overrides when auto-detection is not enough.
+
+  </Accordion>
+  <Accordion title="Request rescans">
+    ```bash
+    clawhub skill rescan <slug>
+    clawhub skill rescan <slug> --yes --json
+
+    clawhub package rescan <name>
+    clawhub package rescan <name> --yes --json
+    ```
+
+    Rescan commands require a logged-in owner token and target the latest
+    published skill version or plugin release. In non-interactive runs, pass
+    `--yes`.
+
+    JSON responses include the target kind, name, version, rescan status, and
+    remaining/max request counts for that version or release.
 
   </Accordion>
   <Accordion title="Delete / undelete (owner or admin)">
@@ -260,13 +329,13 @@ publish/sync.
 
     Options:
 
-    - `--root <dir...>` — extra scan roots.
-    - `--all` — upload everything without prompts.
-    - `--dry-run` — show what would be uploaded.
-    - `--bump <type>` — `patch|minor|major` for updates (default: `patch`).
-    - `--changelog <text>` — changelog for non-interactive updates.
-    - `--tags <tags>` — comma-separated tags (default: `latest`).
-    - `--concurrency <n>` — registry checks (default: `4`).
+    - `--root <dir...>` - extra scan roots.
+    - `--all` - upload everything without prompts.
+    - `--dry-run` - show what would be uploaded.
+    - `--bump <type>` - `patch|minor|major` for updates (default: `patch`).
+    - `--changelog <text>` - changelog for non-interactive updates.
+    - `--tags <tags>` - comma-separated tags (default: `latest`).
+    - `--concurrency <n>` - registry checks (default: `4`).
 
   </Accordion>
 </AccordionGroup>
@@ -277,6 +346,13 @@ publish/sync.
   <Tab title="Search">
     ```bash
     clawhub search "postgres backups"
+    ```
+  </Tab>
+  <Tab title="Find a plugin">
+    ```bash
+    clawhub package explore --family code-plugin
+    clawhub package explore "memory" --family code-plugin
+    clawhub package inspect episodic-claw
     ```
   </Tab>
   <Tab title="Install">
@@ -347,6 +423,7 @@ plugin loading paths.
     - Each publish creates a new **semver** `SkillVersion`.
     - Tags (like `latest`) point to a version; moving tags lets you roll back.
     - Changelogs are attached per version and can be empty when syncing or publishing updates.
+
   </Accordion>
   <Accordion title="Local changes vs registry versions">
     Updates compare the local skill contents to registry versions using a
@@ -363,6 +440,7 @@ plugin loading paths.
   <Accordion title="Storage and lockfile">
     - Installed skills are recorded in `.clawhub/lock.json` under your workdir.
     - Auth tokens are stored in the ClawHub CLI config file (override via `CLAWHUB_CONFIG_PATH`).
+
   </Accordion>
   <Accordion title="Telemetry (install counts)">
     When you run `clawhub sync` while logged in, the CLI sends a minimal

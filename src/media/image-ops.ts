@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { withTempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
+import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
 
 export type ImageMetadata = {
   width: number;
@@ -54,8 +54,6 @@ function prefersSips(): boolean {
   );
 }
 
-let mediaAttachmentImageOpsPromise: Promise<MediaAttachmentImageOps> | null = null;
-
 function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImageOps {
   if (!value || typeof value !== "object") {
     return false;
@@ -71,30 +69,24 @@ function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImag
   );
 }
 
-async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
-  if (!mediaAttachmentImageOpsPromise) {
-    mediaAttachmentImageOpsPromise = Promise.resolve()
-      .then(async () => {
-        const { loadBundledPluginPublicArtifactModuleSync } =
-          await import("../plugins/public-surface-loader.js");
-        const mod = loadBundledPluginPublicArtifactModuleSync<MediaAttachmentImageOpsModule>({
-          dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
-          artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT,
-        });
-        const ops = mod.createMediaAttachmentImageOps?.({
-          maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
-        });
-        if (!isMediaAttachmentImageOps(ops)) {
-          throw new Error("Media understanding core did not expose image ops");
-        }
-        return ops;
-      })
-      .catch((err) => {
-        mediaAttachmentImageOpsPromise = null;
-        throw err;
-      });
+const mediaAttachmentImageOpsLoader = createLazyPromiseLoader(async () => {
+  const { loadBundledPluginPublicArtifactModuleSync } =
+    await import("../plugins/public-surface-loader.js");
+  const mod = loadBundledPluginPublicArtifactModuleSync<MediaAttachmentImageOpsModule>({
+    dirName: MEDIA_UNDERSTANDING_CORE_PLUGIN_ID,
+    artifactBasename: MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT,
+  });
+  const ops = mod.createMediaAttachmentImageOps?.({
+    maxInputPixels: MAX_IMAGE_INPUT_PIXELS,
+  });
+  if (!isMediaAttachmentImageOps(ops)) {
+    throw new Error("Media understanding core did not expose image ops");
   }
-  return await mediaAttachmentImageOpsPromise;
+  return ops;
+});
+
+async function loadMediaAttachmentImageOps(): Promise<MediaAttachmentImageOps> {
+  return await mediaAttachmentImageOpsLoader.load();
 }
 
 function isPositiveImageDimension(value: number): boolean {
@@ -364,19 +356,16 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
   return null;
 }
 
-async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-img-"));
-  try {
-    return await fn(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
+async function withImageTemp<T>(fn: (workspace: TempWorkspace) => Promise<T>): Promise<T> {
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-img-" },
+    fn,
+  );
 }
 
 async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.img");
-    await fs.writeFile(input, buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
     const { stdout } = await runExec(
       "/usr/bin/sips",
       ["-g", "pixelWidth", "-g", "pixelHeight", input],
@@ -407,10 +396,9 @@ async function sipsResizeToJpeg(params: {
   maxSide: number;
   quality: number;
 }): Promise<Buffer> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.img");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, params.buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", params.buffer);
+    const output = workspace.path("out.jpg");
     await runExec(
       "/usr/bin/sips",
       [
@@ -428,20 +416,19 @@ async function sipsResizeToJpeg(params: {
       ],
       { timeoutMs: 20_000, maxBuffer: 1024 * 1024 },
     );
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
 async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.heic");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.heic", buffer);
+    const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 
@@ -502,15 +489,14 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
       return buffer;
   }
 
-  return await withTempDir(async (dir) => {
-    const input = path.join(dir, "in.jpg");
-    const output = path.join(dir, "out.jpg");
-    await fs.writeFile(input, buffer);
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.jpg", buffer);
+    const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", [...ops, input, "--out", output], {
       timeoutMs: 20_000,
       maxBuffer: 1024 * 1024,
     });
-    return await fs.readFile(output);
+    return await workspace.read("out.jpg");
   });
 }
 

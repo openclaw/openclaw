@@ -7,8 +7,7 @@ read_when:
 title: "Messages"
 ---
 
-This page ties together how OpenClaw handles inbound messages, sessions, queueing,
-streaming, and reasoning visibility.
+OpenClaw handles inbound messages through a pipeline of session resolution, queueing, streaming, tool execution, and reasoning visibility. This page maps the path from inbound message to reply.
 
 ## Message flow (high level)
 
@@ -94,8 +93,11 @@ OpenClaw keeps that boundary explicit:
 
 OpenClaw separates the **prompt body** from the **command body**:
 
-- `Body`: prompt text sent to the agent. This may include channel envelopes and
-  optional history wrappers.
+- `BodyForAgent`: primary model-facing text for the current message. Channel
+  plugins should keep this focused on the sender's current prompt-bearing text.
+- `Body`: legacy prompt fallback. This may include channel envelopes and
+  optional history wrappers, but current channels should not rely on it as the
+  primary model input when `BodyForAgent` is available.
 - `CommandBody`: raw user text for directive/command parsing.
 - `RawBody`: legacy alias for `CommandBody` (kept for compatibility).
 
@@ -115,6 +117,8 @@ already in the session transcript.
 Directive stripping only applies to the **current message** section so history
 remains intact. Channels that wrap history should set `CommandBody` (or
 `RawBody`) to the original message text and keep `Body` as the combined prompt.
+Structured history, reply, forwarded, and channel metadata are rendered as
+user-role untrusted context blocks during prompt assembly.
 History buffers are configurable via `messages.groupChat.historyLimit` (global
 default) and per-channel overrides like `channels.slack.historyLimit` or
 `channels.telegram.accounts.<id>.historyLimit` (set `0` to disable).
@@ -125,9 +129,20 @@ If a run is already active, inbound messages can be queued, steered into the
 current run, or collected for a followup turn.
 
 - Configure via `messages.queue` (and `messages.queue.byChannel`).
-- Modes: `interrupt`, `steer`, `followup`, `collect`, plus backlog variants.
+- Default mode is `steer`, with a 500ms followup debounce when steering falls
+  back to queued followup delivery.
+- Modes: `steer`, `followup`, `collect`, `steer-backlog`, `interrupt`, and the
+  legacy one-at-a-time `queue` mode.
 
-Details: [Queueing](/concepts/queue).
+Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
+
+## Channel run ownership
+
+Channel plugins may preserve ordering, debounce input, and apply transport
+backpressure before a message enters the session queue. They should not impose a
+separate timeout around the agent turn itself. Once a message is routed to a
+session, long-running work is governed by the session, tool, and runtime
+lifecycle so all channels report and recover from slow turns consistently.
 
 ## Streaming, chunking, and batching
 
@@ -151,7 +166,7 @@ OpenClaw can expose or hide model reasoning:
 
 - `/reasoning on|off|stream` controls visibility.
 - Reasoning content still counts toward token usage when produced by the model.
-- Telegram supports reasoning stream into the draft bubble.
+- Telegram supports reasoning stream into a transient draft bubble that is deleted after final delivery; use `/reasoning on` for persistent reasoning output.
 
 Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/reference/token-use).
 
@@ -166,7 +181,7 @@ Details: [Configuration](/gateway/config-agents#messages) and channel docs.
 
 ## Silent replies
 
-The exact silent token `NO_REPLY` / `no_reply` means “do not deliver a user-visible reply”.
+The exact silent token `NO_REPLY` / `no_reply` means "do not deliver a user-visible reply".
 When a turn also has pending tool media, such as generated TTS audio, OpenClaw
 strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:
@@ -191,6 +206,7 @@ parent stays quiet until the child completion event delivers the real reply.
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target durable send and receive design
 - [Streaming](/concepts/streaming) — real-time message delivery
 - [Retry](/concepts/retry) — message delivery retry behavior
 - [Queue](/concepts/queue) — message processing queue

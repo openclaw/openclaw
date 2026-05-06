@@ -2,7 +2,7 @@ import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-s
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveApprovalRequestSessionConversation } from "openclaw/plugin-sdk/approval-native-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-types";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -29,14 +29,6 @@ export function extractDiscordChannelId(sessionKey?: string | null): string | nu
     return null;
   }
   const match = sessionKey.match(/discord:(?:channel|group):(\d+)/);
-  return match ? match[1] : null;
-}
-
-export function extractDiscordThreadId(sessionKey?: string | null): string | null {
-  if (!sessionKey) {
-    return null;
-  }
-  const match = sessionKey.match(/discord:(?:channel|group):\d+:thread:(\d+)/);
   return match ? match[1] : null;
 }
 
@@ -132,7 +124,6 @@ function createDiscordOriginTargetResolver(configOverride?: DiscordExecApprovalC
           }
         : null;
     },
-    targetsMatch: (a, b) => a.to === b.to && a.threadId === b.threadId,
     resolveFallbackTarget: (request) => {
       const sessionConversation = resolveApprovalRequestSessionConversation({
         request,
@@ -169,7 +160,7 @@ function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecAppro
   });
 }
 
-export function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
+function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
   return createApproverRestrictedNativeApprovalCapability({
     channel: "discord",
     channelLabel: "Discord",
@@ -221,16 +212,8 @@ export function createDiscordNativeApprovalAdapter(
 }
 
 let cachedDiscordApprovalCapability: ReturnType<typeof createDiscordApprovalCapability> | undefined;
-let cachedDiscordNativeApprovalAdapter:
-  | ReturnType<typeof createDiscordNativeApprovalAdapter>
-  | undefined;
 
 export function getDiscordApprovalCapability() {
   cachedDiscordApprovalCapability ??= createDiscordApprovalCapability();
   return cachedDiscordApprovalCapability;
-}
-
-export function getDiscordNativeApprovalAdapter() {
-  cachedDiscordNativeApprovalAdapter ??= createDiscordNativeApprovalAdapter();
-  return cachedDiscordNativeApprovalAdapter;
 }

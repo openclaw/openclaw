@@ -55,10 +55,9 @@ is omitted or `--latest` is passed, OpenClaw only prints the selected pending
 request and exits; rerun approval with the exact request ID after verifying
 the details.
 
-Note: if a device retries pairing with changed auth details (role/scopes/public
-key), OpenClaw supersedes the previous pending entry and issues a new
-`requestId`. Run `openclaw devices list` right before approval to use the
-current ID.
+<Note>
+If a device retries pairing with changed auth details (role, scopes, or public key), OpenClaw supersedes the previous pending entry and issues a new `requestId`. Run `openclaw devices list` right before approval to use the current ID.
+</Note>
 
 If the device is already paired and asks for broader scopes or a broader role,
 OpenClaw keeps the existing approval in place and creates a new pending upgrade
@@ -103,7 +102,10 @@ caller already has.
 openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
 ```
 
-Returns the new token payload as JSON.
+Returns rotation metadata as JSON. If the caller is rotating its own token while
+authenticated with that device token, the response also includes the replacement
+token so the client can persist it before reconnecting. Shared/admin rotations
+do not echo the bearer token.
 
 ### `openclaw devices revoke --device <id> --role <role>`
 
@@ -128,13 +130,16 @@ Returns the revoke result as JSON.
 - `--timeout <ms>`: RPC timeout.
 - `--json`: JSON output (recommended for scripting).
 
-Note: when you set `--url`, the CLI does not fall back to config or environment credentials.
-Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+<Warning>
+When you set `--url`, the CLI does not fall back to config or environment credentials. Pass `--token` or `--password` explicitly. Missing explicit credentials is an error.
+</Warning>
 
 ## Notes
 
 - Token rotation returns a new token (sensitive). Treat it like a secret.
-- These commands require `operator.pairing` (or `operator.admin`) scope.
+- These commands require `operator.pairing` (or `operator.admin`) scope. Some
+  approvals also require the caller to hold the operator scopes that the target
+  device would mint or inherit; see [Operator scopes](/gateway/operator-scopes).
 - `gateway.nodes.pairing.autoApproveCidrs` is an opt-in Gateway policy for
   fresh node device pairing only; it does not change CLI approval authority.
 - Token rotation and revocation stay inside the approved pairing role set and

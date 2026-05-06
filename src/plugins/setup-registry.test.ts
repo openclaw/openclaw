@@ -1,17 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
-// jiti-loader-cache prefers native require() for compiled .js before falling
-// back to jiti. These tests scripts plugin-loading behaviour through the
-// jiti mock — disable the native-require fast path so the mocked jiti loader
-// stays authoritative for the test fixture files on disk.
+// plugin-module-loader-cache prefers native require() for compiled .js before
+// falling back to jiti. These tests script plugin-loading behavior through the
+// source-transform mock, so force the fallback path and keep the fixture
+// transformer authoritative.
 vi.mock("./native-module-require.js", () => ({
   isJavaScriptModulePath: (_modulePath: string) => false,
   tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
@@ -21,7 +21,6 @@ const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
-let setupRegistryTesting: typeof import("./setup-registry.js").__testing;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
@@ -171,12 +170,11 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-describe("setup-registry getJiti", () => {
+describe("setup-registry module loader", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
     ({
-      __testing: setupRegistryTesting,
       clearPluginSetupRegistryCache,
       resolvePluginSetupRegistry,
       resolvePluginSetupProvider,
@@ -186,7 +184,7 @@ describe("setup-registry getJiti", () => {
     clearPluginSetupRegistryCache();
   });
 
-  it("uses the runtime-supported Jiti boundary on Windows for setup-api modules", () => {
+  it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({
@@ -195,7 +193,6 @@ describe("setup-registry getJiti", () => {
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
-    const expectedTryNative = shouldExpectNativeJitiForJavaScriptTestRuntime();
 
     try {
       resolvePluginSetupRegistry({
@@ -208,10 +205,12 @@ describe("setup-registry getJiti", () => {
     }
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
-    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(path.join(pluginRoot, "setup-api.js"));
+    expect(mocks.createJiti.mock.calls[0]?.[0]).toBe(
+      pathToFileURL(path.join(pluginRoot, "setup-api.js"), { windows: true }).href,
+    );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: expectedTryNative,
+        tryNative: true,
       }),
     );
   });
@@ -769,10 +768,9 @@ describe("setup-registry getJiti", () => {
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
-  it("bounds setup lookup caches with least-recently-used eviction", () => {
+  it("does not retain setup lookup cache entries", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
-    setupRegistryTesting.setMaxSetupLookupCacheEntriesForTest(1);
     mocks.loadPluginManifestRegistry.mockReturnValue({
       plugins: [
         {
@@ -804,7 +802,6 @@ describe("setup-registry getJiti", () => {
 
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
     expect(resolvePluginSetupProvider({ provider: "anthropic", env: {} })?.id).toBe("anthropic");
-    expect(setupRegistryTesting.getCacheSizes().setupProvider).toBe(1);
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
@@ -813,7 +810,6 @@ describe("setup-registry getJiti", () => {
     expect(resolvePluginSetupCliBackend({ backend: "claude-cli", env: {} })?.backend.id).toBe(
       "claude-cli",
     );
-    expect(setupRegistryTesting.getCacheSizes().setupCliBackend).toBe(1);
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
       "codex-cli",
     );
@@ -826,7 +822,6 @@ describe("setup-registry getJiti", () => {
       env: {},
       pluginIds: ["anthropic"],
     });
-    expect(setupRegistryTesting.getCacheSizes().setupRegistry).toBe(1);
     expect(loadSetupModule).toHaveBeenCalledTimes(7);
   });
 });

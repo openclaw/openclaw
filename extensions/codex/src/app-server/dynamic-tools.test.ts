@@ -1,14 +1,19 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "../../../../src/agents/pi-tools.before-tool-call.js";
+import {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  wrapToolWithBeforeToolCallHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
-} from "../../../../src/plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
-import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
-import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
+} from "openclaw/plugin-sdk/hook-runtime";
+import {
+  createEmptyPluginRegistry,
+  createMockPluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
@@ -174,6 +179,8 @@ describe("createCodexDynamicToolBridge", () => {
           provider: "telegram",
           to: "chat-1",
           threadId: "thread-ts-1",
+          text: "hello from Codex",
+          mediaUrls: ["/tmp/reply.png"],
         },
       ],
     });
@@ -207,6 +214,38 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTexts: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+    });
+  });
+
+  it("records heartbeat response tool outcomes", async () => {
+    const bridge = createBridgeWithToolResult(
+      HEARTBEAT_RESPONSE_TOOL_NAME,
+      textToolResult("Recorded.", {
+        status: "recorded",
+        outcome: "needs_attention",
+        notify: true,
+        summary: "Build is blocked.",
+        notificationText: "Build is blocked on missing credentials.",
+        priority: "high",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {},
+    });
+
+    expect(result).toEqual(expectInputText("Recorded."));
+    expect(bridge.telemetry.heartbeatToolResponse).toEqual({
+      outcome: "needs_attention",
+      notify: true,
+      summary: "Build is blocked.",
+      notificationText: "Build is blocked on missing credentials.",
+      priority: "high",
     });
   });
 
@@ -275,7 +314,7 @@ describe("createCodexDynamicToolBridge", () => {
       details: { status: "failed", exitCode: 1 },
     });
 
-    await bridge.handleToolCall({
+    const result = await bridge.handleToolCall({
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
@@ -284,6 +323,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "false" },
     });
 
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "failed output" }],
+    });
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ isError: true }),
       expect.objectContaining({ runtime: "codex" }),
@@ -373,6 +416,92 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("legacy compacted"));
+  });
+
+  it("keeps config out of Codex tool-result contexts", async () => {
+    const config = { session: { store: "/tmp/openclaw-session-store.json" } };
+    const registry = createEmptyPluginRegistry();
+    const middlewareContexts: Record<string, unknown>[] = [];
+    const legacyContexts: Record<string, unknown>[] = [];
+    const middleware = vi.fn(async (_event: unknown, ctx: Record<string, unknown>) => {
+      middlewareContexts.push(ctx);
+      return undefined;
+    });
+    const factory = async (codex: {
+      on: (
+        event: "tool_result",
+        handler: (
+          event: unknown,
+          ctx: Record<string, unknown>,
+        ) => Promise<{ result: AgentToolResult<unknown> } | void>,
+      ) => void;
+    }) => {
+      codex.on("tool_result", async (_event, ctx) => {
+        legacyContexts.push(ctx);
+      });
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "legacy",
+      pluginName: "Legacy",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const execute = vi.fn(async () => textToolResult("done"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "agent-1",
+        config: config as never,
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+      },
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-1",
+      { command: "pwd" },
+      expect.any(AbortSignal),
+      undefined,
+    );
+    expect(middlewareContexts).toHaveLength(1);
+    expect(middlewareContexts[0]).toMatchObject({
+      runtime: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+    });
+    expect(middlewareContexts[0]).not.toHaveProperty("config");
+    expect(legacyContexts).toHaveLength(1);
+    expect(legacyContexts[0]).toMatchObject({
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+    });
+    expect(legacyContexts[0]).not.toHaveProperty("config");
   });
 
   it("fires after_tool_call for successful codex tool executions", async () => {
@@ -532,7 +661,14 @@ describe("createCodexDynamicToolBridge", () => {
             provider: "telegram",
             to: "chat-1",
           },
-          error: "blocked by policy",
+          result: expect.objectContaining({
+            content: [{ type: "text", text: "blocked by policy" }],
+            details: {
+              status: "blocked",
+              deniedReason: "plugin-before-tool-call",
+              reason: "blocked by policy",
+            },
+          }),
         }),
         expect.objectContaining({
           runId: "run-blocked",
@@ -663,6 +799,43 @@ describe("createCodexDynamicToolBridge", () => {
         }),
       );
     });
+  });
+
+  it("passes per-call abort signals into dynamic tool execution", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let resolveTool: ((result: AgentToolResult<unknown>) => void) | undefined;
+    const execute = vi.fn(
+      async (_callId: string, _args: Record<string, unknown>, signal: AbortSignal) =>
+        await new Promise<AgentToolResult<unknown>>((resolve) => {
+          capturedSignal = signal;
+          resolveTool = resolve;
+        }),
+    );
+    const runController = new AbortController();
+    const callController = new AbortController();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: runController.signal,
+    });
+
+    const result = bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-signal",
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "sleep" },
+      },
+      { signal: callController.signal },
+    );
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+
+    callController.abort(new Error("deadline"));
+    expect(capturedSignal?.aborted).toBe(true);
+    resolveTool?.(textToolResult("done"));
+
+    await expect(result).resolves.toEqual(expectInputText("done"));
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {

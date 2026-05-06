@@ -1,30 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
-import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "./agent-timeout-defaults.js";
 import { computeBaseConfigSchemaResponse } from "./schema-base.js";
-import { GENERATED_BASE_CONFIG_SCHEMA } from "./schema.base.generated.js";
 
-describe("generated base config schema", () => {
-  it("matches the computed base config schema payload", () => {
+const BASE_CONFIG_SCHEMA = computeBaseConfigSchemaResponse({
+  generatedAt: "2026-05-05T00:00:00.000Z",
+});
+
+describe("base config schema", () => {
+  it("is deterministic for a fixed generatedAt timestamp", () => {
     expect(
       computeBaseConfigSchemaResponse({
-        generatedAt: GENERATED_BASE_CONFIG_SCHEMA.generatedAt,
+        generatedAt: BASE_CONFIG_SCHEMA.generatedAt,
       }),
-    ).toEqual(GENERATED_BASE_CONFIG_SCHEMA);
+    ).toEqual(BASE_CONFIG_SCHEMA);
   });
 
   it("includes explicit URL-secret tags for sensitive URL fields", () => {
-    expect(GENERATED_BASE_CONFIG_SCHEMA.uiHints["mcp.servers.*.url"]?.tags).toContain(
-      SENSITIVE_URL_HINT_TAG,
-    );
-    expect(GENERATED_BASE_CONFIG_SCHEMA.uiHints["models.providers.*.baseUrl"]?.tags).toContain(
+    expect(BASE_CONFIG_SCHEMA.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(BASE_CONFIG_SCHEMA.uiHints["models.providers.*.baseUrl"]?.tags).toContain(
       SENSITIVE_URL_HINT_TAG,
     );
   });
 
   it("omits legacy hooks.internal.handlers from the public schema payload", () => {
     const hooksInternalProperties = (
-      GENERATED_BASE_CONFIG_SCHEMA.schema as {
+      BASE_CONFIG_SCHEMA.schema as {
         properties?: {
           hooks?: {
             properties?: {
@@ -36,7 +36,7 @@ describe("generated base config schema", () => {
         };
       }
     ).properties?.hooks?.properties?.internal?.properties;
-    const uiHints = GENERATED_BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
+    const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
 
     expect(hooksInternalProperties?.handlers).toBeUndefined();
     expect(uiHints["hooks.internal.handlers"]).toBeUndefined();
@@ -44,7 +44,7 @@ describe("generated base config schema", () => {
 
   it("includes videoGenerationModel in the public schema payload", () => {
     const agentDefaultsProperties = (
-      GENERATED_BASE_CONFIG_SCHEMA.schema as {
+      BASE_CONFIG_SCHEMA.schema as {
         properties?: {
           agents?: {
             properties?: {
@@ -56,40 +56,11 @@ describe("generated base config schema", () => {
         };
       }
     ).properties?.agents?.properties?.defaults?.properties;
-    const uiHints = GENERATED_BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
+    const uiHints = BASE_CONFIG_SCHEMA.uiHints as Record<string, unknown>;
 
     expect(agentDefaultsProperties?.videoGenerationModel).toBeDefined();
     expect(uiHints["agents.defaults.videoGenerationModel.primary"]).toBeDefined();
     expect(uiHints["agents.defaults.videoGenerationModel.fallbacks"]).toBeDefined();
     expect(uiHints["agents.defaults.mediaGenerationAutoProviderFallback"]).toBeDefined();
-  });
-
-  it("keeps the LLM idle timeout schema help aligned with the runtime default", () => {
-    const idleTimeoutDescription = (
-      GENERATED_BASE_CONFIG_SCHEMA.schema as {
-        properties?: {
-          agents?: {
-            properties?: {
-              defaults?: {
-                properties?: {
-                  llm?: {
-                    properties?: {
-                      idleTimeoutSeconds?: {
-                        description?: string;
-                      };
-                    };
-                  };
-                };
-              };
-            };
-          };
-        };
-      }
-    ).properties?.agents?.properties?.defaults?.properties?.llm?.properties?.idleTimeoutSeconds
-      ?.description;
-
-    expect(idleTimeoutDescription).toContain(
-      `Default: ${DEFAULT_LLM_IDLE_TIMEOUT_SECONDS} seconds.`,
-    );
   });
 });

@@ -71,6 +71,41 @@ function createIndex(rootDir: string): InstalledPluginIndex {
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  it("reconstructs installed-index manifest registries when manifest files change", () => {
+    const rootDir = makeTempDir();
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    expect(first.plugins[0]?.modelSupport).toEqual({
+      modelPrefixes: ["installed-"],
+    });
+
+    writePlugin(rootDir, "installed", "updated-installed-");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(second).not.toBe(first);
+    expect(second.plugins[0]?.modelSupport).toEqual({
+      modelPrefixes: ["updated-installed-"],
+    });
+  });
+
   it("loads manifest metadata only for plugins present in the installed index", () => {
     const installedRoot = makeTempDir();
     const unrelatedRoot = makeTempDir();
@@ -80,8 +115,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const registry = loadPluginManifestRegistryForInstalledIndex({
       index: createIndex(installedRoot),
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
@@ -123,8 +156,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ],
       },
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
@@ -181,8 +212,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ],
       },
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },
@@ -244,8 +273,6 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const registry = loadPluginManifestRegistryForInstalledIndex({
       index: persisted,
       env: {
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-        OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
         OPENCLAW_VERSION: "2026.4.25",
         VITEST: "true",
       },

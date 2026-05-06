@@ -132,23 +132,128 @@ export function createPayloadPatchStreamWrapper(
   patchPayload: (params: {
     payload: Record<string, unknown>;
     model: Parameters<StreamFn>[0];
+    context: Parameters<StreamFn>[1];
+    options: Parameters<StreamFn>[2];
   }) => void,
+  wrapperOptions?: {
+    shouldPatch?: (params: {
+      model: Parameters<StreamFn>[0];
+      context: Parameters<StreamFn>[1];
+      options: Parameters<StreamFn>[2];
+    }) => boolean;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    streamWithPayloadPatch(underlying, model, context, options, (payload) =>
-      patchPayload({ payload, model }),
+  return (model, context, options) => {
+    if (wrapperOptions?.shouldPatch && !wrapperOptions.shouldPatch({ model, context, options })) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
+      patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
+  const thinking = payload.thinking;
+  if (!thinking || typeof thinking !== "object") {
+    return false;
+  }
+  return (thinking as { type?: unknown }).type !== "disabled";
+}
+
+function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      ((block as { type?: unknown }).type === "tool_use" ||
+        (block as { type?: unknown }).type === "toolCall"),
+  );
+}
+
+export function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+  if (!Array.isArray(payload.messages)) {
+    return 0;
+  }
+
+  let stripped = 0;
+  while (payload.messages.length > 0) {
+    const finalMessage = payload.messages[payload.messages.length - 1];
+    if (!finalMessage || typeof finalMessage !== "object") {
+      break;
+    }
+
+    const message = finalMessage as Record<string, unknown>;
+    if (message.role !== "assistant" || assistantMessageHasAnthropicToolUse(message)) {
+      break;
+    }
+
+    payload.messages.pop();
+    stripped += 1;
+  }
+  return stripped;
+}
+
+export function stripTrailingAnthropicAssistantPrefillWhenThinking(
+  payload: Record<string, unknown>,
+): number {
+  if (!isAnthropicThinkingEnabled(payload)) {
+    return 0;
+  }
+  return stripTrailingAssistantPrefillMessages(payload);
+}
+
+export function createAnthropicThinkingPrefillPayloadWrapper(
+  baseStreamFn: StreamFn | undefined,
+  onStripped?: (stripped: number) => void,
+  wrapperOptions?: Parameters<typeof createPayloadPatchStreamWrapper>[2],
+): StreamFn {
+  return createPayloadPatchStreamWrapper(
+    baseStreamFn,
+    ({ payload }) => {
+      const stripped = stripTrailingAnthropicAssistantPrefillWhenThinking(payload);
+      if (stripped > 0) {
+        onStripped?.(stripped);
+      }
+    },
+    wrapperOptions,
+  );
+}
+
+export type OpenAICompatibleThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+
+export function isOpenAICompatibleThinkingEnabled(params: {
+  thinkingLevel: OpenAICompatibleThinkingLevel;
+  options: Parameters<StreamFn>[2];
+}): boolean {
+  const options = (params.options ?? {}) as { reasoningEffort?: unknown; reasoning?: unknown };
+  const raw = options.reasoningEffort ?? options.reasoning ?? params.thinkingLevel ?? "high";
+  if (typeof raw !== "string") {
+    return true;
+  }
+  const normalized = raw.trim().toLowerCase();
+  return normalized !== "off" && normalized !== "none";
 }
 
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+export type DeepSeekV4ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
   const normalized = typeof thinkingLevel === "string" ? thinkingLevel.toLowerCase() : "";
   return normalized === "off" || normalized === "none";
 }
 
-function resolveDeepSeekV4ReasoningEffort(thinkingLevel: DeepSeekV4ThinkingLevel): "high" | "max" {
+function resolveDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+): DeepSeekV4ReasoningEffort {
   return thinkingLevel === "xhigh" || thinkingLevel === "max" ? "max" : "high";
 }
 
@@ -164,7 +269,7 @@ function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void
   }
 }
 
-function ensureDeepSeekV4ToolCallReasoningContent(payload: Record<string, unknown>): void {
+function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
   if (!Array.isArray(payload.messages)) {
     return;
   }
@@ -173,7 +278,7 @@ function ensureDeepSeekV4ToolCallReasoningContent(payload: Record<string, unknow
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+    if (record.role !== "assistant") {
       continue;
     }
     if (!("reasoning_content" in record)) {
@@ -186,11 +291,13 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   thinkingLevel: DeepSeekV4ThinkingLevel;
   shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+  resolveReasoningEffort?: (thinkingLevel: DeepSeekV4ThinkingLevel) => DeepSeekV4ReasoningEffort;
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {
     return undefined;
   }
   const underlying = params.baseStreamFn;
+  const resolveReasoningEffort = params.resolveReasoningEffort ?? resolveDeepSeekV4ReasoningEffort;
   return (model, context, options) => {
     if (!params.shouldPatchModel(model)) {
       return underlying(model, context, options);
@@ -206,8 +313,8 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
       }
 
       payload.thinking = { type: "enabled" };
-      payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4ToolCallReasoningContent(payload);
+      payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
+      ensureDeepSeekV4AssistantReasoningContent(payload);
     });
   };
 }

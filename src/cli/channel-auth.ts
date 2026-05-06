@@ -5,7 +5,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import { resolveInstallableChannelPlugin } from "../commands/channel-setup/channel-plugin-resolution.js";
-import { loadConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
 import { setVerbose } from "../globals.js";
@@ -168,13 +168,43 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
   }
 }
 
+async function logoutViaGatewayRuntime(params: {
+  cfg: OpenClawConfig;
+  channelId: string;
+  accountId: string;
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  try {
+    await callGateway({
+      config: params.cfg,
+      method: "channels.logout",
+      params: {
+        channel: params.channelId,
+        accountId: params.accountId,
+      },
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      deviceIdentity: null,
+    });
+    return true;
+  } catch (error) {
+    if (params.cfg.gateway?.mode === "remote") {
+      throw error;
+    }
+    params.runtime.log(
+      `Local logout will clear auth for ${params.channelId}/${params.accountId}, but the running gateway did not stop it: ${formatErrorMessage(error)}`,
+    );
+    return false;
+  }
+}
+
 export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
@@ -217,7 +247,7 @@ export async function runChannelLogout(
 ) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const autoEnabled = applyPluginAutoEnable({
-    config: loadConfig(),
+    config: getRuntimeConfig(),
     env: process.env,
   });
   const loadedCfg = autoEnabled.config;
@@ -235,8 +265,18 @@ export async function runChannelLogout(
   if (!logoutAccount) {
     throw new Error(`Channel ${channelInput} does not support logout`);
   }
-  // Auth-only flow: resolve account + clear session state only.
+  // Prefer the live gateway so logout also stops any active channel runtime.
   const { accountId } = resolveAccountContext(plugin, opts, cfg);
+  if (
+    await logoutViaGatewayRuntime({
+      cfg,
+      channelId: plugin.id,
+      accountId,
+      runtime,
+    })
+  ) {
+    return;
+  }
   const account = plugin.config.resolveAccount(cfg, accountId);
   await logoutAccount({
     cfg,

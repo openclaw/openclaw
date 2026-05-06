@@ -1,0 +1,262 @@
+name: ClawSweeper Dispatch
+
+on:
+  issues:
+    types: [opened, reopened, edited, labeled, unlabeled]
+  issue_comment:
+    types: [created, edited]
+  push:
+    branches: [main]
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned external dispatch; no checkout or untrusted PR code execution
+    types: [opened, reopened, synchronize, ready_for_review, edited, labeled, unlabeled]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+  pull_request_review_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clawsweeper-dispatch-${{ github.repository }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'issue_comment' || !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled')) }}
+    env:
+      HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
+      CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
+      SUPERSEDES_IN_PROGRESS: ${{ (github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review') && 'true' || 'false' }}
+    steps:
+      - name: Debounce bursty metadata events
+        if: ${{ github.event.action == 'labeled' || github.event.action == 'unlabeled' }}
+        run: sleep 20
+
+      - name: Create ClawSweeper dispatch token
+        id: token
+        if: ${{ env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: clawsweeper
+          permission-contents: write
+
+      - name: Create target comment token
+        id: target_token
+        if: ${{ github.event_name == 'issue_comment' && env.HAS_CLAWSWEEPER_APP_PRIVATE_KEY == 'true' }}
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ env.CLAWSWEEPER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: read
+
+      - name: Dispatch GitHub activity to ClawSweeper
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_ACTION: ${{ github.event.action }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::Skipping GitHub activity dispatch because no ClawSweeper app token is configured."
+            exit 0
+          fi
+          activity="$(jq -c \
+            --arg target_repo "$TARGET_REPO" \
+            --arg event_name "$SOURCE_EVENT" \
+            --arg source_action "$SOURCE_ACTION" \
+            --arg actor "$ACTOR" \
+            '
+            def body_excerpt(value):
+              if (value // "" | type) == "string" then
+                ((value // "") | gsub("\\s+"; " ") | .[0:1200])
+              else null end;
+            {
+              type: $event_name,
+              repo: $target_repo,
+              action: $source_action,
+              actor: $actor,
+              subject: (
+                if .pull_request then {
+                  kind: "pull_request",
+                  number: .pull_request.number,
+                  title: .pull_request.title,
+                  url: .pull_request.html_url,
+                  state: (if .pull_request.merged == true then "merged" else .pull_request.state end)
+                } elif .issue then {
+                  kind: (if .issue.pull_request then "pull_request" else "issue" end),
+                  number: .issue.number,
+                  title: .issue.title,
+                  url: .issue.html_url,
+                  state: .issue.state
+                } elif $event_name == "push" then {
+                  kind: "push",
+                  title: (.head_commit.message // .after // "push"),
+                  url: (.head_commit.url // .compare),
+                  state: .ref
+                } else {
+                  kind: $event_name
+                } end),
+              comment: (if .comment then {
+                id: .comment.id,
+                url: .comment.html_url,
+                body_excerpt: body_excerpt(.comment.body)
+              } else null end),
+              review: (if .review then {
+                id: .review.id,
+                state: .review.state,
+                url: .review.html_url,
+                body_excerpt: body_excerpt(.review.body)
+              } else null end),
+              review_comment: (if .comment and $event_name == "pull_request_review_comment" then {
+                id: .comment.id,
+                path: .comment.path,
+                line: (.comment.line // .comment.original_line),
+                url: .comment.html_url,
+                body_excerpt: body_excerpt(.comment.body)
+              } else null end),
+              push: (if $event_name == "push" then {
+                before: .before,
+                after: .after,
+                ref: .ref,
+                compare: .compare,
+                head_commit: .head_commit.id
+              } else null end),
+              delivery_id: (.comment.id // .review.id // .pull_request.head.sha // .issue.updated_at // .after // env.GITHUB_RUN_ID)
+            } | del(.. | nulls)
+            ' "$GITHUB_EVENT_PATH")"
+          payload="$(jq -nc --argjson activity "$activity" \
+            '{event_type:"github_activity",client_payload:{activity:$activity}}')"
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched GitHub activity to ClawSweeper."
+          else
+            echo "::warning::Skipping GitHub activity dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Dispatch exact ClawSweeper review
+        if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          ITEM_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          ITEM_KIND: ${{ github.event_name == 'pull_request_target' && 'pull_request' || 'issue' }}
+          SOURCE_EVENT: ${{ github.event_name }}
+          SOURCE_ACTION: ${{ github.event.action }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
+            exit 0
+          fi
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --argjson item_number "$ITEM_NUMBER" \
+            --arg item_kind "$ITEM_KIND" \
+            --arg source_event "$SOURCE_EVENT" \
+            --arg source_action "$SOURCE_ACTION" \
+            --argjson supersedes_in_progress "$SUPERSEDES_IN_PROGRESS" \
+            '{event_type:"clawsweeper_item",client_payload:{target_repo:$target_repo,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress}}')"
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper review."
+          else
+            echo "::warning::Skipping ClawSweeper dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Acknowledge and dispatch ClawSweeper comment
+        if: ${{ github.event_name == 'issue_comment' }}
+        env:
+          DISPATCH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_TOKEN: ${{ steps.target_token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          ITEM_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SOURCE_ACTION: ${{ github.event.action }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISPATCH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper comment dispatch because no ClawSweeper app token is configured."
+            exit 0
+          fi
+          body_file="$RUNNER_TEMP/clawsweeper-comment-body.txt"
+          printf '%s\n' "$COMMENT_BODY" > "$body_file"
+          if ! grep -Eiq '(^|[[:space:]])@(clawsweeper|openclaw-clawsweeper)\b(\[bot\])?|(^|[[:space:]])/(clawsweeper|review|automerge|autoclose)\b' "$body_file"; then
+            echo "No ClawSweeper command found in comment."
+            exit 0
+          fi
+          if [ -n "$TARGET_TOKEN" ]; then
+            err="$(mktemp)"
+            if GH_TOKEN="$TARGET_TOKEN" gh api -X POST \
+              -H "Accept: application/vnd.github+json" \
+              "repos/$TARGET_REPO/issues/comments/$COMMENT_ID/reactions" \
+              -f content="eyes" 2>"$err" >/dev/null; then
+              echo "Acknowledged ClawSweeper command comment."
+            elif grep -qi "HTTP 422\\|already exists" "$err"; then
+              echo "ClawSweeper command comment already acknowledged."
+            else
+              cat "$err" >&2
+              echo "::warning::Could not acknowledge ClawSweeper command comment."
+            fi
+            rm -f "$err"
+          else
+            echo "::notice::Skipping ClawSweeper comment acknowledgement because no target token is configured."
+          fi
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --argjson item_number "$ITEM_NUMBER" \
+            --argjson comment_id "$COMMENT_ID" \
+            --arg source_event "issue_comment" \
+            --arg source_action "$SOURCE_ACTION" \
+            '{event_type:"clawsweeper_comment",client_payload:{target_repo:$target_repo,item_number:$item_number,comment_id:$comment_id,source_event:$source_event,source_action:$source_action}}')"
+          if GH_TOKEN="$DISPATCH_TOKEN" gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper comment router."
+          else
+            echo "::warning::Skipping ClawSweeper comment dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi
+
+      - name: Dispatch ClawSweeper commit review
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.event.deleted != true }}
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          TARGET_REPO: ${{ github.repository }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          CREATE_CHECKS: ${{ vars.CLAWSWEEPER_COMMIT_REVIEW_CREATE_CHECKS || 'false' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::Skipping ClawSweeper commit dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
+            exit 0
+          fi
+          case "$CREATE_CHECKS" in
+            true|TRUE|1|yes|YES|on|ON) create_checks=true ;;
+            *) create_checks=false ;;
+          esac
+          payload="$(jq -nc \
+            --arg target_repo "$TARGET_REPO" \
+            --arg before_sha "$BEFORE_SHA" \
+            --arg after_sha "$AFTER_SHA" \
+            --arg ref "$SOURCE_REF" \
+            --argjson create_checks "$create_checks" \
+            '{event_type:"clawsweeper_commit_review",client_payload:{target_repo:$target_repo,before_sha:$before_sha,after_sha:$after_sha,ref:$ref,enabled:true,create_checks:$create_checks}}')"
+          if gh api repos/openclaw/clawsweeper/dispatches \
+            --method POST \
+            --input - <<< "$payload"; then
+            echo "Dispatched ClawSweeper commit review."
+          else
+            echo "::warning::Skipping ClawSweeper commit dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
+          fi

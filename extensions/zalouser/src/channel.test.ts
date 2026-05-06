@@ -1,5 +1,5 @@
+import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createNonExitingRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
 import "./zalo-js.test-mocks.js";
 import {
   zalouserAuthAdapter,
@@ -142,7 +142,7 @@ describe("zalouser outbound chunking", () => {
 describe("zalouser channel policies", () => {
   beforeEach(() => {
     mockSendReaction.mockClear();
-    mockSendReaction.mockResolvedValue({ ok: true });
+    mockSendReaction.mockResolvedValue({ ok: true } as never);
   });
 
   it("normalizes dm allowlist entries after trimming channel prefixes", () => {

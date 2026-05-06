@@ -6,8 +6,8 @@ read_when:
 title: "Agent loop"
 ---
 
-An agentic loop is the full “real” run of an agent: intake → context assembly → model inference →
-tool execution → streaming replies → persistence. It’s the authoritative path that turns a message
+An agentic loop is the full "real" run of an agent: intake → context assembly → model inference →
+tool execution → streaming replies → persistence. It's the authoritative path that turns a message
 into actions and a final reply, while keeping session state consistent.
 
 In OpenClaw, a loop is a single, serialized run per session that emits lifecycle and stream events
@@ -32,6 +32,7 @@ wired end-to-end.
    - resolves model + auth profile and builds the pi session
    - subscribes to pi events and streams assistant/tool deltas
    - enforces timeout -> aborts run if exceeded
+   - for Codex app-server turns, aborts an accepted turn that stops producing app-server progress before a terminal event
    - returns payloads + usage metadata
 4. `subscribeEmbeddedPiSession` bridges pi-agent-core events to OpenClaw `agent` stream:
    - tool events => `stream: "tool"`
@@ -49,7 +50,8 @@ wired end-to-end.
   See [Command Queue](/concepts/queue).
 - Transcript writes are also protected by a session write lock on the session file. The lock is
   process-aware and file-based, so it catches writers that bypass the in-process queue or come from
-  another process.
+  another process. Session transcript writers wait up to `session.writeLock.acquireTimeoutMs`
+  before reporting the session as busy; the default is `60000` ms.
 - Session write locks are non-reentrant by default. If a helper intentionally nests acquisition of
   the same lock while preserving one logical writer, it must opt in explicitly with
   `allowReentrant: true`.
@@ -65,7 +67,7 @@ wired end-to-end.
 
 ## Prompt assembly + system prompt
 
-- System prompt is built from OpenClaw’s base prompt, skills prompt, bootstrap context, and per-run overrides.
+- System prompt is built from OpenClaw's base prompt, skills prompt, bootstrap context, and per-run overrides.
 - Model-specific limits and compaction reserve tokens are enforced.
 - See [System prompt](/concepts/system-prompt) for what the model sees.
 
@@ -162,7 +164,10 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
 - Agent runtime: `agents.defaults.timeoutSeconds` default 172800s (48 hours); enforced in `runEmbeddedPiAgent` abort timer.
-- LLM idle timeout: `agents.defaults.llm.idleTimeoutSeconds` aborts a model request when no response chunks arrive before the idle window. Set it explicitly for slow local models or reasoning/tool-call providers; set it to 0 to disable. If it is not set, OpenClaw uses `agents.defaults.timeoutSeconds` when configured, otherwise 120s. Cron-triggered runs with no explicit LLM or agent timeout disable the idle watchdog and rely on the cron outer timeout.
+- Cron runtime: isolated agent-turn `timeoutSeconds` is owned by cron. The scheduler starts that timer when execution begins, aborts the underlying run at the configured deadline, then runs bounded cleanup before recording the timeout so a stale child session cannot keep the lane stuck.
+- Session liveness diagnostics: with diagnostics enabled, `diagnostics.stuckSessionWarnMs` classifies long `processing` sessions that have no observed reply, tool, status, block, or ACP progress. Active embedded runs, model calls, and tool calls report as `session.long_running`; active work with no recent progress reports as `session.stalled`; `session.stuck` is reserved for stale session bookkeeping with no active work. Stale session bookkeeping releases the affected session lane immediately; stalled embedded runs are abort-drained only after `diagnostics.stuckSessionAbortMs` (default: at least 10 minutes and 5x the warning threshold) so queued work can resume without cutting off merely slow runs. Recovery emits structured requested/completed outcomes, and diagnostic state is marked idle only if the same processing generation is still current. Repeated `session.stuck` diagnostics back off while the session remains unchanged.
+- Model idle timeout: OpenClaw aborts a model request when no response chunks arrive before the idle window. `models.providers.<id>.timeoutSeconds` extends this idle watchdog for slow local/self-hosted providers; otherwise OpenClaw uses `agents.defaults.timeoutSeconds` when configured, capped at 120s by default. Cron-triggered runs with no explicit model or agent timeout disable the idle watchdog and rely on the cron outer timeout.
+- Provider HTTP request timeout: `models.providers.<id>.timeoutSeconds` applies to that provider's model HTTP fetches, including connect, headers, body, SDK request timeout, total guarded-fetch abort handling, and model stream idle watchdog. Use this for slow local/self-hosted providers such as Ollama before raising the whole agent runtime timeout.
 
 ## Where things can end early
 

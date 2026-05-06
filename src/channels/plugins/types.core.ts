@@ -112,7 +112,7 @@ export type ChannelSetupInput = {
   useEnv?: boolean;
   homeserver?: string;
   dangerouslyAllowPrivateNetwork?: boolean;
-  /** Compatibility alias for legacy setup callers; prefer dangerouslyAllowPrivateNetwork. */
+  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
   allowPrivateNetwork?: boolean;
   proxy?: string;
   userId?: string;
@@ -273,10 +273,29 @@ export type ChannelGroupContext = {
 };
 
 /** TTS voice delivery behavior advertised by a channel plugin. */
+/**
+ * Container tokens (file-extension shape, no leading dot) that the host
+ * speech-core pipeline knows how to pre-transcode synthesized audio into.
+ * Channels that benefit from a specific container — currently only
+ * BlueBubbles, which needs Apple's native voice-memo CAF descriptor — name
+ * one here. Adding a new entry requires extending the host transcoder
+ * recipe table in lockstep so a typed declaration cannot silently no-op.
+ */
+export type PreferredAudioFileFormat = "caf";
+
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
   audioFileFormats?: readonly string[];
+  /**
+   * Optional preferred audio container the channel wants for voice-memo
+   * delivery. When set and the host can transcode (e.g. `afconvert` on
+   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
+   * before handing it to the channel. Useful for channels (such as
+   * BlueBubbles) whose downstream attempts its own container conversion
+   * that races against the upload write and fails.
+   */
+  preferAudioFileFormat?: PreferredAudioFileFormat;
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -388,6 +407,8 @@ export type ChannelThreadingAdapter = {
    */
   allowExplicitReplyTagsWhenOff?: boolean;
   /**
+   * @deprecated Use allowExplicitReplyTagsWhenOff.
+   *
    * Deprecated alias for allowExplicitReplyTagsWhenOff.
    * Kept for compatibility with older plugin surfaces.
    */
@@ -454,6 +475,12 @@ export type ChannelThreadingToolContext = {
 
 /** Channel-owned messaging helpers for target parsing, routing, and payload shaping. */
 export type ChannelMessagingAdapter = {
+  /**
+   * Provider prefixes accepted in explicit targets, including aliases not used
+   * as channel-selection aliases. Core uses these to reject cross-channel
+   * targets before plugin-specific normalization.
+   */
+  targetPrefixes?: readonly string[];
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -516,6 +543,8 @@ export type ChannelMessagingAdapter = {
     parentConversationCandidates?: string[];
   } | null;
   /**
+   * @deprecated Return parentConversationCandidates from resolveSessionConversation.
+   *
    * Legacy compatibility hook for parent fallbacks when a plugin does not need
    * to customize `id` or `threadId`. Core only uses this when
    * `resolveSessionConversation(...)` does not return
@@ -671,6 +700,14 @@ export type ChannelToolSend = {
   threadId?: string | null;
 };
 
+export type ChannelMessagePreparedSendPayloadContext = {
+  ctx: ChannelMessageActionContext;
+  to: string;
+  payload: ReplyPayload;
+  replyToId?: string | null;
+  threadId?: string | number | null;
+};
+
 /** Channel-owned action surface for the shared `message` tool. */
 export type ChannelMessageActionAdapter = {
   /**
@@ -704,6 +741,14 @@ export type ChannelMessageActionAdapter = {
     toolContext?: ChannelThreadingToolContext;
   }) => boolean;
   extractToolSend?: (params: { args: Record<string, unknown> }) => ChannelToolSend | null;
+  /**
+   * Translate generic `message(action=send)` arguments into the payload core
+   * should persist, retry, recover, and ack. Return null to keep the legacy
+   * plugin-owned action path for sends that cannot be represented durably.
+   */
+  prepareSendPayload?: (
+    params: ChannelMessagePreparedSendPayloadContext,
+  ) => ReplyPayload | null | undefined | Promise<ReplyPayload | null | undefined>;
   /**
    * Prefer this for channel-specific poll semantics or extra poll parameters.
    * Core only parses the shared poll model when falling back to `outbound.sendPoll`.

@@ -1,4 +1,4 @@
-import { normalizeConfiguredMcpServers } from "../config/mcp-config.js";
+import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadEnabledBundleMcpConfig,
@@ -7,15 +7,12 @@ import {
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
 
-export type MergedBundleMcpConfig = {
+type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
 
-export type BundleMcpServerMapper = (
-  server: BundleMcpServerConfig,
-  name: string,
-) => BundleMcpServerConfig;
+type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
 
 const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   "streamable-http": "http",

@@ -63,6 +63,7 @@ Optional build/setup env vars:
 - `OPENCLAW_IMAGE` or `OPENCLAW_PODMAN_IMAGE` -- use an existing/pulled image instead of building `openclaw:local`
 - `OPENCLAW_DOCKER_APT_PACKAGES` -- install extra apt packages during image build
 - `OPENCLAW_EXTENSIONS` -- pre-install plugin dependencies at build time
+- `OPENCLAW_INSTALL_BROWSER` -- pre-install Chromium and Xvfb for browser automation (set to `1` to enable)
 
 Container start:
 
@@ -97,11 +98,11 @@ openclaw channels login
 
 On macOS, Podman machine may make the browser appear non-local to the gateway.
 If the Control UI reports device-auth errors after launch, use the Tailscale guidance in
-[Podman + Tailscale](#podman--tailscale).
+[Podman and Tailscale](#podman--tailscale).
 
 <a id="podman--tailscale"></a>
 
-## Podman + Tailscale
+## Podman and Tailscale
 
 For HTTPS or remote browser access, follow the main Tailscale docs.
 

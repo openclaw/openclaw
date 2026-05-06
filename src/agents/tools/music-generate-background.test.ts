@@ -3,7 +3,6 @@ import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   announceDeliveryMocks,
   createMediaCompletionFixture,
-  expectDirectMediaSend,
   expectFallbackMediaAnnouncement,
   expectQueuedTaskRun,
   expectRecordedTaskProgress,
@@ -96,34 +95,55 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalled();
   });
 
-  it("delivers completed music directly to the requester channel when enabled", async () => {
+  it("warns channel completion agents that normal final replies are private", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: true,
+      path: "direct",
+    });
+    const completion = createMediaCompletionFixture({
+      runId: "tool:music_generate:abc",
+      taskLabel: "night-drive synthwave",
+      result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+      mediaUrls: ["/tmp/generated-night-drive.mp3"],
+    });
+
+    await wakeMusicGenerationTaskCompletion({
+      ...completion,
+      handle: {
+        ...completion.handle,
+        requesterSessionKey: "agent:main:discord:channel:C123",
+      },
+    });
+
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        internalEvents: expect.arrayContaining([
+          expect.objectContaining({
+            replyInstruction: expect.stringContaining(
+              "the user will NOT see your normal assistant final reply",
+            ),
+          }),
+        ]),
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
+      expect.objectContaining({
+        internalEvents: expect.arrayContaining([
+          expect.objectContaining({
+            replyInstruction: expect.stringContaining(
+              "Do not put MEDIA: lines only in your final answer",
+            ),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("queues a completion event when direct send is enabled globally", async () => {
     taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue({
       channel: "discord",
       messageId: "msg-1",
     });
-
-    await wakeMusicGenerationTaskCompletion({
-      ...createMediaCompletionFixture({
-        directSend: true,
-        runId: "tool:music_generate:abc",
-        taskLabel: "night-drive synthwave",
-        result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
-      }),
-    });
-
-    expectDirectMediaSend({
-      sendMessageMock: taskDeliveryRuntimeMocks.sendMessage,
-      channel: "discord",
-      to: "channel:1",
-      threadId: "thread-1",
-      content: "Generated 1 track.",
-      mediaUrls: ["/tmp/generated-night-drive.mp3"],
-    });
-    expect(announceDeliveryMocks.deliverSubagentAnnouncement).not.toHaveBeenCalled();
-  });
-
-  it("falls back to a music-generation completion event when direct delivery fails", async () => {
-    taskDeliveryRuntimeMocks.sendMessage.mockRejectedValue(new Error("discord upload failed"));
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
@@ -139,6 +159,7 @@ describe("music generate background helpers", () => {
       }),
     });
 
+    expect(taskDeliveryRuntimeMocks.sendMessage).not.toHaveBeenCalled();
     expectFallbackMediaAnnouncement({
       deliverAnnouncementMock: announceDeliveryMocks.deliverSubagentAnnouncement,
       requesterSessionKey: "agent:main:discord:direct:123",
