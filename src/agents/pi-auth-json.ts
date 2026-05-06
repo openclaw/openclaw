@@ -28,7 +28,9 @@ const AuthJsonShapeSchema = z.record(z.string(), z.unknown());
 
 async function readAuthJson(rootDir: string, filePath: string): Promise<AuthJsonShape> {
   try {
-    const parsed = await privateFileStore(rootDir).readJson(path.relative(rootDir, filePath));
+    const parsed = await privateFileStore(rootDir).readJsonIfExists(
+      path.relative(rootDir, filePath),
+    );
     return safeParseWithSchema(AuthJsonShapeSchema, parsed) ?? {};
   } catch {
     return {};

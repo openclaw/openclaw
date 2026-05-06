@@ -4,7 +4,7 @@ import path from "node:path";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { readPrivateJson, writePrivateJsonAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   deriveConceptTags,
@@ -760,10 +760,7 @@ async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTer
   const storePath = resolveStorePath(workspaceDir);
   try {
     return normalizeStore(
-      await readPrivateJson({
-        rootDir: workspaceDir,
-        filePath: storePath,
-      }),
+      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, storePath)),
       nowIso,
     );
   } catch (err) {
@@ -836,10 +833,9 @@ async function readPhaseSignalStore(
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   try {
     return normalizePhaseSignalStore(
-      await readPrivateJson({
-        rootDir: workspaceDir,
-        filePath: phaseSignalPath,
-      }),
+      await privateFileStore(workspaceDir).readJsonIfExists(
+        path.relative(workspaceDir, phaseSignalPath),
+      ),
       nowIso,
     );
   } catch {
@@ -853,21 +849,19 @@ async function writePhaseSignalStore(
 ): Promise<void> {
   const phaseSignalPath = resolvePhaseSignalPath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  await writePrivateJsonAtomic({
-    rootDir: workspaceDir,
-    filePath: phaseSignalPath,
-    value: store,
-    trailingNewline: true,
-  });
+  await privateFileStore(workspaceDir).writeJson(
+    path.relative(workspaceDir, phaseSignalPath),
+    store,
+    {
+      trailingNewline: true,
+    },
+  );
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   const storePath = resolveStorePath(workspaceDir);
   await ensureShortTermArtifactsDir(workspaceDir);
-  await writePrivateJsonAtomic({
-    rootDir: workspaceDir,
-    filePath: storePath,
-    value: store,
+  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, storePath), store, {
     trailingNewline: true,
   });
 }

@@ -18,11 +18,7 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  appendRegularFile,
-  readPrivateJson,
-  writePrivateJsonAtomic,
-} from "openclaw/plugin-sdk/security-runtime";
+import { appendRegularFile, privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
   generateAndAppendDreamNarrative,
@@ -449,10 +445,7 @@ async function readDailyIngestionState(workspaceDir: string): Promise<DailyInges
   const statePath = resolveDailyIngestionStatePath(workspaceDir);
   try {
     return normalizeDailyIngestionState(
-      await readPrivateJson({
-        rootDir: workspaceDir,
-        filePath: statePath,
-      }),
+      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, statePath)),
     );
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -467,10 +460,7 @@ async function writeDailyIngestionState(
   state: DailyIngestionState,
 ): Promise<void> {
   const statePath = resolveDailyIngestionStatePath(workspaceDir);
-  await writePrivateJsonAtomic({
-    rootDir: workspaceDir,
-    filePath: statePath,
-    value: state,
+  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, statePath), state, {
     trailingNewline: true,
   });
 }
@@ -567,10 +557,7 @@ async function readSessionIngestionState(workspaceDir: string): Promise<SessionI
   const statePath = resolveSessionIngestionStatePath(workspaceDir);
   try {
     return normalizeSessionIngestionState(
-      await readPrivateJson({
-        rootDir: workspaceDir,
-        filePath: statePath,
-      }),
+      await privateFileStore(workspaceDir).readJsonIfExists(path.relative(workspaceDir, statePath)),
     );
   } catch (err) {
     if (err instanceof SyntaxError) {
@@ -585,10 +572,7 @@ async function writeSessionIngestionState(
   state: SessionIngestionState,
 ): Promise<void> {
   const statePath = resolveSessionIngestionStatePath(workspaceDir);
-  await writePrivateJsonAtomic({
-    rootDir: workspaceDir,
-    filePath: statePath,
-    value: state,
+  await privateFileStore(workspaceDir).writeJson(path.relative(workspaceDir, statePath), state, {
     trailingNewline: true,
   });
 }

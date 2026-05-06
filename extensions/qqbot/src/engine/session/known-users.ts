@@ -6,10 +6,7 @@
  */
 
 import path from "node:path";
-import {
-  readPrivateJsonSync,
-  writePrivateJsonAtomicSync,
-} from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import type { ChatScope } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
@@ -52,10 +49,9 @@ function loadUsersFromFile(): Map<string, KnownUser> {
   usersCache = new Map();
   try {
     const knownUsersFile = getKnownUsersFile();
-    const users = readPrivateJsonSync<KnownUser[]>({
-      rootDir: path.dirname(knownUsersFile),
-      filePath: knownUsersFile,
-    });
+    const users = privateFileStoreSync(path.dirname(knownUsersFile)).readJsonIfExists<KnownUser[]>(
+      path.basename(knownUsersFile),
+    );
     if (users) {
       for (const user of users) {
         usersCache.set(makeUserKey(user), user);
@@ -86,11 +82,10 @@ function doSaveUsersToFile(): void {
   try {
     ensureDir();
     const filePath = getKnownUsersFile();
-    writePrivateJsonAtomicSync({
-      rootDir: path.dirname(filePath),
-      filePath,
-      value: Array.from(usersCache.values()),
-    });
+    privateFileStoreSync(path.dirname(filePath)).writeJson(
+      path.basename(filePath),
+      Array.from(usersCache.values()),
+    );
     isDirty = false;
   } catch (err) {
     debugError(`[known-users] Failed to save users: ${formatErrorMessage(err)}`);

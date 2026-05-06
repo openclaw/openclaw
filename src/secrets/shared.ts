@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  writePrivateJsonAtomicSync,
-  writePrivateTextAtomicSync,
-} from "../infra/private-file-store.js";
+import { privateFileStoreSync } from "../infra/private-file-store.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 export { isRecord } from "../utils.js";
 
@@ -45,10 +42,7 @@ export function ensureDirForFile(filePath: string): void {
 }
 
 export function writeJsonFileSecure(pathname: string, value: unknown): void {
-  writePrivateJsonAtomicSync({
-    rootDir: path.dirname(pathname),
-    filePath: pathname,
-    value,
+  privateFileStoreSync(path.dirname(pathname)).writeJson(path.basename(pathname), value, {
     trailingNewline: true,
   });
 }
@@ -70,9 +64,5 @@ export function writeTextFileAtomic(pathname: string, value: string, mode = 0o60
     });
     return;
   }
-  writePrivateTextAtomicSync({
-    rootDir: path.dirname(pathname),
-    filePath: pathname,
-    content: value,
-  });
+  privateFileStoreSync(path.dirname(pathname)).writeText(path.basename(pathname), value);
 }

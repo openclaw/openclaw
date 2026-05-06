@@ -26,10 +26,6 @@ export {
   openLocalFileSafely,
   pathExists,
   pathExistsSync,
-  readPrivateJson,
-  readPrivateJsonSync,
-  readPrivateText,
-  readPrivateTextSync,
   readRegularFile,
   resolveLocalPathFromRootsSync,
   readRegularFileSync,
@@ -94,10 +90,7 @@ export {
 export { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 export {
   privateFileStore,
-  writePrivateJsonAtomic,
-  writePrivateJsonAtomicSync,
-  writePrivateTextAtomic,
-  writePrivateTextAtomicSync,
+  privateFileStoreSync,
   type PrivateFileStore,
 } from "../infra/private-file-store.js";
 export {

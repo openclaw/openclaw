@@ -111,7 +111,9 @@ function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile 
 async function loadCommitmentStoreInternal(storePath?: string): Promise<LoadedCommitmentStore> {
   const resolved = resolveCommitmentStorePath(storePath);
   try {
-    const parsed = await privateFileStore(path.dirname(resolved)).readJson(path.basename(resolved));
+    const parsed = await privateFileStore(path.dirname(resolved)).readJsonIfExists(
+      path.basename(resolved),
+    );
     if (
       !isRecord(parsed) ||
       parsed.version !== STORE_VERSION ||

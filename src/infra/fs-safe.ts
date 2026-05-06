@@ -16,12 +16,6 @@ export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
 export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
-  readPrivateJson,
-  readPrivateJsonSync,
-  readPrivateText,
-  readPrivateTextSync,
-} from "@openclaw/fs-safe/advanced";
-export {
   appendRegularFile,
   appendRegularFileSync,
   readRegularFile,

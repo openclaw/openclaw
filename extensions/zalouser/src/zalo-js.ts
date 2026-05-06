@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
+  privateFileStoreSync,
   readRegularFileSync,
   statRegularFileSync,
   withTimeout,
-  writePrivateTextAtomicSync,
 } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir as resolvePluginStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
@@ -136,11 +136,7 @@ function isReadableCredentialFile(filePath: string): boolean {
 }
 
 function writeCredentialFileAtomic(filePath: string, payload: string): void {
-  writePrivateTextAtomicSync({
-    rootDir: resolveCredentialsDir(),
-    filePath,
-    content: payload,
-  });
+  privateFileStoreSync(resolveCredentialsDir()).writeText(path.basename(filePath), payload);
 }
 
 function delay(ms: number): Promise<void> {

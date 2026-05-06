@@ -43,7 +43,7 @@ maintainers off the local-only `link:../fs-safe` dependency.
 
 Current pin:
 
-- `github:openclaw/fs-safe#2f4c4262f05581cd54311fcf91949ad293901e9e`
+- `github:openclaw/fs-safe#542657b9d2fc43b8833b4fd6f29724bdcc1d5538`
 
 fs-safe keeps a source prepack helper so pnpm can build the package from the
 GitHub tarball. After npm publish, replace the source pin with a semver range
@@ -139,13 +139,12 @@ Representative use:
 Current overlap:
 
 - `fileStore`
-- `privateStateStore`
-- standalone private JSON/text helpers
+- `fileStore({ private: true })`
 - plugin SDK private-state aliases
 
-The concepts are siblings. fs-safe now exposes private mode through the store
-family, and OpenClaw internals use store-shaped wrappers where they do not need
-public plugin SDK compatibility names.
+The concepts are now one family. fs-safe exposes private mode through
+`fileStore({ private: true })`; OpenClaw internals and bundled plugins use
+store-shaped wrappers instead of standalone private JSON/text helpers.
 
 ### Temp workspaces
 
@@ -252,6 +251,8 @@ The store family should cover:
 - `read`
 - `readText`
 - `readJson`
+- `readTextIfExists`
+- `readJsonIfExists`
 - `write`
 - `writeJson`
 - `remove`
@@ -261,9 +262,9 @@ The store family should cover:
 - `writeStream`
 - `pruneExpired`
 
-After that exists, private standalone helpers can become compatibility wrappers.
-This cleanup added that store shape in fs-safe and moved OpenClaw internals onto
-it where semantics matched. Public plugin SDK names remain aliases.
+This cleanup added that store shape in fs-safe, removed the unshipped
+`privateStateStore` surface, and moved OpenClaw internals and bundled plugins
+onto explicit store reads/writes.
 
 ### Temp
 
@@ -314,7 +315,8 @@ Exit criteria:
 ### Phase 3: Store Unification
 
 - Add the unified private mode to fs-safe's store API.
-- Make `privateStateStore` a thin wrapper over the unified store.
+- Remove the unshipped `privateStateStore` surface instead of keeping a second
+  store family.
 - Migrate OpenClaw private-state internals to the unified store shape in small
   groups:
   - auth/profile state
@@ -322,14 +324,14 @@ Exit criteria:
   - cron/run logs
   - commitments
   - extension state
-- Keep public plugin SDK private helper names as deprecated wrappers.
+- Regenerate the plugin SDK API baseline for the intentional pre-release
+  private-helper removal.
 
 Exit criteria:
 
-- OpenClaw internals do not call standalone private JSON/text helpers except
-  through compatibility modules.
-- `privateStateStore` and `fileStore` share method coverage or one is clearly
-  documented as a compatibility alias.
+- OpenClaw internals and bundled plugins do not call standalone private
+  JSON/text helpers.
+- `fileStore({ private: true })` is the only private multi-file store API.
 
 ### Phase 4: Temp Simplification
 

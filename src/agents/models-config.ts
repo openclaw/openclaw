@@ -86,7 +86,9 @@ async function readExistingModelsFile(pathname: string): Promise<{
   parsed: unknown;
 }> {
   try {
-    const raw = await privateFileStore(path.dirname(pathname)).readText(path.basename(pathname));
+    const raw = await privateFileStore(path.dirname(pathname)).readTextIfExists(
+      path.basename(pathname),
+    );
     if (raw === null) {
       return {
         raw: "",

@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { safeParseJsonWithSchema } from "openclaw/plugin-sdk/extension-shared";
-import { readPrivateText, writePrivateJsonAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import { z } from "zod";
 import { getNostrRuntime } from "./runtime.js";
 
@@ -113,7 +113,9 @@ export async function readNostrBusState(params: {
 }): Promise<NostrBusState | null> {
   const filePath = resolveNostrStatePath(params.accountId, params.env);
   try {
-    const raw = await readPrivateText({ rootDir: path.dirname(filePath), filePath });
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
+    );
     if (raw === null) {
       return null;
     }
@@ -137,10 +139,7 @@ export async function writeNostrBusState(params: {
     gatewayStartedAt: params.gatewayStartedAt,
     recentEventIds: (params.recentEventIds ?? []).filter((x): x is string => typeof x === "string"),
   };
-  await writePrivateJsonAtomic({
-    rootDir: path.dirname(filePath),
-    filePath,
-    value: payload,
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
     trailingNewline: true,
   });
 }
@@ -183,7 +182,9 @@ export async function readNostrProfileState(params: {
 }): Promise<NostrProfileState | null> {
   const filePath = resolveNostrProfileStatePath(params.accountId, params.env);
   try {
-    const raw = await readPrivateText({ rootDir: path.dirname(filePath), filePath });
+    const raw = await privateFileStore(path.dirname(filePath)).readTextIfExists(
+      path.basename(filePath),
+    );
     if (raw === null) {
       return null;
     }
@@ -207,10 +208,7 @@ export async function writeNostrProfileState(params: {
     lastPublishedEventId: params.lastPublishedEventId,
     lastPublishResults: params.lastPublishResults,
   };
-  await writePrivateJsonAtomic({
-    rootDir: path.dirname(filePath),
-    filePath,
-    value: payload,
+  await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), payload, {
     trailingNewline: true,
   });
 }

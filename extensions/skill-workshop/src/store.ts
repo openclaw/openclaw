@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { readPrivateJson, writePrivateJsonAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import type { SkillProposal, SkillWorkshopStatus } from "./types.js";
 
 type StoreFile = {
@@ -43,7 +43,9 @@ async function withLock<T>(key: string, task: () => Promise<T>): Promise<T> {
 }
 
 async function readJson(rootDir: string, filePath: string): Promise<StoreFile> {
-  const parsed = await readPrivateJson<StoreFile>({ rootDir, filePath });
+  const parsed = await privateFileStore(rootDir).readJsonIfExists<StoreFile>(
+    path.relative(rootDir, filePath),
+  );
   if (!parsed) {
     return { version: 1, proposals: [] };
   }
@@ -76,10 +78,7 @@ function normalizeReviewState(
 }
 
 async function atomicWriteJson(rootDir: string, filePath: string, data: StoreFile): Promise<void> {
-  await writePrivateJsonAtomic({
-    rootDir,
-    filePath,
-    value: data,
+  await privateFileStore(rootDir).writeJson(path.relative(rootDir, filePath), data, {
     trailingNewline: true,
   });
 }

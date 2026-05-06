@@ -12,7 +12,7 @@ import {
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 const planOpenClawModelsJsonMock = vi.fn();
-const writePrivateTextAtomicMock = vi.fn();
+const writePrivateStoreTextWriteMock = vi.fn();
 let actualPrivateFileStore:
   | typeof import("../infra/private-file-store.js").privateFileStore
   | undefined;
@@ -82,7 +82,7 @@ beforeAll(async () => {
         return {
           ...store,
           writeText: (relativePath: string, content: string | Uint8Array) =>
-            writePrivateTextAtomicMock({
+            writePrivateStoreTextWriteMock({
               rootDir,
               filePath: path.join(rootDir, relativePath),
               content,
@@ -98,7 +98,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   clearCurrentPluginMetadataSnapshot();
-  writePrivateTextAtomicMock
+  writePrivateStoreTextWriteMock
     .mockReset()
     .mockImplementation(
       async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
@@ -247,7 +247,7 @@ describe("models-config write serialization", () => {
 
       let inFlightWrites = 0;
       let maxInFlightWrites = 0;
-      writePrivateTextAtomicMock.mockImplementation(
+      writePrivateStoreTextWriteMock.mockImplementation(
         async (params: { filePath: string; rootDir: string; content: string | Uint8Array }) => {
           const isModelsWrite = path.basename(params.filePath) === "models.json";
           if (isModelsWrite) {

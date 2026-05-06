@@ -22,7 +22,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isVerbose, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { tempWorkspaceSync, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
-import { writePrivateTextAtomicSync } from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -558,11 +558,7 @@ function readPrefs(prefsPath: string): TtsUserPrefs {
 }
 
 function atomicWriteFileSync(filePath: string, content: string): void {
-  writePrivateTextAtomicSync({
-    rootDir: path.dirname(filePath),
-    filePath,
-    content,
-  });
+  privateFileStoreSync(path.dirname(filePath)).writeText(path.basename(filePath), content);
 }
 
 function updatePrefs(prefsPath: string, update: (prefs: TtsUserPrefs) => void): void {

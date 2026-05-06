@@ -1,8 +1,8 @@
 import path from "node:path";
 import {
   appendRegularFile,
-  readPrivateText,
-  readPrivateTextSync,
+  privateFileStore,
+  privateFileStoreSync,
 } from "openclaw/plugin-sdk/security-runtime";
 import { CallRecordSchema, TerminalStates, type CallId, type CallRecord } from "../types.js";
 
@@ -37,7 +37,7 @@ export function loadActiveCallsFromStore(storePath: string): {
   rejectedProviderCallIds: Set<string>;
 } {
   const logPath = path.join(storePath, "calls.jsonl");
-  const content = readPrivateTextSync({ rootDir: storePath, filePath: logPath });
+  const content = privateFileStoreSync(storePath).readTextIfExists(path.basename(logPath));
   if (content === null) {
     return {
       activeCalls: new Map(),
@@ -87,7 +87,7 @@ export async function getCallHistoryFromStore(
   limit = 50,
 ): Promise<CallRecord[]> {
   const logPath = path.join(storePath, "calls.jsonl");
-  const content = await readPrivateText({ rootDir: storePath, filePath: logPath });
+  const content = await privateFileStore(storePath).readTextIfExists(path.basename(logPath));
   if (content === null) {
     return [];
   }

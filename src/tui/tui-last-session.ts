@@ -32,7 +32,9 @@ export function buildTuiLastSessionScopeKey(params: {
 
 async function readStore(filePath: string): Promise<LastSessionStore> {
   try {
-    const parsed = await privateFileStore(path.dirname(filePath)).readJson(path.basename(filePath));
+    const parsed = await privateFileStore(path.dirname(filePath)).readJsonIfExists(
+      path.basename(filePath),
+    );
     return parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? (parsed as LastSessionStore)
       : {};

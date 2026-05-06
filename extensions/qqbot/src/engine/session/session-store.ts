@@ -7,10 +7,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import {
-  readPrivateJsonSync,
-  writePrivateJsonAtomicSync,
-} from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
@@ -72,10 +69,9 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
     let filePath: string | null = null;
     let state: SessionState | null = null;
     for (const candidatePath of getCandidateSessionPaths(accountId)) {
-      state = readPrivateJsonSync<SessionState>({
-        rootDir: path.dirname(candidatePath),
-        filePath: candidatePath,
-      });
+      state = privateFileStoreSync(path.dirname(candidatePath)).readJsonIfExists<SessionState>(
+        path.basename(candidatePath),
+      );
       if (state) {
         filePath = candidatePath;
         break;
@@ -169,11 +165,7 @@ function doSaveSession(state: SessionState): void {
   try {
     ensureDir();
     const stateToSave: SessionState = { ...state, savedAt: Date.now() };
-    writePrivateJsonAtomicSync({
-      rootDir: path.dirname(filePath),
-      filePath,
-      value: stateToSave,
-    });
+    privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), stateToSave);
     if (legacyPath !== filePath && fs.existsSync(legacyPath)) {
       fs.unlinkSync(legacyPath);
     }

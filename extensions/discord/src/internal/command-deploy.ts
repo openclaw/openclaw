@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
-import { readPrivateJson, writePrivateJsonAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -147,10 +147,9 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      const parsed = await readPrivateJson<{ hashes?: unknown }>({
-        rootDir: path.dirname(storePath),
-        filePath: storePath,
-      });
+      const parsed = await privateFileStore(path.dirname(storePath)).readJsonIfExists<{
+        hashes?: unknown;
+      }>(path.basename(storePath));
       if (!parsed?.hashes || typeof parsed.hashes !== "object") {
         return;
       }
@@ -170,18 +169,17 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      await writePrivateJsonAtomic({
-        rootDir: path.dirname(storePath),
-        filePath: storePath,
-        value: {
+      await privateFileStore(path.dirname(storePath)).writeJson(
+        path.basename(storePath),
+        {
           version: 1,
           updatedAt: new Date().toISOString(),
           hashes: Object.fromEntries(
             [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
           ),
         },
-        trailingNewline: true,
-      });
+        { trailingNewline: true },
+      );
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.
     }

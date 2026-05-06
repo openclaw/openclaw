@@ -1695,7 +1695,7 @@
     "@mariozechner/pi-tui": "0.73.0",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "^0.6.0",
-    "@openclaw/fs-safe": "github:openclaw/fs-safe#2f4c4262f05581cd54311fcf91949ad293901e9e",
+    "@openclaw/fs-safe": "github:openclaw/fs-safe#542657b9d2fc43b8833b4fd6f29724bdcc1d5538",
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.21.0",
     "@slack/web-api": "^7.15.2",
