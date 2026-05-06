@@ -1,15 +1,60 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
 import {
-  applyProposalToWorkspace,
+  applyProposalToWorkshop,
   normalizeSkillName,
   prepareProposalWrite,
   writeSupportFile,
 } from "./skills.js";
 import type { SkillChange, SkillProposal, SkillWorkshopStatus } from "./types.js";
 import { createStoreForContext, resolveWorkspaceDir } from "./workshop.js";
+
+// ── Curator integration (lightweight, lazy-imported) ────────────────────────
+
+let _stampAgentCreated: ((wsDir: string, name: string) => Promise<unknown>) | null = null;
+let _curatorLoadUsage:
+  | ((wsDir: string) => Promise<{ skills: Record<string, { pinned?: boolean }> }>)
+  | null = null;
+
+async function ensureCuratorModules() {
+  if (_stampAgentCreated && _curatorLoadUsage) return;
+  try {
+    const curatorTelemetry = await import("../../skill-curator/src/telemetry.js");
+    _stampAgentCreated = curatorTelemetry.stampAgentCreated;
+    _curatorLoadUsage = curatorTelemetry.loadUsage;
+  } catch {
+    // skill-curator not installed — gracefully skip
+  }
+}
+
+async function stampAgentCreatedIfNew(workspaceDir: string, skillName: string, created: boolean) {
+  if (!created) return;
+  await ensureCuratorModules();
+  if (_stampAgentCreated) {
+    try {
+      await _stampAgentCreated(workspaceDir, skillName);
+    } catch {
+      // non-critical — don't fail skill creation over telemetry stamp
+    }
+  }
+}
+
+async function checkSkillPinned(workspaceDir: string, skillName: string): Promise<boolean> {
+  await ensureCuratorModules();
+  if (!_curatorLoadUsage) return false;
+  try {
+    const usage = await _curatorLoadUsage(workspaceDir);
+    return usage.skills[skillName]?.pinned === true;
+  } catch {
+    return false;
+  }
+}
+
+// ── Tool params ─────────────────────────────────────────────────────────────
 
 type ToolParams = {
   action?: string;
@@ -83,6 +128,8 @@ function buildProposal(params: {
   };
 }
 
+// ── Tool factory ────────────────────────────────────────────────────────────
+
 export function createSkillWorkshopTool(params: {
   api: OpenClawPluginApi;
   config: SkillWorkshopConfig;
@@ -103,6 +150,7 @@ export function createSkillWorkshopTool(params: {
           "suggest",
           "apply",
           "reject",
+          "delete",
           "write_support_file",
         ],
       }),
@@ -175,6 +223,8 @@ export function createSkillWorkshopTool(params: {
             proposal,
             maxSkillBytes: params.config.maxSkillBytes,
           });
+          // Stamp agent-created marker for new skills
+          await stampAgentCreatedIfNew(workspaceDir, proposal.skillName, applied.created);
           const stored = await store.add(
             {
               ...proposal,
@@ -225,6 +275,8 @@ export function createSkillWorkshopTool(params: {
           proposal,
           maxSkillBytes: params.config.maxSkillBytes,
         });
+        // Stamp agent-created marker for new skills applied from queue
+        await stampAgentCreatedIfNew(workspaceDir, proposal.skillName, applied.created);
         const updated = await store.updateStatus(raw.id, "applied");
         return jsonResult({ status: "applied", skillPath: applied.skillPath, proposal: updated });
       }
@@ -233,6 +285,32 @@ export function createSkillWorkshopTool(params: {
           throw new Error("id required");
         }
         return jsonResult(await store.updateStatus(raw.id, "rejected"));
+      }
+      if (action === "delete") {
+        const skillName = normalizeSkillName(readString(raw.skillName) ?? "");
+        if (!skillName) {
+          throw new Error("skillName required for delete");
+        }
+        // Check if skill is pinned — refuse delete with clear instruction
+        const pinned = await checkSkillPinned(workspaceDir, skillName);
+        if (pinned) {
+          throw new Error(
+            `Skill "${skillName}" is pinned. Unpin it first with "openclaw curator unpin ${skillName}" before deleting.`,
+          );
+        }
+        // Delete the skill directory
+        const skillsDir = path.join(workspaceDir, "skills");
+        const skillDir = path.join(skillsDir, skillName);
+        try {
+          await fs.rm(skillDir, { recursive: true, force: true });
+          return jsonResult({ status: "deleted", skillName });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            return jsonResult({ status: "not_found", skillName });
+          }
+          throw new Error(`Failed to delete skill "${skillName}": ${msg}`);
+        }
       }
       if (action === "write_support_file") {
         const skillName = readString(raw.skillName);
