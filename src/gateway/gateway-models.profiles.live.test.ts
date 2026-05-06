@@ -11,6 +11,7 @@ import {
 } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { externalCliDiscoveryForProviders } from "../agents/auth-profiles/external-cli-discovery.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
@@ -74,6 +75,10 @@ const GATEWAY_LIVE_MAX_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const GATEWAY_LIVE_PROBE_TIMEOUT_MS = Math.max(
   30_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS, 90_000),
+);
+const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
+  1_000,
+  toInt(process.env.OPENCLAW_LIVE_GATEWAY_SETUP_TIMEOUT_MS, 60_000),
 );
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
 const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
@@ -200,7 +205,7 @@ function isGatewayLiveModelTimeout(error: string): boolean {
 async function withGatewayLiveTimeout<T>(params: {
   operation: Promise<T>;
   timeoutMs: number;
-  timeoutLabel: "probe" | "model";
+  timeoutLabel: "setup" | "probe" | "model";
   context: string;
 }): Promise<T> {
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -237,6 +242,19 @@ async function withGatewayLiveTimeout<T>(params: {
       );
     }
   }
+}
+
+async function withGatewayLiveSetupTimeout<T>(
+  operation: Promise<T>,
+  context: string,
+  timeoutMs = GATEWAY_LIVE_SETUP_TIMEOUT_MS,
+): Promise<T> {
+  return await withGatewayLiveTimeout({
+    operation,
+    timeoutMs,
+    timeoutLabel: "setup",
+    context,
+  });
 }
 
 async function withGatewayLiveProbeTimeout<T>(operation: Promise<T>, context: string): Promise<T> {
@@ -2368,16 +2386,62 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
-        logProgress("[all-models] discover candidates");
+        const providerList = providerFilterList();
+        const providerLog = providerList?.join(",") ?? "all";
+        logProgress(`[all-models] discover candidates providers=${providerLog}`);
+        logProgress("[all-models] loading config");
         clearRuntimeConfigSnapshot();
-        const cfg = getRuntimeConfig();
-        await ensureOpenClawModelsJson(cfg, undefined, {
-          providerDiscoveryProviderIds: providerFilterList(),
-        });
+        const cfg = await withGatewayLiveSetupTimeout(
+          Promise.resolve().then(() => getRuntimeConfig()),
+          "[all-models] load config",
+        );
+        const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+        logProgress("[all-models] preparing models.json");
+        await withGatewayLiveSetupTimeout(
+          ensureOpenClawModelsJson(cfg, undefined, {
+            workspaceDir,
+            ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
+            providerDiscoveryEntriesOnly: true,
+          }),
+          "[all-models] prepare models.json",
+        );
 
         const agentDir = resolveDefaultAgentDir(cfg);
-        const authStorage = discoverAuthStorage(agentDir);
+        const externalCli = providerList
+          ? externalCliDiscoveryForProviders({ cfg, providers: providerList })
+          : undefined;
+        logProgress("[all-models] loading auth profiles");
+        const authProfileStore = await withGatewayLiveSetupTimeout(
+          Promise.resolve().then(() =>
+            ensureAuthProfileStore(agentDir, {
+              allowKeychainPrompt: false,
+              ...(externalCli ? { externalCli } : {}),
+            }),
+          ),
+          "[all-models] load auth profiles",
+        );
+        const authStorage = await withGatewayLiveSetupTimeout(
+          Promise.resolve().then(() =>
+            discoverAuthStorage(agentDir, {
+              config: cfg,
+              env: process.env,
+              ...(externalCli ? { externalCli } : {}),
+              ...(providerList
+                ? {
+                    skipExternalAuthProfiles: true,
+                    syntheticAuthProviderRefs: [],
+                  }
+                : {}),
+            }),
+          ),
+          "[all-models] load auth storage",
+        );
+        logProgress("[all-models] loading model registry");
         const modelRegistry = discoverModels(authStorage, agentDir);
+        const all = await withGatewayLiveSetupTimeout(
+          Promise.resolve().then(() => modelRegistry.getAll()),
+          "[all-models] load model registry",
+        );
 
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
@@ -2399,7 +2463,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             })
           : null;
         if (!wanted) {
-          const all = modelRegistry.getAll();
           wanted = filter
             ? all.filter((m) => targetMatcher.matchesModel(m.provider, m.id))
             : all.filter(
@@ -2413,6 +2476,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   }) && isHighSignalLiveModelRef({ provider: m.provider, id: m.id }),
               );
         }
+        logProgress(`[all-models] wanted=${wanted.length} total=${all.length}`);
 
         const candidates: Array<Model<Api>> = [];
         const skipped: Array<{ model: string; error: string }> = [];
@@ -2425,11 +2489,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
           const modelRef = `${model.provider}/${model.id}`;
           try {
-            const apiKeyInfo = await getApiKeyForModel({
-              model,
-              cfg,
-              credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
-            });
+            const apiKeyInfo = await withGatewayLiveSetupTimeout(
+              getApiKeyForModel({
+                model,
+                cfg,
+                store: authProfileStore,
+                agentDir,
+                workspaceDir,
+                credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+              }),
+              `[all-models] auth ${modelRef}`,
+              GATEWAY_LIVE_PROBE_TIMEOUT_MS,
+            );
             if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
               skipped.push({
                 model: modelRef,
