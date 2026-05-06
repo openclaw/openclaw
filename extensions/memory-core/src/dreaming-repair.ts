@@ -35,7 +35,7 @@ export type RepairDreamingArtifactsResult = {
 };
 
 const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
-const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
+const SESSION_CORPUS_RELATIVE_DIR = path.join(".openclaw", "dreams", "session-corpus");
 const SESSION_INGESTION_RELATIVE_PATH = path.join("memory", ".dreams", "session-ingestion.json");
 const REPAIR_ARCHIVE_RELATIVE_DIR = path.join(".openclaw-repair", "dreaming");
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";

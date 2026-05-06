@@ -85,7 +85,7 @@ const SESSION_INGESTION_STATE_RELATIVE_PATH = path.join(
   ".dreams",
   "session-ingestion.json",
 );
-const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
+const SESSION_CORPUS_RELATIVE_DIR = path.join(".openclaw", "dreams", "session-corpus");
 const SESSION_INGESTION_SCORE = 0.58;
 const SESSION_INGESTION_MAX_SNIPPET_CHARS = 280;
 const SESSION_INGESTION_MIN_SNIPPET_CHARS = 12;
@@ -678,7 +678,7 @@ async function appendSessionCorpusLines(params: {
   if (params.lines.length === 0) {
     return [];
   }
-  const relativePath = path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
+  const relativePath = path.posix.join(".openclaw", "dreams", "session-corpus", `${params.day}.txt`);
   const absolutePath = path.join(
     params.workspaceDir,
     SESSION_CORPUS_RELATIVE_DIR,

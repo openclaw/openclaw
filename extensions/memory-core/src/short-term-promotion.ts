@@ -17,7 +17,7 @@ import { asRecord } from "./dreaming-shared.js";
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
-  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
+  /(?:^|\/)\.openclaw\/dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
@@ -287,7 +287,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
 
   const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
-  const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
+  const hasEvidence = /\bevidence:\s*(?:\.openclaw\/dreams\/session-corpus\/|memory\/)/i.test(
     snippet,
   );
   const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
