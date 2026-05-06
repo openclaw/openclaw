@@ -1,5 +1,6 @@
 import { stripHeartbeatToken } from "./heartbeat.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "./heartbeat.js";
+import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
@@ -53,9 +54,20 @@ export function isHeartbeatUserMessage(
   if (normalizedHeartbeatPrompt && trimmed.startsWith(normalizedHeartbeatPrompt)) {
     return true;
   }
-  return (
-    trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)
-  );
+  if (trimmed.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && trimmed.includes(HEARTBEAT_TASK_PROMPT_ACK)) {
+    return true;
+  }
+  const stripped = stripInboundMetadata(trimmed);
+  if (stripped === HEARTBEAT_TRANSCRIPT_PROMPT) {
+    return true;
+  }
+  if (normalizedHeartbeatPrompt && stripped.startsWith(normalizedHeartbeatPrompt)) {
+    return true;
+  }
+  if (stripped.startsWith(HEARTBEAT_TASK_PROMPT_PREFIX) && stripped.includes(HEARTBEAT_TASK_PROMPT_ACK)) {
+    return true;
+  }
+  return false;
 }
 
 export function isHeartbeatOkResponse(

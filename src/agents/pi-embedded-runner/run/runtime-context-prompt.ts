@@ -10,6 +10,9 @@ export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
 const MAX_CURRENT_TURN_CONTEXT_STRING_CHARS = 2_000;
+const HEARTBEAT_TRANSCRIPT_MARKER_RE = /^\[OpenClaw heartbeat poll\]$/;
+const HEARTBEAT_MARKER_IN_EFFECTIVE_PROMPT_RE =
+  /Read HEARTBEAT\.md if it exists \(workspace context\)\. Follow it strictly\./;
 
 type RuntimeContextSession = {
   sendCustomMessage: (
@@ -92,9 +95,14 @@ export function resolveRuntimeContextPromptParts(params: {
   }
 
   const prompt = transcriptPrompt.trim();
-  const runtimeContext =
-    removeLastPromptOccurrence(params.effectivePrompt, transcriptPrompt)?.trim() ||
-    params.effectivePrompt.trim();
+
+  const isHeartbeatTurn =
+    HEARTBEAT_TRANSCRIPT_MARKER_RE.test(prompt) &&
+    HEARTBEAT_MARKER_IN_EFFECTIVE_PROMPT_RE.test(params.effectivePrompt);
+
+  const removed = removeLastPromptOccurrence(params.effectivePrompt, transcriptPrompt);
+  const runtimeContext = removed?.trim();
+
   if (!prompt) {
     return runtimeContext
       ? {
@@ -104,6 +112,10 @@ export function resolveRuntimeContextPromptParts(params: {
           runtimeSystemContext: buildRuntimeEventSystemContext(runtimeContext),
         }
       : { prompt: "" };
+  }
+
+  if (isHeartbeatTurn && !runtimeContext) {
+    return { prompt };
   }
 
   return runtimeContext ? { prompt, runtimeContext } : { prompt };
