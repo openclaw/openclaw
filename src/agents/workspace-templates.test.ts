@@ -52,3 +52,53 @@ describe("resolveWorkspaceTemplateDir", () => {
     expect(path.normalize(resolved)).toBe(path.resolve("docs", "reference", "templates"));
   });
 });
+
+describe("AGENTS.md template content priority order", () => {
+  // Regression for #75187: when users lower agents.defaults.bootstrapMaxChars to fit
+  // small/mid model context budgets, head-truncation must preserve the load-bearing
+  // safety and tool-use guidance. Keep Red Lines, External vs Internal, and Tools
+  // ahead of the longer Memory/Group Chats/Heartbeats sections.
+  const templatePath = path.resolve("docs", "reference", "templates", "AGENTS.md");
+
+  async function readH2Order(): Promise<string[]> {
+    const content = await fs.readFile(templatePath, "utf-8");
+    return content
+      .split("\n")
+      .filter((line) => line.startsWith("## "))
+      .map((line) => line.slice("## ".length).trim());
+  }
+
+  it("places Red Lines before Memory and Group Chats", async () => {
+    const headings = await readH2Order();
+    const redLinesIdx = headings.findIndex((h) => h === "Red Lines");
+    const memoryIdx = headings.findIndex((h) => h === "Memory");
+    const groupChatsIdx = headings.findIndex((h) => h === "Group Chats");
+    expect(redLinesIdx).toBeGreaterThanOrEqual(0);
+    expect(memoryIdx).toBeGreaterThan(redLinesIdx);
+    expect(groupChatsIdx).toBeGreaterThan(redLinesIdx);
+  });
+
+  it("places External vs Internal action policy before lower-priority sections", async () => {
+    const headings = await readH2Order();
+    const externalIdx = headings.findIndex((h) => h === "External vs Internal");
+    const memoryIdx = headings.findIndex((h) => h === "Memory");
+    expect(externalIdx).toBeGreaterThanOrEqual(0);
+    expect(memoryIdx).toBeGreaterThan(externalIdx);
+  });
+
+  it("places Tools section before Memory and Group Chats", async () => {
+    const headings = await readH2Order();
+    const toolsIdx = headings.findIndex((h) => h === "Tools");
+    const memoryIdx = headings.findIndex((h) => h === "Memory");
+    const groupChatsIdx = headings.findIndex((h) => h === "Group Chats");
+    expect(toolsIdx).toBeGreaterThanOrEqual(0);
+    expect(memoryIdx).toBeGreaterThan(toolsIdx);
+    expect(groupChatsIdx).toBeGreaterThan(toolsIdx);
+  });
+
+  it("keeps First Run and Session Startup at the very top", async () => {
+    const headings = await readH2Order();
+    expect(headings[0]).toBe("First Run");
+    expect(headings[1]).toBe("Session Startup");
+  });
+});
