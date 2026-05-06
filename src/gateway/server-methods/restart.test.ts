@@ -82,7 +82,7 @@ describe("gateway.restart.request handler", () => {
     });
   });
 
-  it("rejects truthy non-boolean skipDeferral values", async () => {
+  it("normalizes truthy non-boolean skipDeferral values to false", async () => {
     requestSafeGatewayRestart.mockReturnValueOnce({
       ok: true,
       status: "scheduled",
@@ -99,6 +99,31 @@ describe("gateway.restart.request handler", () => {
     });
 
     await invokeRestartRequest({ reason: "operator", skipDeferral: "true" });
+
+    expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
+      reason: "operator",
+      delayMs: 0,
+      skipDeferral: false,
+    });
+  });
+
+  it("forwards skipDeferral: false explicitly when the param is sent as false", async () => {
+    requestSafeGatewayRestart.mockReturnValueOnce({
+      ok: true,
+      status: "scheduled",
+      preflight: { safe: true, counts: {}, blockers: [], summary: "safe to restart now" },
+      restart: {
+        ok: true,
+        pid: 0,
+        signal: "SIGUSR1",
+        delayMs: 0,
+        mode: "emit",
+        coalesced: false,
+        cooldownMsApplied: 0,
+      },
+    });
+
+    await invokeRestartRequest({ reason: "operator", skipDeferral: false });
 
     expect(requestSafeGatewayRestart).toHaveBeenCalledWith({
       reason: "operator",
