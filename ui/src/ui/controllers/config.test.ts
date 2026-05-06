@@ -324,6 +324,48 @@ describe("updateConfigFormValue", () => {
     });
     expect(state.configFormDirty).toBe(true);
   });
+
+  it("preserves empty plugin allowlists when enabling a plugin", () => {
+    const state = createState();
+    applyConfigSnapshot(state, {
+      hash: "hash-plugins",
+      config: {
+        plugins: {
+          allow: [],
+          entries: {
+            deepseek: { enabled: false },
+          },
+        },
+      },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    });
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], true);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: true },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
+
+    updateConfigFormValue(state, ["plugins", "entries", "deepseek", "enabled"], false);
+
+    expect(state.configForm).toEqual({
+      plugins: {
+        allow: [],
+        entries: {
+          deepseek: { enabled: false },
+        },
+      },
+    });
+    expect(state.configFormDirty).toBe(false);
+  });
 });
 
 describe("stageConfigPreset", () => {
