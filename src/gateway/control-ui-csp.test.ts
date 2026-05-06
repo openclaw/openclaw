@@ -17,7 +17,7 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
-  it("allows OpenAI realtime WebRTC offer requests without allowing all HTTPS", () => {
+  it("allows OpenAI realtime and tweakcn theme imports", () => {
     const csp = buildControlUiCspHeader();
     const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
     expect(connectSrc?.split(" ")).toEqual([
@@ -26,6 +26,7 @@ describe("buildControlUiCspHeader", () => {
       "ws:",
       "wss:",
       "https://api.openai.com",
+      "https://tweakcn.com",
     ]);
   });
 
