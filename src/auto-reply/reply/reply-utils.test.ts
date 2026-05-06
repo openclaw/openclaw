@@ -112,20 +112,23 @@ describe("normalizeReplyPayload", () => {
     }
   });
 
-  it("strips NO_REPLY from mixed emoji message (#30916)", () => {
+  it("suppresses message when trailing NO_REPLY follows emoji content (#30916)", () => {
     const result = normalizeReplyPayload({ text: "😄 NO_REPLY" });
-    expect(result).not.toBeNull();
-    expect(result!.text).toContain("😄");
-    expect(result!.text).not.toContain("NO_REPLY");
+    expect(result).toBeNull();
   });
 
-  it("strips NO_REPLY appended after substantive text (#30916)", () => {
+  it("suppresses message when trailing NO_REPLY follows substantive text (#30916)", () => {
     const result = normalizeReplyPayload({
       text: "File's there. Not urgent.\n\nNO_REPLY",
     });
-    expect(result).not.toBeNull();
-    expect(result!.text).toContain("File's there");
-    expect(result!.text).not.toContain("NO_REPLY");
+    expect(result).toBeNull();
+  });
+
+  it("suppresses message when trailing NO_REPLY follows internal reasoning (CoT leak fix)", () => {
+    const result = normalizeReplyPayload({
+      text: "Here's my analysis: user is asking X, the right move is Y.\n\nNO_REPLY",
+    });
+    expect(result).toBeNull();
   });
 
   it("strips glued leading NO_REPLY text without leaking the token", () => {
