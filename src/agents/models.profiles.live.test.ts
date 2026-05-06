@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import {
   collectAnthropicApiKeys,
@@ -292,6 +292,7 @@ function isAudioOnlyModelErrorMessage(raw: string): boolean {
 function isUnsupportedReasoningEffortErrorMessage(raw: string): boolean {
   return (
     /does not support parameter reasoningeffort/i.test(raw) ||
+    /invalid reasoning effort/i.test(raw) ||
     /unsupported value:\s*'low'.*reasoning\.effort.*supported values are:\s*'medium'/i.test(raw)
   );
 }
@@ -312,6 +313,15 @@ function isOpenRouterOpaqueBadRequestErrorMessage(raw: string): boolean {
     msg.includes('"msg":"bad request"')
   );
 }
+
+describe("isUnsupportedReasoningEffortErrorMessage", () => {
+  it("matches provider-native reasoning effort rejections", () => {
+    expect(isUnsupportedReasoningEffortErrorMessage('Error: 400 "Invalid reasoning effort."')).toBe(
+      true,
+    );
+    expect(isUnsupportedReasoningEffortErrorMessage("Error: 400 model not found")).toBe(false);
+  });
+});
 
 describe("isUnsupportedPlanErrorMessage", () => {
   it("matches provider plan-gated models", () => {
@@ -733,7 +743,7 @@ describeLive("live models (profile keys)", () => {
 
       const providers = parseProviderFilter(process.env.OPENCLAW_LIVE_PROVIDERS);
       const providerList = providers ? [...providers] : null;
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir, {
         config: cfg,
         env: process.env,
