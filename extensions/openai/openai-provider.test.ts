@@ -282,6 +282,60 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("resolves chat-latest as an explicit direct API model override", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.5"
+            ? {
+                id,
+                name: "GPT-5.5",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "chat-latest",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+
+    const fallback = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(fallback).toMatchObject({
+      provider: "openai",
+      id: "chat-latest",
+      api: "openai-responses",
+      reasoning: false,
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+  });
+
   it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
     const provider = buildOpenAIProvider();
 
@@ -340,7 +394,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
+  it("keeps chat-latest and gpt-5.5 out of synthetic catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -361,6 +415,12 @@ describe("buildOpenAIProvider", () => {
       expect.objectContaining({
         provider: "openai",
         id: "gpt-5.5",
+      }),
+    );
+    expect(entries).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "chat-latest",
       }),
     );
   });
@@ -385,6 +445,12 @@ describe("buildOpenAIProvider", () => {
       provider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "chat-latest",
       } as never),
     ).toBe(true);
     expect(
