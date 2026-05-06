@@ -198,16 +198,56 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("denies scoped isolated cron runs from using non-remove cron actions", async () => {
+  it("denies scoped isolated cron runs from using cron mutation actions", async () => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 
-    await expect(
-      tool.execute("call-list", {
-        action: "list",
-      }),
-    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+    for (const action of ["add", "update", "run", "wake"]) {
+      callGatewayMock.mockClear();
+      await expect(
+        tool.execute(`call-${action}`, {
+          action,
+          jobId: "job-current",
+          text: "ping",
+        }),
+      ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    }
+  });
 
-    expect(callGatewayMock).not.toHaveBeenCalled();
+  it("allows scoped isolated cron runs to read cron status (#78208)", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await tool.execute("call-status", { action: "status" });
+
+    expectSingleGatewayCallMethod("cron.status");
+  });
+
+  it("allows scoped isolated cron runs to list their own agent's jobs (#78208)", async () => {
+    const tool = createTestCronTool({
+      selfRemoveOnlyJobId: "job-current",
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list", { action: "list" });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: false, agentId: "agent-123" });
+  });
+
+  it("forces scoped isolated cron list to the session agent even when the caller supplies agentId (#78208)", async () => {
+    const tool = createTestCronTool({
+      selfRemoveOnlyJobId: "job-current",
+      agentSessionKey: "agent:agent-123:telegram:direct:channing",
+    });
+
+    await tool.execute("call-list-coerced", {
+      action: "list",
+      agentId: "ops",
+      includeDisabled: true,
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.list");
+    expect(params).toEqual({ includeDisabled: true, agentId: "agent-123" });
   });
 
   it("filters cron list by the requester agent session", async () => {

@@ -350,6 +350,12 @@ function readCronJobIdParam(params: Record<string, unknown>) {
   return readStringParam(params, "jobId") ?? readStringParam(params, "id");
 }
 
+const READ_ONLY_CRON_ACTIONS: ReadonlySet<string> = new Set(["status", "list"]);
+
+function isReadOnlyCronAction(action: string): boolean {
+  return READ_ONLY_CRON_ACTIONS.has(action);
+}
+
 function assertCronSelfRemoveScope(
   opts: CronToolOptions | undefined,
   action: string,
@@ -357,6 +363,9 @@ function assertCronSelfRemoveScope(
 ) {
   const selfRemoveOnlyJobId = opts?.selfRemoveOnlyJobId?.trim();
   if (!selfRemoveOnlyJobId) {
+    return;
+  }
+  if (isReadOnlyCronAction(action)) {
     return;
   }
   if (action !== "remove") {
@@ -656,12 +665,15 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           return jsonResult(await callGateway("cron.status", gatewayOpts, {}));
         case "list": {
           const cfg = getRuntimeConfig();
-          const listAgentId =
-            typeof params.agentId === "string" && params.agentId.trim()
+          const sessionAgentId = opts?.agentSessionKey
+            ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
+            : undefined;
+          const inSelfRemoveScope = Boolean(opts?.selfRemoveOnlyJobId?.trim());
+          const listAgentId = inSelfRemoveScope
+            ? sessionAgentId
+            : typeof params.agentId === "string" && params.agentId.trim()
               ? params.agentId.trim()
-              : opts?.agentSessionKey
-                ? resolveSessionAgentId({ sessionKey: opts.agentSessionKey, config: cfg })
-                : undefined;
+              : sessionAgentId;
           return jsonResult(
             await callGateway("cron.list", gatewayOpts, {
               includeDisabled: Boolean(params.includeDisabled),
