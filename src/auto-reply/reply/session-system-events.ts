@@ -1,4 +1,9 @@
 import { resolveUserTimezone } from "../../agents/date-time.js";
+import {
+  escapeInternalRuntimeContextDelimiters,
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+} from "../../agents/internal-runtime-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
 import {
@@ -17,8 +22,17 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 
+// Exclude user-facing exec-completion events so the heartbeat path can
+// consume them via its own relay surface. `audience: "internal"` events
+// always belong on this generic drain (which routes them to the
+// INTERNAL_RUNTIME_CONTEXT wrap) regardless of text shape — otherwise an
+// exec-shaped internal event (e.g. cron output literally starting with
+// "Exec finished...") falls into a no-consumer hole: this filter would
+// strand it for the heartbeat path, but the heartbeat exec/consume
+// selectors now skip internal events. The audience field is the source
+// of truth for routing; text-shape only matters for user-facing events.
 const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[] =>
-  events.filter((event) => !isExecCompletionEvent(event.text));
+  events.filter((event) => event.audience === "internal" || !isExecCompletionEvent(event.text));
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
@@ -90,26 +104,48 @@ export async function drainFormattedSystemEvents(params: {
     );
   };
 
-  const systemLines: string[] = [];
+  const userFacingLines: string[] = [];
+  const internalLines: string[] = [];
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
     params.sessionKey,
     selectGenericSystemEvents(peekSystemEventEntries(params.sessionKey)),
   );
-  systemLines.push(
-    ...queued.flatMap((event) => {
-      const compacted = compactSystemEvent(event.text);
-      if (!compacted) {
-        return [];
-      }
-      const prefix = event.trusted === false ? "System (untrusted)" : "System";
-      const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-      return compacted
-        .split("\n")
-        .map((subline, index) => `${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-    }),
-  );
+  for (const event of queued) {
+    const compacted = compactSystemEvent(event.text);
+    if (!compacted) {
+      continue;
+    }
+    const prefix = event.trusted === false ? "System (untrusted)" : "System";
+    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
+    const eventLines = compacted
+      .split("\n")
+      .map((subline, index) => `${prefix}: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+    if ((event.audience ?? "user-facing") === "internal") {
+      internalLines.push(...eventLines);
+    } else {
+      userFacingLines.push(...eventLines);
+    }
+  }
+  const systemLines: string[] = [...userFacingLines];
+  if (internalLines.length > 0) {
+    // Wrap internal-audience events in the runtime-context delimiters so the
+    // agent runtime sees the content but user-facing surfaces strip it via
+    // the existing stripInternalRuntimeContext consumers. Framing matches
+    // `formatAgentInternalEventsForPrompt` in `src/agents/internal-events.ts`
+    // (BEGIN, header, blank line, body, END): the header line tells the
+    // model the wrapped block is runtime context, not user-authored, so it
+    // should not echo the contents back into its reply.
+    systemLines.push(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+    systemLines.push("OpenClaw runtime context (internal):");
+    systemLines.push(
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+    );
+    systemLines.push("");
+    systemLines.push(escapeInternalRuntimeContextDelimiters(internalLines.join("\n")));
+    systemLines.push(INTERNAL_RUNTIME_CONTEXT_END);
+  }
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {

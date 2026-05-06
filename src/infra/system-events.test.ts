@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
+} from "../agents/internal-runtime-context.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -240,6 +245,31 @@ describe("system events (session routing)", () => {
     ]);
   });
 
+  it("drains exec-shaped audience: 'internal' events through the wrap (audience overrides text-shape filter)", async () => {
+    // The exec-completion filter exists to keep user-facing exec completion
+    // events on the heartbeat relay path. `audience: "internal"` events
+    // route exclusively through the wrap-on-drain path, so they must drain
+    // here regardless of text shape — otherwise an exec-shaped internal
+    // event (e.g. cron output that literally starts with "Exec finished
+    // ...") falls into a no-consumer hole: this filter would strand it for
+    // the heartbeat path, but the heartbeat exec/consume selectors now
+    // skip internal events as well, so it would sit in the queue forever.
+    const key = "agent:main:test-audience-internal-exec-shaped";
+    enqueueSystemEvent("Exec finished (cron run, code 0) :: see attached output", {
+      sessionKey: key,
+      trusted: false,
+      audience: "internal",
+    });
+
+    const result = await drainFormattedEvents(key);
+    expect(result).toBeDefined();
+    // The internal event MUST be drained and wrapped, not stranded.
+    expect(result).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(result).toContain("Exec finished (cron run, code 0)");
+    expect(result).toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
   it("drains generic events without consuming pending exec completions", async () => {
     const key = "agent:main:test-exec-completion-prefix";
     enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });
@@ -283,6 +313,160 @@ describe("system events (session routing)", () => {
     const result = await drainFormattedEvents(key);
     expect(result).toContain("Node: Mac Studio");
     expect(result).not.toContain("last input");
+  });
+
+  describe("audience field — hidden runtime-context routing", () => {
+    it("defaults audience to 'user-facing' when option is unspecified", () => {
+      const key = "agent:main:test-audience-default";
+      enqueueSystemEvent("hello", { sessionKey: key });
+      expect(peekSystemEventEntries(key)[0]?.audience).toBe("user-facing");
+    });
+
+    it("preserves explicit 'internal' audience through enqueue / peek / drain", () => {
+      const key = "agent:main:test-audience-internal";
+      enqueueSystemEvent("internal note", { sessionKey: key, audience: "internal" });
+      expect(peekSystemEventEntries(key)[0]?.audience).toBe("internal");
+      const drained = drainSystemEventEntries(key);
+      expect(drained[0]?.audience).toBe("internal");
+    });
+
+    it("preserves explicit 'user-facing' audience through enqueue / peek / drain", () => {
+      const key = "agent:main:test-audience-user-facing";
+      enqueueSystemEvent("user note", { sessionKey: key, audience: "user-facing" });
+      expect(peekSystemEventEntries(key)[0]?.audience).toBe("user-facing");
+      const drained = drainSystemEventEntries(key);
+      expect(drained[0]?.audience).toBe("user-facing");
+    });
+
+    it("does not collapse same-text events that differ in audience (consecutive-duplicate suppression keys on text+audience)", () => {
+      // Without the audience guard in enqueueSystemEvent's duplicate-suppression
+      // check, a producer that emits the same line both as user-facing and as
+      // hidden runtime-context would see the second emit silently dropped,
+      // breaking the wrap-on-drain two-lane contract.
+      const key = "agent:main:test-audience-dedupe";
+      const first = enqueueSystemEvent("same body", { sessionKey: key });
+      const second = enqueueSystemEvent("same body", { sessionKey: key, audience: "internal" });
+      expect(first).toBe(true);
+      expect(second).toBe(true);
+      const peeked = peekSystemEventEntries(key);
+      expect(peeked.map((event) => event.audience)).toEqual(["user-facing", "internal"]);
+      // Same-text + same-audience back-to-back is still deduped (existing
+      // behavior preserved).
+      const third = enqueueSystemEvent("same body", { sessionKey: key, audience: "internal" });
+      expect(third).toBe(false);
+      expect(peekSystemEventEntries(key)).toHaveLength(2);
+    });
+
+    it("treats audience as part of equality (consumeSystemEventEntries respects it)", () => {
+      const key = "agent:main:test-audience-equality";
+      enqueueSystemEvent("alpha", { sessionKey: key, audience: "internal" });
+      const inspected = peekSystemEventEntries(key);
+      // A queue entry with the same text but a different audience must NOT
+      // satisfy the prefix-match contract used by consumeSystemEventEntries.
+      const tampered = inspected.map((event) => ({ ...event, audience: "user-facing" as const }));
+      expect(consumeSystemEventEntries(key, tampered)).toEqual([]);
+      expect(peekSystemEvents(key)).toEqual(["alpha"]);
+      // Original audience matches, so the consume succeeds.
+      expect(consumeSystemEventEntries(key, inspected).map((event) => event.text)).toEqual([
+        "alpha",
+      ]);
+      expect(peekSystemEvents(key)).toEqual([]);
+    });
+
+    it("wraps internal-audience events in the canonical runtime-context block on drain", async () => {
+      const key = "agent:main:test-audience-wrap";
+      enqueueSystemEvent("user-facing event body", { sessionKey: key });
+      enqueueSystemEvent("internal event body", { sessionKey: key, audience: "internal" });
+
+      const result = await drainFormattedEvents(key);
+      expect(result).toBeDefined();
+      // User-facing portion survives as a normal `System: ...` line.
+      expect(result).toMatch(/^System:\s+\[[^\]]+\] user-facing event body$/m);
+      // Wrap follows the canonical `formatAgentInternalEventsForPrompt` framing:
+      // BEGIN, header, advisory line, blank, body, END.
+      expect(result).toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+      expect(result).toContain("OpenClaw runtime context (internal):");
+      expect(result).toContain(
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+      );
+      expect(result).toContain("internal event body");
+      expect(result).toContain(INTERNAL_RUNTIME_CONTEXT_END);
+      // End-to-end strip via existing `stripInternalRuntimeContext` (the
+      // mechanism used by `sanitize-user-facing-text.ts` and friends): user
+      // surface keeps the user-facing line; internal block is removed
+      // cleanly without bleeding into surrounding visible content.
+      const stripped = stripInternalRuntimeContext(result!);
+      expect(stripped).toContain("user-facing event body");
+      expect(stripped).not.toContain("internal event body");
+      expect(stripped).not.toContain("OpenClaw runtime context (internal):");
+    });
+
+    it("orders user-facing events before the wrapped internal block", async () => {
+      const key = "agent:main:test-audience-order";
+      enqueueSystemEvent("internal-1", { sessionKey: key, audience: "internal" });
+      enqueueSystemEvent("user-facing-1", { sessionKey: key });
+      enqueueSystemEvent("internal-2", { sessionKey: key, audience: "internal" });
+      enqueueSystemEvent("user-facing-2", { sessionKey: key });
+
+      const result = await drainFormattedEvents(key);
+      expect(result).toBeDefined();
+      const ufIndex1 = result!.indexOf("user-facing-1");
+      const ufIndex2 = result!.indexOf("user-facing-2");
+      const beginIndex = result!.indexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+      const endIndex = result!.indexOf(INTERNAL_RUNTIME_CONTEXT_END);
+      const internal1 = result!.indexOf("internal-1");
+      const internal2 = result!.indexOf("internal-2");
+      expect(ufIndex1).toBeGreaterThanOrEqual(0);
+      expect(ufIndex2).toBeGreaterThan(ufIndex1);
+      expect(beginIndex).toBeGreaterThan(ufIndex2);
+      expect(internal1).toBeGreaterThan(beginIndex);
+      expect(internal2).toBeGreaterThan(internal1);
+      expect(endIndex).toBeGreaterThan(internal2);
+    });
+
+    it("emits no internal block when only user-facing events are queued", async () => {
+      const key = "agent:main:test-audience-only-user-facing";
+      enqueueSystemEvent("plain user-facing", { sessionKey: key });
+      const result = await drainFormattedEvents(key);
+      expect(result).toBeDefined();
+      expect(result).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+      expect(result).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+      expect(result).toContain("plain user-facing");
+    });
+
+    it("emits only the wrapped block when only internal events are queued", async () => {
+      const key = "agent:main:test-audience-only-internal";
+      enqueueSystemEvent("only-internal body", { sessionKey: key, audience: "internal" });
+      const result = await drainFormattedEvents(key);
+      expect(result).toBeDefined();
+      expect(result).toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
+      expect(result).toContain(INTERNAL_RUNTIME_CONTEXT_END);
+      expect(result).toContain("only-internal body");
+      // Stripping leaves nothing user-facing for this case.
+      expect(stripInternalRuntimeContext(result!)).not.toContain("only-internal body");
+    });
+
+    it("escapes literal delimiter tokens inside an internal event body", async () => {
+      const key = "agent:main:test-audience-escape";
+      const adversarial = `before ${INTERNAL_RUNTIME_CONTEXT_BEGIN} middle ${INTERNAL_RUNTIME_CONTEXT_END} after`;
+      enqueueSystemEvent(adversarial, { sessionKey: key, audience: "internal" });
+      const result = await drainFormattedEvents(key);
+      expect(result).toBeDefined();
+      // Outer wrap pair stays intact (one BEGIN at the block opening, one END
+      // at the closing). Inner literal tokens are escaped so the strip pass
+      // cannot eat surrounding text.
+      const beginCount = (result!.match(/<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>/g) ?? []).length;
+      const endCount = (result!.match(/<<<END_OPENCLAW_INTERNAL_CONTEXT>>>/g) ?? []).length;
+      expect(beginCount).toBe(1);
+      expect(endCount).toBe(1);
+      expect(result).toContain("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
+      expect(result).toContain("[[OPENCLAW_INTERNAL_CONTEXT_END]]");
+      // Strip removes the wrapped block cleanly, leaving no inner content
+      // (including the previously-literal tokens) behind.
+      const stripped = stripInternalRuntimeContext(result!);
+      expect(stripped).not.toContain("middle");
+      expect(stripped).not.toContain("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
+    });
   });
 });
 

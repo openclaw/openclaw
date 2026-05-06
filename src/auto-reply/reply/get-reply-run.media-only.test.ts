@@ -1488,6 +1488,52 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
   });
 
+  it("does not downgrade sender ownership when untrusted lines are inside an internal-runtime-context wrap", async () => {
+    // Internal-runtime-context blocks are runtime-generated and stripped from
+    // every user-facing surface, so untrusted-system-event lines inside the
+    // wrap cannot have come from user input — the owner-auth scan must
+    // ignore them. Without this, an `audience: "internal"` event whose
+    // payload happens to carry an untrusted text fragment (e.g. cron output
+    // relayed for agent awareness) would silently strip owner-only tools
+    // from the next reply turn.
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "OpenClaw runtime context (internal):",
+        "This context is runtime-generated, not user-authored. Keep internal details private.",
+        "",
+        "System (untrusted): [t] Cron run completed. Relayed for agent awareness.",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ].join("\n"),
+    );
+    const params = ownerParams();
+
+    await runPreparedReply(params);
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.senderIsOwner).toBe(true);
+  });
+
+  it("still downgrades sender ownership when untrusted lines appear outside the internal-runtime-context wrap", async () => {
+    // Confirms the fix scopes precisely to wrapped content. An untrusted
+    // line that is NOT inside an internal-runtime-context block must still
+    // trip the downgrade — wrapping is the carve-out, not the new default.
+    vi.mocked(drainFormattedSystemEvents).mockResolvedValueOnce(
+      [
+        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "Internal-only metadata.",
+        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+        "System (untrusted): [t] External webhook payload outside the wrap.",
+      ].join("\n"),
+    );
+    const params = ownerParams();
+
+    await runPreparedReply(params);
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.senderIsOwner).toBe(false);
+  });
+
   it("preserves first-token think hint when system events are prepended", async () => {
     // drainFormattedSystemEvents returns just the events block; the caller prepends it.
     // The hint must be extracted from the user body BEFORE prepending, so "System:"

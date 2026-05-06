@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { stripInternalRuntimeContext } from "../../agents/internal-runtime-context.js";
 import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -724,7 +725,16 @@ export async function runPreparedReply(
       });
       if (eventsBlock) {
         drainedSystemEventBlocks.push(eventsBlock);
-        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(eventsBlock)) {
+        // Owner-auth downgrade detects potential user-impersonation of System
+        // (untrusted) lines. Internal-runtime-context blocks are
+        // runtime-generated and stripped from every user-facing surface, so
+        // their `System (untrusted):` prefixes cannot have come from user
+        // input — exclude them from the scan. Without this, an
+        // `audience: "internal"` event that happens to carry an untrusted
+        // text payload (e.g. cron output relayed for agent awareness) would
+        // strip owner-only tools from the next reply turn even though the
+        // user never saw the event.
+        if (UNTRUSTED_SYSTEM_EVENT_LINE_RE.test(stripInternalRuntimeContext(eventsBlock))) {
           forceSenderIsOwnerFalseFromSystemEvents = true;
         }
       }

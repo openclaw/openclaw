@@ -275,6 +275,110 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(sendTelegram).toHaveBeenCalled();
   });
 
+  it("does not use CRON_EVENT_PROMPT for audience: 'internal' cron events", async () => {
+    // `audience: "internal"` cron-awareness events are routed through the
+    // wrap-on-drain path in session-system-events.ts; the cron-event prompt
+    // builder must NOT pull them into buildCronEventPrompt or the wrap is
+    // bypassed and the awareness text gets relayed/double-announced to the
+    // user instead of staying hidden runtime context.
+    const { result, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-cron-internal-",
+      replyText: "Heartbeat check-in",
+      reason: "interval",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Cron run completed: relayed for awareness only", {
+          sessionKey,
+          contextKey: "cron:qmd-awareness",
+          trusted: false,
+          audience: "internal",
+        });
+      },
+    });
+    expect(result.status).toBe("ran");
+    // Heartbeat path must not classify the internal event as a cron-event
+    // relay payload — provider stays "heartbeat" and the cron prompt
+    // template (which would re-expose the text on user-facing relay) is
+    // not invoked.
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.Body).not.toContain("scheduled reminder has been triggered");
+    expect(calledCtx?.Body).not.toContain("Cron run completed: relayed for awareness only");
+  });
+
+  it("leaves audience: 'internal' events queued after a heartbeat run so the wrapped drain path can consume them", async () => {
+    // Counterpart to the cron-event-prompt skip above. Excluding internal
+    // events from the relay selectors is only half the contract — they must
+    // also be excluded from selectSystemEventsConsumedByHeartbeat so the
+    // heartbeat doesn't silently drain them from the queue. Otherwise the
+    // event is consumed without ever reaching drainFormattedSystemEvents
+    // and the INTERNAL_RUNTIME_CONTEXT wrap never fires — exactly the
+    // hidden agent-awareness this audience field is meant to preserve.
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
+      const getReplySpy = vi.fn().mockResolvedValue({ text: "Heartbeat check-in" });
+      const { cfg, sessionKey } = await createConfig({ tmpDir, storePath });
+      const { peekSystemEventEntries } = await import("./system-events.js");
+
+      enqueueSystemEvent("Cron run completed: relayed for awareness only", {
+        sessionKey,
+        contextKey: "cron:qmd-awareness",
+        trusted: false,
+        audience: "internal",
+      });
+
+      // Pre-condition: the internal event is in the queue.
+      expect(peekSystemEventEntries(sessionKey)).toHaveLength(1);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+
+      // Post-condition: the heartbeat run did not consume the internal
+      // event. It stays queued for the next normal drain, which routes it
+      // through the wrap-on-drain integration in session-system-events.ts.
+      const remaining = peekSystemEventEntries(sessionKey);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0].audience).toBe("internal");
+      expect(remaining[0].text).toBe("Cron run completed: relayed for awareness only");
+
+      // Second heartbeat run on the same queue must NOT see the internal
+      // event as a cron-tagged trigger (preflight `hasTaggedCronEvents`
+      // must filter audience: "internal"). Otherwise hidden cron-awareness
+      // creates a persistent heartbeat trigger that bypasses file gates
+      // until a normal reply drains the queue. The user-visible signal is
+      // that the second run still resolves as a generic "heartbeat"
+      // provider, not a cron-event prompt — and the awareness text never
+      // reaches the heartbeat ctx Body.
+      const secondResult = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        reason: "interval",
+        deps: {
+          getReplyFromConfig: getReplySpy,
+          telegram: sendTelegram,
+        },
+      });
+      expect(secondResult.status).toBe("ran");
+      const secondCtx = getReplySpy.mock.calls[1]?.[0] as { Provider?: string; Body?: string };
+      expect(secondCtx.Provider).toBe("heartbeat");
+      expect(secondCtx.Body).not.toContain("scheduled reminder has been triggered");
+      expect(secondCtx.Body).not.toContain("Cron run completed: relayed for awareness only");
+
+      // Internal event still queued after the second run as well.
+      const stillRemaining = peekSystemEventEntries(sessionKey);
+      expect(stillRemaining).toHaveLength(1);
+      expect(stillRemaining[0].audience).toBe("internal");
+    });
+  });
+
   it("drains inspected cron events after a successful run so later heartbeats do not replay them", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
       const sendTelegram = vi.fn().mockResolvedValue({
@@ -466,6 +570,33 @@ describe("Ghost reminder bug (issue #13317)", () => {
       isolatedSession: true,
       forceSenderIsOwnerFalse: false,
     });
+  });
+
+  it("does not force owner downgrade for audience: 'internal' events even when trusted: false", async () => {
+    // `audience: "internal" + trusted: false` is the shape used by the hidden
+    // runtime-context lane (e.g. queueCronAwarenessSystemEvent). The text is
+    // wrapped in INTERNAL_RUNTIME_CONTEXT_*, never reaches a user-facing
+    // surface, and is therefore not user-impersonatable. The heartbeat
+    // owner-auth scan must skip it; otherwise a hidden cron-awareness event
+    // would silently strip owner-only tools/directives from the next
+    // heartbeat-driven reply turn.
+    const { result, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-internal-audience-untrusted-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Cron run completed: relayed for awareness only", {
+          sessionKey,
+          trusted: false,
+          audience: "internal",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
   });
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
