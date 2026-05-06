@@ -1,7 +1,7 @@
 import {
   jsonResult,
   resolveMemorySearchConfig,
-  resolveSessionAgentId,
+  resolveSessionAgentIds,
   type MemoryPluginRuntime,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -11,7 +11,7 @@ import {
   type AnyAgentTool,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { Type } from "typebox";
+import type { TSchema } from "typebox";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
@@ -23,6 +23,7 @@ type RuntimeProviderModule = typeof import("./src/runtime-provider.js");
 type MemoryToolOptions = {
   config?: OpenClawConfig;
   getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
 };
@@ -49,35 +50,37 @@ function hasMemoryToolContext(options: MemoryToolOptions): boolean {
   if (!cfg) {
     return false;
   }
-  const agentId = resolveSessionAgentId({
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
     sessionKey: options.agentSessionKey,
     config: cfg,
+    agentId: options.agentId,
   });
   return Boolean(resolveMemorySearchConfig(cfg, agentId));
 }
 
-const MemorySearchSchema = Type.Object({
-  query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([
-      Type.Literal("memory"),
-      Type.Literal("wiki"),
-      Type.Literal("all"),
-      Type.Literal("sessions"),
-    ]),
-  ),
-});
+const MemorySearchSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string" },
+    maxResults: { type: "number" },
+    minScore: { type: "number" },
+    corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
+  },
+  required: ["query"],
+  additionalProperties: false,
+} as const satisfies TSchema;
 
-const MemoryGetSchema = Type.Object({
-  path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
-});
+const MemoryGetSchema = {
+  type: "object",
+  properties: {
+    path: { type: "string" },
+    from: { type: "number" },
+    lines: { type: "number" },
+    corpus: { type: "string", enum: ["memory", "wiki", "all"] },
+  },
+  required: ["path"],
+  additionalProperties: false,
+} as const satisfies TSchema;
 
 function createLazyMemoryTool(params: {
   options: MemoryToolOptions;
@@ -145,6 +148,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
   return {
     config: getConfig(),
     getConfig,
+    agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
   };

@@ -152,8 +152,8 @@ jobs:
           set -euo pipefail
 
           if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then
-            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
-              echo "package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
+            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+              echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
             fi
           fi
@@ -219,6 +219,23 @@ jobs:
           output_dir=".artifacts/qa-e2e/npm-telegram-beta-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
           export OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="${output_dir}"
+
+          append_telegram_summary() {
+            local status=$?
+            local report="${output_dir}/telegram-qa-report.md"
+            if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "${report}" ]]; then
+              {
+                echo "## Package Telegram E2E"
+                echo
+                echo "- Package: ${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC}}"
+                echo "- Provider mode: ${OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE}"
+                echo
+                cat "${report}"
+              } >> "${GITHUB_STEP_SUMMARY}"
+            fi
+            return "${status}"
+          }
+          trap append_telegram_summary EXIT
 
           if [[ -n "${PACKAGE_ARTIFACT_NAME// }" ]]; then
             mapfile -t package_tgzs < <(find .artifacts/telegram-package-under-test -type f -name "*.tgz" | sort)

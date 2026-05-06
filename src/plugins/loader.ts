@@ -9,7 +9,8 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -46,6 +47,7 @@ import {
   type PluginActivationConfigSource,
   type NormalizedPluginsConfig,
 } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { getGlobalHookRunner, initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { toSafeImportPath } from "./import-specifier.js";
@@ -93,15 +95,11 @@ import {
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
-  getMemoryFlushPlanResolver,
-  getMemoryPromptSectionBuilder,
-  getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
-import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import {
   fingerprintPluginDiscoveryContext,
   resolvePluginDiscoveryContext,
@@ -109,7 +107,7 @@ import {
 import { withProfile } from "./plugin-load-profile.js";
 import {
   createPluginModuleLoaderCache,
-  getCachedPluginSourceModuleLoader,
+  getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -245,10 +243,7 @@ type CachedPluginState = {
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
-  memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
-  memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
-  memoryRuntime: ReturnType<typeof getMemoryRuntime>;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -485,8 +480,8 @@ function runPluginRegisterSync(
 
 function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
-  const loadSourceModule = (modulePath: string) => {
-    return getCachedPluginSourceModuleLoader({
+  const createLoaderForModule = (modulePath: string) => {
+    return getCachedPluginModuleLoader({
       cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
@@ -500,18 +495,8 @@ function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkRes
       pluginSdkResolution: options.pluginSdkResolution,
     });
   };
-  return (modulePath: string): unknown => {
-    if (shouldPreferNativeModuleLoad(modulePath)) {
-      const native = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
-      if (native.ok) {
-        return native.moduleExport;
-      }
-    }
-    // Source .ts runtime shims import sibling ".js" specifiers that only exist
-    // after build. Jiti remains the dev/source fallback because it rewrites those
-    // imports against the source graph and applies SDK aliases.
-    return loadSourceModule(modulePath)(toSafeImportPath(modulePath));
-  };
+  return (modulePath: string): unknown =>
+    createLoaderForModule(modulePath)(toSafeImportPath(modulePath));
 }
 
 function resolveCanonicalDistRuntimeSource(source: string): string {
@@ -678,17 +663,24 @@ function resolveBundledPackageRootForCache(stockRoot?: string): string | undefin
 }
 
 function readPackageVersionForCache(packageJsonPath: string): string {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return "unknown";
-    }
-    const version = (parsed as { version?: unknown }).version;
-    return typeof version === "string" && version.trim() ? version.trim() : "unknown";
-  } catch {
+  const parsed = tryReadJsonSync(packageJsonPath);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return "unknown";
   }
+  const version = (parsed as { version?: unknown }).version;
+  return typeof version === "string" && version.trim() ? version.trim() : "unknown";
 }
+
+const bundledPackageCacheIdentityByStockRoot = new Map<
+  string,
+  {
+    packageJson: string;
+    packageRoot: string;
+    packageVersion: string;
+    size: number;
+    mtimeMs: number;
+  }
+>();
 
 function resolveBundledPackageCacheIdentity(stockRoot?: string):
   | {
@@ -699,28 +691,40 @@ function resolveBundledPackageCacheIdentity(stockRoot?: string):
       mtimeMs: number;
     }
   | undefined {
+  if (!stockRoot) {
+    return undefined;
+  }
   const packageRoot = resolveBundledPackageRootForCache(stockRoot);
   if (!packageRoot) {
     return undefined;
   }
+  const stockRootKey = path.resolve(stockRoot);
+  const cached = bundledPackageCacheIdentityByStockRoot.get(stockRootKey);
+  if (cached) {
+    return cached;
+  }
   const packageJsonPath = path.join(packageRoot, "package.json");
   try {
     const stat = fs.statSync(packageJsonPath);
-    return {
+    const identity = {
       packageJson: safeRealpathOrResolve(packageJsonPath),
       packageRoot: safeRealpathOrResolve(packageRoot),
       packageVersion: readPackageVersionForCache(packageJsonPath),
       size: stat.size,
       mtimeMs: stat.mtimeMs,
     };
+    bundledPackageCacheIdentityByStockRoot.set(stockRootKey, identity);
+    return identity;
   } catch {
-    return {
+    const identity = {
       packageJson: path.resolve(packageJsonPath),
       packageRoot: safeRealpathOrResolve(packageRoot),
       packageVersion: "missing",
       size: -1,
       mtimeMs: -1,
     };
+    bundledPackageCacheIdentityByStockRoot.set(stockRootKey, identity);
+    return identity;
   }
 }
 
@@ -1317,6 +1321,21 @@ function validatePluginConfig(params: {
   if (!schema) {
     return { ok: true, value: params.value as Record<string, unknown> | undefined };
   }
+  if (isEmptyPluginConfigJsonSchema(schema)) {
+    if (
+      params.value === undefined ||
+      (params.value &&
+        typeof params.value === "object" &&
+        !Array.isArray(params.value) &&
+        Object.keys(params.value).length === 0)
+    ) {
+      return { ok: true, value: {} };
+    }
+    if (!params.value || typeof params.value !== "object" || Array.isArray(params.value)) {
+      return { ok: false, errors: ["<root>: must be object"] };
+    }
+    return { ok: false, errors: ["<root>: config must be empty"] };
+  }
   const cacheKey = params.cacheKey ?? JSON.stringify(schema);
   const result = validateJsonSchemaValue({
     schema,
@@ -1328,6 +1347,31 @@ function validatePluginConfig(params: {
     return { ok: true, value: result.value as Record<string, unknown> | undefined };
   }
   return { ok: false, errors: result.errors.map((error) => error.text) };
+}
+
+function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean {
+  if (schema.type !== "object" || schema.additionalProperties !== false) {
+    return false;
+  }
+  const properties = schema.properties;
+  if (
+    !properties ||
+    typeof properties !== "object" ||
+    Array.isArray(properties) ||
+    Object.keys(properties).length > 0
+  ) {
+    return false;
+  }
+  return !(
+    "required" in schema ||
+    "dependentRequired" in schema ||
+    "dependencies" in schema ||
+    "minProperties" in schema ||
+    "allOf" in schema ||
+    "anyOf" in schema ||
+    "oneOf" in schema ||
+    "not" in schema
+  );
 }
 
 function resolvePluginModuleExport(moduleExport: unknown): {
@@ -1467,10 +1511,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
           corpusSupplements: cached.state.memoryCorpusSupplements,
-          promptBuilder: cached.state.memoryPromptBuilder,
           promptSupplements: cached.state.memoryPromptSupplements,
-          flushPlanResolver: cached.state.memoryFlushPlanResolver,
-          runtime: cached.state.memoryRuntime,
         });
         activatePluginRegistry(
           cached.state.registry,
@@ -1676,7 +1717,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
         autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
       });
@@ -1687,6 +1728,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           name: manifestRecord.name ?? pluginId,
           description: manifestRecord.description,
           version: manifestRecord.version,
+          packageName: manifestRecord.packageName,
           format: manifestRecord.format,
           bundleFormat: manifestRecord.bundleFormat,
           bundleCapabilities: manifestRecord.bundleCapabilities,
@@ -1694,6 +1736,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           rootDir: candidate.rootDir,
           origin: candidate.origin,
           workspaceDir: candidate.workspaceDir,
+          trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
           enabled: false,
           compat: collectPluginManifestCompatCodes(manifestRecord),
           activationState,
@@ -1715,7 +1758,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
-        enabledByDefault: manifestRecord.enabledByDefault,
+        enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
       });
       const entry = normalized.entries[pluginId];
@@ -1724,6 +1767,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         name: manifestRecord.name ?? pluginId,
         description: manifestRecord.description,
         version: manifestRecord.version,
+        packageName: manifestRecord.packageName,
         format: manifestRecord.format,
         bundleFormat: manifestRecord.bundleFormat,
         bundleCapabilities: manifestRecord.bundleCapabilities,
@@ -1731,6 +1775,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
+        trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
         enabled: enableState.enabled,
         compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
@@ -1957,7 +2002,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           : runtimeCandidateEntry;
       const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
       const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
-      const opened = openBoundaryFileSync({
+      const opened = openRootFileSync({
         absolutePath: moduleLoadSource,
         rootPath: moduleRoot,
         boundaryLabel: "plugin root",
@@ -2048,7 +2093,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             const runtimeModuleRoot = resolveCanonicalDistRuntimeSource(
               runtimeCandidateEntry.rootDir,
             );
-            const runtimeOpened = openBoundaryFileSync({
+            const runtimeOpened = openRootFileSync({
               absolutePath: runtimeModuleSource,
               rootPath: runtimeModuleRoot,
               boundaryLabel: "plugin root",
@@ -2283,11 +2328,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
-      const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
-      const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
-      const previousMemoryRuntime = getMemoryRuntime();
 
       try {
         withProfile(
@@ -2304,10 +2346,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
             corpusSupplements: previousMemoryCorpusSupplements,
-            promptBuilder: previousMemoryPromptBuilder,
             promptSupplements: previousMemoryPromptSupplements,
-            flushPlanResolver: previousMemoryFlushPlanResolver,
-            runtime: previousMemoryRuntime,
           });
         }
         registry.plugins.push(record);
@@ -2322,10 +2361,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
           corpusSupplements: previousMemoryCorpusSupplements,
-          promptBuilder: previousMemoryPromptBuilder,
           promptSupplements: previousMemoryPromptSupplements,
-          flushPlanResolver: previousMemoryFlushPlanResolver,
-          runtime: previousMemoryRuntime,
         });
         recordPluginError({
           logger,
@@ -2393,10 +2429,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
-          memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
-          memoryPromptBuilder: getMemoryPromptSectionBuilder(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
-          memoryRuntime: getMemoryRuntime(),
         },
         onlyPluginIds,
       );
@@ -2510,7 +2543,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
-      enabledByDefault: manifestRecord.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
       autoEnabledReason: formatAutoEnabledActivationReason(autoEnabledReasons[pluginId]),
     });
@@ -2521,6 +2554,7 @@ export async function loadOpenClawPluginCliRegistry(
         name: manifestRecord.name ?? pluginId,
         description: manifestRecord.description,
         version: manifestRecord.version,
+        packageName: manifestRecord.packageName,
         format: manifestRecord.format,
         bundleFormat: manifestRecord.bundleFormat,
         bundleCapabilities: manifestRecord.bundleCapabilities,
@@ -2528,6 +2562,7 @@ export async function loadOpenClawPluginCliRegistry(
         rootDir: candidate.rootDir,
         origin: candidate.origin,
         workspaceDir: candidate.workspaceDir,
+        trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
         enabled: false,
         compat: collectPluginManifestCompatCodes(manifestRecord),
         activationState,
@@ -2549,7 +2584,7 @@ export async function loadOpenClawPluginCliRegistry(
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
-      enabledByDefault: manifestRecord.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
     });
     const entry = normalized.entries[pluginId];
@@ -2558,6 +2593,7 @@ export async function loadOpenClawPluginCliRegistry(
       name: manifestRecord.name ?? pluginId,
       description: manifestRecord.description,
       version: manifestRecord.version,
+      packageName: manifestRecord.packageName,
       format: manifestRecord.format,
       bundleFormat: manifestRecord.bundleFormat,
       bundleCapabilities: manifestRecord.bundleCapabilities,
@@ -2565,6 +2601,7 @@ export async function loadOpenClawPluginCliRegistry(
       rootDir: candidate.rootDir,
       origin: candidate.origin,
       workspaceDir: candidate.workspaceDir,
+      trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
       enabled: enableState.enabled,
       compat: collectPluginManifestCompatCodes(manifestRecord),
       activationState,
@@ -2637,7 +2674,7 @@ export async function loadOpenClawPluginCliRegistry(
       seenIds.set(pluginId, candidate.origin);
       continue;
     }
-    const opened = openBoundaryFileSync({
+    const opened = openRootFileSync({
       absolutePath: sourceForCliMetadata,
       rootPath: pluginRoot,
       boundaryLabel: "plugin root",

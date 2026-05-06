@@ -17,7 +17,7 @@ import {
   normalizeProviderResolvedModelWithPlugin,
   shouldPreferProviderRuntimeResolvedModel,
 } from "../../plugins/provider-runtime.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { resolveDefaultAgentDir } from "../agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
@@ -27,7 +27,6 @@ import {
   shouldSuppressBuiltInModel,
   shouldUnconditionallySuppress,
 } from "../model-suppression.js";
-import { isLegacyModelsAddCodexMetadataModel } from "../openai-codex-models-add-legacy.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import {
   attachModelProviderRequestTransport,
@@ -397,12 +396,10 @@ function resolveConfiguredProviderConfig(
 }
 
 function isModelsAddMetadataModel(params: {
-  provider: string;
   model: NonNullable<InlineProviderConfig["models"]>[number] | undefined;
 }) {
   return (
-    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add" ||
-    isLegacyModelsAddCodexMetadataModel(params)
+    (params.model as { metadataSource?: unknown } | undefined)?.metadataSource === "models-add"
   );
 }
 
@@ -528,8 +525,7 @@ function applyConfiguredProviderOverrides(params: {
       ? findConfiguredProviderModel(providerConfig, params.provider, discoveredModel.id)
       : undefined);
   const metadataOverrideModel =
-    params.preferDiscoveredModelMetadata &&
-    isModelsAddMetadataModel({ provider: params.provider, model: configuredModel })
+    params.preferDiscoveredModelMetadata && isModelsAddMetadataModel({ model: configuredModel })
       ? undefined
       : configuredModel;
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
@@ -993,7 +989,7 @@ export function resolveModel(
     provider,
     model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
   };
-  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const authStorage = options?.authStorage ?? discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = options?.modelRegistry ?? discoverModels(authStorage, resolvedAgentDir);
   const runtimeHooks = resolveRuntimeHooks(options);
@@ -1045,7 +1041,7 @@ export async function resolveModelAsync(
     provider,
     model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
   };
-  const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
+  const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const emptyDiscoveryStores =
     options?.skipPiDiscovery && (!options.authStorage || !options.modelRegistry)
       ? createEmptyPiDiscoveryStores()

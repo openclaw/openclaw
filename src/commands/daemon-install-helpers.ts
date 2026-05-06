@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
+import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
@@ -13,13 +13,19 @@ import {
   resolveGatewayProgramArguments,
   resolveOpenClawWrapperPath,
 } from "../daemon/program-args.js";
+import {
+  addServiceEnvPlanEntries,
+  compactServiceEnvPlanValueSources,
+  createMutableServiceEnvPlan,
+} from "../daemon/service-env-plan.js";
+import { applyManagedServiceEnvRenderPolicy } from "../daemon/service-env-render-policy.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
   readManagedServiceEnvKeysFromEnvironment,
-  writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
 import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
+import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -40,6 +46,7 @@ type GatewayInstallPlan = {
   programArguments: string[];
   workingDirectory?: string;
   environment: Record<string, string | undefined>;
+  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 };
 
 let daemonInstallAuthProfileSourceRuntimePromise:
@@ -166,6 +173,61 @@ function collectConfigSecretRefServiceEnvVars(params: {
       continue;
     }
     entries[key] = value;
+  }
+  return entries;
+}
+
+function collectExecSecretRefPassEnvServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  if (!params.config) {
+    return {};
+  }
+  const entries: Record<string, string> = {};
+  for (const target of discoverConfigSecretTargets(params.config)) {
+    if (!target.entry.includeInPlan) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: params.config.secrets?.defaults,
+    });
+    if (!ref || ref.source !== "exec") {
+      continue;
+    }
+    const provider = params.config.secrets?.providers?.[ref.provider];
+    if (!provider || provider.source !== "exec") {
+      continue;
+    }
+    for (const rawKey of provider.passEnv ?? []) {
+      const key = normalizeEnvVarKey(rawKey, { portable: true });
+      if (!key) {
+        params.warn?.(
+          `Exec SecretRef passEnv id "${rawKey}" is not portable and was not added to the service environment`,
+          "Config SecretRef",
+        );
+        continue;
+      }
+      if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+        params.warn?.(
+          `Exec SecretRef passEnv ref "${key}" blocked by host-env security policy`,
+          "Config SecretRef",
+        );
+        continue;
+      }
+      if (Object.hasOwn(params.durableEnvironment, key)) {
+        continue;
+      }
+      const value = params.env[key]?.trim();
+      if (!value) {
+        continue;
+      }
+      entries[key] = value;
+    }
   }
   return entries;
 }
@@ -305,6 +367,22 @@ function collectPreservedExistingServiceEnvVars(
   return preserved;
 }
 
+function readExistingEnvironmentValueSource(params: {
+  existingEnvironmentValueSources?: Record<
+    string,
+    GatewayServiceEnvironmentValueSource | undefined
+  >;
+  normalizedKey: string;
+}): GatewayServiceEnvironmentValueSource | undefined {
+  for (const [rawKey, source] of Object.entries(params.existingEnvironmentValueSources ?? {})) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true })?.toUpperCase();
+    if (key === params.normalizedKey) {
+      return source;
+    }
+  }
+  return undefined;
+}
+
 function resolveGatewayInstallWorkingDirectory(params: {
   env: Record<string, string | undefined>;
   platform: NodeJS.Platform;
@@ -326,13 +404,27 @@ async function buildGatewayInstallEnvironment(params: {
   warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
+  existingEnvironmentValueSources?: Record<
+    string,
+    GatewayServiceEnvironmentValueSource | undefined
+  >;
   platform: NodeJS.Platform;
-}): Promise<Record<string, string | undefined>> {
-  const durableEnvironment = collectDurableServiceEnvVars({
+}): Promise<{
+  environment: Record<string, string | undefined>;
+  environmentValueSources: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
+}> {
+  const { stateDirDotEnvEnvironment, configEnvironment, durableEnvironment } =
+    collectDurableServiceEnvVarSources({
+      env: params.env,
+      config: params.config,
+    });
+  const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
     env: params.env,
     config: params.config,
+    durableEnvironment,
+    warn: params.warn,
   });
-  const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
+  const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
     env: params.env,
     config: params.config,
     durableEnvironment,
@@ -343,20 +435,37 @@ async function buildGatewayInstallEnvironment(params: {
     authStore: params.authStore,
     warn: params.warn,
   });
-  const environment: Record<string, string | undefined> = {
-    ...collectPreservedExistingServiceEnvVars(
-      params.existingEnvironment,
-      readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment),
-    ),
-    ...durableEnvironment,
-    ...configSecretRefEnvironment,
-    ...authProfileEnvironment,
-  };
+  const preservedExistingEnvironment = collectPreservedExistingServiceEnvVars(
+    params.existingEnvironment,
+    readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment),
+  );
+  const plan = createMutableServiceEnvPlan();
+  addServiceEnvPlanEntries(plan, preservedExistingEnvironment, {
+    source: "existing-preserved",
+    valueSource: ({ normalizedKey }) =>
+      readExistingEnvironmentValueSource({
+        existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+        normalizedKey,
+      }) ?? "inline",
+  });
+  addServiceEnvPlanEntries(plan, stateDirDotEnvEnvironment, { source: "state-dotenv" });
+  addServiceEnvPlanEntries(plan, configEnvironment, { source: "config-env" });
+  addServiceEnvPlanEntries(plan, configSecretRefEnvironment, { source: "config-secretref-env" });
+  addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, { source: "exec-passenv" });
+  addServiceEnvPlanEntries(plan, authProfileEnvironment, { source: "auth-profile-env" });
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
     omitKeys: Object.keys(params.serviceEnvironment),
   });
-  writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
-  Object.assign(environment, params.serviceEnvironment);
+  applyManagedServiceEnvRenderPolicy({
+    plan,
+    managedServiceEnvKeys,
+    serviceEnvironment: params.serviceEnvironment,
+    platform: params.platform,
+  });
+  addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
+    source: "service-generated",
+    includeRawKeys: true,
+  });
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
@@ -364,9 +473,14 @@ async function buildGatewayInstallEnvironment(params: {
     params.platform,
   );
   if (mergedPath) {
-    environment.PATH = mergedPath;
+    plan.environment.PATH = mergedPath;
+    plan.environmentValueSources.PATH = "inline";
   }
-  return environment;
+  compactServiceEnvPlanValueSources(plan);
+  return {
+    environment: plan.environment,
+    environmentValueSources: plan.environmentValueSources,
+  };
 }
 
 export async function buildGatewayInstallPlan(params: {
@@ -382,6 +496,10 @@ export async function buildGatewayInstallPlan(params: {
   /** Full config to extract env vars from (env vars + inline env keys). */
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
+  existingEnvironmentValueSources?: Record<
+    string,
+    GatewayServiceEnvironmentValueSource | undefined
+  >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
   const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
@@ -421,6 +539,17 @@ export async function buildGatewayInstallPlan(params: {
     extraPathDirs: resolveDaemonNodeBinDir(nodePath),
   });
 
+  const { environment, environmentValueSources } = await buildGatewayInstallEnvironment({
+    env: serviceInputEnv,
+    config: params.config,
+    authStore: params.authStore,
+    warn: params.warn,
+    serviceEnvironment,
+    existingEnvironment: params.existingEnvironment,
+    existingEnvironmentValueSources: params.existingEnvironmentValueSources,
+    platform,
+  });
+
   // Lowest to highest: preserved custom vars, durable config, auth env refs, generated service env.
   return {
     programArguments,
@@ -429,15 +558,8 @@ export async function buildGatewayInstallPlan(params: {
       platform,
       workingDirectory,
     }),
-    environment: await buildGatewayInstallEnvironment({
-      env: serviceInputEnv,
-      config: params.config,
-      authStore: params.authStore,
-      warn: params.warn,
-      serviceEnvironment,
-      existingEnvironment: params.existingEnvironment,
-      platform,
-    }),
+    environment,
+    ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
   };
 }
 

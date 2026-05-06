@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { ApplicationCommandType, ComponentType, Routes } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client, ComponentRegistry, type AnyListener } from "./client.js";
@@ -272,6 +275,35 @@ describe("Client.deployCommands", () => {
 
     expect(get).toHaveBeenCalledTimes(1);
     expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips unchanged command deploys across client restarts using the hash store", async () => {
+    const hashStorePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-command-deploy-")),
+      "hashes.json",
+    );
+    const first = createInternalTestClient([createTestCommand({ name: "one" })], {
+      commandDeployHashStorePath: hashStorePath,
+    });
+    const firstGet = vi.fn(async () => []);
+    const firstPost = vi.fn(async () => undefined);
+    attachRestMock(first, { get: firstGet, post: firstPost });
+
+    await first.deployCommands({ mode: "reconcile" });
+
+    const second = createInternalTestClient([createTestCommand({ name: "one" })], {
+      commandDeployHashStorePath: hashStorePath,
+    });
+    const secondGet = vi.fn(async () => []);
+    const secondPost = vi.fn(async () => undefined);
+    attachRestMock(second, { get: secondGet, post: secondPost });
+
+    await second.deployCommands({ mode: "reconcile" });
+
+    expect(firstGet).toHaveBeenCalledTimes(1);
+    expect(firstPost).toHaveBeenCalledTimes(1);
+    expect(secondGet).not.toHaveBeenCalled();
+    expect(secondPost).not.toHaveBeenCalled();
   });
 
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {

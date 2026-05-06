@@ -205,7 +205,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
 
     expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
     expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
-      "/tmp/agent-dir",
+      expect.stringMatching(/[/\\]\.openclaw[/\\]agents[/\\]main[/\\]agent$/),
       { allowKeychainPrompt: false },
     );
   });
@@ -284,7 +284,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              agentRuntime: { id: "codex", fallback: "none" },
+              agentRuntime: { id: "codex" },
             },
           },
         },
@@ -356,7 +356,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              agentRuntime: { id: "codex", fallback: "none" },
+              agentRuntime: { id: "codex" },
             },
           },
         },
@@ -429,7 +429,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              agentRuntime: { id: "codex", fallback: "none" },
+              agentRuntime: { id: "codex" },
             },
           },
         },
@@ -503,7 +503,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         config: {
           agents: {
             defaults: {
-              agentRuntime: { id: "codex", fallback: "none" },
+              agentRuntime: { id: "codex" },
             },
           },
         },

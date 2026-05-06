@@ -18,9 +18,7 @@ vi.mock("../../cli/npm-resolution.js", () => ({
 }));
 
 vi.mock("../../cli/plugins-command-helpers.js", () => ({
-  buildPreferredClawHubSpec: vi.fn(() => null),
   createPluginInstallLogger: vi.fn(() => ({})),
-  decidePreferredClawHubFallback: vi.fn(() => "fallback_to_npm"),
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),
 }));
 
@@ -262,6 +260,28 @@ describe("handlePluginsCommand", () => {
         }),
       }),
     );
+  });
+
+  it("refuses plugin enablement in Nix mode before reading or replacing config", async () => {
+    const previousNixMode = process.env.OPENCLAW_NIX_MODE;
+    process.env.OPENCLAW_NIX_MODE = "1";
+    try {
+      const params = buildPluginsParams("/plugins enable superpowers", buildCfg());
+      params.command.senderIsOwner = true;
+
+      const result = await handlePluginsCommand(params, true);
+      expect(result?.reply?.text).toContain("OPENCLAW_NIX_MODE=1");
+      expect(result?.reply?.text).toContain("nix-openclaw#quick-start");
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(refreshPluginRegistryAfterConfigMutationMock).not.toHaveBeenCalled();
+    } finally {
+      if (previousNixMode === undefined) {
+        delete process.env.OPENCLAW_NIX_MODE;
+      } else {
+        process.env.OPENCLAW_NIX_MODE = previousNixMode;
+      }
+    }
   });
 
   it("resolves write targets by indexed plugin name without loading diagnostics", async () => {

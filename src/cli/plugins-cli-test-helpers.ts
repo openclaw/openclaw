@@ -74,10 +74,18 @@ const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledHookPacks: AsyncUnknownMock = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
+export class PromptInputClosedError extends Error {
+  constructor() {
+    super("Prompt input closed before an answer was received.");
+    this.name = "PromptInputClosedError";
+  }
+}
 export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
+export const installPluginFromNpmPackArchive: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
+export const findBundledPluginSourceMock: UnknownMock = vi.fn();
 export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
 export const recordHookInstall: UnknownMock = vi.fn();
@@ -157,6 +165,18 @@ vi.mock("../runtime.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  assertConfigWriteAllowedInCurrentMode: () => {
+    if (process.env.OPENCLAW_NIX_MODE === "1") {
+      throw new Error(
+        [
+          "Config is managed by Nix (`OPENCLAW_NIX_MODE=1`), so OpenClaw treats openclaw.json as immutable.",
+          "Do not run setup, onboarding, openclaw update, plugin install/update/uninstall/enable, doctor repair/token-generation, or config set against this file.",
+          "Agent-first Nix setup: https://github.com/openclaw/nix-openclaw#quick-start",
+          "OpenClaw Nix overview: https://docs.openclaw.ai/install/nix",
+        ].join("\n"),
+      );
+    }
+  },
   getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readConfigFileSnapshot: ((
@@ -197,11 +217,15 @@ vi.mock("../plugins/marketplace.js", () => ({
 }));
 
 vi.mock("../plugins/enable.js", () => ({
-  enablePluginInConfig: ((cfg: OpenClawConfig, pluginId: string) =>
-    invokeMock<[OpenClawConfig, string], unknown>(
+  enablePluginInConfig: ((
+    ...args: Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/enable.js"))["enablePluginInConfig"]>,
+      unknown
+    >(
       enablePluginInConfig,
-      cfg,
-      pluginId,
+      ...args,
     )) as (typeof import("../plugins/enable.js"))["enablePluginInConfig"],
 }));
 
@@ -450,6 +474,7 @@ vi.mock("../hooks/update.js", () => ({
 }));
 
 vi.mock("./prompt.js", () => ({
+  PromptInputClosedError,
   promptYesNo: ((...args: Parameters<(typeof import("./prompt.js"))["promptYesNo"]>) =>
     invokeMock<
       Parameters<(typeof import("./prompt.js"))["promptYesNo"]>,
@@ -473,6 +498,16 @@ vi.mock("../plugins/install.js", () => ({
       installPluginFromNpmSpec,
       ...args,
     )) as (typeof import("../plugins/install.js"))["installPluginFromNpmSpec"],
+  installPluginFromNpmPackArchive: ((
+    ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+  ) =>
+    invokeMock<
+      Parameters<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>,
+      ReturnType<(typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"]>
+    >(
+      installPluginFromNpmPackArchive,
+      ...args,
+    )) as (typeof import("../plugins/install.js"))["installPluginFromNpmPackArchive"],
   installPluginFromPath: ((
     ...args: Parameters<(typeof import("../plugins/install.js"))["installPluginFromPath"]>
   ) =>
@@ -484,6 +519,26 @@ vi.mock("../plugins/install.js", () => ({
       ...args,
     )) as (typeof import("../plugins/install.js"))["installPluginFromPath"],
 }));
+
+vi.mock("../plugins/bundled-sources.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-sources.js")>();
+  return {
+    ...actual,
+    findBundledPluginSource: ((
+      ...args: Parameters<
+        (typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"]
+      >
+    ) => {
+      if (findBundledPluginSourceMock.getMockImplementation()) {
+        return invokeMock<
+          Parameters<(typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"]>,
+          ReturnType<(typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"]>
+        >(findBundledPluginSourceMock, ...args);
+      }
+      return actual.findBundledPluginSource(...args);
+    }) as (typeof import("../plugins/bundled-sources.js"))["findBundledPluginSource"],
+  };
+});
 
 vi.mock("../plugins/git-install.js", () => ({
   installPluginFromGitSpec: ((
@@ -618,9 +673,11 @@ export function resetPluginsCliTestState() {
   installPluginFromGitSpec.mockReset();
   parseGitPluginSpec.mockReset();
   installPluginFromNpmSpec.mockReset();
+  installPluginFromNpmPackArchive.mockReset();
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
+  findBundledPluginSourceMock.mockReset();
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();
   recordHookInstall.mockReset();

@@ -16,11 +16,9 @@ import {
   buildMemoryPromptSection,
   getMemoryRuntime,
   listMemoryCorpusSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -590,22 +588,24 @@ describe("clearPluginLoaderCache", () => {
       search: async () => [],
       get: async () => null,
     });
-    registerMemoryPromptSection(() => ["stale memory section"]);
     registerMemoryPromptSupplement("memory-wiki", () => ["stale wiki supplement"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "stale",
-      systemPrompt: "stale",
-      relativePath: "memory/stale.md",
-    }));
-    registerMemoryRuntime({
-      async getMemorySearchManager() {
-        return { manager: null };
-      },
-      resolveMemoryBackendConfig() {
-        return { backend: "builtin" as const };
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["stale memory section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "stale",
+        systemPrompt: "stale",
+        relativePath: "memory/stale.md",
+      }),
+      runtime: {
+        async getMemorySearchManager() {
+          return { manager: null };
+        },
+        resolveMemoryBackendConfig() {
+          return { backend: "builtin" as const };
+        },
       },
     });
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
@@ -652,7 +652,9 @@ describe("clearPluginRegistryLoadCache", () => {
       id: "still-live",
       create: async () => ({ provider: null }),
     });
-    registerMemoryPromptSection(() => ["still live"]);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["still live"],
+    });
 
     clearPluginRegistryLoadCache();
 

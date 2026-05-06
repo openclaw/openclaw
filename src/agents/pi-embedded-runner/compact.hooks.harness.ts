@@ -301,8 +301,10 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-settings.js", () => ({
+    applyPiAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
     applyPiCompactionSettingsFromConfig: vi.fn(),
     ensurePiCompactionReserveTokens: vi.fn(),
+    isSilentOverflowProneModel: vi.fn(() => false),
     resolveCompactionReserveTokensFloor: vi.fn(() => 0),
   }));
 
@@ -329,6 +331,7 @@ export async function loadCompactHooksHarness(): Promise<{
   vi.doMock("../session-write-lock.js", () => ({
     acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
+    resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({
@@ -485,7 +488,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("./history.js", () => ({
-    getDmHistoryLimitFromSessionKey: vi.fn(() => undefined),
+    getHistoryLimitFromSessionKey: vi.fn(() => undefined),
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
@@ -496,13 +499,11 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveSkillsPromptForRun: vi.fn(() => undefined),
   }));
 
-  vi.doMock("../agent-paths.js", () => ({
-    resolveOpenClawAgentDir: vi.fn(() => "/tmp"),
-  }));
-
   vi.doMock("../agent-scope.js", () => ({
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: vi.fn(() => undefined),
+    resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agents/${agentId}/agent`),
+    resolveDefaultAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
     resolveDefaultAgentId: vi.fn(() => "main"),
     resolveRunModelFallbacksOverride: vi.fn(() => undefined),
     resolveSessionAgentId: resolveSessionAgentIdMock,
