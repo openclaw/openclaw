@@ -974,6 +974,7 @@ describe("uninstallPlugin", () => {
         "npm",
         "uninstall",
         "--loglevel=error",
+        "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
@@ -986,6 +987,7 @@ describe("uninstallPlugin", () => {
         timeoutMs: 300_000,
         env: expect.objectContaining({
           NPM_CONFIG_IGNORE_SCRIPTS: "true",
+          npm_config_legacy_peer_deps: "true",
           npm_config_package_lock: "true",
         }),
       }),
@@ -1015,8 +1017,11 @@ describe("uninstallPlugin", () => {
       )}\n`,
     );
     await fs.symlink(tempDir, peerLink, "junction");
-    runCommandWithTimeoutMock.mockImplementationOnce(async () => {
+    runCommandWithTimeoutMock.mockImplementationOnce(async (argv: string[]) => {
       await fs.rm(peerLink, { recursive: true, force: true });
+      if (!argv.includes("--legacy-peer-deps")) {
+        await fs.mkdir(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+      }
       return {
         code: 0,
         stdout: "",
@@ -1038,6 +1043,7 @@ describe("uninstallPlugin", () => {
 
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
     await expect(fs.access(removedPluginDir)).rejects.toThrow();
+    await expect(fs.access(path.join(npmRoot, "node_modules", "openclaw"))).rejects.toThrow();
     await expect(fs.lstat(peerLink).then((stat) => stat.isSymbolicLink())).resolves.toBe(true);
   });
 

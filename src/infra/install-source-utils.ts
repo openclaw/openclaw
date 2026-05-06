@@ -321,3 +321,52 @@ export async function packNpmSpecToArchive(params: {
     metadata: parsedJson?.metadata ?? {},
   };
 }
+
+export async function resolveNpmPackArchiveMetadata(params: {
+  archivePath: string;
+  timeoutMs?: number;
+}): Promise<
+  | {
+      ok: true;
+      archivePath: string;
+      tarballName: string;
+      metadata: NpmSpecResolution;
+    }
+  | {
+      ok: false;
+      error: string;
+    }
+> {
+  const archivePathResult = await resolveArchiveSourcePath(params.archivePath);
+  if (!archivePathResult.ok) {
+    return archivePathResult;
+  }
+  const archivePath = archivePathResult.path;
+  const res = await runCommandWithTimeout(
+    ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      env: {
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+      },
+    },
+  );
+  if (res.code !== 0) {
+    return {
+      ok: false,
+      error: `npm pack metadata read failed: ${res.stderr.trim() || res.stdout.trim()}`,
+    };
+  }
+
+  const parsedJson = parseNpmPackJsonOutput(res.stdout || "");
+  if (!parsedJson?.metadata.name || !parsedJson.metadata.version) {
+    return { ok: false, error: "npm pack metadata read produced incomplete package metadata" };
+  }
+  return {
+    ok: true,
+    archivePath,
+    tarballName: parsedJson.filename ?? path.basename(archivePath),
+    metadata: parsedJson.metadata,
+  };
+}
