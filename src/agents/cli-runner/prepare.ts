@@ -409,6 +409,8 @@ export async function prepareCliRunContext(
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
+          allowRawTranscriptReseed:
+            backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true,
         }),
         prompt: preparedPrompt,
       });

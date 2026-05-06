@@ -249,6 +249,72 @@ describe("loadCliSessionReseedMessages", () => {
     }
   });
 
+  it("reseeds from raw transcript tail when allowRawTranscriptReseed is opted in", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-opt-in",
+      messages: ["earlier turn", "later turn"],
+    });
+
+    try {
+      const reseed = await loadCliSessionReseedMessages({
+        sessionId: "session-opt-in",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        allowRawTranscriptReseed: true,
+      });
+      expect(reseed).toMatchObject([
+        { role: "user", content: "earlier turn" },
+        { role: "user", content: "later turn" },
+      ]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to raw transcript tail when compaction summary is empty and opt-in is set", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-empty-summary",
+      messages: ["pre-compaction", "post-compaction"],
+    });
+    // Insert a compaction entry with an empty summary between the two messages.
+    const original = fs.readFileSync(sessionFile, "utf-8").trimEnd().split("\n");
+    const reordered = [
+      ...original.slice(0, 2),
+      JSON.stringify({
+        type: "compaction",
+        id: "compaction-empty",
+        parentId: "msg-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "   ",
+      }),
+      ...original.slice(2),
+    ].join("\n");
+    fs.writeFileSync(sessionFile, `${reordered}\n`, "utf-8");
+
+    try {
+      const reseed = await loadCliSessionReseedMessages({
+        sessionId: "session-empty-summary",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        allowRawTranscriptReseed: true,
+      });
+      expect(reseed).toMatchObject([
+        { role: "user", content: "pre-compaction" },
+        { role: "user", content: "post-compaction" },
+      ]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reseeds fresh CLI sessions from the latest compaction summary and post-compaction tail", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);

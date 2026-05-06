@@ -147,6 +147,18 @@ export type CliBackendConfig = {
   imagePathScope?: "temp" | "workspace";
   /** Serialize runs for this CLI. */
   serialize?: boolean;
+  /**
+   * Opt-in: when a freshly resumed CLI session has no compaction summary to
+   * reseed from, fall back to the most recent raw transcript messages
+   * (capped at MAX_CLI_SESSION_HISTORY_MESSAGES) so the resumed session has
+   * continuity instead of waking up empty. Default `false` preserves the
+   * long-standing safety property — pre-compaction transcripts may contain
+   * raw context the operator does not want bleeding into a resumed session.
+   * Operators with single-user, single-consumer setups (where the agent is
+   * the only reader of its own transcripts) can set this to `true` to trade
+   * that filter for restart continuity.
+   */
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
     /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
