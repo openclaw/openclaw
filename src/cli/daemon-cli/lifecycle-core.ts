@@ -32,6 +32,7 @@ type DaemonLifecycleOptions = {
   force?: boolean;
   wait?: string;
   restartIntent?: GatewayRestartIntent;
+  disable?: boolean;
 };
 
 type RestartPostCheckContext = {
@@ -413,7 +414,7 @@ export async function runServiceStop(params: {
     return;
   }
   try {
-    await params.service.stop({ env: process.env, stdout });
+    await params.service.stop({ env: process.env, stdout, disable: params.opts?.disable });
   } catch (err) {
     fail(`${params.serviceNoun} stop failed: ${String(err)}`);
     return;
