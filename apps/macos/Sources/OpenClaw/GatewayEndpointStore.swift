@@ -33,8 +33,8 @@ actor GatewayEndpointStore {
 
     struct Deps {
         let mode: @Sendable () async -> AppState.ConnectionMode
-        let token: @Sendable () -> String?
-        let password: @Sendable () -> String?
+        let token: @Sendable () async -> String?
+        let password: @Sendable () async -> String?
         let localPort: @Sendable () -> Int
         let localHost: @Sendable () async -> String
         let remotePortIfRunning: @Sendable () async -> UInt16?
@@ -45,20 +45,22 @@ actor GatewayEndpointStore {
             token: {
                 let root = OpenClawConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayToken(
+                return await GatewayEndpointStore.resolveGatewayToken(
                     isRemote: isRemote,
                     root: root,
                     env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
+                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
+                    secretResolver: .live)
             },
             password: {
                 let root = OpenClawConfigFile.loadDict()
                 let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayPassword(
+                return await GatewayEndpointStore.resolveGatewayPassword(
                     isRemote: isRemote,
                     root: root,
                     env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
+                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot(),
+                    secretResolver: .live)
             },
             localPort: { GatewayEnvironment.gatewayPort() },
             localHost: {
@@ -78,18 +80,90 @@ actor GatewayEndpointStore {
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })
     }
 
+    struct SecretInputResolver {
+        typealias SecurityRunner = @Sendable (_ service: String, _ account: String) -> String?
+
+        let securityRunner: SecurityRunner
+
+        static let live = SecretInputResolver { service, account in
+            Self.securityFindGenericPassword(service: service, account: account)
+        }
+
+        static let blocking = SecretInputResolver { service, account in
+            Self.securityFindGenericPassword(service: service, account: account)
+        }
+
+        static func stub(_ value: String?) -> SecretInputResolver {
+            SecretInputResolver { _, _ in value }
+        }
+
+        func resolve(_ input: Any?) async -> String? {
+            guard let secret = self.parse(input) else { return self.resolvePlainString(input) }
+            guard let raw = await Task.detached(
+                priority: .utility,
+                operation: { self.securityRunner(secret.service, secret.account) }).value else { return nil }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        func resolveSync(_ input: Any?) -> String? {
+            guard let secret = self.parse(input) else { return self.resolvePlainString(input) }
+            guard let raw = self.securityRunner(secret.service, secret.account) else { return nil }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        private func resolvePlainString(_ input: Any?) -> String? {
+            guard let raw = input as? String else { return nil }
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+
+        private func parse(_ input: Any?) -> (service: String, account: String)? {
+            guard let ref = input as? [String: Any] else { return nil }
+            guard (ref["source"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "exec",
+                  (ref[
+                      "provider",
+                  ] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "keychain"
+            else { return nil }
+            guard let rawID = ref["id"] as? String else { return nil }
+            let account = rawID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !account.isEmpty else { return nil }
+            let service = ((ref["service"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines))
+                .flatMap { $0.isEmpty ? nil : $0 } ?? "openclaw"
+            return (service: service, account: account)
+        }
+
+        private static func securityFindGenericPassword(service: String, account: String) -> String? {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+            process.arguments = ["find-generic-password", "-s", service, "-a", account, "-w"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0 else { return nil }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                return String(data: data, encoding: .utf8)
+            } catch {
+                return nil
+            }
+        }
+    }
+
     private static func resolveGatewayPassword(
         isRemote: Bool,
         root: [String: Any],
         env: [String: String],
-        launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        secretResolver: SecretInputResolver = .blocking) async -> String?
     {
         let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configPassword = self.resolveConfigPassword(isRemote: isRemote, root: root),
-               !configPassword.isEmpty
-            {
+            if self.hasConfigPassword(isRemote: isRemote, root: root) {
                 self.warnEnvOverrideOnce(
                     kind: .password,
                     envVar: "OPENCLAW_GATEWAY_PASSWORD",
@@ -97,27 +171,16 @@ actor GatewayEndpointStore {
             }
             return trimmed
         }
-        if isRemote {
-            if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let password = remote["password"] as? String
-            {
-                let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !pw.isEmpty {
-                    return pw
-                }
-            }
-            return nil
-        }
-        if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let password = auth["password"] as? String
+
+        if let configPassword = await self.resolveConfigPassword(
+            isRemote: isRemote,
+            root: root,
+            secretResolver: secretResolver)
         {
-            let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !pw.isEmpty {
-                return pw
-            }
+            return configPassword
         }
+
+        guard !isRemote else { return nil }
         if let password = launchdSnapshot?.password?.trimmingCharacters(in: .whitespacesAndNewlines),
            !password.isEmpty
         {
@@ -126,22 +189,39 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigPassword(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func hasConfigPassword(isRemote: Bool, root: [String: Any]) -> Bool {
         if isRemote {
             if let gateway = root["gateway"] as? [String: Any],
-               let remote = gateway["remote"] as? [String: Any],
-               let password = remote["password"] as? String
+               let remote = gateway["remote"] as? [String: Any]
             {
-                return password.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (remote["password"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            }
+            return false
+        }
+        guard let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any]
+        else { return false }
+        return auth["password"] is String || auth["password"] is [String: Any]
+    }
+
+    private static func resolveConfigPassword(
+        isRemote: Bool,
+        root: [String: Any],
+        secretResolver: SecretInputResolver = .blocking) async -> String?
+    {
+        if isRemote {
+            if let gateway = root["gateway"] as? [String: Any],
+               let remote = gateway["remote"] as? [String: Any]
+            {
+                return await secretResolver.resolve(remote["password"] as? String)
             }
             return nil
         }
 
         if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let password = auth["password"] as? String
+           let auth = gateway["auth"] as? [String: Any]
         {
-            return password.trimmingCharacters(in: .whitespacesAndNewlines)
+            return await secretResolver.resolve(auth["password"])
         }
         return nil
     }
@@ -150,15 +230,13 @@ actor GatewayEndpointStore {
         isRemote: Bool,
         root: [String: Any],
         env: [String: String],
-        launchdSnapshot: LaunchAgentPlistSnapshot?) -> String?
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        secretResolver: SecretInputResolver = .blocking) async -> String?
     {
         let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
-            if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-               !configToken.isEmpty,
-               configToken != trimmed
-            {
+            if self.hasConfigToken(isRemote: isRemote, root: root) {
                 self.warnEnvOverrideOnce(
                     kind: .token,
                     envVar: "OPENCLAW_GATEWAY_TOKEN",
@@ -167,8 +245,10 @@ actor GatewayEndpointStore {
             return trimmed
         }
 
-        if let configToken = self.resolveConfigToken(isRemote: isRemote, root: root),
-           !configToken.isEmpty
+        if let configToken = await self.resolveConfigToken(
+            isRemote: isRemote,
+            root: root,
+            secretResolver: secretResolver)
         {
             return configToken
         }
@@ -186,18 +266,107 @@ actor GatewayEndpointStore {
         return nil
     }
 
-    private static func resolveConfigToken(isRemote: Bool, root: [String: Any]) -> String? {
+    private static func hasConfigToken(isRemote: Bool, root: [String: Any]) -> Bool {
+        if isRemote {
+            return GatewayRemoteConfig.resolveTokenString(root: root) != nil
+        }
+        guard let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any]
+        else { return false }
+        return auth["token"] is String || auth["token"] is [String: Any]
+    }
+
+    private static func resolveConfigToken(
+        isRemote: Bool,
+        root: [String: Any],
+        secretResolver: SecretInputResolver = .blocking) async -> String?
+    {
         if isRemote {
             return GatewayRemoteConfig.resolveTokenString(root: root)
         }
 
         if let gateway = root["gateway"] as? [String: Any],
-           let auth = gateway["auth"] as? [String: Any],
-           let token = auth["token"] as? String
+           let auth = gateway["auth"] as? [String: Any]
         {
-            return token.trimmingCharacters(in: .whitespacesAndNewlines)
+            return await secretResolver.resolve(auth["token"])
         }
         return nil
+    }
+
+    private static func resolveGatewayPasswordSync(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        secretResolver: SecretInputResolver = .blocking) -> String?
+    {
+        let raw = env["OPENCLAW_GATEWAY_PASSWORD"] ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if let configPassword = self.resolveConfigPasswordSync(
+            isRemote: isRemote,
+            root: root,
+            secretResolver: secretResolver)
+        {
+            return configPassword
+        }
+        guard !isRemote else { return nil }
+        if let password = launchdSnapshot?.password?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !password.isEmpty
+        {
+            return password
+        }
+        return nil
+    }
+
+    private static func resolveConfigPasswordSync(
+        isRemote: Bool,
+        root: [String: Any],
+        secretResolver: SecretInputResolver = .blocking) -> String?
+    {
+        if isRemote {
+            guard let gateway = root["gateway"] as? [String: Any],
+                  let remote = gateway["remote"] as? [String: Any] else { return nil }
+            return secretResolver.resolveSync(remote["password"] as? String)
+        }
+        guard let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any] else { return nil }
+        return secretResolver.resolveSync(auth["password"])
+    }
+
+    private static func resolveGatewayTokenSync(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String],
+        launchdSnapshot: LaunchAgentPlistSnapshot?,
+        secretResolver: SecretInputResolver = .blocking) -> String?
+    {
+        let raw = env["OPENCLAW_GATEWAY_TOKEN"] ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        if let configToken = self.resolveConfigTokenSync(
+            isRemote: isRemote,
+            root: root,
+            secretResolver: secretResolver)
+        {
+            return configToken
+        }
+        guard !isRemote else { return nil }
+        if let token = launchdSnapshot?.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
+            return token
+        }
+        return nil
+    }
+
+    private static func resolveConfigTokenSync(
+        isRemote: Bool,
+        root: [String: Any],
+        secretResolver: SecretInputResolver = .blocking) -> String?
+    {
+        if isRemote { return GatewayRemoteConfig.resolveTokenString(root: root) }
+        guard let gateway = root["gateway"] as? [String: Any],
+              let auth = gateway["auth"] as? [String: Any] else { return nil }
+        return secretResolver.resolveSync(auth["token"])
     }
 
     private static func warnEnvOverrideOnce(
@@ -253,8 +422,8 @@ actor GatewayEndpointStore {
             bindMode: bind,
             customBindHost: customBindHost,
             tailscaleIP: nil)
-        let token = deps.token()
-        let password = deps.password()
+        let token: String? = nil
+        let password: String? = nil
         switch initialMode {
         case .local:
             self.state = .ready(
@@ -267,6 +436,10 @@ actor GatewayEndpointStore {
             Task { await self.setMode(.remote) }
         case .unconfigured:
             self.state = .unavailable(mode: .unconfigured, reason: "Gateway not configured")
+        }
+
+        if initialMode == .local {
+            Task { await self.setMode(.local) }
         }
     }
 
@@ -289,8 +462,8 @@ actor GatewayEndpointStore {
     }
 
     func setMode(_ mode: AppState.ConnectionMode) async {
-        let token = self.deps.token()
-        let password = self.deps.password()
+        let token = await self.deps.token()
+        let password = await self.deps.password()
         switch mode {
         case .local:
             self.cancelRemoteEnsure()
@@ -409,8 +582,8 @@ actor GatewayEndpointStore {
         try await self.requireRemoteMode()
 
         if let url = try self.resolveDirectRemoteURL() {
-            let token = self.deps.token()
-            let password = self.deps.password()
+            let token = await self.deps.token()
+            let password = await self.deps.password()
             self.cancelRemoteEnsure()
             self.setState(.ready(mode: .remote, url: url, token: token, password: password))
             return (url, token, password)
@@ -435,8 +608,8 @@ actor GatewayEndpointStore {
                 self.remoteEnsure = nil
             }
 
-            let token = self.deps.token()
-            let password = self.deps.password()
+            let token = await self.deps.token()
+            let password = await self.deps.password()
             let scheme = GatewayEndpointStore.resolveGatewayScheme(
                 root: OpenClawConfigFile.loadDict(),
                 env: ProcessInfo.processInfo.environment)
@@ -531,8 +704,8 @@ actor GatewayEndpointStore {
             root: root,
             env: ProcessInfo.processInfo.environment)
         let port = self.deps.localPort()
-        let token = self.deps.token()
-        let password = self.deps.password()
+        let token = await self.deps.token()
+        let password = await self.deps.password()
         let url = URL(string: "\(scheme)://\(tailscaleIP):\(port)")!
 
         self.logger.info("auto bind fallback to tailnet host=\(tailscaleIP, privacy: .public)")
@@ -620,7 +793,8 @@ extension GatewayEndpointStore {
         root: [String: Any],
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot?,
-        tailscaleIP: String?) -> GatewayConnection.Config
+        tailscaleIP: String?,
+        secretResolver: SecretInputResolver = .blocking) -> GatewayConnection.Config
     {
         let port = GatewayEnvironment.gatewayPort()
         let bind = self.resolveGatewayBindMode(root: root, env: env)
@@ -630,16 +804,18 @@ extension GatewayEndpointStore {
             bindMode: bind,
             customBindHost: customBindHost,
             tailscaleIP: tailscaleIP)
-        let token = self.resolveGatewayToken(
+        let token = self.resolveGatewayTokenSync(
             isRemote: false,
             root: root,
             env: env,
-            launchdSnapshot: launchdSnapshot)
-        let password = self.resolveGatewayPassword(
+            launchdSnapshot: launchdSnapshot,
+            secretResolver: secretResolver)
+        let password = self.resolveGatewayPasswordSync(
             isRemote: false,
             root: root,
             env: env,
-            launchdSnapshot: launchdSnapshot)
+            launchdSnapshot: launchdSnapshot,
+            secretResolver: secretResolver)
         return (
             url: URL(string: "\(scheme)://\(host):\(port)")!,
             token: token,
@@ -722,18 +898,30 @@ extension GatewayEndpointStore {
         isRemote: Bool,
         root: [String: Any],
         env: [String: String],
-        launchdSnapshot: LaunchAgentPlistSnapshot? = nil) -> String?
+        launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
+        secretResolver: SecretInputResolver = .stub(nil)) -> String?
     {
-        self.resolveGatewayPassword(isRemote: isRemote, root: root, env: env, launchdSnapshot: launchdSnapshot)
+        self.resolveGatewayPasswordSync(
+            isRemote: isRemote,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot,
+            secretResolver: secretResolver)
     }
 
     static func _testResolveGatewayToken(
         isRemote: Bool,
         root: [String: Any],
         env: [String: String],
-        launchdSnapshot: LaunchAgentPlistSnapshot? = nil) -> String?
+        launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
+        secretResolver: SecretInputResolver = .stub(nil)) -> String?
     {
-        self.resolveGatewayToken(isRemote: isRemote, root: root, env: env, launchdSnapshot: launchdSnapshot)
+        self.resolveGatewayTokenSync(
+            isRemote: isRemote,
+            root: root,
+            env: env,
+            launchdSnapshot: launchdSnapshot,
+            secretResolver: secretResolver)
     }
 
     static func _testResolveGatewayBindMode(
@@ -758,13 +946,15 @@ extension GatewayEndpointStore {
         root: [String: Any],
         env: [String: String],
         launchdSnapshot: LaunchAgentPlistSnapshot? = nil,
-        tailscaleIP: String? = nil) -> GatewayConnection.Config
+        tailscaleIP: String? = nil,
+        secretResolver: SecretInputResolver = .stub(nil)) -> GatewayConnection.Config
     {
         self.localConfig(
             root: root,
             env: env,
             launchdSnapshot: launchdSnapshot,
-            tailscaleIP: tailscaleIP)
+            tailscaleIP: tailscaleIP,
+            secretResolver: secretResolver)
     }
 }
 #endif
