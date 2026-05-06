@@ -65,18 +65,38 @@ function resolveValidatedDiscoveredStorePathSync(params: {
   agentsRoot: string;
   realAgentsRoot?: string;
 }): string | undefined {
-  const storePath = path.join(params.sessionsDir, "sessions.json");
   try {
+    const sessionsStat = fsSync.lstatSync(params.sessionsDir);
+    if (sessionsStat.isSymbolicLink() || !sessionsStat.isDirectory()) {
+      return undefined;
+    }
+    const realSessionsDir = fsSync.realpathSync.native(params.sessionsDir);
+    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
+    if (!isWithinRoot(realSessionsDir, realAgentsRoot)) {
+      return undefined;
+    }
+    const storePath = path.join(params.sessionsDir, "sessions.json");
     const stat = fsSync.lstatSync(storePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return undefined;
     }
     const realStorePath = fsSync.realpathSync.native(storePath);
-    const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
-      return undefined;
+      try {
+        const realSessionsDir = fsSync.realpathSync.native(params.sessionsDir);
+        const realAgentsRoot =
+          params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
+        return isWithinRoot(realSessionsDir, realAgentsRoot)
+          ? path.join(realSessionsDir, "sessions.json")
+          : undefined;
+      } catch (innerErr) {
+        if (shouldSkipDiscoveryError(innerErr)) {
+          return undefined;
+        }
+        throw innerErr;
+      }
     }
     throw err;
   }
@@ -87,18 +107,37 @@ async function resolveValidatedDiscoveredStorePath(params: {
   agentsRoot: string;
   realAgentsRoot?: string;
 }): Promise<string | undefined> {
-  const storePath = path.join(params.sessionsDir, "sessions.json");
   try {
+    const sessionsStat = await fs.lstat(params.sessionsDir);
+    if (sessionsStat.isSymbolicLink() || !sessionsStat.isDirectory()) {
+      return undefined;
+    }
+    const realSessionsDir = await fs.realpath(params.sessionsDir);
+    const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
+    if (!isWithinRoot(realSessionsDir, realAgentsRoot)) {
+      return undefined;
+    }
+    const storePath = path.join(params.sessionsDir, "sessions.json");
     const stat = await fs.lstat(storePath);
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return undefined;
     }
     const realStorePath = await fs.realpath(storePath);
-    const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
     return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
-      return undefined;
+      try {
+        const realSessionsDir = await fs.realpath(params.sessionsDir);
+        const realAgentsRoot = params.realAgentsRoot ?? (await fs.realpath(params.agentsRoot));
+        return isWithinRoot(realSessionsDir, realAgentsRoot)
+          ? path.join(realSessionsDir, "sessions.json")
+          : undefined;
+      } catch (innerErr) {
+        if (shouldSkipDiscoveryError(innerErr)) {
+          return undefined;
+        }
+        throw innerErr;
+      }
     }
     throw err;
   }

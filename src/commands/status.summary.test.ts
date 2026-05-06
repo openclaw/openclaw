@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
-  readSessionStoreReadOnly: vi.fn(() => ({})),
+  loadSessionStore: vi.fn(() => ({})),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -44,8 +44,8 @@ vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
 }));
 
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
+vi.mock("../config/sessions/store-load.js", () => ({
+  loadSessionStore: statusSummaryMocks.loadSessionStore,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -142,7 +142,7 @@ describe("getStatusSummary", () => {
     vi.clearAllMocks();
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
+    statusSummaryMocks.loadSessionStore.mockReturnValue({});
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -189,7 +189,7 @@ describe("getStatusSummary", () => {
 
   it("includes the selected agent runtime on recent sessions", async () => {
     vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
-    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+    statusSummaryMocks.loadSessionStore.mockReturnValue({
       "agent:main:main": {
         sessionId: "session-1",
         updatedAt: Date.now(),

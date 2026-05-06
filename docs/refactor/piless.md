@@ -53,7 +53,10 @@ This plan has started landing in slices:
   persist only: no JSON import, pruning, capping, archive cleanup, or
   disk-budget cleanup runs on the hot path. The old maintenance write options
   have been removed from the session-store API; doctor owns legacy import and
-  `openclaw sessions cleanup` owns explicit cleanup.
+  `openclaw sessions cleanup` owns explicit cleanup. Status and discovery now
+  use the primary session-store loader instead of a duplicated read-only JSON
+  parser, and SQLite-backed agent session directories remain discoverable after
+  doctor deletes the legacy `sessions.json` file.
 - Transcript events have a SQLite store primitive with JSONL import/export.
   Transcript append paths dual-write when the caller already has agent and
   session scope, including gateway-injected assistant messages. Scoped appends
@@ -551,6 +554,8 @@ Phase 1: SQLite session index
 - Prove current session list, patch, reset, cleanup, and UI flows.
 - Remove load-time/startup session JSON migration, write-time pruning, and
   migration-era maintenance options from the runtime store path.
+- Remove the duplicate status-only session JSON reader and stop requiring a
+  physical `sessions.json` file for discovered SQLite-backed agent stores.
 
 Phase 2: VFS scratch
 

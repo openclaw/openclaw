@@ -2,7 +2,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agen
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { readSessionStoreReadOnly } from "../config/sessions/store-read.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
 import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCronStorePath } from "../cron/store.js";
@@ -179,7 +179,12 @@ export async function getStatusSummary(
     if (cached) {
       return cached;
     }
-    const store = readSessionStoreReadOnly(storePath);
+    let store: Record<string, SessionEntry | undefined>;
+    try {
+      store = loadSessionStore(storePath);
+    } catch {
+      store = {};
+    }
     storeCache.set(storePath, store);
     return store;
   };

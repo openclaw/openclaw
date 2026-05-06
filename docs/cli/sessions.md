@@ -68,8 +68,11 @@ inside `.openclaw/trajectory-exports/` under the selected workspace.
 `openclaw sessions --all-agents` reads configured agent stores. Gateway and ACP
 session discovery are broader: they also include disk-only stores found under
 the default `agents/` root or a templated `session.store` root. Those
-discovered stores must resolve to regular `sessions.json` files inside the
-agent root; symlinks and out-of-root paths are skipped.
+discovered stores are keyed by the per-agent `sessions/` directory, so
+SQLite-backed agents remain discoverable after doctor removes the legacy
+`sessions.json` import file. If a legacy `sessions.json` still exists, it must
+be a regular file inside the agent root; symlinks and out-of-root paths are
+skipped.
 
 JSON examples:
 
