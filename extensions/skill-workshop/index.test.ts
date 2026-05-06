@@ -617,6 +617,60 @@ describe("skill-workshop", () => {
     expect(await store.list("pending")).toHaveLength(1);
   });
 
+  it("queues apply true suggestions in pending mode before explicit apply", async () => {
+    const workspaceDir = await makeTempDir();
+    const stateDir = await makeTempDir();
+    let tool: AnyAgentTool | undefined;
+    const api = createTestPluginApi({
+      pluginConfig: { approvalPolicy: "pending" },
+      runtime: {
+        agent: {
+          resolveAgentWorkspaceDir: () => workspaceDir,
+        },
+        state: {
+          resolveStateDir: () => stateDir,
+        },
+      } as never,
+      registerTool(registered) {
+        const resolved =
+          typeof registered === "function" ? registered({ workspaceDir }) : registered;
+        tool = Array.isArray(resolved) ? resolved[0] : (resolved ?? undefined);
+      },
+    });
+
+    plugin.register(api);
+    const result = await tool?.execute?.("call-1", {
+      action: "suggest",
+      apply: true,
+      skillName: "screenshot-asset-workflow",
+      description: "Screenshot asset workflow",
+      body: "Verify dimensions, optimize the PNG, and run the relevant gate.",
+    });
+
+    expect(result?.details).toMatchObject({ status: "pending" });
+    const proposalId =
+      (result?.details as { proposal?: { id?: string } } | undefined)?.proposal?.id ?? "";
+    expect(proposalId).toBeTruthy();
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    const store = new SkillWorkshopStore({ stateDir, workspaceDir });
+    expect(await store.list("pending")).toHaveLength(1);
+    expect(await store.list("applied")).toHaveLength(0);
+
+    const applied = await tool?.execute?.("call-2", {
+      action: "apply",
+      id: proposalId,
+    });
+
+    expect(applied?.details).toMatchObject({ status: "applied" });
+    await expect(
+      fs.access(path.join(workspaceDir, "skills", "screenshot-asset-workflow", "SKILL.md")),
+    ).resolves.toBeUndefined();
+    expect(await store.list("pending")).toHaveLength(0);
+    expect(await store.list("applied")).toHaveLength(1);
+  });
+
   it("uses the reviewer to propose existing skill repairs", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
