@@ -76,6 +76,18 @@ class ModelCost:
     cost: float
 
 
+@dataclass
+class ModelUsage:
+    model: str
+    cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
+    total_tokens: int = 0
+    tokens_available: bool = False
+
+
 def parse_daily_entries(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     daily = payload.get("daily")
     if not daily:
@@ -107,8 +119,18 @@ def filter_by_days(entries: List[Dict[str, Any]], days: Optional[int]) -> List[D
     return filtered
 
 
-def aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:
-    totals: Dict[str, float] = {}
+def numeric_int_field(item: Dict[str, Any], *names: str) -> Optional[int]:
+    for name in names:
+        value = item.get(name)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return int(value)
+    return None
+
+
+def aggregate_model_usages(entries: Iterable[Dict[str, Any]]) -> Dict[str, ModelUsage]:
+    totals: Dict[str, ModelUsage] = {}
     for entry in entries:
         breakdowns = entry.get("modelBreakdowns")
         if not breakdowns:
@@ -119,13 +141,45 @@ def aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:
             if not isinstance(item, dict):
                 continue
             model = item.get("modelName")
-            cost = item.get("cost")
             if not isinstance(model, str):
                 continue
-            if not isinstance(cost, (int, float)):
+
+            usage = totals.setdefault(model, ModelUsage(model=model))
+            cost = item.get("cost")
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+                usage.cost += float(cost)
+
+            input_tokens = numeric_int_field(item, "inputTokens", "totalInputTokens", "prompt_tokens", "input_tokens")
+            output_tokens = numeric_int_field(item, "outputTokens", "totalOutputTokens", "completion_tokens", "output_tokens")
+            cache_read_tokens = numeric_int_field(item, "cacheReadTokens", "cache_read_tokens")
+            cache_creation_tokens = numeric_int_field(
+                item,
+                "cacheCreationTokens",
+                "cache_creation_tokens",
+                "cacheWriteTokens",
+                "cache_write_tokens",
+            )
+            explicit_total_tokens = numeric_int_field(item, "totalTokens", "total_tokens")
+
+            token_parts = [input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens]
+            has_token_data = explicit_total_tokens is not None or any(value is not None for value in token_parts)
+            if not has_token_data:
                 continue
-            totals[model] = totals.get(model, 0.0) + float(cost)
+
+            usage.tokens_available = True
+            usage.input_tokens += input_tokens or 0
+            usage.output_tokens += output_tokens or 0
+            usage.cache_read_tokens += cache_read_tokens or 0
+            usage.cache_creation_tokens += cache_creation_tokens or 0
+            if explicit_total_tokens is not None:
+                usage.total_tokens += explicit_total_tokens
+            else:
+                usage.total_tokens += sum(value or 0 for value in token_parts)
     return totals
+
+
+def aggregate_costs(entries: Iterable[Dict[str, Any]]) -> Dict[str, float]:
+    return {model: usage.cost for model, usage in aggregate_model_usages(entries).items()}
 
 
 def pick_current_model(entries: List[Dict[str, Any]]) -> Tuple[Optional[str], Optional[str]]:
@@ -203,10 +257,32 @@ def render_text_current(
     return "\n".join(lines)
 
 
-def render_text_all(provider: str, totals: Dict[str, float]) -> str:
+def format_int(value: int) -> str:
+    return f"{value:,}"
+
+
+def render_tokens(usage: ModelUsage) -> str:
+    if not usage.tokens_available:
+        return "tokens unavailable"
+    parts = [f"tokens {format_int(usage.total_tokens)}"]
+    details = []
+    if usage.input_tokens:
+        details.append(f"in {format_int(usage.input_tokens)}")
+    if usage.output_tokens:
+        details.append(f"out {format_int(usage.output_tokens)}")
+    if usage.cache_read_tokens:
+        details.append(f"cache read {format_int(usage.cache_read_tokens)}")
+    if usage.cache_creation_tokens:
+        details.append(f"cache create {format_int(usage.cache_creation_tokens)}")
+    if details:
+        parts.append(f"({', '.join(details)})")
+    return " ".join(parts)
+
+
+def render_text_all(provider: str, totals: Dict[str, ModelUsage]) -> str:
     lines = [f"Provider: {provider}", "Models:"]
-    for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True):
-        lines.append(f"- {model}: {usd(cost)}")
+    for model, usage in sorted(totals.items(), key=lambda item: item[1].cost, reverse=True):
+        lines.append(f"- {model}: {usd(usage.cost)}, {render_tokens(usage)}")
     return "\n".join(lines)
 
 
@@ -231,13 +307,22 @@ def build_json_current(
     }
 
 
-def build_json_all(provider: str, totals: Dict[str, float]) -> Dict[str, Any]:
+def build_json_all(provider: str, totals: Dict[str, ModelUsage]) -> Dict[str, Any]:
     return {
         "provider": provider,
         "mode": "all",
         "models": [
-            {"model": model, "totalCostUSD": cost}
-            for model, cost in sorted(totals.items(), key=lambda item: item[1], reverse=True)
+            {
+                "model": model,
+                "totalCostUSD": usage.cost,
+                "tokensAvailable": usage.tokens_available,
+                "totalTokens": usage.total_tokens if usage.tokens_available else None,
+                "inputTokens": usage.input_tokens if usage.tokens_available else None,
+                "outputTokens": usage.output_tokens if usage.tokens_available else None,
+                "cacheReadTokens": usage.cache_read_tokens if usage.tokens_available else None,
+                "cacheCreationTokens": usage.cache_creation_tokens if usage.tokens_available else None,
+            }
+            for model, usage in sorted(totals.items(), key=lambda item: item[1].cost, reverse=True)
         ],
     }
 
@@ -301,7 +386,7 @@ def main() -> int:
             )
         return 0
 
-    totals = aggregate_costs(entries)
+    totals = aggregate_model_usages(entries)
     if not totals:
         eprint("No model breakdowns found in codexbar cost payload.")
         return 2

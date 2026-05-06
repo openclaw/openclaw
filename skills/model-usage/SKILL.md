@@ -26,7 +26,7 @@ metadata:
 
 ## Overview
 
-Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
+Get per-model usage cost and token totals from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
 TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
 
@@ -62,7 +62,8 @@ cat /tmp/cost.json | python {baseDir}/scripts/model_usage.py --input - --mode cu
 ## Output
 
 - Text (default) or JSON (`--format json --pretty`).
-- Values are cost-only per model; tokens are not split by model in CodexBar output.
+- `--mode all` includes per-model cost plus token usage when CodexBar's `modelBreakdowns[]` entries expose token fields (`inputTokens`/`outputTokens`/cache/`totalTokens`, or OpenAI-style `prompt_tokens`/`completion_tokens`/`total_tokens`).
+- If CodexBar only provides `modelName` and `cost` for a model, the script reports `tokens unavailable` instead of inventing a per-model split from daily aggregate totals.
 
 ## References
 
