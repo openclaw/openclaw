@@ -6,7 +6,6 @@ import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildProviderMissingAuthMessageWithPlugin } from "../plugins/provider-runtime.runtime.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import {
   normalizeOptionalSecretInput,
@@ -37,6 +36,16 @@ const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
 const AWS_PROFILE_ENV = "AWS_PROFILE";
+
+let providerRuntimePromise:
+  | Promise<typeof import("../plugins/provider-runtime.runtime.js")>
+  | undefined;
+
+function loadProviderRuntime() {
+  providerRuntimePromise ??= import("../plugins/provider-runtime.runtime.js");
+  return providerRuntimePromise;
+}
+
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -369,6 +378,7 @@ export async function resolveApiKeyForProvider(params: {
       })
     : undefined;
   if (owningPluginIds?.length) {
+    const { buildProviderMissingAuthMessageWithPlugin } = await loadProviderRuntime();
     const pluginMissingAuthMessage = buildProviderMissingAuthMessageWithPlugin({
       provider,
       config: cfg,
