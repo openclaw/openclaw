@@ -155,7 +155,7 @@ openclaw [--dev] [--profile <name>] <command>
     emoji list|upload
     sticker send|upload
     role info|add|remove
-    channel info|list
+    channel info|list|create|edit|delete|move
     member info
     voice status
     event list|create

@@ -176,6 +176,13 @@ Name lookup:
 - `role add` / `role remove` (Discord): `--guild-id`, `--user-id`, `--role-id`
 - `channel info` (Discord): `--target`
 - `channel list` (Discord): `--guild-id`
+- `channel create` (Discord): `--guild-id`, `--name`
+  - Optional: `--type`, `--parent-id`, `--topic`, `--position`, `--nsfw`
+- `channel edit` (Discord): `--channel-id`
+  - Optional: `--name`, `--parent-id`, `--topic`, `--position`, `--nsfw`, `--rate-limit-per-user`
+- `channel delete` (Discord): `--channel-id`
+- `channel move` (Discord): `--guild-id`, `--channel-id`, `--position`
+  - Optional: `--parent-id`
 - `member info` (Discord/Slack): `--user-id` (+ `--guild-id` for Discord)
 - `voice status` (Discord): `--guild-id`, `--user-id`
 
