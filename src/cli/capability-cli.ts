@@ -11,6 +11,7 @@ import {
 } from "../agents/auth-profiles.js";
 import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import {
   completeWithPreparedSimpleCompletionModel,
@@ -558,6 +559,24 @@ function resolveModelRefOverride(raw: string | undefined): { provider?: string; 
   };
 }
 
+function shouldCanonicalizeModelRunRef(
+  model: string | undefined,
+  ref: { provider?: string; model?: string },
+): ref is { provider: string; model: string } {
+  return Boolean(model && model !== model.toLowerCase() && ref.provider && ref.model);
+}
+
+async function canonicalizeModelRunRef(raw: string | undefined, cfg: OpenClawConfig) {
+  const model = normalizeStringifiedOptionalString(raw);
+  const ref = resolveModelRefOverride(model);
+  if (!shouldCanonicalizeModelRunRef(model, ref)) {
+    return model;
+  }
+  const catalog = await loadModelCatalog({ config: cfg });
+  const entry = findModelInCatalog(catalog, ref.provider, ref.model);
+  return entry ? `${entry.provider}/${entry.id}` : model;
+}
+
 function requireProviderModelOverride(
   raw: string | undefined,
 ): { provider: string; model: string } | undefined {
@@ -644,11 +663,12 @@ async function runModelRun(params: {
           })),
         ]
       : params.prompt;
+  const model = await canonicalizeModelRunRef(params.model, cfg);
   if (params.transport === "local") {
     const prepared = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId,
-      modelRef: params.model,
+      modelRef: model,
       allowMissingApiKeyModes: ["aws-sdk"],
       skipPiDiscovery: true,
     });
@@ -721,10 +741,10 @@ async function runModelRun(params: {
     } satisfies CapabilityEnvelope;
   }
 
-  const { provider, model } = resolveModelRefOverride(params.model);
+  const { provider, model: modelId } = resolveModelRefOverride(model);
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
-  const hasModelOverride = Boolean(provider || model);
+  const hasModelOverride = Boolean(provider || modelId);
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
@@ -751,7 +771,7 @@ async function runModelRun(params: {
             }))
           : undefined,
       provider,
-      model,
+      model: modelId,
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
