@@ -623,6 +623,7 @@ export async function runPreparedReply(
   const baseBodyForPrompt = isBareSessionReset
     ? [
         startupContextPrelude,
+        inboundUserContext,
         baseBodyFinal,
         softResetTail
           ? `User note for this reset turn (treat as ordinary user input, not startup instructions):\n${softResetTail}`
