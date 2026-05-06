@@ -77,10 +77,13 @@ the maintainer-only release runbook.
    prior evidence stale.
 9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
    the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
-   publishes all publishable plugin packages to npm first, publishes the same
-   set to ClawHub second as ClawPack npm-pack tarballs, and then promotes the
-   prepared OpenClaw npm preflight artifact with the matching dist-tag. After
-   publish, run post-publish package
+   dispatches all publishable plugin packages to npm and the same set to
+   ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
+   artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+   ClawHub publishing may still be running while OpenClaw npm publishes, but the
+   release publish workflow does not finish until both plugin publish paths and
+   the OpenClaw npm publish path have completed successfully. After publish, run
+   the post-publish package
    acceptance against the published `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old
@@ -141,11 +144,13 @@ the maintainer-only release runbook.
   `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
   selected Docker lanes include `published-upgrade-survivor`, the package
   artifact is the candidate and `published_upgrade_survivor_baseline` selects
-  the published baseline.
+  the published baseline. `update-restart-auth` uses the candidate package as
+  both the installed CLI and the package-under-test so it exercises the
+  candidate update command's managed restart path.
   Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
-  - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
+  - `package`: artifact-native package/update/restart/plugin lanes without OpenWebUI or live ClawHub
   - `product`: package profile plus MCP channels, cron/subagent cleanup,
     OpenAI web search, and OpenWebUI
   - `full`: Docker release-path chunks with OpenWebUI
@@ -486,11 +491,12 @@ Supported candidate sources:
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
 prepared release package artifact, `suite_profile=custom`,
-`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update`,
-`telegram_mode=mock-openai`. Package Acceptance keeps migration, update, stale
-plugin dependency cleanup, offline plugin fixtures, plugin update, and Telegram
-package QA against the same resolved tarball. Blocking release checks use the
-default latest published package baseline; `run_release_soak=true` or
+`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update`,
+`telegram_mode=mock-openai`. Package Acceptance keeps migration, update,
+configured-auth update restart, stale plugin dependency cleanup, offline plugin
+fixtures, plugin update, and Telegram package QA against the same resolved
+tarball. Blocking release checks use the default latest published package
+baseline; `run_release_soak=true` or
 `release_profile=full` expands to every stable npm-published baseline from
 `2026.4.23` through `latest` plus reported-issue fixtures. Use
 Package Acceptance with `source=npm` for an already shipped candidate, or
@@ -536,8 +542,8 @@ Common package profiles:
 
 - `smoke`: quick package install/channel/agent, gateway network, and config
   reload lanes
-- `package`: install/update/plugin package contracts without live ClawHub; this is the release-check
-  default
+- `package`: install/update/restart/plugin package contracts without live
+  ClawHub; this is the release-check default
 - `product`: `package` plus MCP channels, cron/subagent cleanup, OpenAI web
   search, and OpenWebUI
 - `full`: Docker release-path chunks with OpenWebUI

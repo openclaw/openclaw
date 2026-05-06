@@ -12,6 +12,7 @@ import {
 import {
   expectedIntegrityForUpdate,
   installedPackageNeedsOpenClawPeerLinkRepair,
+  readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
 import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
@@ -32,6 +33,10 @@ import {
 } from "./externalized-bundled-plugins.js";
 import { installPluginFromGitSpec } from "./git-install.js";
 import {
+  resolveClawHubInstallSpecsForUpdateChannel,
+  resolveNpmInstallSpecsForUpdateChannel,
+} from "./install-channel-specs.js";
+import {
   installPluginFromNpmSpec,
   PLUGIN_INSTALL_ERROR_CODE,
   resolvePluginInstallDir,
@@ -42,6 +47,7 @@ import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
+import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -459,22 +465,59 @@ function npmUpdateFailureSpec(params: {
   return params.effectiveSpec ?? params.fallbackSpec ?? "unknown";
 }
 
-function isDefaultNpmSpecForBetaUpdate(spec: string): { name: string } | null {
-  const parsed = parseRegistryNpmSpec(spec);
-  if (!parsed) {
-    return null;
-  }
-  if (parsed.selectorKind === "none") {
-    return { name: parsed.name };
-  }
-  if (parsed.selectorKind === "tag" && parsed.selector?.toLowerCase() === "latest") {
-    return { name: parsed.name };
-  }
-  return null;
-}
-
 function resolveNpmSpecPackageName(spec: string | undefined): string | undefined {
   return spec ? parseRegistryNpmSpec(spec)?.name : undefined;
+}
+
+function resolveClawHubSpecPackageName(spec: string | undefined): string | undefined {
+  return spec ? parseClawHubPluginSpec(spec)?.name : undefined;
+}
+
+export function resolveTrustedSourceLinkedOfficialNpmSpec(params: {
+  pluginId: string;
+  record: PluginInstallRecord;
+}): string | undefined {
+  if (params.record.source !== "npm") {
+    return undefined;
+  }
+  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  if (!entry) {
+    return undefined;
+  }
+  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.npmSpec;
+  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
+  if (!officialSpec || !officialPackageName) {
+    return undefined;
+  }
+  const recordedPackageNames = [
+    params.record.resolvedName,
+    resolveNpmSpecPackageName(params.record.spec),
+    resolveNpmSpecPackageName(params.record.resolvedSpec),
+  ].filter((value): value is string => Boolean(value));
+  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
+}
+
+export function resolveTrustedSourceLinkedOfficialClawHubSpec(params: {
+  pluginId: string;
+  record: PluginInstallRecord;
+}): string | undefined {
+  if (params.record.source !== "clawhub") {
+    return undefined;
+  }
+  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
+  if (!entry) {
+    return undefined;
+  }
+  const officialSpec = resolveOfficialExternalPluginInstall(entry)?.clawhubSpec;
+  const officialPackageName = resolveClawHubSpecPackageName(officialSpec);
+  if (!officialSpec || !officialPackageName) {
+    return undefined;
+  }
+  const recordedPackageNames = [
+    params.record.clawhubPackage,
+    resolveClawHubSpecPackageName(params.record.spec),
+  ].filter((value): value is string => Boolean(value));
+  return recordedPackageNames.includes(officialPackageName) ? officialSpec : undefined;
 }
 
 function isTrustedSourceLinkedOfficialNpmUpdate(params: {
@@ -482,26 +525,10 @@ function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  if (params.record.source !== "npm") {
-    return false;
-  }
-  const entry = getOfficialExternalPluginCatalogEntry(params.pluginId);
-  if (!entry) {
-    return false;
-  }
-  const officialPackageName = resolveNpmSpecPackageName(
-    resolveOfficialExternalPluginInstall(entry)?.npmSpec,
-  );
+  const officialSpec = resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
-  if (!officialPackageName || requestedPackageName !== officialPackageName) {
-    return false;
-  }
-  const recordedPackageNames = [
-    params.record.resolvedName,
-    resolveNpmSpecPackageName(params.record.spec),
-    resolveNpmSpecPackageName(params.record.resolvedSpec),
-  ].filter((value): value is string => Boolean(value));
-  return recordedPackageNames.includes(officialPackageName);
+  return Boolean(officialPackageName && requestedPackageName === officialPackageName);
 }
 
 function isTrustedSourceLinkedOfficialBridgeNpmInstall(params: {
@@ -552,6 +579,7 @@ function isBridgeClawHubInstall(params: {
 function resolveNpmUpdateSpecs(params: {
   record: PluginInstallRecord;
   specOverride?: string;
+  officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
 }): {
   installSpec?: string;
@@ -559,44 +587,25 @@ function resolveNpmUpdateSpecs(params: {
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  const recordSpec = params.specOverride ?? params.record.spec;
+  const recordSpec = params.specOverride ?? params.officialSpecOverride ?? params.record.spec;
   if (!recordSpec) {
     return {};
   }
-  if (params.specOverride || params.updateChannel !== "beta") {
+  if (params.specOverride) {
     return {
       installSpec: recordSpec,
       recordSpec,
     };
   }
-  const betaTarget = isDefaultNpmSpecForBetaUpdate(recordSpec);
-  if (!betaTarget) {
-    return {
-      installSpec: recordSpec,
-      recordSpec,
-    };
-  }
-  return {
-    installSpec: `${betaTarget.name}@beta`,
-    recordSpec,
-    fallbackSpec: recordSpec,
-    fallbackLabel: `${betaTarget.name}@beta`,
-  };
-}
-
-function isDefaultClawHubSpecForBetaUpdate(spec: string): { name: string } | null {
-  const parsed = parseClawHubPluginSpec(spec);
-  if (!parsed) {
-    return null;
-  }
-  if (!parsed.version || parsed.version.toLowerCase() === "latest") {
-    return { name: parsed.name };
-  }
-  return null;
+  return resolveNpmInstallSpecsForUpdateChannel({
+    spec: recordSpec,
+    updateChannel: params.updateChannel,
+  });
 }
 
 function resolveClawHubUpdateSpecs(params: {
   record: PluginInstallRecord;
+  officialSpecOverride?: string;
   updateChannel?: UpdateChannel;
 }): {
   installSpec?: string;
@@ -604,29 +613,15 @@ function resolveClawHubUpdateSpecs(params: {
   fallbackSpec?: string;
   fallbackLabel?: string;
 } {
-  if (!params.record.clawhubPackage) {
+  if (!params.officialSpecOverride && !params.record.clawhubPackage) {
     return {};
   }
-  const recordSpec = params.record.spec ?? `clawhub:${params.record.clawhubPackage}`;
-  if (params.updateChannel !== "beta") {
-    return {
-      installSpec: recordSpec,
-      recordSpec,
-    };
-  }
-  const betaTarget = isDefaultClawHubSpecForBetaUpdate(recordSpec);
-  if (!betaTarget) {
-    return {
-      installSpec: recordSpec,
-      recordSpec,
-    };
-  }
-  return {
-    installSpec: `clawhub:${betaTarget.name}@beta`,
-    recordSpec,
-    fallbackSpec: recordSpec,
-    fallbackLabel: `clawhub:${betaTarget.name}@beta`,
-  };
+  const recordSpec =
+    params.officialSpecOverride ?? params.record.spec ?? `clawhub:${params.record.clawhubPackage}`;
+  return resolveClawHubInstallSpecsForUpdateChannel({
+    spec: recordSpec,
+    updateChannel: params.updateChannel,
+  });
 }
 
 function isBridgeAlreadyInstalledFromPreferredSource(params: {
@@ -765,12 +760,60 @@ function disablePluginConfigEntry(config: OpenClawConfig, pluginId: string): Ope
   };
 }
 
+async function repairOpenClawPeerLinksForNpmInstalls(params: {
+  config: OpenClawConfig;
+  logger: PluginUpdateLogger;
+}): Promise<boolean> {
+  let repaired = false;
+  for (const [pluginId, record] of Object.entries(params.config.plugins?.installs ?? {})) {
+    if (record.source !== "npm") {
+      continue;
+    }
+
+    let installPath: string;
+    try {
+      installPath = resolveUserPath(
+        record.installPath?.trim() || resolvePluginInstallDir(pluginId),
+      );
+    } catch (err) {
+      params.logger.warn?.(
+        `Could not repair openclaw peer link for "${pluginId}" due to invalid install path: ${String(err)}`,
+      );
+      continue;
+    }
+
+    if (!installedPackageNeedsOpenClawPeerLinkRepair(installPath)) {
+      continue;
+    }
+
+    const peerDependencies = readInstalledPackagePeerDependencies(installPath);
+    if (!Object.hasOwn(peerDependencies, "openclaw")) {
+      continue;
+    }
+
+    try {
+      await linkOpenClawPeerDependencies({
+        installedDir: installPath,
+        peerDependencies,
+        logger: params.logger,
+      });
+      repaired = !installedPackageNeedsOpenClawPeerLinkRepair(installPath) || repaired;
+    } catch (err) {
+      params.logger.warn?.(
+        `Could not repair openclaw peer link for "${pluginId}" at ${installPath}: ${String(err)}`,
+      );
+    }
+  }
+  return repaired;
+}
+
 export async function updateNpmInstalledPlugins(params: {
   config: OpenClawConfig;
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
   skipDisabledPlugins?: boolean;
+  syncOfficialPluginInstalls?: boolean;
   disableOnFailure?: boolean;
   timeoutMs?: number;
   dryRun?: boolean;
@@ -789,6 +832,13 @@ export async function updateNpmInstalledPlugins(params: {
   const outcomes: PluginUpdateOutcome[] = [];
   let next = params.config;
   let changed = false;
+  let ranNpmInstaller = false;
+  const installNpmSpecForUpdate = async (
+    installParams: Parameters<typeof installPluginFromNpmSpec>[0],
+  ): Promise<Awaited<ReturnType<typeof installPluginFromNpmSpec>>> => {
+    ranNpmInstaller = true;
+    return await installPluginFromNpmSpec(installParams);
+  };
 
   const recordFailure = (pluginId: string, message: string) => {
     if (params.disableOnFailure && !params.dryRun) {
@@ -832,6 +882,13 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
+    const officialNpmSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      : undefined;
+    const officialClawHubSpec = params.syncOfficialPluginInstalls
+      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      : undefined;
+
     if (normalizedPluginConfig) {
       const enableState = resolveEffectiveEnableState({
         id: pluginId,
@@ -839,7 +896,7 @@ export async function updateNpmInstalledPlugins(params: {
         config: normalizedPluginConfig,
         rootConfig: params.config,
       });
-      if (!enableState.enabled) {
+      if (!enableState.enabled && !officialNpmSpec && !officialClawHubSpec) {
         outcomes.push({
           pluginId,
           status: "skipped",
@@ -868,6 +925,7 @@ export async function updateNpmInstalledPlugins(params: {
         ? resolveNpmUpdateSpecs({
             record,
             specOverride: params.specOverrides?.[pluginId],
+            officialSpecOverride: officialNpmSpec,
             updateChannel: params.updateChannel,
           })
         : undefined;
@@ -875,6 +933,7 @@ export async function updateNpmInstalledPlugins(params: {
       record.source === "clawhub"
         ? resolveClawHubUpdateSpecs({
             record,
+            officialSpecOverride: officialClawHubSpec,
             updateChannel: params.updateChannel,
           })
         : undefined;
@@ -922,7 +981,7 @@ export async function updateNpmInstalledPlugins(params: {
       continue;
     }
 
-    if (record.source === "clawhub" && !record.clawhubPackage) {
+    if (record.source === "clawhub" && !record.clawhubPackage && !officialClawHubSpec) {
       outcomes.push({
         pluginId,
         status: "skipped",
@@ -972,7 +1031,16 @@ export async function updateNpmInstalledPlugins(params: {
       recordFailure(pluginId, `Invalid install path for "${pluginId}": ${String(err)}`);
       continue;
     }
-    const currentVersion = await readInstalledPackageVersion(installPath);
+    let currentVersion: string | undefined;
+    try {
+      currentVersion = await readInstalledPackageVersion(installPath);
+    } catch (err) {
+      recordFailure(
+        pluginId,
+        `Failed to inspect installed package for ${pluginId}: ${String(err)}`,
+      );
+      continue;
+    }
     const extensionsDir = resolveRecordedExtensionsDir({
       pluginId,
       installPath,
@@ -1207,7 +1275,7 @@ export async function updateNpmInstalledPlugins(params: {
     try {
       result =
         record.source === "npm"
-          ? await installPluginFromNpmSpec({
+          ? await installNpmSpecForUpdate({
               spec: effectiveSpec!,
               mode: "update",
               extensionsDir,
@@ -1270,7 +1338,7 @@ export async function updateNpmInstalledPlugins(params: {
         }),
       );
       usedNpmFallback = true;
-      result = await installPluginFromNpmSpec({
+      result = await installNpmSpecForUpdate({
         spec: npmSpecs.fallbackSpec,
         mode: "update",
         extensionsDir,
@@ -1426,6 +1494,14 @@ export async function updateNpmInstalledPlugins(params: {
         message: `Updated ${pluginId}: ${currentLabel} -> ${nextLabel}.`,
       });
     }
+  }
+
+  if (ranNpmInstaller) {
+    changed =
+      (await repairOpenClawPeerLinksForNpmInstalls({
+        config: next,
+        logger,
+      })) || changed;
   }
 
   return { config: next, changed, outcomes };

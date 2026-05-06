@@ -95,7 +95,10 @@ import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
-import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import {
+  isExplicitSourceReplyCommand,
+  resolveSourceReplyVisibilityPolicy,
+} from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -711,7 +714,7 @@ export async function dispatchReplyFromConfig(
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      ctx.CommandSource !== "native" &&
+      !isExplicitSourceReplyCommand(ctx) &&
       (chatType === "group" || chatType === "channel"
         ? effectiveVisibleReplies !== "automatic"
         : effectiveVisibleReplies === "message_tool"));
@@ -1243,15 +1246,24 @@ export async function dispatchReplyFromConfig(
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
+    const allowSuppressedSourceProgressCallbacks =
+      params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    const shouldForwardProgressCallback = (options?: {
+      forwardWhenSourceDeliverySuppressed?: boolean;
+    }) =>
+      !suppressAutomaticSourceDelivery ||
+      (allowSuppressedSourceProgressCallbacks &&
+        options?.forwardWhenSourceDeliverySuppressed === true);
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
+      options?: { forwardWhenSourceDeliverySuppressed?: boolean },
     ): ((...args: Args) => Promise<void>) | undefined => {
       if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
         return undefined;
       }
       return async (...args: Args) => {
         markProgress();
-        if (!suppressAutomaticSourceDelivery) {
+        if (shouldForwardProgressCallback(options)) {
           await callback?.(...args);
         }
       };
@@ -1274,11 +1286,21 @@ export async function dispatchReplyFromConfig(
         onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
         onAssistantMessageStart: wrapProgressCallback(params.replyOptions?.onAssistantMessageStart),
         onBlockReplyQueued: wrapProgressCallback(params.replyOptions?.onBlockReplyQueued),
-        onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart),
-        onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent),
-        onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput),
-        onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart),
-        onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd),
+        onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
+        onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
+          forwardWhenSourceDeliverySuppressed: true,
+        }),
         onToolResult: (payload: ReplyPayload) => {
           markProgress();
           const run = async () => {
@@ -1330,7 +1352,7 @@ export async function dispatchReplyFromConfig(
         onPlanUpdate: async (payload) => {
           markProgress();
           markInboundDedupeReplayUnsafe();
-          if (!suppressAutomaticSourceDelivery) {
+          if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
             await onPlanUpdateFromReplyOptions?.(payload);
           }
           if (payload.phase !== "update" || shouldSuppressDefaultToolProgressMessages()) {
@@ -1341,7 +1363,7 @@ export async function dispatchReplyFromConfig(
         onApprovalEvent: async (payload) => {
           markProgress();
           markInboundDedupeReplayUnsafe();
-          if (!suppressAutomaticSourceDelivery) {
+          if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
             await onApprovalEventFromReplyOptions?.(payload);
           }
           if (payload.phase !== "requested" || shouldSuppressDefaultToolProgressMessages()) {
@@ -1360,7 +1382,7 @@ export async function dispatchReplyFromConfig(
         onPatchSummary: async (payload) => {
           markProgress();
           markInboundDedupeReplayUnsafe();
-          if (!suppressAutomaticSourceDelivery) {
+          if (shouldForwardProgressCallback({ forwardWhenSourceDeliverySuppressed: true })) {
             await onPatchSummaryFromReplyOptions?.(payload);
           }
           if (payload.phase !== "end" || shouldSuppressDefaultToolProgressMessages()) {
@@ -1497,6 +1519,9 @@ export async function dispatchReplyFromConfig(
     }
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const beforeAgentRunBlocked = replies.some(
+      (reply) => getReplyPayloadMetadata(reply)?.beforeAgentRunBlocked === true,
+    );
 
     let queuedFinal = false;
     let routedFinalCount = 0;
@@ -1600,7 +1625,11 @@ export async function dispatchReplyFromConfig(
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
-    return attachSourceReplyDeliveryMode({ queuedFinal, counts });
+    return attachSourceReplyDeliveryMode({
+      queuedFinal,
+      counts,
+      ...(beforeAgentRunBlocked ? { beforeAgentRunBlocked } : {}),
+    });
   } catch (err) {
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {
