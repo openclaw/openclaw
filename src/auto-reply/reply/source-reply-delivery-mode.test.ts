@@ -97,13 +97,23 @@ describe("resolveSourceReplyDeliveryMode", () => {
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
-        ctx: { ChatType: "group", CommandSource: "text", CommandAuthorized: true },
+        ctx: {
+          ChatType: "group",
+          CommandSource: "text",
+          CommandAuthorized: true,
+          CommandBody: "/status",
+        },
       }),
     ).toBe("automatic");
     expect(
       resolveSourceReplyDeliveryMode({
         cfg: emptyConfig,
-        ctx: { ChatType: "group", CommandSource: "text" },
+        ctx: {
+          ChatType: "group",
+          CommandSource: "text",
+          CommandAuthorized: false,
+          CommandBody: "/status",
+        },
       }),
     ).toBe("message_tool_only");
   });
@@ -192,7 +202,12 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
   it("keeps native and authorized text command replies visible in groups", () => {
     for (const ctx of [
       { ChatType: "group", CommandSource: "native" },
-      { ChatType: "group", CommandSource: "text", CommandAuthorized: true },
+      {
+        ChatType: "group",
+        CommandSource: "text",
+        CommandAuthorized: true,
+        CommandBody: "/status",
+      },
     ] as const) {
       expect(
         resolveSourceReplyVisibilityPolicy({
