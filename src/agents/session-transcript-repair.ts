@@ -337,57 +337,69 @@ function repairToolCallInputs(
     let messageChanged = false;
 
     for (const block of msg.content) {
-      if (
-        isRawToolCallBlock(block) &&
-        (!hasToolCallInput(block) ||
+      if (isRawToolCallBlock(block)) {
+        // Drop genuinely incomplete streaming artifacts (missing required fields).
+        if (
+          !hasToolCallInput(block) ||
           !hasToolCallId(block) ||
-          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames))
-      ) {
-        droppedToolCalls += 1;
-        droppedInMessage += 1;
+          !isAllowedToolCallName((block as RawToolCallBlock).name, allowedToolNames)
+        ) {
+          droppedToolCalls += 1;
+          droppedInMessage += 1;
+          changed = true;
+          messageChanged = true;
+          continue;
+        }
+      }
+      // Strip partialJson early so sessions_spawn sanitization still runs on
+      // otherwise-complete blocks retained from the OpenAI Responses transport.
+      let workBlock = block;
+      if (isRawToolCallBlock(block) && "partialJson" in block) {
+        const stripped = { ...(block as object) } as Record<string, unknown>;
+        delete stripped.partialJson;
+        workBlock = stripped as typeof block;
         changed = true;
         messageChanged = true;
-        continue;
       }
-      if (isRawToolCallBlock(block)) {
+      if (isRawToolCallBlock(workBlock)) {
         if (
-          (block as { type?: unknown }).type === "toolCall" ||
-          (block as { type?: unknown }).type === "toolUse" ||
-          (block as { type?: unknown }).type === "functionCall"
+          (workBlock as { type?: unknown }).type === "toolCall" ||
+          (workBlock as { type?: unknown }).type === "toolUse" ||
+          (workBlock as { type?: unknown }).type === "functionCall"
         ) {
           // Only sanitize (redact) sessions_spawn blocks; all others are passed through
           // unchanged to preserve provider-specific shapes (e.g. toolUse.input for Anthropic).
           const blockName =
-            typeof (block as { name?: unknown }).name === "string"
-              ? (block as { name: string }).name.trim()
+            typeof (workBlock as { name?: unknown }).name === "string"
+              ? (workBlock as { name: string }).name.trim()
               : undefined;
           if (normalizeLowercaseStringOrEmpty(blockName) === "sessions_spawn") {
-            const sanitized = sanitizeToolCallBlock(block);
-            if (sanitized !== block) {
+            const sanitized = sanitizeToolCallBlock(workBlock);
+            if (sanitized !== workBlock) {
               changed = true;
               messageChanged = true;
             }
             nextContent.push(sanitized as typeof block);
           } else {
-            if (typeof (block as { name?: unknown }).name === "string") {
-              const rawName = (block as { name: string }).name;
+            if (typeof (workBlock as { name?: unknown }).name === "string") {
+              const rawName = (workBlock as { name: string }).name;
               const trimmedName = rawName.trim();
               if (rawName !== trimmedName && trimmedName) {
-                const renamed = { ...(block as object), name: trimmedName } as typeof block;
+                const renamed = { ...(workBlock as object), name: trimmedName } as typeof block;
                 nextContent.push(renamed);
                 changed = true;
                 messageChanged = true;
               } else {
-                nextContent.push(block);
+                nextContent.push(workBlock);
               }
             } else {
-              nextContent.push(block);
+              nextContent.push(workBlock);
             }
           }
           continue;
         }
       } else {
-        nextContent.push(block);
+        nextContent.push(workBlock);
       }
     }
 
