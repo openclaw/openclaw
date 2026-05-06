@@ -1163,6 +1163,7 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
+                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
                   "concepts/progress-drafts",
                   "concepts/retry",
@@ -1205,6 +1206,7 @@
                       "plugins/building-plugins",
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
+                      "plugins/sdk-channel-message",
                       "plugins/sdk-provider-plugins",
                       "plugins/adding-capabilities",
                       "plugins/compatibility",

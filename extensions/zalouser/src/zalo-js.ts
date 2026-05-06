@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import type {
   ZaloAuthStatus,
   ZaloEventMessage,
@@ -1243,7 +1244,11 @@ export async function sendZaloTextMessage(
   const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
-    return { ok: false, error: "No threadId provided" };
+    return {
+      ok: false,
+      error: "No threadId provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
+    };
   }
 
   return await withZaloApi(
@@ -1297,9 +1302,15 @@ export async function sendZaloTextMessage(
             }
             const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
             const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
+            const voiceMessageId = extractSendMessageId(response);
             return {
               ok: true,
-              messageId: extractSendMessageId(response) ?? textMessageId,
+              messageId: voiceMessageId ?? textMessageId,
+              receipt: createZalouserSendReceipt({
+                platformMessageIds: [textMessageId, voiceMessageId],
+                threadId: trimmedThreadId,
+                kind: "voice",
+              }),
             };
           }
 
@@ -1320,7 +1331,16 @@ export async function sendZaloTextMessage(
             trimmedThreadId,
             type,
           );
-          return { ok: true, messageId: extractSendMessageId(response) };
+          const messageId = extractSendMessageId(response);
+          return {
+            ok: true,
+            messageId,
+            receipt: createZalouserSendReceipt({
+              messageId,
+              threadId: trimmedThreadId,
+              kind: "media",
+            }),
+          };
         }
 
         const payloadText = text.slice(0, 2000);
@@ -1330,9 +1350,22 @@ export async function sendZaloTextMessage(
           trimmedThreadId,
           type,
         );
-        return { ok: true, messageId: extractSendMessageId(response) };
+        const messageId = extractSendMessageId(response);
+        return {
+          ok: true,
+          messageId,
+          receipt: createZalouserSendReceipt({
+            messageId,
+            threadId: trimmedThreadId,
+            kind: "text",
+          }),
+        };
       } catch (error) {
-        return { ok: false, error: toErrorMessage(error) };
+        return {
+          ok: false,
+          error: toErrorMessage(error),
+          receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "unknown" }),
+        };
       }
     },
     { shouldPersist: (result) => result.ok },
@@ -1453,10 +1486,18 @@ export async function sendZaloLink(
   const trimmedThreadId = threadId.trim();
   const trimmedUrl = url.trim();
   if (!trimmedThreadId) {
-    return { ok: false, error: "No threadId provided" };
+    return {
+      ok: false,
+      error: "No threadId provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "unknown" }),
+    };
   }
   if (!trimmedUrl) {
-    return { ok: false, error: "No URL provided" };
+    return {
+      ok: false,
+      error: "No URL provided",
+      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
+    };
   }
 
   try {
@@ -1469,12 +1510,25 @@ export async function sendZaloLink(
           trimmedThreadId,
           type,
         );
-        return { ok: true, messageId: String(response.msgId) };
+        const messageId = String(response.msgId);
+        return {
+          ok: true,
+          messageId,
+          receipt: createZalouserSendReceipt({
+            messageId,
+            threadId: trimmedThreadId,
+            kind: "card",
+          }),
+        };
       },
       { shouldPersist: (result) => result.ok },
     );
   } catch (error) {
-    return { ok: false, error: toErrorMessage(error) };
+    return {
+      ok: false,
+      error: toErrorMessage(error),
+      receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "card" }),
+    };
   }
 }
 

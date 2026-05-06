@@ -87,7 +87,7 @@ function missingCompiledRuntimeEntryMessage(params: {
   entry: string;
   candidates: readonly string[];
 }): string {
-  return `${params.label} requires compiled runtime output for TypeScript entry ${params.entry}: expected ${params.candidates.join(", ")}`;
+  return `${params.label} requires compiled runtime output for TypeScript entry ${params.entry}: expected ${params.candidates.join(", ")}. This is a plugin packaging issue, not a local config problem; update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then. TypeScript source fallback is only supported for source checkouts and local development paths.`;
 }
 
 async function validatePackageExtensionEntry(params: {

@@ -28,6 +28,14 @@
     "target": "OpenClaw 应用 SDK API 设计"
   },
   {
+    "source": "Message lifecycle refactor",
+    "target": "消息生命周期重构"
+  },
+  {
+    "source": "Channel message API",
+    "target": "频道消息 API"
+  },
+  {
     "source": "Azure Speech",
     "target": "Azure Speech"
   },
@@ -726,6 +734,18 @@
   {
     "source": "Codex Harness Context Engine Port",
     "target": "Codex Harness Context Engine Port"
+  },
+  {
+    "source": "Plugin refactor plan",
+    "target": "插件重构计划"
+  },
+  {
+    "source": "Retry policy",
+    "target": "重试策略"
+  },
+  {
+    "source": "Channel turn kernel",
+    "target": "频道轮次内核"
   },
   {
     "source": "/gateway/configuration#strict-validation",

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import type * as Lark from "@larksuiteoapi/node-sdk";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import { mediaKindFromMime } from "openclaw/plugin-sdk/media-mime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import {
@@ -15,7 +16,11 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
+import {
+  assertFeishuMessageApiSuccess,
+  resolveFeishuReceiptKind,
+  toFeishuSendResult,
+} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
@@ -399,6 +404,7 @@ export type UploadFileResult = {
 export type SendMediaResult = {
   messageId: string;
   chatId: string;
+  receipt: MessageReceipt;
   voiceIntentDegradedToFile?: boolean;
 };
 
@@ -532,7 +538,7 @@ export async function sendImageFeishu(params: {
       { includeNestedErrorLogId: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId);
+    return toFeishuSendResult(response, receiveId, "media");
   }
 
   const response = await requestFeishuApi(
@@ -549,7 +555,7 @@ export async function sendImageFeishu(params: {
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId);
+  return toFeishuSendResult(response, receiveId, "media");
 }
 
 /**
@@ -589,7 +595,7 @@ export async function sendFileFeishu(params: {
       { includeNestedErrorLogId: true },
     );
     assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId);
+    return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
   }
 
   const response = await requestFeishuApi(
@@ -606,7 +612,7 @@ export async function sendFileFeishu(params: {
     { includeNestedErrorLogId: true },
   );
   assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(response, receiveId);
+  return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
 }
 
 /**

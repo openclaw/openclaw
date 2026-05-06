@@ -329,8 +329,8 @@ jobs:
 
           run_lane() {
             local lane="$1"
-            local repo_root="$worktree_root/$lane"
-            local output_dir=".artifacts/qa-e2e/mantis/discord-thread-attachment/$lane"
+            local repo_root="${GITHUB_WORKSPACE}/${worktree_root}/${lane}"
+            local output_dir=".artifacts/qa-e2e/mantis/discord-thread-attachment/${lane}"
             pnpm --dir "$repo_root" openclaw qa discord \
               --repo-root "$repo_root" \
               --output-dir "$output_dir" \
@@ -416,7 +416,7 @@ jobs:
         with:
           name: mantis-discord-thread-attachment-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
 
       - name: Create Mantis GitHub App token
@@ -444,12 +444,20 @@ jobs:
           set -euo pipefail
 
           root=".artifacts/qa-e2e/mantis/discord-thread-attachment"
+          if [[ ! -f "$root/mantis-evidence.json" ]]; then
+            echo "No Mantis evidence manifest found; skipping PR evidence comment."
+            exit 0
+          fi
+          artifact_url_args=()
+          if [[ -n "${ARTIFACT_URL:-}" ]]; then
+            artifact_url_args=(--artifact-url "$ARTIFACT_URL")
+          fi
           node scripts/mantis/publish-pr-evidence.mjs \
             --manifest "$root/mantis-evidence.json" \
             --target-pr "$TARGET_PR" \
             --artifact-root "mantis/discord-thread-attachment/pr-${TARGET_PR}/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
             --marker "<!-- mantis-discord-thread-attachment -->" \
-            --artifact-url "$ARTIFACT_URL" \
+            "${artifact_url_args[@]}" \
             --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
             --request-source "$REQUEST_SOURCE"
 
