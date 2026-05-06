@@ -1377,6 +1377,7 @@ describe("runWithModelFallback", () => {
 
   it("includes configured primary as last resort when fallbacksOverride is empty (#77766)", async () => {
     const cfg = makeFallbacksOnlyCfg();
+    const calls: Array<{ provider: string; model: string }> = [];
 
     await expect(
       runWithModelFallback({
