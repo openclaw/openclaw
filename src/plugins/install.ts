@@ -493,6 +493,7 @@ async function installPluginFromManagedNpmRoot(
       "npm",
       ...createSafeNpmInstallArgs({
         omitDev: true,
+        omitPeer: true,
         loglevel: "error",
         legacyPeerDeps: true,
         noAudit: true,

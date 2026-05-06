@@ -132,6 +132,7 @@ Docs: https://docs.openclaw.ai
 - CLI/infer: pass minimal instructions to local `openai-codex/*` model probes and surface provider error details when `infer model run` returns no text. Fixes #76464. Thanks @lilesjtu.
 - Dependencies: override transitive `ip-address` to `10.2.0` so the runtime lockfile no longer includes the vulnerable `10.1.0` build flagged by Dependabot alert 109. Thanks @vincentkoc.
 - Plugins/install: apply OpenClaw's npm security overrides inside managed external plugin npm roots so hoisted plugin dependencies inherit the host package hardening. Thanks @vincentkoc.
+- Plugins/install: skip npm peer resolution in managed plugin roots so installing peer-based plugins such as Opik cannot pull a stale registry `openclaw` copy beside Codex/Discord/WhatsApp and trigger `ERESOLVE`. Thanks @vincentkoc.
 - Feishu: hydrate missing native topic starter thread IDs before session routing so first turns and follow-ups stay in the same topic session. Fixes #78262. Thanks @joeyzenghuan.
 - Memory Wiki: skip empty and whitespace-only source pages when refreshing generated Related blocks, preventing blank pages from being rewritten into Related-only stubs. Fixes #78121. Thanks @amknight.
 - LINE: reject `dmPolicy: "open"` configs without wildcard `allowFrom` so webhook DMs fail validation instead of being acknowledged and silently blocked before inbound processing. Fixes #78316.
