@@ -5,8 +5,7 @@
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
-    "migrationProviders": ["codex"],
-    "tools": ["codex_plugin_*"]
+    "migrationProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -43,33 +42,6 @@
         "type": "array",
         "items": { "type": "string" },
         "default": []
-      },
-      "codexPlugins": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "enabled": {
-            "type": "boolean",
-            "default": false
-          },
-          "allow_destructive_actions": {
-            "type": "boolean",
-            "default": false
-          },
-          "plugins": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "enabled": { "type": "boolean" },
-                "marketplaceName": { "type": "string" },
-                "pluginName": { "type": "string" },
-                "allow_destructive_actions": { "type": "boolean" }
-              }
-            }
-          }
-        }
       },
       "discovery": {
         "type": "object",
@@ -187,26 +159,6 @@
     "codexDynamicToolsExclude": {
       "label": "Dynamic Tool Excludes",
       "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
-      "advanced": true
-    },
-    "codexPlugins": {
-      "label": "Codex Plugins",
-      "help": "Expose migrated openai-curated Codex plugins as OpenClaw tools.",
-      "advanced": true
-    },
-    "codexPlugins.enabled": {
-      "label": "Enable Codex Plugins",
-      "help": "When true, migrated openai-curated Codex plugins may be activated and exposed as tools.",
-      "advanced": true
-    },
-    "codexPlugins.allow_destructive_actions": {
-      "label": "Allow Destructive Plugin Actions",
-      "help": "Global fail-closed policy for destructive Codex plugin permission requests.",
-      "advanced": true
-    },
-    "codexPlugins.plugins": {
-      "label": "Plugin Entries",
-      "help": "Per-plugin enablement, migration metadata, and destructive-action overrides.",
       "advanced": true
     },
     "discovery": {

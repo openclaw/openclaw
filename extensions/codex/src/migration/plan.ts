@@ -22,7 +22,6 @@ import {
 import { resolveCodexMigrationTargets } from "./targets.js";
 
 const OPENAI_CURATED_MARKETPLACE = "openai-curated";
-const CODEX_PLUGIN_TOOL_ALLOWLIST_ENTRY = "codex";
 
 type CodexMigrationContext = MigrationProviderContext & {
   plugins?: string[];
@@ -166,34 +165,7 @@ function selectCodexPlugins(params: {
   return selectedPlugins.toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
-function buildCodexPluginsConfig(
-  plugins: readonly CodexInstalledPluginSource[],
-): Record<string, unknown> {
-  return {
-    enabled: true,
-    allow_destructive_actions: false,
-    plugins: {
-      "*": {
-        enabled: true,
-      },
-      ...Object.fromEntries(
-        plugins.map((plugin) => [
-          codexPluginKey(plugin),
-          {
-            enabled: true,
-            marketplaceName: OPENAI_CURATED_MARKETPLACE,
-            pluginName: plugin.name,
-          },
-        ]),
-      ),
-    },
-  };
-}
-
-function buildCodexPluginConfigItems(params: {
-  ctx: MigrationProviderContext;
-  plugins: readonly CodexInstalledPluginSource[];
-}): MigrationItem[] {
+function buildCodexPluginConfigItems(params: { ctx: MigrationProviderContext }): MigrationItem[] {
   const items: MigrationItem[] = [];
   items.push(
     createMigrationConfigPatchItem({
@@ -201,7 +173,8 @@ function buildCodexPluginConfigItems(params: {
       target: "plugins.entries.codex.enabled",
       path: ["plugins", "entries", "codex", "enabled"],
       value: true,
-      message: "Enable the bundled Codex plugin so migrated Codex plugin tools can load.",
+      message:
+        "Enable the bundled Codex plugin so migrated Codex plugins run through the native app-server thread.",
       conflict:
         !params.ctx.overwrite &&
         hasMigrationConfigPatchConflict(
@@ -225,48 +198,6 @@ function buildCodexPluginConfigItems(params: {
       }),
     );
   }
-
-  const toolsAllow = readConfigPath(params.ctx.config, ["tools", "allow"]);
-  const toolAllowPath = isStringArray(toolsAllow)
-    ? (["tools", "allow"] as const)
-    : (["tools", "alsoAllow"] as const);
-  const existingToolAllow = readConfigPath(params.ctx.config, toolAllowPath);
-  const toolAllowValue = isStringArray(existingToolAllow)
-    ? appendUnique(existingToolAllow, CODEX_PLUGIN_TOOL_ALLOWLIST_ENTRY)
-    : [CODEX_PLUGIN_TOOL_ALLOWLIST_ENTRY];
-  items.push(
-    createMigrationConfigPatchItem({
-      id: "config:codex-plugin-tool-allowlist",
-      target: toolAllowPath.join("."),
-      path: [...toolAllowPath],
-      value: toolAllowValue,
-      message:
-        "Allow optional Codex plugin tools by plugin id so migrated codex_plugin_* tools are discoverable.",
-      conflict:
-        !params.ctx.overwrite &&
-        existingToolAllow !== undefined &&
-        !isStringArray(existingToolAllow),
-    }),
-  );
-
-  const value = buildCodexPluginsConfig(params.plugins);
-  items.push(
-    createMigrationConfigPatchItem({
-      id: "config:codex-plugins",
-      target: "plugins.entries.codex.config.codexPlugins",
-      path: ["plugins", "entries", "codex", "config", "codexPlugins"],
-      value,
-      message:
-        "Enable migrated source-installed openai-curated Codex plugins with destructive actions disabled.",
-      conflict:
-        !params.ctx.overwrite &&
-        hasMigrationConfigPatchConflict(
-          params.ctx.config,
-          ["plugins", "entries", "codex", "config", "codexPlugins"],
-          value,
-        ),
-    }),
-  );
   return items;
 }
 
@@ -295,12 +226,13 @@ function buildCodexPluginItems(params: {
           ...(plugin.marketplacePath ? { marketplacePath: plugin.marketplacePath } : {}),
           sourceInstalled: plugin.installed,
           sourceEnabled: plugin.enabled,
+          nativeThreadPlugin: true,
           ...(plugin.accessible !== undefined ? { accessible: plugin.accessible } : {}),
         },
       }),
     );
   }
-  items.push(...buildCodexPluginConfigItems(params));
+  items.push(...buildCodexPluginConfigItems({ ctx: params.ctx }));
   return items;
 }
 
@@ -323,7 +255,7 @@ export async function buildCodexMigrationPlan(
     })),
   );
   const selectedPlugins = selectCodexPlugins({
-    plugins: source.codexPlugins,
+    plugins: source.nativePlugins,
     selected: readSelectedPlugins(ctx),
   });
   items.push(...buildCodexPluginItems({ ctx, plugins: selectedPlugins }));
@@ -365,7 +297,7 @@ export async function buildCodexMigrationPlan(
       : []),
     ...(selectedPlugins.length > 0
       ? [
-          "Source-installed openai-curated Codex plugins will be activated through Codex app-server during apply. Plugin bytes are not copied manually.",
+          "Source-installed openai-curated Codex plugins will be activated through Codex app-server during apply and invoked by native plugin mentions on the main Codex thread. Plugin bytes are not copied manually.",
         ]
       : []),
     ...(source.plugins.length > 0
@@ -388,6 +320,7 @@ export async function buildCodexMigrationPlan(
     warnings,
     nextSteps: [
       "Run openclaw doctor after applying the migration.",
+      "Invoke migrated Codex plugins from Codex-mode turns with native mentions such as [@Google Calendar](plugin://google-calendar).",
       "Review skipped Codex plugin/config/hook items before installing or recreating them in OpenClaw.",
     ],
     metadata: {

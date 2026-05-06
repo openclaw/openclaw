@@ -264,70 +264,32 @@ For live and Docker smoke tests, auth usually comes from the Codex CLI account
 or an OpenClaw `openai-codex` auth profile. Local stdio app-server launches can
 also fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` when no account is present.
 
-## Codex plugin bridge
+## Native Codex plugins and apps
 
-OpenClaw can expose selected native Codex plugins as OpenClaw agent tools. This
-is intentionally narrower than loading every plugin bundle in a Codex home:
-OpenClaw only bridges plugins that were observed as source-installed
-`openai-curated` Codex plugins during migration, then activates them through
-Codex app-server APIs.
+OpenClaw relies on Codex app-server's native plugin and app support for Codex
+mode. It does not register synthetic OpenClaw tools for Codex plugins, and it
+does not start a separate ephemeral Codex thread to invoke a plugin. Plugin
+mentions stay in the main Codex app-server thread for the session.
 
-The bridge is fail-closed. It is disabled unless `codexPlugins.enabled` is
-true, and each bridged plugin needs an explicit entry. The migration provider
-writes those entries for selected source-installed plugins:
+Use native Codex mention syntax in a Codex-mode turn:
 
-```json5
-{
-  plugins: {
-    entries: {
-      codex: {
-        enabled: true,
-        config: {
-          codexPlugins: {
-            enabled: true,
-            allow_destructive_actions: false,
-            plugins: {
-              "*": { enabled: true },
-              "google-calendar": {
-                enabled: true,
-                marketplaceName: "openai-curated",
-                pluginName: "google-calendar",
-              },
-            },
-          },
-        },
-      },
-    },
-  },
-}
+```md
+[@Google Calendar](plugin://google-calendar) Find a free slot tomorrow afternoon.
 ```
 
-Each configured plugin becomes one OpenClaw tool named
-`codex_plugin_<plugin_name>`, for example `codex_plugin_google_calendar`. The
-tool accepts:
+When `openclaw migrate codex --plugin ...` sees source-installed
+`openai-curated` Codex plugins through app-server discovery, migration applies
+only the native setup:
 
-```json
-{ "request": "Find a free slot tomorrow afternoon." }
-```
+- enables the bundled `codex` plugin when needed
+- adds `codex` to `plugins.allow` when that allowlist is already restrictive
+- installs or enables the selected `openai-curated` plugin with `plugin/install`
+- reloads Codex skills, MCP servers, and apps through app-server APIs
 
-At runtime OpenClaw uses the shared Codex app-server client to:
-
-- refresh `plugin/list` and `app/list`
-- install or enable the selected `openai-curated` plugin with `plugin/install`
-- enable related Codex apps in app-server config
-- reload skills, hooks, MCP servers, and apps
-- start an ephemeral Codex turn with a plugin mention such as
-  `[@Google Calendar](plugin://google-calendar)`
-
-Command/file approval requests and unsupported user-input requests stay
-declined by the app-server bridge defaults. MCP elicitation requests are
-declined unless the effective plugin policy has
-`allow_destructive_actions: true`; keep the default `false` unless you trust
-the plugin to perform destructive app actions.
-
-Config changes require a gateway restart because OpenClaw registers agent tools
-when plugins load. Use `/new` or `/reset` after changing the Codex runtime or
-plugin bridge config so active sessions rebuild their tool catalog.
+After migration, the Codex app-server owns plugin activation, app authorization,
+permission prompts, and transcript semantics. If a related app is inaccessible
+or needs authorization, migration reports that on the plugin item instead of
+creating an OpenClaw fallback tool.
 
 ## Workspace bootstrap files
 

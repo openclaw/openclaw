@@ -3,13 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   CODEX_APP_SERVER_CONFIG_KEYS,
   CODEX_COMPUTER_USE_CONFIG_KEYS,
-  CODEX_PLUGIN_ENTRY_CONFIG_KEYS,
-  CODEX_PLUGINS_CONFIG_KEYS,
   codexAppServerStartOptionsKey,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
-  resolveCodexPluginsConfig,
 } from "./config.js";
 
 describe("Codex app-server config", () => {
@@ -151,57 +148,6 @@ describe("Codex app-server config", () => {
       codexDynamicToolsProfile: "openclaw-compat",
       codexDynamicToolsExclude: ["custom_tool"],
     });
-  });
-
-  it("parses Codex plugin bridge config with fail-closed defaults", () => {
-    expect(resolveCodexPluginsConfig({ pluginConfig: {} })).toEqual({
-      enabled: false,
-      allow_destructive_actions: false,
-      plugins: {},
-    });
-
-    expect(
-      resolveCodexPluginsConfig({
-        pluginConfig: {
-          codexPlugins: {
-            enabled: true,
-            allow_destructive_actions: true,
-            plugins: {
-              "*": { enabled: true },
-              " google-calendar ": {
-                enabled: true,
-                marketplaceName: " openai-curated ",
-                pluginName: " google-calendar ",
-                allow_destructive_actions: false,
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual({
-      enabled: true,
-      allow_destructive_actions: true,
-      plugins: {
-        "*": { enabled: true },
-        "google-calendar": {
-          enabled: true,
-          marketplaceName: "openai-curated",
-          pluginName: "google-calendar",
-          allow_destructive_actions: false,
-        },
-      },
-    });
-  });
-
-  it("rejects malformed Codex plugin bridge config", () => {
-    expect(
-      readCodexPluginConfig({
-        codexPlugins: {
-          enabled: true,
-          install: true,
-        },
-      }),
-    ).toEqual({});
   });
 
   it("treats configured and environment commands as explicit overrides", () => {
@@ -442,11 +388,6 @@ describe("Codex app-server config", () => {
         properties: {
           appServer: { properties: Record<string, unknown> };
           computerUse: { properties: Record<string, unknown> };
-          codexPlugins: {
-            properties: {
-              plugins: { additionalProperties: { properties: Record<string, unknown> } };
-            } & Record<string, unknown>;
-          };
         };
       };
       uiHints: Record<string, unknown>;
@@ -466,18 +407,6 @@ describe("Codex app-server config", () => {
     for (const key of CODEX_COMPUTER_USE_CONFIG_KEYS) {
       expect(manifest.uiHints[`computerUse.${key}`]).toBeTruthy();
     }
-    const codexPluginsManifestKeys = Object.keys(
-      manifest.configSchema.properties.codexPlugins.properties,
-    ).toSorted();
-    expect(codexPluginsManifestKeys).toEqual([...CODEX_PLUGINS_CONFIG_KEYS].toSorted());
-    for (const key of CODEX_PLUGINS_CONFIG_KEYS) {
-      expect(manifest.uiHints[`codexPlugins.${key}`]).toBeTruthy();
-    }
-    const codexPluginEntryManifestKeys = Object.keys(
-      manifest.configSchema.properties.codexPlugins.properties.plugins.additionalProperties
-        .properties,
-    ).toSorted();
-    expect(codexPluginEntryManifestKeys).toEqual([...CODEX_PLUGIN_ENTRY_CONFIG_KEYS].toSorted());
   });
 
   it("does not schema-default mode-derived policy fields", async () => {

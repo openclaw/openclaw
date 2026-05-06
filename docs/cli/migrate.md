@@ -142,9 +142,9 @@ openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
   OpenClaw agent workspace when you want per-agent ownership.
 - Source-installed `openai-curated` Codex plugins selected with
   `--plugin <name>`, activated through the target Codex app-server with
-  `plugin/install`. Apply also writes
-  `plugins.entries.codex.config.codexPlugins` so each selected plugin becomes a
-  `codex_plugin_<name>` OpenClaw tool after the gateway restarts.
+  `plugin/install`. OpenClaw does not turn these into OpenClaw tools; invoke
+  them from Codex-mode turns with native mentions such as
+  `[@Google Calendar](plugin://google-calendar)`.
 
 ### Manual-review Codex state
 

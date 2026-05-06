@@ -5,13 +5,13 @@ describe("plugin tool contracts", () => {
   it("allows explicit prefix wildcard contracts for config-derived tool names", () => {
     expect(
       findUndeclaredPluginToolNames({
-        declaredNames: ["codex_plugin_*"],
-        toolNames: ["codex_plugin_google_calendar", "codex_plugin_slack"],
+        declaredNames: ["derived_tool_*"],
+        toolNames: ["derived_tool_calendar", "derived_tool_slack"],
       }),
     ).toEqual([]);
     expect(
       findUndeclaredPluginToolNames({
-        declaredNames: ["codex_plugin_*"],
+        declaredNames: ["derived_tool_*"],
         toolNames: ["memory_search"],
       }),
     ).toEqual(["memory_search"]);

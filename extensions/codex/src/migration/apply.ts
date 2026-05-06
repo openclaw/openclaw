@@ -24,10 +24,7 @@ import { buildCodexMigrationPlan } from "./plan.js";
 
 const OPENAI_CURATED_MARKETPLACE = "openai-curated";
 const CODEX_PLUGIN_APPLY_TIMEOUT_MS = 60_000;
-const CODEX_CONFIG_ALLOWLIST_ITEM_IDS = new Set([
-  "config:codex-plugin-allowlist",
-  "config:codex-plugin-tool-allowlist",
-]);
+const CODEX_CONFIG_ALLOWLIST_ITEM_IDS = new Set(["config:codex-plugin-allowlist"]);
 
 type CodexMigrationAppServerRequest = (method: string, params?: unknown) => Promise<unknown>;
 
@@ -320,16 +317,6 @@ export async function applyCodexMigrationPlan(params: {
     }
     if (item.action === "archive") {
       items.push(await archiveMigrationItem(item, reportDir));
-    } else if (
-      item.id === "config:codex-plugins" &&
-      [...appliedPluginItemsById.values()].some((pluginItem) => pluginItem.status !== "migrated")
-    ) {
-      items.push(
-        markMigrationItemError(
-          item,
-          "not enabling Codex plugin bridge config because one or more plugin activation items failed",
-        ),
-      );
     } else if (
       item.kind === "config" &&
       item.action === "merge" &&

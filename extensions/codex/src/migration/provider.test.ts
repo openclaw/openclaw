@@ -293,7 +293,7 @@ describe("buildCodexMigrationProvider", () => {
     );
   });
 
-  it("plans installed openai-curated Codex plugins and codexPlugins config from app-server inventory", async () => {
+  it("plans installed openai-curated Codex plugins for native app-server activation", async () => {
     const fixture = await createCodexFixture();
     const request = vi.fn(async (method: string) => {
       if (method === "plugin/list") {
@@ -351,40 +351,6 @@ describe("buildCodexMigrationProvider", () => {
             value: true,
           }),
         }),
-        expect.objectContaining({
-          id: "config:codex-plugin-tool-allowlist",
-          kind: "config",
-          action: "merge",
-          details: expect.objectContaining({
-            path: ["tools", "alsoAllow"],
-            value: ["codex"],
-          }),
-        }),
-        expect.objectContaining({
-          id: "config:codex-plugins",
-          kind: "config",
-          action: "merge",
-          details: expect.objectContaining({
-            path: ["plugins", "entries", "codex", "config", "codexPlugins"],
-            value: {
-              enabled: true,
-              allow_destructive_actions: false,
-              plugins: {
-                "*": { enabled: true },
-                gmail: {
-                  enabled: true,
-                  marketplaceName: "openai-curated",
-                  pluginName: "gmail",
-                },
-                slack: {
-                  enabled: true,
-                  marketplaceName: "openai-curated",
-                  pluginName: "slack",
-                },
-              },
-            },
-          }),
-        }),
       ]),
     );
     expect(plan.items).toEqual(
@@ -415,24 +381,7 @@ describe("buildCodexMigrationProvider", () => {
     );
 
     expect(plan.items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "plugin:gmail" }),
-        expect.objectContaining({
-          id: "config:codex-plugins",
-          details: expect.objectContaining({
-            value: expect.objectContaining({
-              plugins: {
-                "*": { enabled: true },
-                gmail: {
-                  enabled: true,
-                  marketplaceName: "openai-curated",
-                  pluginName: "gmail",
-                },
-              },
-            }),
-          }),
-        }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ id: "plugin:gmail" })]),
     );
     expect(plan.items).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ id: "plugin:slack" })]),
@@ -472,7 +421,7 @@ describe("buildCodexMigrationProvider", () => {
     await expect(fs.access(path.join(reportDir, "report.json"))).resolves.toBeUndefined();
   });
 
-  it("applies Codex plugin config and installs selected source-installed curated plugins only during apply", async () => {
+  it("activates selected source-installed curated plugins natively during apply", async () => {
     const fixture = await createCodexFixture();
     sourceTesting.setAppServerRequestForTests(async (method: string) => {
       if (method === "plugin/list") {
@@ -553,11 +502,6 @@ describe("buildCodexMigrationProvider", () => {
       expect.arrayContaining([
         expect.objectContaining({ id: "plugin:gmail", status: "migrated" }),
         expect.objectContaining({ id: "config:codex-enabled", status: "migrated" }),
-        expect.objectContaining({
-          id: "config:codex-plugin-tool-allowlist",
-          status: "migrated",
-        }),
-        expect.objectContaining({ id: "config:codex-plugins", status: "migrated" }),
       ]),
     );
     expect(getConfig()).toMatchObject({
@@ -565,28 +509,16 @@ describe("buildCodexMigrationProvider", () => {
         entries: {
           codex: {
             enabled: true,
-            config: {
-              codexPlugins: {
-                enabled: true,
-                allow_destructive_actions: false,
-                plugins: {
-                  "*": { enabled: true },
-                  gmail: {
-                    enabled: true,
-                    marketplaceName: "openai-curated",
-                    pluginName: "gmail",
-                  },
-                },
-              },
-            },
           },
         },
       },
-      tools: { alsoAllow: ["codex"] },
+    });
+    expect(getConfig()).not.toMatchObject({
+      plugins: { entries: { codex: { config: expect.anything() } } },
     });
   });
 
-  it("merges Codex into existing plugin and tool allowlists during apply", async () => {
+  it("merges Codex into existing plugin allowlists during apply", async () => {
     const fixture = await createCodexFixture();
     sourceTesting.setAppServerRequestForTests(async (method: string) => {
       if (method === "plugin/list") {
@@ -623,7 +555,6 @@ describe("buildCodexMigrationProvider", () => {
     expect(plan.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "config:codex-plugin-allowlist", status: "planned" }),
-        expect.objectContaining({ id: "config:codex-plugin-tool-allowlist", status: "planned" }),
       ]),
     );
 
@@ -642,16 +573,15 @@ describe("buildCodexMigrationProvider", () => {
     expect(result.items).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "config:codex-plugin-allowlist", status: "migrated" }),
-        expect.objectContaining({ id: "config:codex-plugin-tool-allowlist", status: "migrated" }),
       ]),
     );
     expect(getConfig()).toMatchObject({
       plugins: { allow: ["browser", "codex"] },
-      tools: { alsoAllow: ["browser", "codex"] },
+      tools: { alsoAllow: ["browser"] },
     });
   });
 
-  it("does not enable Codex plugin bridge config when app auth is still required", async () => {
+  it("reports native plugin activation errors when app auth is still required", async () => {
     const fixture = await createCodexFixture();
     sourceTesting.setAppServerRequestForTests(async (method: string) => {
       if (method === "plugin/list") {
@@ -726,15 +656,12 @@ describe("buildCodexMigrationProvider", () => {
           status: "error",
           reason: expect.stringContaining("requires app authorization"),
         }),
-        expect.objectContaining({ id: "config:codex-plugins", status: "error" }),
+        expect.objectContaining({ id: "config:codex-enabled", status: "migrated" }),
       ]),
     );
-    expect(getConfig()).not.toMatchObject({
-      plugins: { entries: { codex: { config: { codexPlugins: expect.anything() } } } },
-    });
   });
 
-  it("does not enable Codex plugin bridge config when an already-installed app is inaccessible", async () => {
+  it("reports native plugin activation errors when an already-installed app is inaccessible", async () => {
     const fixture = await createCodexFixture();
     sourceTesting.setAppServerRequestForTests(async (method: string) => {
       if (method === "plugin/list") {
@@ -787,15 +714,12 @@ describe("buildCodexMigrationProvider", () => {
           status: "error",
           reason: expect.stringContaining("app is not accessible"),
         }),
-        expect.objectContaining({ id: "config:codex-plugins", status: "error" }),
+        expect.objectContaining({ id: "config:codex-enabled", status: "migrated" }),
       ]),
     );
-    expect(getConfig()).not.toMatchObject({
-      plugins: { entries: { codex: { config: { codexPlugins: expect.anything() } } } },
-    });
   });
 
-  it("does not enable Codex plugin bridge config when any related app is inaccessible", async () => {
+  it("reports native plugin activation errors when any related app is inaccessible", async () => {
     const fixture = await createCodexFixture();
     sourceTesting.setAppServerRequestForTests(async (method: string) => {
       if (method === "plugin/list") {
@@ -846,12 +770,9 @@ describe("buildCodexMigrationProvider", () => {
           status: "error",
           reason: expect.stringContaining("app is not accessible"),
         }),
-        expect.objectContaining({ id: "config:codex-plugins", status: "error" }),
+        expect.objectContaining({ id: "config:codex-enabled", status: "migrated" }),
       ]),
     );
-    expect(getConfig()).not.toMatchObject({
-      plugins: { entries: { codex: { config: { codexPlugins: expect.anything() } } } },
-    });
   });
 
   it("does not call plugin install during dry-run planning", async () => {

@@ -528,45 +528,45 @@ describe("resolvePluginTools optional tools", () => {
       ...baseContext.config,
       plugins: {
         ...baseContext.config.plugins,
-        allow: [...baseContext.config.plugins.allow, "codex"],
+        allow: [...baseContext.config.plugins.allow, "wildcard-demo"],
         entries: {
-          codex: { enabled: true },
+          "wildcard-demo": { enabled: true },
         },
       },
     };
     const registry = createToolRegistry([
       {
-        pluginId: "codex",
+        pluginId: "wildcard-demo",
         optional: true,
-        source: "/tmp/codex.js",
-        names: ["codex_plugin_google_calendar"],
-        declaredNames: ["codex_plugin_*"],
-        factory: () => makeTool("codex_plugin_google_calendar"),
+        source: "/tmp/wildcard-demo.js",
+        names: ["derived_tool_calendar"],
+        declaredNames: ["derived_tool_*"],
+        factory: () => makeTool("derived_tool_calendar"),
       },
     ]);
     loadOpenClawPluginsMock.mockReturnValue(registry);
     installToolManifestSnapshot({
       config,
       plugin: {
-        id: "codex",
+        id: "wildcard-demo",
         origin: "bundled",
         enabledByDefault: false,
         channels: [],
         providers: [],
         contracts: {
-          tools: ["codex_plugin_*"],
+          tools: ["derived_tool_*"],
         },
       },
     });
 
     const tools = resolvePluginTools({
       context: { ...baseContext, config } as never,
-      toolAllowlist: ["codex_plugin_google_calendar"],
+      toolAllowlist: ["derived_tool_calendar"],
       allowGatewaySubagentBinding: true,
     });
 
-    expectResolvedToolNames(tools, ["codex_plugin_google_calendar"]);
-    expectLoaderSelectedOnlyPluginIds(["codex"]);
+    expectResolvedToolNames(tools, ["derived_tool_calendar"]);
+    expectLoaderSelectedOnlyPluginIds(["wildcard-demo"]);
   });
 
   it("auto-loads cold registry for path-based config-origin plugins without pre-warming (#76598)", () => {

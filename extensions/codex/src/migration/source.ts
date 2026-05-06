@@ -58,7 +58,7 @@ type CodexSource = {
   configPath?: string;
   hooksPath?: string;
   skills: CodexSkillSource[];
-  codexPlugins: CodexInstalledPluginSource[];
+  nativePlugins: CodexInstalledPluginSource[];
   pluginDiscoveryError?: string;
   plugins: CodexPluginSource[];
   archivePaths: CodexArchiveSource[];
@@ -348,7 +348,7 @@ export async function discoverCodexSource(
     ...((await exists(configPath)) ? { configPath } : {}),
     ...((await exists(hooksPath)) ? { hooksPath } : {}),
     skills,
-    codexPlugins: appServerPlugins.plugins,
+    nativePlugins: appServerPlugins.plugins,
     ...(appServerPlugins.error ? { pluginDiscoveryError: appServerPlugins.error } : {}),
     plugins,
     archivePaths,
