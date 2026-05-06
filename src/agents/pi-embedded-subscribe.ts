@@ -326,8 +326,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     const { text, addedDuringMessage, chunkerHasBuffered } = args;
 
     // If we're not streaming block replies, ensure the final payload includes
-    // the final text even when interim streaming was enabled.
-    if (state.includeReasoning && text && !params.onBlockReply) {
+    // the final text even when interim streaming/preview callbacks were enabled.
+    // Channel previews (for example Feishu cards) are not a delivery guarantee:
+    // the dispatch result still needs assistantTexts populated so the final
+    // reply can be sent by channels that did not actually open a streaming lane.
+    if (text && !params.onBlockReply) {
       if (assistantTexts.length > state.assistantTextBaseline) {
         assistantTexts.splice(
           state.assistantTextBaseline,
