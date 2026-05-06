@@ -1,7 +1,9 @@
 import path from "node:path";
 import {
   createMigrationItem,
+  createMigrationConfigPatchItem,
   createMigrationManualItem,
+  hasMigrationConfigPatchConflict,
   MIGRATION_REASON_TARGET_EXISTS,
   summarizeMigrationItems,
 } from "openclaw/plugin-sdk/migration";
@@ -11,8 +13,42 @@ import type {
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { exists, sanitizeName } from "./helpers.js";
-import { discoverCodexSource, hasCodexSource, type CodexSkillSource } from "./source.js";
+import {
+  discoverCodexSource,
+  hasCodexSource,
+  type CodexInstalledPluginSource,
+  type CodexSkillSource,
+} from "./source.js";
 import { resolveCodexMigrationTargets } from "./targets.js";
+
+const OPENAI_CURATED_MARKETPLACE = "openai-curated";
+
+type CodexMigrationContext = MigrationProviderContext & {
+  plugins?: string[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readConfigPath(config: unknown, path: readonly string[]): unknown {
+  let current: unknown = config;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function appendUnique(values: readonly string[], value: string): string[] {
+  return values.includes(value) ? [...values] : [...values, value];
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((entry): entry is string => typeof entry === "string");
+}
 
 function uniqueSkillName(skill: CodexSkillSource, counts: Map<string, number>): string {
   const base = sanitizeName(skill.name) || "codex-skill";
@@ -67,10 +103,143 @@ async function buildSkillItems(params: {
   return items;
 }
 
+function normalizePluginSelectionRef(value: string): string {
+  return sanitizeName(value).replace(new RegExp(`@${OPENAI_CURATED_MARKETPLACE}$`, "u"), "");
+}
+
+function readSelectedPlugins(ctx: MigrationProviderContext): Set<string> | undefined {
+  const selected = (ctx as CodexMigrationContext).plugins;
+  if (!selected || selected.length === 0) {
+    return undefined;
+  }
+  return new Set(
+    selected
+      .map((plugin) => normalizePluginSelectionRef(plugin))
+      .filter((plugin) => plugin.length > 0),
+  );
+}
+
+function codexPluginKey(plugin: CodexInstalledPluginSource): string {
+  return sanitizeName(plugin.name) || sanitizeName(plugin.id) || "codex-plugin";
+}
+
+function selectCodexPlugins(params: {
+  plugins: CodexInstalledPluginSource[];
+  selected?: Set<string>;
+}): CodexInstalledPluginSource[] {
+  if (!params.selected) {
+    return params.plugins;
+  }
+  const availableRefs = new Map<string, CodexInstalledPluginSource>();
+  for (const plugin of params.plugins) {
+    const refs = [
+      plugin.name,
+      plugin.id,
+      codexPluginKey(plugin),
+      plugin.id.replace(new RegExp(`@${OPENAI_CURATED_MARKETPLACE}$`, "u"), ""),
+    ];
+    for (const ref of refs) {
+      availableRefs.set(normalizePluginSelectionRef(ref), plugin);
+    }
+  }
+  const selectedPlugins: CodexInstalledPluginSource[] = [];
+  const unknown: string[] = [];
+  for (const ref of params.selected) {
+    const plugin = availableRefs.get(ref);
+    if (!plugin) {
+      unknown.push(ref);
+      continue;
+    }
+    if (!selectedPlugins.some((existing) => existing.id === plugin.id)) {
+      selectedPlugins.push(plugin);
+    }
+  }
+  if (unknown.length > 0) {
+    const available = params.plugins.map((plugin) => plugin.name).toSorted();
+    throw new Error(
+      `No migratable Codex plugin matched ${unknown.map((item) => `"${item}"`).join(", ")}. Available plugins: ${
+        available.length > 0 ? available.join(", ") : "none"
+      }.`,
+    );
+  }
+  return selectedPlugins.toSorted((a, b) => a.name.localeCompare(b.name));
+}
+
+function buildCodexPluginConfigItems(params: { ctx: MigrationProviderContext }): MigrationItem[] {
+  const items: MigrationItem[] = [];
+  items.push(
+    createMigrationConfigPatchItem({
+      id: "config:codex-enabled",
+      target: "plugins.entries.codex.enabled",
+      path: ["plugins", "entries", "codex", "enabled"],
+      value: true,
+      message:
+        "Enable the bundled Codex plugin so migrated Codex plugins run through the native app-server thread.",
+      conflict:
+        !params.ctx.overwrite &&
+        hasMigrationConfigPatchConflict(
+          params.ctx.config,
+          ["plugins", "entries", "codex", "enabled"],
+          true,
+        ),
+    }),
+  );
+
+  const pluginAllow = readConfigPath(params.ctx.config, ["plugins", "allow"]);
+  if (isStringArray(pluginAllow)) {
+    const value = appendUnique(pluginAllow, "codex");
+    items.push(
+      createMigrationConfigPatchItem({
+        id: "config:codex-plugin-allowlist",
+        target: "plugins.allow",
+        path: ["plugins", "allow"],
+        value,
+        message: "Include Codex in the plugin allowlist so the enabled plugin can load.",
+      }),
+    );
+  }
+  return items;
+}
+
+function buildCodexPluginItems(params: {
+  ctx: MigrationProviderContext;
+  plugins: CodexInstalledPluginSource[];
+}): MigrationItem[] {
+  if (params.plugins.length === 0) {
+    return [];
+  }
+  const items: MigrationItem[] = [];
+  for (const plugin of params.plugins) {
+    items.push(
+      createMigrationItem({
+        id: `plugin:${codexPluginKey(plugin)}`,
+        kind: "plugin",
+        action: "install",
+        source: `${OPENAI_CURATED_MARKETPLACE}:${plugin.name}`,
+        status: "planned",
+        message: `Activate Codex plugin "${plugin.displayName}" through Codex app-server.`,
+        details: {
+          pluginId: plugin.id,
+          pluginName: plugin.name,
+          displayName: plugin.displayName,
+          marketplaceName: OPENAI_CURATED_MARKETPLACE,
+          ...(plugin.marketplacePath ? { marketplacePath: plugin.marketplacePath } : {}),
+          sourceInstalled: plugin.installed,
+          sourceEnabled: plugin.enabled,
+          nativeThreadPlugin: true,
+          ...(plugin.accessible !== undefined ? { accessible: plugin.accessible } : {}),
+        },
+      }),
+    );
+  }
+  items.push(...buildCodexPluginConfigItems({ ctx: params.ctx }));
+  return items;
+}
+
 export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
-  const source = await discoverCodexSource(ctx.source);
+  const source = await discoverCodexSource(ctx.source, { config: ctx.config });
   if (!hasCodexSource(source)) {
     throw new Error(
       `Codex state was not found at ${source.root}. Pass --from <path> if it lives elsewhere.`,
@@ -85,14 +254,19 @@ export async function buildCodexMigrationPlan(
       overwrite: ctx.overwrite,
     })),
   );
+  const selectedPlugins = selectCodexPlugins({
+    plugins: source.nativePlugins,
+    selected: readSelectedPlugins(ctx),
+  });
+  items.push(...buildCodexPluginItems({ ctx, plugins: selectedPlugins }));
   for (const [index, plugin] of source.plugins.entries()) {
     items.push(
       createMigrationManualItem({
         id: `plugin:${sanitizeName(plugin.name) || sanitizeName(path.basename(plugin.source))}:${index + 1}`,
         source: plugin.source,
-        message: `Codex native plugin "${plugin.name}" was found but not activated automatically.`,
+        message: `Codex native plugin "${plugin.name}" was found in the cache scan but not activated automatically.`,
         recommendation:
-          "Review the plugin bundle first, then install trusted compatible plugins with openclaw plugins install <path>.",
+          "Codex plugin migration can activate source-installed openai-curated plugins only when app-server discovery is available; review other cached plugin bundles manually.",
       }),
     );
   }
@@ -116,9 +290,19 @@ export async function buildCodexMigrationPlan(
           "Conflicts were found. Re-run with --overwrite to replace conflicting skill targets after item-level backups.",
         ]
       : []),
+    ...(source.pluginDiscoveryError
+      ? [
+          `Codex app-server plugin discovery was unavailable (${source.pluginDiscoveryError}). Cached plugin bundles are reported for manual review only.`,
+        ]
+      : []),
+    ...(selectedPlugins.length > 0
+      ? [
+          "Source-installed openai-curated Codex plugins will be activated through Codex app-server during apply and invoked by native plugin mentions on the main Codex thread. Plugin bytes are not copied manually.",
+        ]
+      : []),
     ...(source.plugins.length > 0
       ? [
-          "Codex native plugins are reported for manual review only. OpenClaw does not auto-activate plugin bundles, hooks, MCP servers, or apps from another Codex home.",
+          "Cached Codex plugin bundles are manual-review fallback items. OpenClaw does not copy plugin bytes or activate non-openai-curated marketplaces.",
         ]
       : []),
     ...(source.archivePaths.length > 0
@@ -136,6 +320,7 @@ export async function buildCodexMigrationPlan(
     warnings,
     nextSteps: [
       "Run openclaw doctor after applying the migration.",
+      "Invoke migrated Codex plugins from Codex-mode turns with native mentions such as [@Google Calendar](plugin://google-calendar).",
       "Review skipped Codex plugin/config/hook items before installing or recreating them in OpenClaw.",
     ],
     metadata: {

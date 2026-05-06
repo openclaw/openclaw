@@ -77,9 +77,33 @@ Verification:
 Goal: preserve useful Codex plugin migration by activating selected plugins in
 Codex app-server, not in OpenClaw's tool registry.
 
-This milestone is intentionally deferred to the stacked migration PR. The first
-PR only lands the native invocation and configuration substrate that migration
-uses.
+User-visible behavior:
+
+- `openclaw migrate codex --plugin <name>` can install or enable selected
+  source-installed `openai-curated` Codex plugins.
+- Migration enables the bundled `codex` plugin and updates `plugins.allow` only
+  when needed for the Codex harness itself.
+- Migration does not write tool allowlist entries or bridge config for Codex
+  plugins.
+
+Implementation scope:
+
+- Discover source-installed plugins through app-server `plugin/list` and
+  related app state through `app/list`.
+- Keep apply-time `plugin/install` plus app, MCP server, and skill reloads.
+- Report inaccessible or unauthorized apps on plugin items.
+- Remove apply-time fallback to bridge config.
+
+Acceptance criteria:
+
+- Selected plugins are installed through app-server APIs.
+- Failed app authorization does not create fallback tool config.
+- Restrictive plugin allowlists are updated only for the bundled `codex` plugin.
+
+Verification:
+
+- Migration provider tests cover planning, selected plugin install, restrictive
+  allowlists, and app authorization failures.
 
 ## 2. Implementation plan
 
@@ -111,12 +135,15 @@ that OpenClaw forwards to `turn/start`.
 
 ### 2.5 Migrate selected plugins through app-server
 
-Deferred to the stacked migration PR. That PR adds Codex source discovery,
-planning, apply-time install/reload behavior, and migration CLI/docs updates.
+This stacked PR adds Codex source discovery, planning, apply-time install/reload
+behavior, and migration CLI/docs updates. The migration provider records native
+plugin items as `plugin` install actions with `nativeThreadPlugin: true`, then
+applies them with Codex app-server control-plane calls instead of OpenClaw tool
+registration.
 
-### 2.6 PR 1 docs, tests, and proof
+### 2.6 PR stack docs, tests, and proof
 
-This PR owns:
+PR 1 owns:
 
 - Harness docs for native mention usage and the removal of bridge tool
   semantics.
@@ -126,3 +153,11 @@ This PR owns:
   registry behavior independent of Codex-native plugin ids.
 - Showboat/dev-gateway/TUI proof that a native plugin mention reaches the main
   Codex app-server thread without a `codex_plugin_*` OpenClaw tool call.
+
+This PR owns:
+
+- CLI migration docs for `openclaw migrate codex --plugin <name>` and native
+  mention usage after migration.
+- Harness docs that explain the migration-specific native setup behavior.
+- Migration provider tests for selected plugin discovery, install, reload,
+  restrictive allowlist handling, and related-app authorization failures.

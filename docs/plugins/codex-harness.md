@@ -277,10 +277,19 @@ Use native Codex mention syntax in a Codex-mode turn:
 [@Google Calendar](plugin://google-calendar) Find a free slot tomorrow afternoon.
 ```
 
-Codex plugin migration is covered by the stacked migration PR. The runtime
-contract here is the same before and after migration: the Codex app-server owns
-plugin activation, app authorization, permission prompts, and transcript
-semantics.
+When `openclaw migrate codex --plugin ...` sees source-installed
+`openai-curated` Codex plugins through app-server discovery, migration applies
+only the native setup:
+
+- enables the bundled `codex` plugin when needed
+- adds `codex` to `plugins.allow` when that allowlist is already restrictive
+- installs or enables the selected `openai-curated` plugin with `plugin/install`
+- reloads Codex skills, MCP servers, and apps through app-server APIs
+
+After migration, the Codex app-server owns plugin activation, app authorization,
+permission prompts, and transcript semantics. If a related app is inaccessible
+or needs authorization, migration reports that on the plugin item instead of
+creating an OpenClaw fallback tool.
 
 ## Workspace bootstrap files
 

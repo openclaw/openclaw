@@ -21,9 +21,11 @@ openclaw migrate list
 openclaw migrate claude --dry-run
 openclaw migrate codex --dry-run
 openclaw migrate codex --skill gog-vault77-google-workspace
+openclaw migrate codex --plugin google-calendar
 openclaw migrate hermes --dry-run
 openclaw migrate hermes
 openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
+openclaw migrate apply codex --yes --plugin google-calendar
 openclaw migrate apply codex --yes
 openclaw migrate apply claude --yes
 openclaw migrate apply hermes --yes
@@ -53,6 +55,9 @@ openclaw onboard --import-from hermes --import-source ~/.hermes
 </ParamField>
 <ParamField path="--skill <name>" type="string">
   Select one skill copy item by skill name or item id. Repeat the flag to migrate multiple skills. When omitted, interactive Codex migrations show a checkbox selector and non-interactive migrations keep all planned skills.
+</ParamField>
+<ParamField path="--plugin <name>" type="string">
+  Select one source-installed `openai-curated` Codex plugin to activate through Codex app-server. Repeat the flag to migrate multiple plugins.
 </ParamField>
 <ParamField path="--no-backup" type="boolean">
   Skip the pre-apply backup. Requires `--force` when local OpenClaw state exists.
@@ -135,13 +140,19 @@ openclaw migrate apply codex --yes --skill gog-vault77-google-workspace
   `.system` cache.
 - Personal AgentSkills under `$HOME/.agents/skills`, copied into the current
   OpenClaw agent workspace when you want per-agent ownership.
+- Source-installed `openai-curated` Codex plugins selected with
+  `--plugin <name>`, activated through the target Codex app-server with
+  `plugin/install`. OpenClaw does not turn these into OpenClaw tools; invoke
+  them from Codex-mode turns with native mentions such as
+  `[@Google Calendar](plugin://google-calendar)`.
 
 ### Manual-review Codex state
 
-Codex native plugins, `config.toml`, and native `hooks/hooks.json` are not
-activated automatically. Plugins may expose MCP servers, apps, hooks, or other
-executable behavior, so the provider reports them for review instead of loading
-them into OpenClaw. Config and hook files are copied into the migration report
+Cached Codex plugin bundles, non-`openai-curated` marketplaces, `config.toml`,
+and native `hooks/hooks.json` are not activated automatically. Plugins may
+expose MCP servers, apps, hooks, or other executable behavior, so the provider
+reports unsafe or undiscoverable bundles for review instead of copying plugin
+bytes into OpenClaw. Config and hook files are copied into the migration report
 for manual review.
 
 ## Hermes provider
