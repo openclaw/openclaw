@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readQaScenarioById } from "./scenario-catalog.js";
-import { QA_SCENARIO_PACKS } from "./scenario-packs.js";
+import { QA_SCENARIO_PACKS, readQaScenarioById } from "./scenario-catalog.js";
 
 describe("qa scenario packs", () => {
   it("points every pack scenario id at a loadable markdown scenario", () => {
