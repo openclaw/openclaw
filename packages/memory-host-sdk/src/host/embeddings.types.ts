@@ -51,6 +51,10 @@ export type EmbeddingProviderOptions = {
   };
   /** Provider-specific output vector dimensions for supported embedding families. */
   outputDimensionality?: number;
+  /** Jina v5 task-specific LoRA adapter for query-time embedding requests. */
+  queryTask?: string;
+  /** Jina v5 task-specific LoRA adapter for document/indexing embedding requests. */
+  documentTask?: string;
   /** Gemini: override the default task type sent with embedding requests. */
   taskType?: GeminiTaskType;
 };

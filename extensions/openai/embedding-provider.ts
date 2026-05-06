@@ -16,6 +16,8 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryTask?: string;
+  documentTask?: string;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -46,11 +48,17 @@ export async function createOpenAiEmbeddingProvider(
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   };
 
+  const resolveTask = (kind: "query" | "document"): string | undefined => {
+    const value = kind === "query" ? client.queryTask : client.documentTask;
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  };
+
   const embed = async (input: string[], kind: "query" | "document"): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
     const inputType = resolveInputType(kind);
+    const task = resolveTask(kind);
     return await fetchRemoteEmbeddingVectors({
       url,
       headers: client.headers,
@@ -60,6 +68,7 @@ export async function createOpenAiEmbeddingProvider(
         model: client.model,
         input,
         ...(inputType ? { input_type: inputType } : {}),
+        ...(task ? { task } : {}),
       },
       errorPrefix: "openai embeddings failed",
     });
@@ -96,5 +105,7 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    queryTask: options.queryTask,
+    documentTask: options.documentTask,
   };
 }

@@ -538,6 +538,32 @@ describe("memory search config", () => {
     expect(resolved?.documentInputType).toBe("document");
   });
 
+  it("merges memory search Jina task overrides", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            queryTask: "retrieval.query",
+            documentTask: "text-matching",
+          },
+        },
+        list: [
+          {
+            id: "main",
+            default: true,
+            memorySearch: {
+              documentTask: "retrieval.passage",
+            },
+          },
+        ],
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.queryTask).toBe("retrieval.query");
+    expect(resolved?.documentTask).toBe("retrieval.passage");
+  });
+
   it("defaults session delta thresholds", () => {
     const cfg = asConfig({
       agents: {

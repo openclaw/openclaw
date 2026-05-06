@@ -33,10 +33,12 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           baseUrl: client.baseUrl,
           model: client.model,
           documentInputType: client.documentInputType ?? client.inputType,
+          documentTask: client.documentTask,
           headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
         },
         batchEmbed: async (batch) => {
           const inputType = client.documentInputType ?? client.inputType;
+          const task = client.documentTask;
           const byCustomId = await runOpenAiEmbeddingBatches({
             openAi: client,
             agentId: batch.agentId,
@@ -48,6 +50,7 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
                 model: client.model,
                 input: chunk.text,
                 ...(inputType ? { input_type: inputType } : {}),
+                ...(task ? { task } : {}),
               },
             })),
             wait: batch.wait,

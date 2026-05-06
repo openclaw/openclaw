@@ -53,6 +53,8 @@ export type MemoryEmbeddingProviderCreateOptions = {
     modelCacheDir?: string;
   };
   outputDimensionality?: number;
+  queryTask?: string;
+  documentTask?: string;
   taskType?:
     | "RETRIEVAL_QUERY"
     | "RETRIEVAL_DOCUMENT"

@@ -212,6 +212,48 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
   </Accordion>
+  <Accordion title="Jina v5 task parameters (OpenAI-compatible)">
+    When using Jina v5 embedding models through an OpenAI-compatible endpoint, you can configure task-specific LoRA adapters to optimise embeddings for different retrieval and matching scenarios. This is controlled via the `queryTask` and `documentTask` fields under `memorySearch`.
+
+    | Key            | Type     | Default | Description                                                              |
+    | -------------- | -------- | ------- | ------------------------------------------------------------------------ |
+    | `queryTask`    | `string` | unset   | Task adapter for query embeddings (e.g. `"retrieval.query"`)              |
+    | `documentTask` | `string` | unset   | Task adapter for document/indexing embeddings (e.g. `"retrieval.passage"`) |
+
+    Supported task values:
+
+    - `"retrieval.query"` / `"retrieval.passage"` — asymmetric retrieval
+    - `"text-matching"` — symmetric semantic matching
+    - `"clustering"` — cluster-friendly embeddings
+    - `"classification"` — classification-friendly embeddings
+    - `"separation"` — separation-focused embeddings
+
+    When left unset, Jina v5 defaults to general-purpose embeddings.
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            remote: {
+              baseUrl: "https://api.jina.ai/v1",
+              apiKey: "env:JINA_API_KEY",
+            },
+            model: "jina-embeddings-v3",
+            queryTask: "retrieval.query",
+            documentTask: "retrieval.passage",
+          },
+        },
+      },
+    }
+    ```
+
+    <Note>
+    The document `task` field is included in the embedding cache identity, so changing task values triggers automatic cache invalidation for existing indexed embeddings. This parameter is forwarded only for OpenAI-compatible embedding providers; it is not applied to Mistral or LM Studio embedding providers.
+    </Note>
+
+  </Accordion>
   <Accordion title="Bedrock">
     ### Bedrock embedding config
 

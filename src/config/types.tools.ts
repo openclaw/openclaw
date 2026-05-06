@@ -406,6 +406,18 @@ export type MemorySearchConfig = {
    * Supported values today are 768, 1536, and 3072.
    */
   outputDimensionality?: number;
+  /**
+   * Jina v5 task-specific LoRA adapter for query-time embedding requests.
+   * Supported values: "retrieval.query", "text-matching", "clustering", "classification", "separation".
+   * When not set, Jina v5 defaults to general-purpose embeddings.
+   */
+  queryTask?: string;
+  /**
+   * Jina v5 task-specific LoRA adapter for document/indexing embedding requests.
+   * Supported values: "retrieval.passage", "text-matching", "clustering", "classification", "separation".
+   * When not set, Jina v5 defaults to general-purpose embeddings.
+   */
+  documentTask?: string;
   /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */
