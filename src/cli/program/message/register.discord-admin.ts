@@ -57,6 +57,65 @@ export function registerMessageDiscordAdminCommands(message: Command, helpers: M
       await helpers.runMessageAction("channel-list", opts);
     });
 
+  helpers
+    .withMessageBase(
+      channel
+        .command("create")
+        .description("Create a channel")
+        .requiredOption("--guild-id <id>", "Guild id")
+        .requiredOption("--name <name>", "Channel name"),
+    )
+    .option("--type <n>", "Channel type")
+    .option("--parent-id <id>", "Parent category id")
+    .option("--topic <text>", "Channel topic")
+    .option("--position <n>", "Channel position")
+    .option("--nsfw", "Mark channel as NSFW", false)
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-create", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      channel
+        .command("edit")
+        .description("Edit a channel")
+        .requiredOption("--channel-id <id>", "Channel id"),
+    )
+    .option("--name <name>", "Channel name")
+    .option("--parent-id <id>", "Parent category id")
+    .option("--topic <text>", "Channel topic")
+    .option("--position <n>", "Channel position")
+    .option("--nsfw", "Mark channel as NSFW")
+    .option("--rate-limit-per-user <n>", "Slowmode seconds")
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-edit", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      channel
+        .command("delete")
+        .description("Delete a channel")
+        .requiredOption("--channel-id <id>", "Channel id"),
+    )
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-delete", opts);
+    });
+
+  helpers
+    .withMessageBase(
+      channel
+        .command("move")
+        .description("Move a channel")
+        .requiredOption("--guild-id <id>", "Guild id")
+        .requiredOption("--channel-id <id>", "Channel id")
+        .requiredOption("--position <n>", "New channel position"),
+    )
+    .option("--parent-id <id>", "Parent category id")
+    .action(async (opts) => {
+      await helpers.runMessageAction("channel-move", opts);
+    });
+
   const member = message.command("member").description("Member actions");
   helpers
     .withMessageBase(
