@@ -2922,6 +2922,61 @@ describe("matrix live qa scenarios", () => {
     });
   });
 
+  it("accepts shortened Matrix tool progress error preview lines", async () => {
+    const previewEventId = "$tool-progress-error-short-preview";
+    const previewEvent = matrixQaMessageEvent({
+      kind: "notice",
+      eventId: previewEventId,
+      body: "Nautiling...\n- `📖 Read: from…ng-matrix-tool-progress-target.txt`",
+    });
+    const { waitForRoomEvent } = mockMatrixQaRoomClient({
+      driverEventId: "$tool-progress-error-short-trigger",
+      events: [
+        {
+          event: previewEvent,
+          since: "driver-sync-preview",
+        },
+        {
+          event: ({ sendTextMessage }) =>
+            matrixQaMessageEvent({
+              kind: "notice",
+              eventId: "$tool-progress-error-short-final",
+              body: readMatrixQaReplyDirective(
+                sendTextMessage.mock.calls[0]?.[0]?.body,
+                "MATRIX_QA_TOOL_PROGRESS_ERROR_SHORT_FIXED",
+              ),
+              relatesTo: {
+                relType: "m.replace",
+                eventId: previewEventId,
+              },
+            }),
+          since: "driver-sync-next",
+        },
+      ],
+    });
+
+    const scenario = MATRIX_QA_SCENARIOS.find(
+      (entry) => entry.id === "matrix-room-tool-progress-error",
+    );
+    expect(scenario).toBeDefined();
+
+    await expect(runMatrixQaScenario(scenario!, matrixQaScenarioContext())).resolves.toMatchObject({
+      artifacts: {
+        previewBodyPreview: "Nautiling...\n- `📖 Read: from…ng-matrix-tool-progress-target.txt`",
+        previewEventId,
+        reply: {
+          eventId: "$tool-progress-error-short-final",
+          relatesTo: {
+            eventId: previewEventId,
+            relType: "m.replace",
+          },
+        },
+      },
+    });
+
+    expect(waitForRoomEvent).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps Matrix-looking tool progress mentions inert in partial previews", async () => {
     const previewEventId = "$tool-progress-mention-preview";
     mockMatrixQaRoomClient({
