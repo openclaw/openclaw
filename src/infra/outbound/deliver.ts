@@ -556,6 +556,7 @@ function createChannelOutboundContextBase(
     mediaAccess: params.mediaAccess,
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
+    abortSignal: params.abortSignal,
     gatewayClientScopes: params.gatewayClientScopes,
   };
 }
