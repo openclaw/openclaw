@@ -3,6 +3,7 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -88,7 +89,8 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
   isBillingErrorMessage: () => false,
   isLikelyContextOverflowError: () => false,
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-  isRateLimitErrorMessage: () => false,
+  isRateLimitErrorMessage: (message: string) =>
+    /rate.limit|too many requests|429|usage limit/i.test(message),
   isTransientHttpError: () => false,
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
@@ -272,6 +274,7 @@ function createMockReplyOperation(): {
       attachBackend: vi.fn(),
       detachBackend: vi.fn(),
       complete: vi.fn(),
+      completeThen: vi.fn((afterClear: () => void) => afterClear()),
       fail: failMock,
       abortByUser: vi.fn(),
       abortForRestart: vi.fn(),
@@ -1142,7 +1145,185 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("publishes Codex app-server telemetry to agent event subscribers", async () => {
+  it("skips channel item progress when a matching tool event carries the progress", async () => {
+    const onItemEvent = vi.fn();
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "bash",
+      phase: "start",
+      args: { command: "pnpm test" },
+      detailMode: undefined,
+    });
+  });
+
+  it("preserves suppressed item progress when no tool-start callback is registered", async () => {
+    const onItemEvent = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "item",
+        data: {
+          itemId: "cmd-1",
+          kind: "command",
+          title: "Command",
+          name: "bash",
+          phase: "start",
+          status: "running",
+          suppressChannelProgress: true,
+        },
+      });
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          itemId: "cmd-1",
+          toolCallId: "cmd-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "pnpm test" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onItemEvent,
+        } satisfies GetReplyOptions,
+      }),
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onItemEvent).toHaveBeenCalledWith({
+      itemId: "cmd-1",
+      kind: "command",
+      title: "Command",
+      name: "bash",
+      phase: "start",
+      status: "running",
+    });
+  });
+
+  it("forwards raw tool progress detail mode to tool-start reply options", async () => {
+    const onToolStart = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "pnpm test -- --watch=false" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      toolProgressDetail: "raw",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "pnpm test -- --watch=false" },
+      detailMode: "raw",
+    });
+  });
+
+  it("fires tool-start progress before slow typing signals resolve for best-effort Pi events", async () => {
+    const onToolStart = vi.fn(async () => {});
+    let releaseTyping: (() => void) | undefined;
+    const typingSignals = createMockTypingSignaler();
+    vi.mocked(typingSignals.signalToolStart).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseTyping = resolve;
+        }),
+    );
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      void params.onAgentEvent?.({
+        stream: "tool",
+        data: {
+          name: "exec",
+          phase: "start",
+          args: { command: "echo hi" },
+        },
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        opts: {
+          onToolStart,
+        } satisfies GetReplyOptions,
+      }),
+      typingSignals,
+    });
+
+    try {
+      expect(result.kind).toBe("success");
+      expect(onToolStart).toHaveBeenCalledWith({
+        name: "exec",
+        phase: "start",
+        args: { command: "echo hi" },
+        detailMode: undefined,
+      });
+    } finally {
+      releaseTyping?.();
+      await Promise.resolve();
+    }
+  });
+
+  it("leaves Codex app-server telemetry publication to the harness", async () => {
     const agentEvents = await import("../../infra/agent-events.js");
     const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -1183,15 +1364,12 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
-    expect(emitAgentEvent).toHaveBeenCalledWith({
-      runId: "run-codex",
-      stream: "codex_app_server.guardian",
-      sessionKey: "agent:main:subagent:codex-child",
-      data: {
-        phase: "blocked",
-        message: "command requires approval",
-      },
-    });
+    expect(emitAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-codex",
+        stream: "codex_app_server.guardian",
+      }),
+    );
   });
 
   it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
@@ -1993,6 +2171,98 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("surfaces Codex usage-limit reset details for pure fallback exhaustion", async () => {
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error(`All models failed (1): openai/gpt-5.5: ${codexMessage}`), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: codexMessage,
+            reason: "rate_limit",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
+      expect(result.payload.text).not.toContain("All models failed");
+      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+  });
+
+  it("surfaces direct Codex usage-limit errors when fallback does not wrap one attempt", async () => {
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(new Error(codexMessage));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(`⚠️ ${codexMessage}`);
+      expect(getReplyPayloadMetadata(result.payload)).toMatchObject({
+        deliverDespiteSourceReplySuppression: true,
+      });
+    }
+  });
+
   it("surfaces billing guidance for pure billing cooldown fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(
@@ -2238,6 +2508,55 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
     }
   });
+
+  it.each([
+    {
+      rejection: new Error("CLI exceeded timeout (300s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: undefined as string | undefined,
+    },
+    {
+      rejection: new Error("CLI produced no output for 120s and was terminated."),
+      modeLabel: "no-output stall" as const,
+      routingSubstring: undefined,
+    },
+    {
+      rejection: new Error(
+        "All models failed (2): anthropic/claude-opus-4-7: CLI exceeded timeout (300s) and was terminated. | anthropic/foo: bar",
+      ),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing anthropic/claude-opus-4-7)",
+    },
+    {
+      rejection: new Error("codex-cli/gpt-5.5: CLI exceeded timeout (60s) and was terminated."),
+      modeLabel: "overall CLI turn budget" as const,
+      routingSubstring: "(routing codex-cli/gpt-5.5)",
+    },
+  ])(
+    "surfaces CLI subprocess timeout copy instead of generic failure when verbose is off ($modeLabel)",
+    async ({ rejection, modeLabel, routingSubstring }) => {
+      state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        ...createMinimalRunAgentTurnParams(),
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind !== "final") {
+        throw new Error("expected final reply");
+      }
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).toContain("CLI subprocess");
+      expect(result.payload.text).not.toContain("Claude CLI");
+      expect(result.payload.text).toContain(modeLabel);
+      expect(result.payload.text).toContain("gateway may still be healthy");
+      expect(result.payload.text).toContain("cliBackends.<your-runtime>");
+      if (routingSubstring) {
+        expect(result.payload.text).toContain(routingSubstring);
+      }
+    },
+  );
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(

@@ -183,6 +183,9 @@ describe("config schema", () => {
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
       "Discord Progress Tool Lines",
     );
+    expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
+      "Mattermost Progress Label",
+    );
   });
 
   it("omits a single oversized plugin schema from the full schema response", () => {

@@ -130,9 +130,6 @@ export async function createGatewayRuntimeState(params: {
         });
         if (handler.rootDir) {
           canvasHost = handler;
-          params.logCanvas.info(
-            `canvas host mounted at http://${params.bindHost}:${params.port}${CANVAS_HOST_PATH}/ (root ${handler.rootDir})`,
-          );
         }
       } catch (err) {
         params.logCanvas.warn(`canvas host failed to start: ${String(err)}`);

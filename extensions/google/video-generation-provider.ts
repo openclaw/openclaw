@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -7,7 +7,7 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type {
   GeneratedVideoAsset,
@@ -26,7 +26,7 @@ import { createGoogleGenAI, type GoogleGenAIClient } from "./google-genai-runtim
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
-const MAX_POLL_ATTEMPTS = 90;
+const MAX_POLL_ATTEMPTS = 120;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
@@ -151,24 +151,22 @@ async function downloadGeneratedVideo(params: {
   file: unknown;
   index: number;
 }): Promise<GeneratedVideoAsset> {
-  const tempDir = await mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-google-video-"),
+  return await withTempWorkspace(
+    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-google-video-" },
+    async ({ dir: tempDir }) => {
+      const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
+      await params.client.files.download({
+        file: params.file as never,
+        downloadPath,
+      });
+      const buffer = await readFile(downloadPath);
+      return {
+        buffer,
+        mimeType: "video/mp4",
+        fileName: `video-${params.index + 1}.mp4`,
+      };
+    },
   );
-  const downloadPath = path.join(tempDir, `video-${params.index + 1}.mp4`);
-  try {
-    await params.client.files.download({
-      file: params.file as never,
-      downloadPath,
-    });
-    const buffer = await readFile(downloadPath);
-    return {
-      buffer,
-      mimeType: "video/mp4",
-      fileName: `video-${params.index + 1}.mp4`,
-    };
-  } finally {
-    await rm(tempDir, { recursive: true, force: true });
-  }
 }
 
 function resolveGoogleGeneratedVideoDownloadUrl(params: {
@@ -322,7 +320,6 @@ async function generateGoogleVideoViaRest(params: {
   durationSeconds?: number;
   aspectRatio?: "16:9" | "9:16";
   resolution?: "720p" | "1080p";
-  audio?: boolean;
 }): Promise<unknown> {
   let operation = await requestGoogleVideoJson({
     url: `${params.baseUrl}/${resolveGoogleVideoRestModelPath(params.model)}:predictLongRunning`,
@@ -337,7 +334,6 @@ async function generateGoogleVideoViaRest(params: {
           : {}),
         ...(params.aspectRatio ? { aspectRatio: params.aspectRatio } : {}),
         ...(params.resolution ? { resolution: params.resolution } : {}),
-        ...(params.audio === true ? { generateAudio: true } : {}),
       },
     },
   });
@@ -429,7 +425,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
             ...(typeof durationSeconds === "number" ? { durationSeconds } : {}),
             ...(aspectRatio ? { aspectRatio } : {}),
             ...(resolution ? { resolution } : {}),
-            ...(req.audio === true ? { generateAudio: true } : {}),
           },
         });
       } catch (error) {
@@ -446,7 +441,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           durationSeconds,
           aspectRatio,
           resolution,
-          audio: req.audio,
         });
       }
 
@@ -480,7 +474,6 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           durationSeconds,
           aspectRatio,
           resolution,
-          audio: req.audio,
         });
         generatedVideos = extractGeneratedVideos(operation);
       }

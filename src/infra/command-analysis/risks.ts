@@ -1,4 +1,11 @@
 import { splitShellArgs } from "../../utils/shell-argv.js";
+import {
+  COMMAND_CARRIER_EXECUTABLES,
+  isEnvAssignmentToken,
+  parseEnvInvocationPrelude,
+  resolveCarrierCommandArgv,
+  SOURCE_EXECUTABLES,
+} from "../command-carriers.js";
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
@@ -8,9 +15,7 @@ import {
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
-export const COMMAND_CARRIER_EXECUTABLES = new Set(["sudo", "doas", "env", "command", "builtin"]);
-
-export const SOURCE_EXECUTABLES = new Set([".", "source"]);
+export { COMMAND_CARRIER_EXECUTABLES, resolveCarrierCommandArgv, SOURCE_EXECUTABLES };
 
 export type CommandCarrierHit = {
   command: string;
@@ -19,279 +24,38 @@ export type CommandCarrierHit = {
 
 export type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: string };
 
-const MAX_INLINE_EVAL_CARRIER_DEPTH = 4;
-
-const COMMAND_EXECUTING_OPTIONS = new Set(["-p"]);
-const COMMAND_QUERY_OPTIONS = new Set(["-v", "-V"]);
-const ENV_OPTIONS_WITH_VALUE = new Set([
-  "-C",
-  "-S",
-  "-u",
-  "--argv0",
-  "--block-signal",
-  "--chdir",
-  "--default-signal",
-  "--ignore-signal",
-  "--split-string",
-  "--unset",
-]);
-const ENV_STANDALONE_OPTIONS = new Set(["-0", "-i", "--ignore-environment", "--null"]);
-const SUDO_OPTIONS_WITH_VALUE = new Set([
-  "-C",
-  "-D",
-  "-g",
-  "-h",
-  "-p",
-  "-R",
-  "-T",
-  "-U",
-  "-u",
-  "--chdir",
-  "--close-from",
-  "--group",
-  "--host",
-  "--other-user",
-  "--prompt",
-  "--role",
-  "--type",
-  "--user",
-]);
-const SUDO_STANDALONE_OPTIONS = new Set([
-  "-A",
-  "-b",
-  "-E",
-  "-H",
-  "-n",
-  "-P",
-  "-S",
-  "--askpass",
-  "--background",
-  "--login",
-  "--non-interactive",
-  "--preserve-env",
-  "--reset-home",
-  "--stdin",
-]);
-const SUDO_NON_EXEC_OPTIONS = new Set([
-  "-K",
-  "-k",
-  "-l",
-  "-V",
-  "-v",
-  "-e",
-  "--edit",
-  "--help",
-  "--list",
-  "--remove-timestamp",
-  "--reset-timestamp",
-  "--validate",
-  "--version",
-]);
-const DOAS_OPTIONS_WITH_VALUE = new Set(["-a", "-C", "-u"]);
-const DOAS_STANDALONE_OPTIONS = new Set(["-L", "-n", "-s"]);
-const EXEC_OPTIONS_WITH_VALUE = new Set(["-a"]);
-const EXEC_STANDALONE_OPTIONS = new Set(["-c", "-l"]);
-
-function isEnvAssignmentToken(token: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+function commandArgvKey(argv: readonly string[]): string {
+  return argv.join("\0");
 }
 
-function optionName(token: string): string {
-  return token.split("=", 1)[0] ?? token;
+function isCommandCarrierExecutable(executable: string, options?: { includeExec?: boolean }) {
+  return (
+    COMMAND_CARRIER_EXECUTABLES.has(executable) ||
+    Boolean(options?.includeExec && executable === "exec")
+  );
 }
 
-function hasInlineShortOptionValue(token: string): boolean {
-  return /^-[A-Za-z].+/u.test(token) && token.length > 2;
-}
-
-function resolveEnvSplitPayload(payload: string, depth: number): string[] | null {
-  const innerArgv = splitShellArgs(payload);
-  if (!innerArgv || innerArgv.length === 0) {
-    return null;
-  }
-  return resolveEnvCarriedArgv(["env", ...innerArgv], depth + 1) ?? innerArgv;
-}
-
-function resolveEnvCarriedArgv(argv: string[], depth = 0): string[] | null {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH || normalizeExecutableToken(argv[0] ?? "") !== "env") {
-    return null;
-  }
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? "";
-    if (!token) {
-      return null;
-    }
-    if (isEnvAssignmentToken(token)) {
-      continue;
-    }
-    if (token === "--") {
-      return argv.slice(index + 1);
-    }
-    if (token === "-S" || token === "--split-string") {
-      const payload = argv[index + 1];
-      return typeof payload === "string" ? resolveEnvSplitPayload(payload, depth) : null;
-    }
-    if (token.startsWith("--split-string=")) {
-      return resolveEnvSplitPayload(token.slice("--split-string=".length), depth);
-    }
-    if (token.startsWith("-S") && token.length > 2) {
-      return resolveEnvSplitPayload(token.slice(2), depth);
-    }
-    if (token.startsWith("-")) {
-      const normalized = optionName(token);
-      if (ENV_STANDALONE_OPTIONS.has(normalized)) {
-        continue;
-      }
-      if (ENV_OPTIONS_WITH_VALUE.has(normalized)) {
-        if (!token.includes("=") && !hasInlineShortOptionValue(token)) {
-          index += 1;
-        }
-        continue;
-      }
-      return null;
-    }
-    return argv.slice(index);
-  }
-  return null;
-}
-
-function resolveCommandBuiltinCarriedArgv(argv: string[]): string[] | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (executable !== "command" && executable !== "builtin") {
-    return null;
-  }
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? "";
-    if (token === "--") {
-      return argv.slice(index + 1);
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(index);
-    }
-    const normalized = optionName(token);
-    if (COMMAND_QUERY_OPTIONS.has(normalized)) {
-      return null;
-    }
-    if (!COMMAND_EXECUTING_OPTIONS.has(normalized)) {
-      return null;
-    }
-  }
-  return null;
-}
-
-function resolveSudoLikeCarriedArgv(argv: string[]): string[] | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  const standaloneOptions =
-    executable === "sudo"
-      ? SUDO_STANDALONE_OPTIONS
-      : executable === "doas"
-        ? DOAS_STANDALONE_OPTIONS
-        : null;
-  const optionsWithValue =
-    executable === "sudo"
-      ? SUDO_OPTIONS_WITH_VALUE
-      : executable === "doas"
-        ? DOAS_OPTIONS_WITH_VALUE
-        : null;
-  if (!standaloneOptions || !optionsWithValue) {
-    return null;
-  }
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? "";
-    if (token === "--") {
-      return argv.slice(index + 1);
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(index);
-    }
-    const normalized = optionName(token);
-    if (executable === "sudo" && SUDO_NON_EXEC_OPTIONS.has(normalized)) {
-      return null;
-    }
-    if (standaloneOptions.has(normalized)) {
-      continue;
-    }
-    if (optionsWithValue.has(normalized)) {
-      if (!token.includes("=") && !hasInlineShortOptionValue(token)) {
-        index += 1;
-      }
-      continue;
-    }
-    return null;
-  }
-  return null;
-}
-
-export function resolveCarrierCommandArgv(
+export function buildCommandPayloadCandidates(
   argv: string[],
-  depth = 0,
-  options?: { includeExec?: boolean },
-): string[] | null {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH) {
-    return null;
-  }
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  switch (executable) {
-    case "env":
-      return resolveEnvCarriedArgv(argv, depth);
-    case "command":
-    case "builtin":
-      return resolveCommandBuiltinCarriedArgv(argv);
-    case "sudo":
-    case "doas":
-      return resolveSudoLikeCarriedArgv(argv);
-    case "exec":
-      return options?.includeExec ? resolveExecCarriedArgv(argv) : null;
-    default:
-      return null;
-  }
-}
-
-function resolveExecCarriedArgv(argv: string[]): string[] | null {
-  if (normalizeExecutableToken(argv[0] ?? "") !== "exec") {
-    return null;
-  }
-  for (let index = 1; index < argv.length; index += 1) {
-    const token = argv[index] ?? "";
-    if (token === "--") {
-      return argv.slice(index + 1);
-    }
-    if (!token.startsWith("-")) {
-      return argv.slice(index);
-    }
-    const normalized = optionName(token);
-    if (EXEC_STANDALONE_OPTIONS.has(normalized)) {
-      continue;
-    }
-    if (EXEC_OPTIONS_WITH_VALUE.has(normalized)) {
-      if (!token.includes("=") && !hasInlineShortOptionValue(token)) {
-        index += 1;
-      }
-      continue;
-    }
-    return null;
-  }
-  return null;
-}
-
-export function buildCommandPayloadCandidates(argv: string[], depth = 0): string[] {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH) {
+  seenArgv = new Set<string>(),
+): string[] {
+  const key = commandArgvKey(argv);
+  if (seenArgv.has(key)) {
     return argv.length > 0 ? [argv.join(" ")] : [];
   }
+  seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
-  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, depth, {
+  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, 0, {
     includeExec: true,
   });
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
-  const carriedCandidates = carriedArgv
-    ? buildCommandPayloadCandidates(carriedArgv, depth + 1)
-    : [];
+  const carriedCandidates = carriedArgv ? buildCommandPayloadCandidates(carriedArgv, seenArgv) : [];
   const shellWrapperPayload = extractShellWrapperInlineCommand(executableArgv);
   const shellWrapperCandidates = shellWrapperPayload
     ? (() => {
         const innerArgv = splitShellArgs(shellWrapperPayload);
         return innerArgv
-          ? buildCommandPayloadCandidates(innerArgv, depth + 1)
+          ? buildCommandPayloadCandidates(innerArgv, seenArgv)
           : [shellWrapperPayload];
       })()
     : [];
@@ -314,34 +78,56 @@ function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
   return [...new Set(candidates.filter((candidate) => candidate.trim().length > 0))];
 }
 
-export function detectCarrierInlineEvalArgv(
+function detectCarrierInlineEvalArgvInternal(
   argv: string[],
-  depth = 0,
+  seenArgv: Set<string>,
 ): InterpreterInlineEvalHit | null {
-  if (depth > MAX_INLINE_EVAL_CARRIER_DEPTH) {
+  const executableArgv = stripLeadingEnvAssignments(argv);
+  const key = commandArgvKey(executableArgv);
+  if (seenArgv.has(key)) {
     return null;
   }
-  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
+  seenArgv.add(key);
+
+  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(executableArgv);
   if (dispatchUnwrap.kind === "unwrapped") {
-    return detectInlineEvalArgv(dispatchUnwrap.argv, depth + 1);
+    return detectInlineEvalArgvInternal(dispatchUnwrap.argv, seenArgv);
   }
 
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
+  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv, depth);
-  return carriedArgv ? detectInlineEvalArgv(carriedArgv, depth + 1) : null;
+  const carriedArgv = resolveCarrierCommandArgv(executableArgv, 0, { includeExec: true });
+  if (!carriedArgv) {
+    return null;
+  }
+  return (
+    detectInterpreterInlineEvalArgv(carriedArgv) ??
+    detectCarrierInlineEvalArgvInternal(carriedArgv, seenArgv)
+  );
 }
 
-export function detectInlineEvalArgv(
+export function detectCarrierInlineEvalArgv(argv: string[]): InterpreterInlineEvalHit | null {
+  return detectCarrierInlineEvalArgvInternal(argv, new Set());
+}
+
+function detectInlineEvalArgvInternal(
   argv: string[] | undefined | null,
-  depth = 0,
+  seenArgv: Set<string>,
 ): InterpreterInlineEvalHit | null {
   if (!Array.isArray(argv)) {
     return null;
   }
-  return detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgv(argv, depth);
+  return (
+    detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgvInternal(argv, seenArgv)
+  );
+}
+
+export function detectInlineEvalArgv(
+  argv: string[] | undefined | null,
+): InterpreterInlineEvalHit | null {
+  return detectInlineEvalArgvInternal(argv, new Set());
 }
 
 export function detectInlineEvalInSegments(
@@ -384,13 +170,30 @@ export function detectEnvSplitStringFlag(argv: string[]): string | null {
   if (normalizeExecutableToken(argv[0] ?? "") !== "env") {
     return null;
   }
-  for (const arg of argv.slice(1)) {
+  const parsed = parseEnvInvocationPrelude(argv);
+  if (!parsed?.splitArgv) {
+    return null;
+  }
+  for (const arg of argv.slice(1, parsed.commandIndex)) {
     const token = arg.trim();
-    if (token === "-S" || token === "--split-string") {
+    if (token === "-S" || token === "-s") {
       return token;
+    }
+    if (token === "--split-string") {
+      return "--split-string";
     }
     if (token.startsWith("--split-string=") || (token.startsWith("-S") && token.length > 2)) {
       return token.startsWith("--") ? "--split-string" : "-S";
+    }
+    if (token.startsWith("-") && !token.startsWith("--")) {
+      for (const option of token.slice(1)) {
+        if (option === "S") {
+          return "-S";
+        }
+        if (option === "s") {
+          return "-s";
+        }
+      }
     }
   }
   return null;
@@ -401,10 +204,10 @@ export function detectShellWrapperThroughCarrierArgv(
   shellCommandFlag: (argv: string[], startIndex: number) => unknown,
 ): string | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv);
+  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
   if (!carriedArgv) {
     return null;
   }
@@ -416,10 +219,10 @@ export function detectShellWrapperThroughCarrierArgv(
 
 export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuiltinHit | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!COMMAND_CARRIER_EXECUTABLES.has(executable)) {
+  if (!isCommandCarrierExecutable(executable, { includeExec: true })) {
     return null;
   }
-  const carriedArgv = resolveCarrierCommandArgv(argv);
+  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
   if (!carriedArgv) {
     return null;
   }

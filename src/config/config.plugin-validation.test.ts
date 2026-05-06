@@ -253,6 +253,44 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("reports catalog install hints for missing configured official external plugins", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { brave: { enabled: true } },
+          allow: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
+    expect(res.warnings ?? []).toEqual(
+      expect.arrayContaining([
+        { path: "plugins.entries.brave", message },
+        { path: "plugins.allow", message },
+      ]),
+    );
+    expect(
+      (res.warnings ?? []).some(
+        (warning) =>
+          (warning.path === "plugins.entries.brave" || warning.path === "plugins.allow") &&
+          warning.message.includes("remove it from plugins config"),
+      ),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "reports configured blocked plugins without stale not-found wording",
     async () => {
@@ -465,6 +503,36 @@ describe("config plugin validation", () => {
       message: "unknown channel id: telegarm",
     });
     expect(res.warnings).not.toContainEqual(expect.objectContaining({ path: "channels.telegarm" }));
+  });
+
+  it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", async () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        channels: {
+          discord: { token: "xxx" },
+        },
+        plugins: {
+          allow: ["discord"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.warnings ?? []).toContainEqual({
+      path: "plugins.allow",
+      message:
+        "plugin not installed: discord — install the official external plugin with: openclaw plugins install @openclaw/discord",
+    });
   });
 
   it("uses persisted installed-plugin records as stale channel evidence", async () => {

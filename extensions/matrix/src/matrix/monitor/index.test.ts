@@ -483,6 +483,8 @@ describe("monitorMatrixProvider", () => {
     [{ mode: "progress" }, "progress", true],
     [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
     [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
+    [{ mode: "partial", progress: { toolProgress: false } }, "partial", true],
+    [{ mode: "quiet", progress: { toolProgress: false } }, "quiet", true],
     [{ mode: "progress", progress: { toolProgress: false } }, "progress", false],
     [
       { mode: "progress", progress: { toolProgress: false }, preview: { toolProgress: true } },

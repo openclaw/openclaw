@@ -89,19 +89,19 @@ export function resolveCommandAnalysisSummaryForDisplay(params: {
   sanitizeText?: (value: string) => string;
 }): CommandExplanationSummary | null {
   const analysis =
-    Array.isArray(params.commandArgv) && params.commandArgv.length > 0
-      ? analyzeCommandForPolicy({
-          source: "argv",
-          argv: params.commandArgv,
-          cwd: params.cwd ?? undefined,
-        })
-      : params.host === "node"
-        ? null
-        : analyzeCommandForPolicy({
-            source: "shell",
-            command: params.commandText,
+    params.host === "node"
+      ? Array.isArray(params.commandArgv) && params.commandArgv.length > 0
+        ? analyzeCommandForPolicy({
+            source: "argv",
+            argv: params.commandArgv,
             cwd: params.cwd ?? undefined,
-          });
+          })
+        : null
+      : analyzeCommandForPolicy({
+          source: "shell",
+          command: params.commandText,
+          cwd: params.cwd ?? undefined,
+        });
   if (!analysis?.ok) {
     return null;
   }

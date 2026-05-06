@@ -103,6 +103,10 @@ function normalizePromptRouteChannel(raw?: string | null): string | undefined {
   return normalized && normalized !== "none" ? normalized : undefined;
 }
 
+function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefined {
+  return value === "explain" || value === "raw" ? value : undefined;
+}
+
 function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
   return (
     normalizePromptRouteChannel(entry?.origin?.provider) ??
@@ -1067,6 +1071,9 @@ export async function runPreparedReply(
     defaultModel,
     agentCfgContextTokens: agentCfg?.contextTokens,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    toolProgressDetail:
+      normalizeToolProgressDetail(agentCfg?.toolProgressDetail) ??
+      normalizeToolProgressDetail(cfg.agents?.defaults?.toolProgressDetail),
     isNewSession,
     blockStreamingEnabled,
     blockReplyChunking,

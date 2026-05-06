@@ -41,6 +41,82 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
   });
 });
 
+describe("statusSummaryRuntime.classifySessionKey", () => {
+  it("classifies cron history sessions distinctly", () => {
+    expect(statusSummaryRuntime.classifySessionKey("agent:main:cron:daily-digest")).toBe("cron");
+    expect(
+      statusSummaryRuntime.classifySessionKey("agent:avery:cron:daily-digest:run:abc123"),
+    ).toBe("cron");
+  });
+});
+
+describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
+  it("uses the shared /status runtime labels for persisted harness metadata", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {} as never,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 0,
+          agentRuntimeOverride: "codex",
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("OpenAI Codex");
+  });
+
+  it("preserves configured default CLI runtimes when sessions lack persisted harness metadata", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "claude-cli" },
+            },
+          },
+        } as never,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 0,
+        },
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        sessionKey: "agent:main:main",
+      }),
+    ).toBe("Claude CLI");
+  });
+
+  it("preserves configured agent runtimes before harness selection", () => {
+    expect(
+      statusSummaryRuntime.resolveSessionRuntimeLabel({
+        cfg: {
+          agents: {
+            defaults: {
+              agentRuntime: { id: "pi" },
+            },
+            list: [
+              {
+                id: "research",
+                agentRuntime: { id: "codex" },
+              },
+            ],
+          },
+        } as never,
+        entry: {
+          sessionId: "session-1",
+          updatedAt: 0,
+        },
+        provider: "openai",
+        model: "gpt-5.5",
+        agentId: "research",
+        sessionKey: "agent:research:main",
+      }),
+    ).toBe("OpenAI Codex");
+  });
+});
+
 describe("statusSummaryRuntime.resolveSessionModelRef", () => {
   const cfg = {
     agents: {

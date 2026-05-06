@@ -15,6 +15,7 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { startControlUiResponsivenessObserver } from "./control-ui-performance.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
 
@@ -52,6 +53,7 @@ type LifecycleHost = {
   chatScrollTimeout?: number | null;
   logsScrollFrame?: number | null;
   controlUiTabPaintSeq?: number;
+  controlUiResponsivenessObserver?: { disconnect: () => void } | null;
   popStateHandler: () => void;
   topbarObserver: ResizeObserver | null;
 };
@@ -77,6 +79,9 @@ export function handleConnected(host: LifecycleHost) {
   if (host.tab === "debug") {
     startDebugPolling(host as unknown as Parameters<typeof startDebugPolling>[0]);
   }
+  host.controlUiResponsivenessObserver ??= startControlUiResponsivenessObserver(
+    host as unknown as Parameters<typeof startControlUiResponsivenessObserver>[0],
+  );
 }
 
 export function handleFirstUpdated(host: LifecycleHost) {
@@ -120,6 +125,8 @@ export function handleDisconnected(host: LifecycleHost) {
   detachThemeListener(host as unknown as Parameters<typeof detachThemeListener>[0]);
   host.topbarObserver?.disconnect();
   host.topbarObserver = null;
+  host.controlUiResponsivenessObserver?.disconnect();
+  host.controlUiResponsivenessObserver = null;
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {

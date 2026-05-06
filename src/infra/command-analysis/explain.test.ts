@@ -31,11 +31,11 @@ describe("command-analysis explanation summary", () => {
     expect(summary.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
   });
 
-  it("resolves display summaries from argv or shell commands", () => {
+  it("resolves node display summaries from argv", () => {
     expect(
       resolveCommandAnalysisSummaryForDisplay({
-        host: "gateway",
-        commandText: "echo ok",
+        host: "node",
+        commandText: "python3 script.py",
         commandArgv: ["python3", "-c", "print(1)"],
       }),
     ).toEqual(
@@ -51,6 +51,29 @@ describe("command-analysis explanation summary", () => {
         commandText: "python3 -c 'print(1)'",
       }),
     ).toBeNull();
+  });
+
+  it("resolves gateway display summaries from shell text even when argv is stale", () => {
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "gateway",
+        commandText: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: ["inline-eval"],
+        warningLines: ["Contains inline-eval: python3 -c"],
+      }),
+    );
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "gateway",
+        commandText: "echo ok",
+        commandArgv: ["python3", "-c", "print(1)"],
+      })?.riskKinds,
+    ).toEqual([]);
     expect(
       resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",

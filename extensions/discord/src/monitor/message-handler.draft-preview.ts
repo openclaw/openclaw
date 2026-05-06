@@ -1,6 +1,8 @@
 import { EmbeddedBlockChunker } from "openclaw/plugin-sdk/agent-runtime";
 import {
+  createChannelProgressDraftGate,
   formatChannelProgressDraftText,
+  isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -70,7 +72,6 @@ export function createDiscordDraftPreviewController(params: {
   let hasStreamedMessage = false;
   let finalizedViaPreviewMessage = false;
   let finalDeliveryHandled = false;
-  let progressDraftStarted = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
   const suppressDefaultToolProgressMessages =
@@ -81,7 +82,35 @@ export function createDiscordDraftPreviewController(params: {
     });
   let previewToolProgressSuppressed = false;
   let previewToolProgressLines: string[] = [];
+  let reasoningProgressRawText = "";
+  let lastReasoningProgressLine: string | undefined;
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
+
+  const renderProgressDraft = async (options?: { flush?: boolean }) => {
+    if (!draftStream || discordStreamMode !== "progress") {
+      return;
+    }
+    const previewText = formatChannelProgressDraftText({
+      entry: params.discordConfig,
+      lines: previewToolProgressLines,
+      seed: progressSeed,
+    });
+    if (!previewText || previewText === lastPartialText) {
+      return;
+    }
+    lastPartialText = previewText;
+    draftText = previewText;
+    hasStreamedMessage = true;
+    draftChunker?.reset();
+    draftStream.update(previewText);
+    if (options?.flush) {
+      await draftStream.flush();
+    }
+  };
+
+  const progressDraftGate = createChannelProgressDraftGate({
+    onStart: () => renderProgressDraft({ flush: true }),
+  });
 
   const resetProgressState = () => {
     lastPartialText = "";
@@ -89,6 +118,8 @@ export function createDiscordDraftPreviewController(params: {
     draftChunker?.reset();
     previewToolProgressSuppressed = false;
     previewToolProgressLines = [];
+    reasoningProgressRawText = "";
+    lastReasoningProgressLine = undefined;
   };
 
   const forceNewMessageIfNeeded = () => {
@@ -103,6 +134,12 @@ export function createDiscordDraftPreviewController(params: {
     draftStream,
     previewToolProgressEnabled,
     suppressDefaultToolProgressMessages,
+    get isProgressMode() {
+      return discordStreamMode === "progress";
+    },
+    get hasProgressDraftStarted() {
+      return progressDraftGate.hasStarted;
+    },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
     },
@@ -117,50 +154,88 @@ export function createDiscordDraftPreviewController(params: {
       if (!draftStream || discordStreamMode !== "progress") {
         return;
       }
-      if (progressDraftStarted) {
-        return;
-      }
-      const previewText = formatChannelProgressDraftText({
-        entry: params.discordConfig,
-        lines: [],
-        seed: progressSeed,
-      });
-      if (!previewText || previewText === lastPartialText) {
-        return;
-      }
-      progressDraftStarted = true;
-      lastPartialText = previewText;
-      draftText = previewText;
-      hasStreamedMessage = true;
-      draftChunker?.reset();
-      draftStream.update(previewText);
-      await draftStream.flush();
+      await progressDraftGate.startNow();
     },
-    pushToolProgress(line?: string) {
-      if (!draftStream || !previewToolProgressEnabled || previewToolProgressSuppressed) {
+    async pushToolProgress(line?: string, options?: { toolName?: string }) {
+      if (!draftStream) {
+        return;
+      }
+      if (
+        options?.toolName !== undefined &&
+        !isChannelProgressDraftWorkToolName(options.toolName)
+      ) {
         return;
       }
       const normalized = line?.replace(/\s+/g, " ").trim();
       if (!normalized) {
         return;
       }
-      const previous = previewToolProgressLines.at(-1);
-      if (previous === normalized) {
+      if (discordStreamMode !== "progress") {
+        if (!previewToolProgressEnabled || previewToolProgressSuppressed) {
+          return;
+        }
+        const previous = previewToolProgressLines.at(-1);
+        if (previous === normalized) {
+          return;
+        }
+        previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+          -resolveChannelProgressDraftMaxLines(params.discordConfig),
+        );
+        const previewText = formatChannelProgressDraftText({
+          entry: params.discordConfig,
+          lines: previewToolProgressLines,
+          seed: progressSeed,
+        });
+        lastPartialText = previewText;
+        draftText = previewText;
+        hasStreamedMessage = true;
+        draftChunker?.reset();
+        draftStream.update(previewText);
         return;
       }
-      previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-        -resolveChannelProgressDraftMaxLines(params.discordConfig),
-      );
-      const previewText = formatChannelProgressDraftText({
-        entry: params.discordConfig,
-        lines: previewToolProgressLines,
-        seed: progressSeed,
-      });
-      lastPartialText = previewText;
-      draftText = previewText;
-      hasStreamedMessage = true;
-      draftChunker?.reset();
-      draftStream.update(previewText);
+      if (previewToolProgressEnabled && !previewToolProgressSuppressed && normalized) {
+        const previous = previewToolProgressLines.at(-1);
+        if (previous !== normalized) {
+          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(params.discordConfig),
+          );
+        }
+      }
+      const alreadyStarted = progressDraftGate.hasStarted;
+      await progressDraftGate.noteWork();
+      if (alreadyStarted && progressDraftGate.hasStarted) {
+        await renderProgressDraft();
+      }
+    },
+    async pushReasoningProgress(text?: string) {
+      if (!draftStream || discordStreamMode !== "progress" || !text) {
+        return;
+      }
+      reasoningProgressRawText = mergeReasoningProgressText(reasoningProgressRawText, text);
+      const normalized = normalizeReasoningProgressLine(reasoningProgressRawText);
+      if (!normalized) {
+        return;
+      }
+      if (previewToolProgressEnabled && !previewToolProgressSuppressed) {
+        const priorIndex =
+          lastReasoningProgressLine === undefined
+            ? -1
+            : previewToolProgressLines.lastIndexOf(lastReasoningProgressLine);
+        if (priorIndex >= 0) {
+          previewToolProgressLines = [...previewToolProgressLines];
+          previewToolProgressLines[priorIndex] = normalized;
+        } else {
+          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
+            -resolveChannelProgressDraftMaxLines(params.discordConfig),
+          );
+        }
+        lastReasoningProgressLine = normalized;
+      }
+      const alreadyStarted = progressDraftGate.hasStarted;
+      await progressDraftGate.noteWork();
+      if (alreadyStarted && progressDraftGate.hasStarted) {
+        await renderProgressDraft();
+      }
     },
     resolvePreviewFinalText(text?: string) {
       if (typeof text !== "string") {
@@ -252,7 +327,12 @@ export function createDiscordDraftPreviewController(params: {
         },
       });
     },
-    handleAssistantMessageBoundary: forceNewMessageIfNeeded,
+    handleAssistantMessageBoundary() {
+      if (discordStreamMode === "progress") {
+        return;
+      }
+      forceNewMessageIfNeeded();
+    },
     async flush() {
       if (!draftStream) {
         return;
@@ -273,6 +353,7 @@ export function createDiscordDraftPreviewController(params: {
     },
     async cleanup() {
       try {
+        progressDraftGate.cancel();
         if (!finalDeliveryHandled) {
           await draftStream?.discardPending();
         }
@@ -284,4 +365,30 @@ export function createDiscordDraftPreviewController(params: {
       }
     },
   };
+}
+
+function normalizeReasoningProgressLine(text: string): string {
+  return text
+    .replace(/^\s*(?:>\s*)?Reasoning:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function mergeReasoningProgressText(current: string, incoming: string): string {
+  if (!current) {
+    return incoming;
+  }
+  const normalizedCurrent = normalizeReasoningProgressLine(current);
+  const normalizedIncoming = normalizeReasoningProgressLine(incoming);
+  if (!normalizedIncoming || normalizedIncoming === normalizedCurrent) {
+    return current;
+  }
+  if (isReasoningSnapshotText(incoming) || normalizedIncoming.startsWith(normalizedCurrent)) {
+    return incoming;
+  }
+  return `${current}${incoming}`;
+}
+
+function isReasoningSnapshotText(text: string): boolean {
+  return /^\s*(?:>\s*)?Reasoning:\s*/i.test(text);
 }

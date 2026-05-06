@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
@@ -496,10 +497,8 @@ async function scanManifestDependencyDenylist(params: {
   });
   const packageManifestPaths = traversalResult.packageManifestPaths;
   for (const manifestPath of packageManifestPaths) {
-    let manifest: PackageManifest;
-    try {
-      manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as PackageManifest;
-    } catch {
+    const manifest = await tryReadJson<PackageManifest>(manifestPath);
+    if (!manifest) {
       continue;
     }
 
@@ -561,6 +560,7 @@ async function scanDirectoryTarget(params: {
   includeFiles?: string[];
   logger: InstallScanLogger;
   path: string;
+  suppressBuiltinWarnings?: boolean;
   suspiciousMessage: string;
   targetName: string;
   warningMessage: string;
@@ -571,6 +571,9 @@ async function scanDirectoryTarget(params: {
       includeFiles: params.includeFiles,
     });
     const builtinScan = buildBuiltinScanFromSummary(scanSummary);
+    if (params.suppressBuiltinWarnings) {
+      return builtinScan;
+    }
     if (scanSummary.critical > 0) {
       params.logger.warn?.(
         `${params.warningMessage}: ${buildCriticalDetails({ findings: scanSummary.findings })}`,
@@ -632,16 +635,6 @@ function logDangerousForceUnsafeInstall(params: {
   );
 }
 
-function logTrustedSourceLinkedOfficialInstall(params: {
-  findings: Array<{ file: string; line: number; message: string; severity: string }>;
-  logger: InstallScanLogger;
-  targetLabel: string;
-}) {
-  params.logger.warn?.(
-    `WARNING: ${params.targetLabel} allowed because it is an official OpenClaw package: ${buildCriticalDetails({ findings: params.findings })}`,
-  );
-}
-
 function resolveBuiltinScanDecision(
   params: InstallSafetyOverrides & {
     builtinScan: BuiltinInstallScan;
@@ -657,12 +650,6 @@ function resolveBuiltinScanDecision(
   });
   if (params.dangerouslyForceUnsafeInstall && params.builtinScan.critical > 0) {
     logDangerousForceUnsafeInstall({
-      findings: params.builtinScan.findings,
-      logger: params.logger,
-      targetLabel: params.targetLabel,
-    });
-  } else if (params.trustedSourceLinkedOfficialInstall && params.builtinScan.critical > 0) {
-    logTrustedSourceLinkedOfficialInstall({
       findings: params.builtinScan.findings,
       logger: params.logger,
       targetLabel: params.targetLabel,
@@ -857,6 +844,7 @@ export async function scanPackageInstallSourceRuntime(
     includeFiles: forcedScanEntries,
     logger: params.logger,
     path: params.packageDir,
+    suppressBuiltinWarnings: params.trustedSourceLinkedOfficialInstall === true,
     suspiciousMessage: `Plugin "{target}" has {count} suspicious code pattern(s). Run "openclaw security audit --deep" for details.`,
     targetName: params.pluginId,
     warningMessage: `WARNING: Plugin "${params.pluginId}" contains dangerous code patterns`,

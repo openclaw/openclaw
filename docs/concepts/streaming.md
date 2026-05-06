@@ -69,17 +69,17 @@ streaming and the provider also includes it in the completed reply.
 
 Block chunking is implemented by `EmbeddedBlockChunker`:
 
-- **Low bound:** don’t emit until buffer >= `minChars` (unless forced).
+- **Low bound:** don't emit until buffer >= `minChars` (unless forced).
 - **High bound:** prefer splits before `maxChars`; if forced, split at `maxChars`.
 - **Break preference:** `paragraph` → `newline` → `sentence` → `whitespace` → hard break.
 - **Code fences:** never split inside fences; when forced at `maxChars`, close + reopen the fence to keep Markdown valid.
 
-`maxChars` is clamped to the channel `textChunkLimit`, so you can’t exceed per-channel caps.
+`maxChars` is clamped to the channel `textChunkLimit`, so you can't exceed per-channel caps.
 
 ## Coalescing (merge streamed blocks)
 
 When block streaming is enabled, OpenClaw can **merge consecutive block chunks**
-before sending them out. This reduces “single-line spam” while still providing
+before sending them out. This reduces "single-line spam" while still providing
 progressive output.
 
 - Coalescing waits for **idle gaps** (`idleMs`) before flushing.
@@ -98,7 +98,7 @@ block replies (after the first block). This makes multi-bubble responses feel
 more natural.
 
 - Config: `agents.defaults.humanDelay` (override per agent via `agents.list[].humanDelay`).
-- Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
+- Modes: `off` (default), `natural` (800-2500ms), `custom` (`minMs`/`maxMs`).
 - Applies only to **block replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"
@@ -152,17 +152,19 @@ Slack-only:
 Legacy key migration:
 
 - Telegram: legacy `streamMode` and scalar/boolean `streaming` values are detected and migrated by doctor/config compatibility paths to `streaming.mode`.
-- Discord: `streamMode` + boolean `streaming` auto-migrate to `streaming` enum.
-- Slack: `streamMode` auto-migrates to `streaming.mode`; boolean `streaming` auto-migrates to `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` auto-migrates to `streaming.nativeTransport`.
+- Discord: `streamMode` + boolean `streaming` remain runtime aliases for the `streaming` enum; run `openclaw doctor --fix` to rewrite persisted config.
+- Slack: `streamMode` remains a runtime alias for `streaming.mode`; boolean `streaming` remains a runtime alias for `streaming.mode` plus `streaming.nativeTransport`; legacy `nativeStreaming` remains a runtime alias for `streaming.nativeTransport`. Run `openclaw doctor --fix` to rewrite persisted config.
 
 ### Runtime behavior
 
 Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
-- Sends a fresh final message instead of editing in place when a preview has been visible for about one minute, then cleans up the preview so Telegram's timestamp reflects reply completion.
+- Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
+- `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
+- If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
-- `/reasoning stream` can write reasoning to preview.
+- `/reasoning stream` can write reasoning to a transient preview that is deleted after final delivery.
 
 Discord:
 
@@ -193,7 +195,7 @@ Matrix:
 
 ### Tool-progress preview updates
 
-Preview streaming can also include **tool-progress** updates — short status lines like "searching the web", "reading file", or "calling tool" — that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+Preview streaming can also include **tool-progress** updates - short status lines like "searching the web", "reading file", or "calling tool" - that appear in the same preview message while tools are running, ahead of the final reply. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
 
 Supported surfaces:
 
@@ -201,10 +203,10 @@ Supported surfaces:
 - Telegram has shipped with tool-progress preview updates enabled since `v2026.4.22`; keeping them enabled preserves that released behavior.
 - **Mattermost** already folds tool activity into its single draft preview post (see above).
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message. On Telegram, `streaming.mode: "off"` is final-only: generic progress chatter is also suppressed instead of being delivered as standalone status messages, while approval prompts, media payloads, and errors still route normally.
-- To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To disable preview edits entirely, set `streaming.mode` to `off`.
+- To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To keep tool-progress lines visible while hiding command/exec text, set `streaming.preview.commandText` to `"status"` or `streaming.progress.commandText` to `"status"`; the default is `"raw"` to preserve released behavior. This policy is shared by draft/progress channels that use OpenClaw's compact progress renderer, including Discord, Matrix, Microsoft Teams, Mattermost, Slack draft previews, and Telegram. To disable preview edits entirely, set `streaming.mode` to `off`.
 - Telegram selected quote replies are an exception: when `replyToMode` is not `"off"` and selected quote text is present, OpenClaw skips the answer preview stream for that turn so tool-progress preview lines cannot render. Current-message replies without selected quote text still keep preview streaming. See [Telegram channel docs](/channels/telegram) for details.
 
-Example:
+Keep progress lines visible but hide raw command/exec text:
 
 ```json
 {
@@ -213,7 +215,26 @@ Example:
       "streaming": {
         "mode": "partial",
         "preview": {
-          "toolProgress": false
+          "toolProgress": true,
+          "commandText": "status"
+        }
+      }
+    }
+  }
+}
+```
+
+Use the same shape under another compact progress channel key, for example `channels.discord`, `channels.matrix`, `channels.msteams`, `channels.mattermost`, or Slack draft previews. For progress-draft mode, put the same policy under `streaming.progress`:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "streaming": {
+        "mode": "progress",
+        "progress": {
+          "toolProgress": true,
+          "commandText": "status"
         }
       }
     }
@@ -223,7 +244,8 @@ Example:
 
 ## Related
 
-- [Progress drafts](/concepts/progress-drafts) — visible work-in-progress messages that update during long turns
-- [Messages](/concepts/messages) — message lifecycle and delivery
-- [Retry](/concepts/retry) — retry behavior on delivery failure
-- [Channels](/channels) — per-channel streaming support
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) - target shared preview, edit, stream, and finalization design
+- [Progress drafts](/concepts/progress-drafts) - visible work-in-progress messages that update during long turns
+- [Messages](/concepts/messages) - message lifecycle and delivery
+- [Retry](/concepts/retry) - retry behavior on delivery failure
+- [Channels](/channels) - per-channel streaming support

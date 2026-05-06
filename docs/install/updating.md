@@ -93,6 +93,12 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 npm i -g openclaw@latest
 ```
 
+Prefer `openclaw update` for supervised installs because it can coordinate the
+package swap with the running Gateway service. If you update manually while a
+managed Gateway is running, restart the Gateway immediately after the package
+manager finishes so the old process does not keep serving from replaced package
+files.
+
 When `openclaw update` manages a global npm install, it installs the target into
 a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps
 the clean package tree into the real global prefix. That avoids npm overlaying a
