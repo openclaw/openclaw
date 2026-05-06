@@ -248,12 +248,12 @@ describe("googlechatPlugin outbound sendMedia", () => {
               cfg,
               to: "spaces/AAA",
               text: "threaded",
-              threadId: "thread-1",
+              threadId: "spaces/AAA/threads/thread-1",
             });
             expect(sendGoogleChatMessageMock).toHaveBeenCalledWith(
               expect.objectContaining({
                 space: "spaces/AAA",
-                thread: "thread-1",
+                thread: "spaces/AAA/threads/thread-1",
               }),
             );
           },
