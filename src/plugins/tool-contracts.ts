@@ -22,5 +22,11 @@ export function findUndeclaredPluginToolNames(params: {
   toolNames: readonly string[];
 }): string[] {
   const declared = new Set(normalizePluginToolNames(params.declaredNames));
-  return normalizePluginToolNames(params.toolNames).filter((name) => !declared.has(name));
+  const wildcardPrefixes = [...declared]
+    .filter((name) => name.endsWith("*"))
+    .map((name) => name.slice(0, -1))
+    .filter(Boolean);
+  return normalizePluginToolNames(params.toolNames).filter(
+    (name) => !declared.has(name) && !wildcardPrefixes.some((prefix) => name.startsWith(prefix)),
+  );
 }

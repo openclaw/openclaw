@@ -264,6 +264,24 @@ For live and Docker smoke tests, auth usually comes from the Codex CLI account
 or an OpenClaw `openai-codex` auth profile. Local stdio app-server launches can
 also fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` when no account is present.
 
+## Native Codex plugins and apps
+
+OpenClaw relies on Codex app-server's native plugin and app support for Codex
+mode. It does not register synthetic OpenClaw tools for Codex plugins, and it
+does not start a separate ephemeral Codex thread to invoke a plugin. Plugin
+mentions stay in the main Codex app-server thread for the session.
+
+Use native Codex mention syntax in a Codex-mode turn:
+
+```md
+[@Google Calendar](plugin://google-calendar) Find a free slot tomorrow afternoon.
+```
+
+Codex plugin migration is covered by the stacked migration PR. The runtime
+contract here is the same before and after migration: the Codex app-server owns
+plugin activation, app authorization, permission prompts, and transcript
+semantics.
+
 ## Workspace bootstrap files
 
 Codex handles `AGENTS.md` itself through native project-doc discovery. OpenClaw

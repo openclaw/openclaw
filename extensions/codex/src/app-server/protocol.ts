@@ -89,6 +89,12 @@ type CodexAppServerRequestResultMap = {
   "account/read": v2.GetAccountResponse;
   "feedback/upload": v2.FeedbackUploadResponse;
   "mcpServerStatus/list": v2.ListMcpServerStatusResponse;
+  "plugin/list": v2.PluginListResponse;
+  "plugin/install": v2.PluginInstallResponse;
+  "app/list": v2.AppsListResponse;
+  "hooks/list": v2.HooksListResponse;
+  "config/mcpServer/reload": undefined;
+  "config/batchWrite": undefined;
   "model/list": v2.ModelListResponse;
   "review/start": v2.ReviewStartResponse;
   "skills/list": v2.SkillsListResponse;
