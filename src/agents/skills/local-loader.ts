@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isPathInside } from "../../infra/path-guards.js";
-import { openPinnedFileSync } from "../../infra/safe-open-sync.js";
+import { openRootFileSync } from "../../infra/boundary-file-read.js";
 import { parseFrontmatter, resolveSkillInvocationPolicy } from "./frontmatter.js";
 import { createSyntheticSourceInfo, type Skill } from "./skill-contract.js";
 import type { ParsedSkillFrontmatter } from "./types.js";
@@ -16,18 +15,17 @@ function readSkillFileSync(params: {
   filePath: string;
   maxBytes?: number;
 }): string | null {
-  const opened = openPinnedFileSync({
-    filePath: params.filePath,
-    rejectPathSymlink: true,
+  const opened = openRootFileSync({
+    absolutePath: params.filePath,
+    rootPath: params.rootRealPath,
+    rootRealPath: params.rootRealPath,
+    boundaryLabel: "skill root",
     maxBytes: params.maxBytes,
   });
   if (!opened.ok) {
     return null;
   }
   try {
-    if (!isPathInside(params.rootRealPath, opened.path)) {
-      return null;
-    }
     return fs.readFileSync(opened.fd, "utf8");
   } finally {
     fs.closeSync(opened.fd);

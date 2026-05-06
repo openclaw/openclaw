@@ -2,7 +2,7 @@ import "../infra/fs-safe-defaults.js";
 import type fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createSidecarLockManager } from "../infra/sidecar-lock.js";
+import { createFileLockManager } from "../infra/file-lock-manager.js";
 import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
@@ -60,7 +60,7 @@ type LockInspectionDetails = Pick<
   "pid" | "pidAlive" | "createdAt" | "ageMs" | "stale" | "staleReasons"
 >;
 
-const SESSION_LOCKS = createSidecarLockManager("openclaw.session-write-lock");
+const SESSION_LOCKS = createFileLockManager("openclaw.session-write-lock");
 
 export type SessionWriteLockAcquireTimeoutConfig = {
   session?: {
@@ -503,8 +503,7 @@ export async function acquireSessionWriteLock(params: {
   const lockPath = `${normalizedSessionFile}.lock`;
   await fs.mkdir(sessionDir, { recursive: true });
   try {
-    const lock = await SESSION_LOCKS.acquire({
-      targetPath: sessionFile,
+    const lock = await SESSION_LOCKS.acquire(sessionFile, {
       staleMs,
       timeoutMs,
       retry: { minTimeout: 50, maxTimeout: 1000, factor: 1 },

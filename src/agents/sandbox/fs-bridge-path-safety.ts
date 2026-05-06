@@ -1,16 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
-import type { PinnedOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
 import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
 import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+
+type BoundaryAllowedType = "file" | "directory";
 
 export type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
-  allowedType?: PinnedOpenSyncAllowedType;
+  allowedType?: BoundaryAllowedType;
 };
 
 export type PathSafetyCheck = {
@@ -145,7 +146,7 @@ export class SandboxFsPathGuard {
     action: string,
     options?: {
       aliasPolicy?: PathAliasPolicy;
-      allowedType?: PinnedOpenSyncAllowedType;
+      allowedType?: BoundaryAllowedType;
     },
   ): Promise<RootFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);

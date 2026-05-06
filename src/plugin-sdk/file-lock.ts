@@ -1,5 +1,9 @@
 import "../infra/fs-safe-defaults.js";
-import { createSidecarLockManager } from "../infra/sidecar-lock.js";
+import {
+  acquireFileLock as acquireFsSafeFileLock,
+  drainFileLockManagerForTest,
+  resetFileLockManagerForTest,
+} from "@openclaw/fs-safe/file-lock";
 import { isPidAlive } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
@@ -30,7 +34,7 @@ export type FileLockTimeoutError = Error & {
   lockPath: string;
 };
 
-const fileLocks = createSidecarLockManager("openclaw.plugin-sdk.file-lock");
+const FILE_LOCK_MANAGER_KEY = "openclaw.plugin-sdk.file-lock";
 
 function readLockPayload(value: Record<string, unknown> | null): LockFilePayload | null {
   if (!value) {
@@ -70,11 +74,11 @@ function normalizeTimeoutError(err: unknown): never {
 }
 
 export function resetFileLockStateForTest(): void {
-  fileLocks.reset();
+  resetFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
 }
 
 export async function drainFileLockStateForTest(): Promise<void> {
-  await fileLocks.drain();
+  await drainFileLockManagerForTest(FILE_LOCK_MANAGER_KEY, FILE_LOCK_MANAGER_KEY);
 }
 
 /** Acquire a re-entrant process-local file lock backed by a `.lock` sidecar file. */
@@ -83,8 +87,8 @@ export async function acquireFileLock(
   options: FileLockOptions,
 ): Promise<FileLockHandle> {
   try {
-    const lock = await fileLocks.acquire({
-      targetPath: filePath,
+    const lock = await acquireFsSafeFileLock(filePath, {
+      managerKey: FILE_LOCK_MANAGER_KEY,
       staleMs: options.stale,
       retry: options.retries,
       allowReentrant: true,

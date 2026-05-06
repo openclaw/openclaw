@@ -43,7 +43,7 @@ maintainers off the local-only `link:../fs-safe` dependency.
 
 Current pin:
 
-- `github:openclaw/fs-safe#02b9a9d2ae80f6f93a2d78a9e630c831ce5beb6c`
+- `github:openclaw/fs-safe#2e83f7d9b96eeb0a07c9ac1431d66e81b049e69f`
 
 fs-safe keeps a source prepack helper so pnpm can build the package from the
 GitHub tarball. After npm publish, replace the source pin with a semver range
@@ -206,12 +206,15 @@ Core OpenClaw code should use local policy wrappers:
 - `src/infra/replace-file.ts` for low-level atomic replacement
 - `src/infra/boundary-file-read.ts` for loader/package boundary reads
 - `src/infra/archive.ts` for archive extraction policy
+- `src/infra/file-lock-manager.ts` for the rare core service that needs
+  manager-style lock lifecycle/diagnostics
 
 New direct imports from `@openclaw/fs-safe/*` should be reserved for:
 
 - package-level utilities outside core that cannot import `src/infra`
 - compatibility shims
-- code that intentionally consumes a narrow fs-safe subpath
+- code that intentionally consumes a narrow fs-safe subpath, such as
+  `openclaw/plugin-sdk/file-lock` using `@openclaw/fs-safe/file-lock`
 
 ### Plugin SDK exports
 
@@ -378,6 +381,11 @@ Exit criteria:
 
 - Keep `@openclaw/fs-safe` main entry curated.
 - Keep `root()` as the primary README/API story.
+- Keep `openPinnedFileSync` internal. Use `readSecureFile`, `root().open`, or
+  `openRootFile*` wrappers instead of exposing the fd-level pinned primitive.
+- Keep `createSidecarLockManager` internal. Public callers should use
+  `acquireFileLock` / `withFileLock`; `createFileLockManager` is subpath-only
+  for long-lived services that need held-lock inspection or drain/reset.
 - Move rare root escape hatches such as `openWritable` to advanced only if API
   checks show no supported caller needs the main root interface.
 - Keep `regular-file`, `secure-file`, archive, and root helpers separate
