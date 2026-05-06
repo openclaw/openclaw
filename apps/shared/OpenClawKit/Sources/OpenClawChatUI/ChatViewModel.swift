@@ -1156,11 +1156,6 @@ public final class OpenClawChatViewModel {
     }
 
     private func addImageAttachment(url: URL?, data: Data, fileName: String, mimeType: String) async {
-        if data.count > 5_000_000 {
-            self.errorText = "Attachment \(fileName) exceeds 5 MB limit"
-            return
-        }
-
         let uti: UTType = {
             if let url {
                 return UTType(filenameExtension: url.pathExtension) ?? .data
@@ -1172,13 +1167,29 @@ public final class OpenClawChatViewModel {
             return
         }
 
-        let preview = Self.previewImage(data: data)
+        // Resize + strip metadata for privacy and to fit the transport budget.
+        // Runs off the MainActor so a 48MP decode doesn't freeze the UI.
+        let processed: Data
+        do {
+            processed = try await Task.detached(priority: .userInitiated) {
+                try ChatImageProcessor.processForUpload(data: data)
+            }.value
+        } catch {
+            self.errorText = "Could not process \(fileName): \(error.localizedDescription)"
+            return
+        }
+
+        let outputFileName: String = {
+            let base = (fileName as NSString).deletingPathExtension
+            return base.isEmpty ? "image.jpg" : "\(base).jpg"
+        }()
+        let preview = Self.previewImage(data: processed)
         self.attachments.append(
             OpenClawPendingAttachment(
                 url: url,
-                data: data,
-                fileName: fileName,
-                mimeType: mimeType,
+                data: processed,
+                fileName: outputFileName,
+                mimeType: "image/jpeg",
                 preview: preview))
     }
 
