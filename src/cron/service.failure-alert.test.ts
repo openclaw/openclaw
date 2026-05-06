@@ -428,4 +428,52 @@ describe("CronService failure alerts", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("includes event timestamp in failure alert body", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "test error",
+    }));
+
+    const now = Date.now();
+    vi.setSystemTime(now);
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          cooldownMs: 60_000,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "timestamped job",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run" },
+    });
+
+    // Manually set the lastRunAtMs to simulate a job run
+    job.state.lastRunAtMs = now;
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    
+    const alertText = sendCronFailureAlert.mock.calls[0][0].text;
+    expect(alertText).toContain("Event time:");
+    expect(alertText).toContain(new Date(now).toISOString());
+
+    cron.stop();
+    await store.cleanup();
+  });
 });
