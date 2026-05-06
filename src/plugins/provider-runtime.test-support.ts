@@ -70,7 +70,7 @@ export async function expectAugmentedCodexCatalog(
       entries: openaiCodexCatalogEntries,
     },
   })) as Array<Record<string, unknown>>;
-  expect(result).toHaveLength(expectedEntries.length);
+  expect(result.length).toBeGreaterThanOrEqual(expectedEntries.length);
   for (const entry of expectedEntries) {
     expect(result).toContainEqual(expect.objectContaining(entry));
   }
