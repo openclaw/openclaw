@@ -31,7 +31,9 @@ function sanitizeDebounceEntry(entry: BlueBubblesDebounceEntry): BlueBubblesDebo
 
 type BlueBubblesDebouncer = {
   enqueue: (item: BlueBubblesDebounceEntry) => Promise<void>;
-  flushKey: (key: string) => Promise<void>;
+  flushKey: (key: string) => Promise<boolean>;
+  flushAll: () => Promise<number>;
+  unregister: () => void;
 };
 
 type BlueBubblesDebounceRegistry = {
@@ -325,12 +327,15 @@ export function createBlueBubblesDebounceRegistry(params: {
           await baseDebouncer.enqueue(sanitizeDebounceEntry(item));
         },
         flushKey: (key) => baseDebouncer.flushKey(key),
+        flushAll: () => baseDebouncer.flushAll(),
+        unregister: () => baseDebouncer.unregister(),
       };
 
       targetDebouncers.set(target, debouncer);
       return debouncer;
     },
     removeDebouncer: (target) => {
+      targetDebouncers.get(target)?.unregister();
       targetDebouncers.delete(target);
     },
   };

@@ -3198,7 +3198,7 @@ describe("createFeishuMessageReceiveHandler media dedupe", () => {
         }),
       },
     });
-    const handler = createFeishuMessageReceiveHandler({
+    const { handler } = createFeishuMessageReceiveHandler({
       cfg: { channels: { feishu: { dmPolicy: "open" } } } as ClawdbotConfig,
       core,
       accountId: "receive-media-dedupe",

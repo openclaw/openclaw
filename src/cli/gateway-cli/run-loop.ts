@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
+import { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
@@ -266,6 +268,8 @@ export async function runGatewayLoop(params: {
     exitProcess(0);
   };
 
+  const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
+  const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
   const SHUTDOWN_TIMEOUT_MS = SUPERVISOR_STOP_TIMEOUT_MS - 5_000;
   const resolveRestartDrainTimeoutMs = async (
@@ -302,9 +306,13 @@ export async function runGatewayLoop(params: {
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
-    const armForceExitTimer = (forceExitMs: number) => {
+    const armForceExitTimer = (forceExitMs: number, opts?: { replace?: boolean }) => {
       if (forceExitTimer) {
-        return;
+        if (!opts?.replace) {
+          return;
+        }
+        clearTimeout(forceExitTimer);
+        forceExitTimer = null;
       }
       forceExitTimer = setTimeout(() => {
         gatewayLog.error("shutdown timed out; exiting without full cleanup");
@@ -321,6 +329,7 @@ export async function runGatewayLoop(params: {
           }
         })();
       }, forceExitMs);
+      forceExitTimer.unref?.();
     };
     const clearForceExitTimer = () => {
       if (!forceExitTimer) {
@@ -350,11 +359,38 @@ export async function runGatewayLoop(params: {
           armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
         }
       };
+      const rearmRestartForceExitTimerAfterFlush = () => {
+        if (isRestart && restartDrainTimeoutMs !== undefined) {
+          armForceExitTimer(
+            restartDrainTimeoutMs + SHUTDOWN_TIMEOUT_MS + FOLLOWUP_DRAIN_TIMEOUT_MS,
+            { replace: true },
+          );
+        }
+      };
 
       try {
         // On restart, wait for in-flight agent turns to finish before
         // tearing down the server so buffered messages are delivered.
         if (isRestart) {
+          // Flush inbound debounce buffers BEFORE marking the gateway as
+          // draining so flushed messages can still enqueue into the command
+          // queue. This pushes any messages waiting in per-channel debounce
+          // timers (e.g. the 2500ms collect window) into the followup queues
+          // immediately, preventing silent message loss on reinit.
+          const flushedBuffers = await flushAllInboundDebouncers({
+            timeoutMs: INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS,
+          });
+          if (flushedBuffers > 0) {
+            gatewayLog.info(
+              `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
+            );
+          }
+
+          // Start the restart watchdog budget after the pre-shutdown debounce
+          // flush so slow flush handlers do not steal time from the configured
+          // restart drain window.
+          rearmRestartForceExitTimerAfterFlush();
+
           const {
             abortEmbeddedPiRun,
             getInspectableActiveTaskRestartBlockers,
@@ -393,9 +429,6 @@ export async function runGatewayLoop(params: {
               );
             }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
 
-          // Reject new enqueues immediately during the drain window so
-          // sessions get an explicit restart error instead of silent task loss.
-          markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
 
@@ -436,6 +469,25 @@ export async function runGatewayLoop(params: {
               }
             }
           }
+
+          // Drain followup queues AFTER active tasks finish so tasks that
+          // produce followup work have a chance to enqueue before we wait.
+          // Always drain regardless of flushedCount — queued followups are
+          // not contingent on debouncers.
+          const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
+          if (followupResult.drained) {
+            gatewayLog.info("followup queues drained before restart");
+          } else {
+            gatewayLog.warn(
+              `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
+            );
+          }
+
+          // Reject new command-queue work AFTER followup queues have drained.
+          // The drain callbacks flow through enqueueCommandInLane() which
+          // throws GatewayDrainingError once draining=true; marking before
+          // drain would silently drop queued followups.
+          markGatewayDraining();
         }
 
         armCloseForceExitTimerForIndefiniteRestart();

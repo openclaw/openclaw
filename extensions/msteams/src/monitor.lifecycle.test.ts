@@ -36,7 +36,9 @@ vi.mock("../runtime-api.js", () => ({
           resolve();
           return;
         }
-        params.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+        params.abortSignal?.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
       });
       await params.onAbort?.();
     },
@@ -92,7 +94,8 @@ vi.mock("express", () => {
 
 const registerMSTeamsHandlers = vi.hoisted(() =>
   vi.fn(() => ({
-    run: vi.fn(async () => {}),
+    handler: { run: vi.fn(async () => {}) },
+    unregisterDebouncer: vi.fn(),
   })),
 );
 const createMSTeamsAdapter = vi.hoisted(() =>

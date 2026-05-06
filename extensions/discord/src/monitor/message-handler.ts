@@ -303,7 +303,10 @@ export function createDiscordMessageHandler(
     }
   };
 
-  handler.deactivate = messageRunQueue.deactivate;
+  handler.deactivate = () => {
+    debouncer.unregister();
+    messageRunQueue.deactivate();
+  };
 
   return handler;
 }

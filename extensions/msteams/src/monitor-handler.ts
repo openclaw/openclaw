@@ -321,8 +321,8 @@ async function handleFeedbackInvoke(
 export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   handler: T,
   deps: MSTeamsMessageHandlerDeps,
-): T {
-  const handleTeamsMessage = createMSTeamsMessageHandler(deps);
+): { handler: T; unregisterDebouncer: () => void } {
+  const { handleTeamsMessage, unregisterDebouncer } = createMSTeamsMessageHandler(deps);
   const handleReaction = createMSTeamsReactionHandler(deps);
 
   // Wrap the original run method to intercept invokes
@@ -534,5 +534,5 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     await next();
   });
 
-  return handler;
+  return { handler, unregisterDebouncer };
 }

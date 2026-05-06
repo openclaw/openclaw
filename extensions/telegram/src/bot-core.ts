@@ -609,7 +609,7 @@ export function createTelegramBotCore(
     telegramDeps,
   });
 
-  registerTelegramHandlers({
+  const { unregisterDebouncer } = registerTelegramHandlers({
     cfg,
     accountId: account.accountId,
     bot,
@@ -630,6 +630,7 @@ export function createTelegramBotCore(
 
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
+    unregisterDebouncer();
     threadBindingManager?.stop();
     return originalStop(...args);
   }) as typeof bot.stop;

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBonjourBeacon } from "../../infra/bonjour-discovery.js";
 import { pickBeaconHost, pickGatewayPort } from "./discover.js";
 
@@ -51,7 +51,11 @@ const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true
 const resetAllLanes = vi.fn();
 const reloadTaskRegistryFromStore = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  () => { mode: "spawned" | "supervised" | "disabled" | "failed"; pid?: number; detail?: string }
+  () => {
+    mode: "spawned" | "supervised" | "disabled" | "failed";
+    pid?: number;
+    detail?: string;
+  }
 >(() => ({ mode: "disabled" }));
 const respawnGatewayProcessForUpdate = vi.fn<
   () => {
@@ -69,6 +73,11 @@ const abortEmbeddedPiRun = vi.fn(
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const flushAllInboundDebouncers = vi.fn(async (_options?: { timeoutMs?: number }) => 0);
+const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+  remaining: 0,
+}));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const loadConfig = vi.fn<() => { gateway: { reload: { deferralTimeoutMs?: number } } }>(() => ({
@@ -83,6 +92,15 @@ const gatewayLog = {
   warn: vi.fn(),
   error: vi.fn(),
 };
+
+vi.mock("../../auto-reply/inbound-debounce.js", () => ({
+  flushAllInboundDebouncers: (options?: { timeoutMs?: number }) =>
+    flushAllInboundDebouncers(options),
+}));
+
+vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({
+  waitForFollowupQueueDrain: (timeoutMs: number) => waitForFollowupQueueDrain(timeoutMs),
+}));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
@@ -284,6 +302,16 @@ async function createSignaledLoopHarness(exitCallOrder?: string[]) {
 }
 
 describe("runGatewayLoop", () => {
+  beforeEach(() => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 90_000,
+        },
+      },
+    });
+  });
+
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
 
@@ -581,6 +609,236 @@ describe("runGatewayLoop", () => {
       expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
     });
   });
+
+  it("flushes inbound debouncers before marking gateway draining on SIGUSR1", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(2);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+      expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+      expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
+      expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
+      // Flush debouncers BEFORE marking draining so flushed messages can enqueue
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        markGatewayDraining.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      // markGatewayDraining must come AFTER followup queue drain — the drain
+      // callbacks flow through enqueueCommandInLane() which rejects once
+      // draining=true, so draining before drain drops queued followups.
+      expect(waitForFollowupQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        markGatewayDraining.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        "flushed 2 pending inbound debounce buffer(s) before restart",
+      );
+      expect(gatewayLog.info).toHaveBeenCalledWith("followup queues drained before restart");
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("extends the restart force-exit timer to include followup queue drain time", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(1);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const forceExitCalls = setTimeoutSpy.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
+        expect(forceExitCalls).toContain(115_000);
+        expect(forceExitCalls).toContain(120_000);
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  it("re-arms the watchdog with the configured restart drain timeout", async () => {
+    vi.clearAllMocks();
+    loadConfig.mockReturnValue({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 300_000,
+        },
+      },
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(0);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const forceExitCalls = setTimeoutSpy.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 325_000);
+        expect(forceExitCalls).toEqual([325_000, 330_000]);
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  it("always drains followup queue even when no debouncers had buffered messages", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(0);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        expect(flushAllInboundDebouncers).toHaveBeenCalledTimes(1);
+        expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
+        // Followup queue drain is always called regardless of flushedCount
+        expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
+        expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+        const forceExitCalls = setTimeoutSpy.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
+        expect(forceExitCalls).toEqual([115_000, 120_000]);
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
+    });
+  });
+
+  it("logs warning when followup queue drain times out", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      flushAllInboundDebouncers.mockResolvedValueOnce(1);
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: false,
+        remaining: 3,
+      });
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "followup queue drain timeout; 3 item(s) still pending",
+      );
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("re-arms the restart watchdog after a slow debounce flush", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      let now = 1000;
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+      flushAllInboundDebouncers.mockImplementationOnce(async () => {
+        now += 20_000;
+        return 0;
+      });
+
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      try {
+        const { exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+        const sigterm = captureSignal("SIGTERM");
+
+        sigusr1();
+
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+
+        const forceExitCalls = setTimeoutSpy.mock.calls
+          .map((call) => call[1])
+          .filter((delay): delay is number => typeof delay === "number" && delay >= 115_000);
+        // First arm: 1000 + 25000 + 90000 = 116000, delay = 116000 - 1000 = 115000
+        // Second arm (after 20s flush): 21000 + 25000 + 90000 + 5000 = 141000,
+        // delay = 141000 - 21000 = 120000
+        expect(forceExitCalls).toEqual([115_000, 120_000]);
+
+        sigterm();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        nowSpy.mockRestore();
+        setTimeoutSpy.mockRestore();
+      }
+    });
+  });
+
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);

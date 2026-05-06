@@ -3,10 +3,10 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { ClawdbotConfig, RuntimeEnv, HistoryEntry } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import {
+  type FeishuBotAddedEvent,
+  type FeishuMessageEvent,
   handleFeishuMessage,
   parseFeishuMessageEvent,
-  type FeishuMessageEvent,
-  type FeishuBotAddedEvent,
 } from "./bot.js";
 import { handleFeishuCardAction, type FeishuCardActionEvent } from "./card-action.js";
 import { createEventDispatcher } from "./client.js";
@@ -241,7 +241,7 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
 function registerEventHandlers(
   eventDispatcher: Lark.EventDispatcher,
   context: RegisterEventHandlersContext,
-): void {
+): { unregisterDebouncer: () => void } {
   const { cfg, accountId, runtime, chatHistories, fireAndForget } = context;
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
@@ -259,23 +259,25 @@ function registerEventHandlers(
     }
   };
 
+  const feishuMessageReceive = createFeishuMessageReceiveHandler({
+    cfg,
+    core: getFeishuRuntime(),
+    accountId,
+    runtime,
+    chatHistories,
+    fireAndForget,
+    handleMessage: handleFeishuMessage,
+    resolveDebounceText: ({ event, botOpenId, botName }) =>
+      parseFeishuMessageEvent(event, botOpenId, botName).content,
+    hasProcessedMessage: hasProcessedFeishuMessage,
+    recordProcessedMessage: recordProcessedFeishuMessage,
+    getBotOpenId: (id) => botOpenIds.get(id),
+    getBotName: (id) => botNames.get(id),
+    resolveSequentialKey: getFeishuSequentialKey,
+  });
+
   eventDispatcher.register({
-    "im.message.receive_v1": createFeishuMessageReceiveHandler({
-      cfg,
-      core: getFeishuRuntime(),
-      accountId,
-      runtime,
-      chatHistories,
-      fireAndForget,
-      handleMessage: handleFeishuMessage,
-      resolveDebounceText: ({ event, botOpenId, botName }) =>
-        parseFeishuMessageEvent(event, botOpenId, botName).content,
-      hasProcessedMessage: hasProcessedFeishuMessage,
-      recordProcessedMessage: recordProcessedFeishuMessage,
-      getBotOpenId: (id) => botOpenIds.get(id),
-      getBotName: (id) => botNames.get(id),
-      resolveSequentialKey: getFeishuSequentialKey,
-    }),
+    "im.message.receive_v1": feishuMessageReceive.handler,
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
     },
@@ -399,6 +401,8 @@ function registerEventHandlers(
       }
     },
   });
+
+  return { unregisterDebouncer: feishuMessageReceive.unregisterDebouncer };
 }
 
 export type BotOpenIdSource =
@@ -422,7 +426,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      ? {
+          botOpenId: botOpenIdSource.botOpenId,
+          botName: botOpenIdSource.botName,
+        }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
@@ -450,7 +457,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     const chatHistories = new Map<string, HistoryEntry[]>();
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
 
-    registerEventHandlers(eventDispatcher, {
+    const { unregisterDebouncer } = registerEventHandlers(eventDispatcher, {
       cfg,
       accountId,
       runtime,
@@ -458,10 +465,26 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       fireAndForget: params.fireAndForget ?? true,
     });
 
-    if (connectionMode === "webhook") {
-      return await monitorWebhook({ account, accountId, runtime, abortSignal, eventDispatcher });
+    try {
+      if (connectionMode === "webhook") {
+        return await monitorWebhook({
+          account,
+          accountId,
+          runtime,
+          abortSignal,
+          eventDispatcher,
+        });
+      }
+      return await monitorWebSocket({
+        account,
+        accountId,
+        runtime,
+        abortSignal,
+        eventDispatcher,
+      });
+    } finally {
+      unregisterDebouncer();
     }
-    return await monitorWebSocket({ account, accountId, runtime, abortSignal, eventDispatcher });
   } finally {
     threadBindingManager?.stop();
   }

@@ -975,7 +975,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     },
   });
 
-  return async function handleTeamsMessage(context: MSTeamsTurnContext) {
+  const handleTeamsMessage = async (context: MSTeamsTurnContext) => {
     const activity = context.activity;
     const attachments = Array.isArray(activity.attachments)
       ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
@@ -1001,5 +1001,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       wasMentioned,
       implicitMentionKinds,
     });
+  };
+
+  return {
+    handleTeamsMessage,
+    unregisterDebouncer: inboundDebouncer.unregister,
   };
 }

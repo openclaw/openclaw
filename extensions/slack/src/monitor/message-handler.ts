@@ -27,6 +27,10 @@ export type SlackMessageHandler = (
   opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
 ) => Promise<void>;
 
+export type SlackMessageHandlerWithLifecycle = SlackMessageHandler & {
+  deactivate: () => void;
+};
+
 const APP_MENTION_RETRY_TTL_MS = 60_000;
 
 export class SlackRetryableInboundError extends Error {
@@ -58,7 +62,7 @@ export function createSlackMessageHandler(params: {
   account: ResolvedSlackAccount;
   /** Called on each inbound event to update liveness tracking. */
   trackEvent?: () => void;
-}): SlackMessageHandler {
+}): SlackMessageHandlerWithLifecycle {
   const { ctx, account, trackEvent } = params;
   const { debounceMs, debouncer } = createChannelInboundDebouncer<{
     message: SlackMessageEvent;
@@ -187,7 +191,7 @@ export function createSlackMessageHandler(params: {
     return true;
   };
 
-  return async (message, opts) => {
+  const handler: SlackMessageHandlerWithLifecycle = async (message, opts) => {
     if (opts.source === "message" && message.type !== "message") {
       return;
     }
@@ -235,4 +239,10 @@ export function createSlackMessageHandler(params: {
     }
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
+
+  handler.deactivate = () => {
+    debouncer.unregister();
+  };
+
+  return handler;
 }
