@@ -468,6 +468,33 @@ describe("Ghost reminder bug (issue #13317)", () => {
     });
   });
 
+  it("does not force owner downgrade for audience: 'internal' events even when trusted: false", async () => {
+    // `audience: "internal" + trusted: false` is the shape used by the hidden
+    // runtime-context lane (e.g. queueCronAwarenessSystemEvent). The text is
+    // wrapped in INTERNAL_RUNTIME_CONTEXT_*, never reaches a user-facing
+    // surface, and is therefore not user-impersonatable. The heartbeat
+    // owner-auth scan must skip it; otherwise a hidden cron-awareness event
+    // would silently strip owner-only tools/directives from the next
+    // heartbeat-driven reply turn.
+    const { result, calledCtx } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-internal-audience-untrusted-",
+      replyText: "Handled internally",
+      reason: "hook:wake",
+      target: "none",
+      enqueue: (sessionKey) => {
+        enqueueSystemEvent("Cron run completed: relayed for awareness only", {
+          sessionKey,
+          trusted: false,
+          audience: "internal",
+        });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("heartbeat");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
+  });
+
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       const cfg: OpenClawConfig = {

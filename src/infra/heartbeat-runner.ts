@@ -1442,11 +1442,21 @@ export async function runHeartbeatOnce(opts: {
     runSessionKey === sessionKey
       ? preflight.pendingEventEntries
       : peekSystemEventEntries(runSessionKey);
+  // Owner-auth downgrade detects user-impersonation of System (untrusted)
+  // lines, but `audience: "internal"` events are runtime-generated, hidden
+  // behind the INTERNAL_RUNTIME_CONTEXT wrap, and stripped from every
+  // user-facing surface — they cannot have come from user input. Excluding
+  // them here mirrors the consumer-side carve-out in get-reply-run.ts and
+  // keeps the heartbeat path from disabling owner-only tools/directives
+  // because of an `audience: "internal" + trusted: false` event queued for
+  // hidden agent awareness (e.g. queueCronAwarenessSystemEvent).
+  const isUserFacingUntrustedEvent = (event: SystemEvent): boolean =>
+    event.trusted === false && event.audience !== "internal";
   const hasUntrustedInspectedEvents =
     preflight.shouldInspectPendingEvents &&
-    preflight.pendingEventEntries.some((event) => event.trusted === false);
+    preflight.pendingEventEntries.some(isUserFacingUntrustedEvent);
   const hasUntrustedActiveSessionEvents = activeSessionPendingEventEntries.some(
-    (event) => event.trusted === false,
+    isUserFacingUntrustedEvent,
   );
   const hasUntrustedPendingEvents = hasUntrustedInspectedEvents || hasUntrustedActiveSessionEvents;
 
