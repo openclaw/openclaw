@@ -559,6 +559,14 @@ export const TtsConfigSchema = z
       })
       .strict()
       .optional(),
+    autoEmotion: z
+      .object({
+        enabled: z.boolean().optional(),
+        fallback: z.string().optional(),
+        allowed: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
     prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),

@@ -1702,6 +1702,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
   "messages.tts.personas.*.providers":
     "Provider-specific TTS persona bindings keyed by speech provider id. These merge over messages.tts.providers for the active persona.",
+  "messages.tts.autoEmotion":
+    "Conservative automatic emotion selection for TTS. When enabled, OpenClaw infers an abstract emotion from spoken text and maps it to provider-specific speech controls unless provider config, persona provider bindings, or request overrides already set emotion/style/instructions/prosody.",
+  "messages.tts.autoEmotion.enabled":
+    "Enables conservative automatic emotion selection from the synthesized text.",
+  "messages.tts.autoEmotion.fallback":
+    "Abstract emotion to use when no heuristic matches or the selected emotion is not allowed.",
+  "messages.tts.autoEmotion.allowed":
+    "Optional allowlist of abstract emotion ids automatic selection may emit, such as happy, calm, neutral, sad, surprised, or angry.",
   "messages.tts.providers":
     "Provider-specific TTS settings keyed by speech provider id. Use this instead of bundled provider-specific top-level keys so speech plugins stay decoupled from core config schema.",
   "messages.tts.providers.*":

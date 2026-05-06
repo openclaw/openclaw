@@ -540,6 +540,306 @@ describe("speech-core native voice-note routing", () => {
     }
   });
 
+  it("applies auto emotion as a provider override when enabled", async () => {
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+              fallback: "neutral",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: expect.objectContaining({
+          emotion: "happy",
+        }),
+      }),
+    );
+  });
+
+  it("keeps explicit emotion overrides ahead of auto emotion", async () => {
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      overrides: {
+        providerOverrides: {
+          mock: {
+            emotion: "calm",
+          },
+        },
+      },
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: expect.objectContaining({
+          emotion: "calm",
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ["volcengine", { emotion: "happy" }],
+    ["xiaomi", { style: "Speak in a warm, upbeat, cheerful tone." }],
+    ["openai", { instructions: "Speak in a warm, upbeat, cheerful tone." }],
+    ["elevenlabs", { voiceSettings: { style: 0.45, stability: 0.35 } }],
+    ["microsoft", { rate: "+8%", pitch: "+4%", volume: "+0%" }],
+    ["azure-speech", { rate: "+8%", pitch: "+4%", volume: "+0%" }],
+  ])("maps auto emotion to %s provider-specific overrides", async (provider, expectedOverrides) => {
+    installSpeechProviders([createMockSpeechProvider(provider)]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider,
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+              fallback: "neutral",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: expectedOverrides,
+      }),
+    );
+  });
+
+  it("keeps explicit provider-specific overrides ahead of auto emotion", async () => {
+    installSpeechProviders([createMockSpeechProvider("openai")]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "openai",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      overrides: {
+        providerOverrides: {
+          openai: {
+            instructions: "Use the exact reviewer-provided voice direction.",
+          },
+        },
+      },
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          instructions: "Use the exact reviewer-provided voice direction.",
+        },
+      }),
+    );
+  });
+
+  it("keeps ElevenLabs auto emotion when only similarityBoost is configured", async () => {
+    installSpeechProviders([createMockSpeechProvider("elevenlabs")]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "elevenlabs",
+            providers: {
+              elevenlabs: {
+                voiceSettings: {
+                  similarityBoost: 0.75,
+                },
+              },
+            },
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          voiceSettings: {
+            style: 0.45,
+            stability: 0.35,
+          },
+        },
+      }),
+    );
+  });
+
+  it("does not treat provider default ElevenLabs voice settings as explicit overrides", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("elevenlabs", {
+        resolveConfig: () => ({
+          voiceSettings: {
+            style: 0,
+            stability: 0.5,
+            similarityBoost: 0.75,
+          },
+        }),
+      }),
+    ]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "elevenlabs",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          voiceSettings: {
+            style: 0.45,
+            stability: 0.35,
+          },
+        },
+      }),
+    );
+  });
+
+  it("honors persona provider instructions before OpenAI auto emotion", async () => {
+    installSpeechProviders([createMockSpeechProvider("openai")]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "openai",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                providers: {
+                  openai: {
+                    instructions: "Speak with dry butler restraint.",
+                  },
+                },
+              },
+            },
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerConfig: expect.objectContaining({
+          instructions: "Speak with dry butler restraint.",
+        }),
+        providerOverrides: undefined,
+      }),
+    );
+  });
+
+  it("honors persona provider voice settings before ElevenLabs auto emotion", async () => {
+    installSpeechProviders([createMockSpeechProvider("elevenlabs")]);
+
+    await synthesizeSpeech({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "elevenlabs",
+            persona: "alfred",
+            personas: {
+              alfred: {
+                providers: {
+                  elevenlabs: {
+                    voiceSettings: {
+                      style: 0.1,
+                      stability: 0.9,
+                    },
+                  },
+                },
+              },
+            },
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(synthesizeMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerConfig: expect.objectContaining({
+          voiceSettings: {
+            style: 0.1,
+            stability: 0.9,
+          },
+        }),
+        providerOverrides: undefined,
+      }),
+    );
+  });
+
   it("does not mark skipped unregistered providers as missing persona bindings", async () => {
     const result = await synthesizeSpeech({
       text: "Use fallback provider.",
@@ -650,6 +950,44 @@ describe("speech-core native voice-note routing", () => {
       expect.objectContaining({
         providerOverrides: {
           voice: "directed-voice",
+        },
+      }),
+    );
+  });
+
+  it("applies auto emotion to telephony synthesis providers", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("openai", {
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "Great news, the deployment succeeded!",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "openai",
+            autoEmotion: {
+              enabled: true,
+              allowed: ["happy", "calm", "neutral"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeTelephony).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          instructions: "Speak in a warm, upbeat, cheerful tone.",
         },
       }),
     );

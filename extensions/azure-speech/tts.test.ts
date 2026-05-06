@@ -32,6 +32,19 @@ describe("azure speech tts", () => {
     );
   });
 
+  it("wraps speech text in prosody when prosody options are provided", () => {
+    expect(
+      buildAzureSpeechSsml({
+        text: "hello",
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+        rate: "+8%",
+        pitch: "+4%",
+        volume: "+0%",
+      }),
+    ).toContain(`<prosody rate="+8%" pitch="+4%" volume="+0%">hello</prosody>`);
+  });
+
   it("normalizes region and endpoint routing", () => {
     expect(normalizeAzureSpeechBaseUrl({ region: "eastus" })).toBe(
       "https://eastus.tts.speech.microsoft.com",

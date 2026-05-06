@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ResolvedTtsPersona,
   TtsAutoMode,
+  TtsAutoEmotionConfig,
   TtsConfig,
   TtsMode,
   TtsProvider,
@@ -19,6 +20,7 @@ export type ResolvedTtsConfig = {
   personas: Record<string, ResolvedTtsPersona>;
   summaryModel?: string;
   modelOverrides: ResolvedTtsModelOverrides;
+  autoEmotion?: TtsAutoEmotionConfig;
   providerConfigs: Record<string, SpeechProviderConfig>;
   prefsPath?: string;
   maxTextLength: number;
