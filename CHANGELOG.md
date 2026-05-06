@@ -712,6 +712,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/restart: align `gateway.restart.safe` preflight with scheduled restart deferral by counting only active restart blockers (running non-ended tasks), so queued task records no longer keep "safe" restarts deferred indefinitely. (#76923) Thanks @NikolaFC.
 - Discord: persist slash-command deploy hashes across process restarts so unchanged command sets skip redeploy and avoid restart-loop 429s.
 - Providers/LM Studio: normalize binary `off`/`on` reasoning metadata from Gemma 4 and other local models to LM Studio's accepted OpenAI-compatible `reasoning_effort` values.
+- Memory Core: preserve `sessions` corpus labels when shaping `memory_search` transcript hits instead of reporting them as generic memory results. (#71898) Thanks @rubencu.
 - Plugins/externalization: keep official external install docs, update examples, and live Codex npm checks on default npm tags instead of `@beta`. Thanks @vincentkoc.
 - Plugins/externalization: keep ACPX, Google Chat, and LINE publishable plugin dist trees out of the core npm package file list.
 - Plugins/ClawHub: fall back to version metadata when the artifact resolver route is missing and keep the Docker ClawHub fixture aligned with npm-pack artifact resolution, avoiding false version-not-found failures during plugin install validation. Thanks @vincentkoc.
