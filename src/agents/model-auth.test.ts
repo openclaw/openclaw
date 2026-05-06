@@ -1,4 +1,3 @@
-import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
@@ -7,6 +6,7 @@ import {
   GCP_VERTEX_CREDENTIALS_MARKER,
   NON_ENV_SECRETREF_MARKER,
 } from "./model-auth-markers.js";
+import type { Model } from "./pi-ai-contract.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshotWithMetadata: () => ({

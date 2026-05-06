@@ -1,5 +1,5 @@
-import { TUI } from "@mariozechner/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { TUI } from "../pi-tui-contract.js";
 import { editorTheme } from "../theme/theme.js";
 import { CustomEditor } from "./custom-editor.js";
 

@@ -12,6 +12,8 @@ import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js"
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
+import { createAgentHarnessWorkerLaunchRequest } from "./worker-launch.js";
+import { resolveAgentHarnessWorkerLaunch } from "./worker-policy.js";
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy };
@@ -156,6 +158,36 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
   });
   const v2Harness = adaptAgentHarnessToV2(harness);
+  const workerLaunch = resolveAgentHarnessWorkerLaunch({ attempt: params, env: process.env });
+  if (workerLaunch.mode === "inline" && workerLaunch.reason === "not_serializable") {
+    log.debug("agent harness attempt stays inline; worker payload not serializable yet", {
+      harnessId: harness.id,
+      provider: params.provider,
+      modelId: params.modelId,
+      blockers: workerLaunch.blockers?.map((blocker) => blocker.field ?? blocker.reason),
+    });
+  }
+  if (workerLaunch.mode === "worker") {
+    const workerRequest = createAgentHarnessWorkerLaunchRequest(params, {
+      runtimeId: harness.id,
+      filesystemMode: "disk",
+    });
+    if (workerLaunch.reason === "requested") {
+      throw new Error(
+        "Agent harness worker mode was requested, but PI harness attempts are not connected to the worker backend yet.",
+      );
+    }
+    log.debug(
+      "agent harness attempt is worker-serializable but still using inline harness adapter",
+      {
+        harnessId: harness.id,
+        provider: params.provider,
+        modelId: params.modelId,
+        runId: workerRequest.preparedRun.runId,
+        filesystemMode: workerRequest.preparedRun.filesystemMode,
+      },
+    );
+  }
   if (harness.id === "pi") {
     return await runAgentHarnessV2LifecycleAttempt(v2Harness, params);
   }

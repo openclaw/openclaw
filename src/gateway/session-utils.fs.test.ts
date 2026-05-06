@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { SessionManager } from "../agents/transcript/session-transcript-contract.js";
+import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
 import {
@@ -940,6 +942,125 @@ describe("readSessionMessages", () => {
       expect(openSpy).toHaveBeenCalledTimes(1);
     } finally {
       openSpy.mockRestore();
+    }
+  });
+
+  test("reads async full and recent messages from scoped SQLite when JSONL is missing", async () => {
+    const sessionId = "test-session-sqlite-transcript-fallback";
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, ".openclaw-sqlite-fallback");
+    closeOpenClawStateDatabaseForTest();
+    try {
+      for (const event of [
+        { type: "session", version: 1, id: sessionId },
+        {
+          type: "message",
+          id: "user-1",
+          parentId: null,
+          message: { role: "user", content: "sqlite root" },
+        },
+        {
+          type: "message",
+          id: "assistant-1",
+          parentId: "user-1",
+          message: {
+            role: "assistant",
+            content: "sqlite active",
+            model: "sonnet-4.6",
+            provider: "anthropic",
+            usage: { input: 5, output: 2 },
+          },
+        },
+        {
+          type: "message",
+          id: "assistant-inactive",
+          parentId: "user-1",
+          message: { role: "assistant", content: "sqlite inactive" },
+        },
+        {
+          type: "message",
+          id: "user-2",
+          parentId: "assistant-1",
+          message: { role: "user", content: "sqlite latest" },
+        },
+      ]) {
+        appendSqliteSessionTranscriptEvent({
+          agentId: "target",
+          sessionId,
+          event,
+        });
+      }
+
+      const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+        agentId: "target",
+        mode: "full",
+        reason: "test SQLite transcript fallback",
+      });
+      expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
+        "sqlite root",
+        "sqlite active",
+        "sqlite latest",
+      ]);
+      expect(fullMessages[2]).toMatchObject({
+        __openclaw: expect.objectContaining({ id: "user-2", seq: 3 }),
+      });
+
+      const recent = await readRecentSessionMessagesWithStatsAsync(
+        sessionId,
+        storePath,
+        undefined,
+        {
+          agentId: "target",
+          maxMessages: 1,
+          maxLines: 20,
+        },
+      );
+      expect(recent.totalMessages).toBe(3);
+      expect(recent.messages).toEqual([
+        expect.objectContaining({
+          content: "sqlite latest",
+          __openclaw: expect.objectContaining({ seq: 3 }),
+        }),
+      ]);
+
+      expect(
+        readRecentSessionTranscriptLines({
+          agentId: "target",
+          sessionId,
+          storePath,
+          maxLines: 2,
+        }),
+      ).toMatchObject({
+        lines: expect.arrayContaining([expect.stringContaining("sqlite latest")]),
+        totalLines: 5,
+      });
+      expect(
+        readSessionTitleFieldsFromTranscript(sessionId, storePath, undefined, "target"),
+      ).toEqual({
+        firstUserMessage: "sqlite root",
+        lastMessagePreview: "sqlite latest",
+      });
+      expect(readFirstUserMessageFromTranscript(sessionId, storePath, undefined, "target")).toBe(
+        "sqlite root",
+      );
+      expect(readLastMessagePreviewFromTranscript(sessionId, storePath, undefined, "target")).toBe(
+        "sqlite latest",
+      );
+      expect(
+        readLatestSessionUsageFromTranscript(sessionId, storePath, undefined, "target"),
+      ).toMatchObject({
+        inputTokens: 5,
+        outputTokens: 2,
+        model: "sonnet-4.6",
+        modelProvider: "anthropic",
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
     }
   });
 

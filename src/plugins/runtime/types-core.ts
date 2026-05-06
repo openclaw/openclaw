@@ -316,13 +316,17 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("../../agents/pi-ai-contract.js").Model<
+        import("../../agents/pi-ai-contract.js").Api
+      >;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("../../agents/pi-ai-contract.js").Model<
+        import("../../agents/pi-ai-contract.js").Api
+      >;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

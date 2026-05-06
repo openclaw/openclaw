@@ -1,9 +1,9 @@
-import type { ProviderStreamOptions } from "@mariozechner/pi-ai";
 import {
   describeImageWithModelPayloadTransform,
   describeImagesWithModelPayloadTransform,
   type MediaUnderstandingProvider,
 } from "openclaw/plugin-sdk/media-understanding";
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/provider-ai";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);

@@ -1,4 +1,4 @@
-import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
+import type { AssistantMessage, StopReason, Usage } from "./pi-ai-contract.js";
 
 type StreamModelDescriptor = {
   api: string;

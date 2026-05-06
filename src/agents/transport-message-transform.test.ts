@@ -1,5 +1,5 @@
-import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { Api, Context, Model } from "./pi-ai-contract.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 function makeModel(api: Api, provider: string, id: string): Model<Api> {

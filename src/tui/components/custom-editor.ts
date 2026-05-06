@@ -1,4 +1,4 @@
-import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
+import { Editor, Key, matchesKey } from "../pi-tui-contract.js";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;

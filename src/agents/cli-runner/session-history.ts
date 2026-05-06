@@ -1,6 +1,5 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { migrateSessionEntries, parseSessionEntries } from "@mariozechner/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -12,6 +11,10 @@ import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
+import {
+  migrateSessionEntries,
+  parseSessionEntries,
+} from "../transcript/session-transcript-contract.js";
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;

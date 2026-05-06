@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../agents/agent-core-contract.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 
 export type PluginNextTurnInjectionPlacement = "prepend_context" | "append_context";

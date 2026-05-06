@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -7,21 +5,22 @@ import type {
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { getRawSessionAppendMessage } from "../session-raw-append-message.js";
 import {
   acquireSessionWriteLock,
   type SessionWriteLockAcquireTimeoutConfig,
   resolveSessionWriteLockAcquireTimeoutMs,
 } from "../session-write-lock.js";
-import { log } from "./logger.js";
+import type { SessionManager } from "../transcript/session-manager-contract.js";
 import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
-} from "./transcript-file-state.js";
+} from "../transcript/transcript-file-state.js";
+import { log } from "./logger.js";
 
-type SessionManagerLike = ReturnType<typeof SessionManager.open>;
-type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
+type SessionBranchEntry = ReturnType<SessionManager["getBranch"]>[number];
 
 function estimateMessageBytes(message: AgentMessage): number {
   return Buffer.byteLength(JSON.stringify(message), "utf8");
@@ -38,10 +37,10 @@ function remapEntryId(
 }
 
 function appendBranchEntry(params: {
-  sessionManager: SessionManagerLike;
+  sessionManager: SessionManager;
   entry: SessionBranchEntry;
   rewrittenEntryIds: ReadonlyMap<string, string>;
-  appendMessage: SessionManagerLike["appendMessage"];
+  appendMessage: SessionManager["appendMessage"];
 }): string {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
@@ -150,7 +149,7 @@ function appendTranscriptStateBranchEntry(params: {
  * from the first rewritten message's parent and re-appending the suffix.
  */
 export function rewriteTranscriptEntriesInSessionManager(params: {
-  sessionManager: SessionManagerLike;
+  sessionManager: SessionManager;
   replacements: TranscriptRewriteReplacement[];
 }): TranscriptRewriteResult {
   const replacementsById = new Map(

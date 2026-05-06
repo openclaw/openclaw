@@ -1,9 +1,8 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
 } from "../infra/exec-approvals.js";
+import type { AgentToolResult } from "./agent-core-contract.js";
 import {
   buildExecApprovalRequesterContext,
   buildExecApprovalTurnSourceContext,

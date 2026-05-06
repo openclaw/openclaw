@@ -1,12 +1,3 @@
-import {
-  streamSimple,
-  type Api,
-  type AssistantMessageEvent,
-  type ImageContent,
-  type Message,
-  type Model,
-  type TextContent,
-} from "@mariozechner/pi-ai";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
@@ -24,7 +15,15 @@ import {
 } from "./image-sanitization.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "./openai-codex-routing.js";
+import {
+  streamSimple,
+  type Api,
+  type AssistantMessageEvent,
+  type ImageContent,
+  type Message,
+  type Model,
+  type TextContent,
+} from "./pi-ai-contract.js";
 import { EmbeddedBlockChunker, type BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { resolveModelWithRegistry } from "./pi-embedded-runner/model.js";
 import { getActiveEmbeddedRunSnapshot } from "./pi-embedded-runner/runs.js";

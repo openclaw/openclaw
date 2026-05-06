@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "../agent-core-contract.js";
+import { streamSimple } from "../pi-ai-contract.js";
 
 const MINIMAX_FAST_MODEL_IDS = new Map<string, string>([
   ["MiniMax-M2.7", "MiniMax-M2.7-highspeed"],

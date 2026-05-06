@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -7,8 +5,10 @@ import {
   applyInputProvenanceToUserMessage,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import type { AgentMessage } from "./agent-core-contract.js";
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import type { SessionManager } from "./transcript/session-transcript-contract.js";
 
 type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
@@ -109,7 +109,7 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   const beforeMessageWrite = (event: {
-    message: import("@mariozechner/pi-agent-core").AgentMessage;
+    message: import("./agent-core-contract.js").AgentMessage;
   }) => {
     let message = event.message;
     let changed = false;

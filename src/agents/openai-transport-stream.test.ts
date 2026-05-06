@@ -1,5 +1,4 @@
 import { createServer } from "node:http";
-import type { Model } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
@@ -10,6 +9,7 @@ import {
   sanitizeTransportPayloadText,
   __testing,
 } from "./openai-transport-stream.js";
+import type { Model } from "./pi-ai-contract.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
   buildTransportAwareSimpleStreamFn,

@@ -14,6 +14,10 @@ import { getFileStatSnapshot } from "../cache-utils.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import {
+  saveSqliteSessionStore,
+  resolveSqliteSessionStoreOptionsForPath,
+} from "./store-backend.sqlite.js";
+import {
   dropSessionStoreObjectCache,
   getSerializedSessionStore,
   isSessionStoreCacheEnabled,
@@ -22,7 +26,7 @@ import {
   writeSessionStoreCache,
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
-import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
+import { loadSessionStore } from "./store-load.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -34,6 +38,7 @@ import {
   type ResolvedSessionMaintenanceConfig,
   type SessionMaintenanceWarning,
 } from "./store-maintenance.js";
+import { normalizeSessionStore } from "./store-normalize.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
 import {
   mergeSessionEntry,
@@ -372,6 +377,13 @@ async function saveSessionStoreUnlocked(
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
+  const sqliteOptions = resolveSqliteSessionStoreOptionsForPath(storePath);
+  if (sqliteOptions) {
+    saveSqliteSessionStore(sqliteOptions, store);
+    dropSessionStoreObjectCache(storePath);
+    return;
+  }
+
   if (getSerializedSessionStore(storePath) === json) {
     updateSessionStoreWriteCaches({ storePath, store, serialized: json });
     return;

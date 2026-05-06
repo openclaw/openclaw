@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {
@@ -98,7 +98,7 @@ export async function handleDiscordGuildAction(
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg: OpenClawConfig,
   options?: { mediaLocalRoots?: readonly string[] },
-): Promise<AgentToolResult<unknown>> {
+): Promise<AgentToolResult> {
   const accountId = readStringParam(params, "accountId");
   if (!cfg) {
     throw new Error("Discord guild actions require a resolved runtime config.");

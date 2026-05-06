@@ -6,7 +6,7 @@ import {
   migrateSessionEntries,
   SessionManager,
   type FileEntry as PiSessionFileEntry,
-} from "@mariozechner/pi-coding-agent";
+} from "../agents/transcript/session-transcript-contract.js";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,

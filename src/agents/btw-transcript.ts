@@ -1,16 +1,16 @@
 import { readFile } from "node:fs/promises";
 import {
-  buildSessionContext,
-  migrateSessionEntries,
-  parseSessionEntries,
-  type SessionEntry as PiSessionEntry,
-} from "@mariozechner/pi-coding-agent";
-import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   type SessionEntry as StoredSessionEntry,
 } from "../config/sessions.js";
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
+import {
+  buildSessionContext,
+  migrateSessionEntries,
+  parseSessionEntries,
+  type SessionEntry as PiSessionEntry,
+} from "./transcript/session-transcript-contract.js";
 
 export function resolveBtwSessionTranscriptPath(params: {
   sessionId: string;

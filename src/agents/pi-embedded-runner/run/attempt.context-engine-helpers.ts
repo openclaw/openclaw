@@ -1,7 +1,7 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { ContextEngine } from "../../../context-engine/types.js";
+import type { AgentMessage } from "../../agent-core-contract.js";
 import type { BootstrapMode } from "../../bootstrap-mode.js";
+import type { AssistantMessage } from "../../pi-ai-contract.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import type { PromptCacheChange } from "../prompt-cache-observability.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";

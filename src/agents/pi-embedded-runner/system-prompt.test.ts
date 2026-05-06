@@ -1,6 +1,6 @@
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import type { AgentSession } from "../transcript/session-transcript-contract.js";
 import {
   applySystemPromptOverrideToSession,
   buildEmbeddedSystemPrompt,

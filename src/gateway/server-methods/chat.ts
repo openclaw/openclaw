@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import type { AgentMessage } from "../../agents/agent-core-contract.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { CURRENT_SESSION_VERSION } from "../../agents/transcript/session-transcript-contract.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
@@ -1422,6 +1422,8 @@ async function appendAssistantTranscriptMessage(params: {
   return await appendInjectedAssistantMessageToTranscript({
     transcriptPath,
     message: params.message,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionId: params.sessionId,
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
@@ -1748,6 +1750,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const localMessages =
       sessionId && storePath
         ? await readRecentSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            agentId: sessionAgentId,
             maxMessages: max,
             maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
           })

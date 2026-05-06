@@ -1,17 +1,17 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { UserMessage } from "@mariozechner/pi-ai";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { summarizeWithFallback } from "./compaction.js";
+import type { UserMessage } from "./pi-ai-contract.js";
+import type { ExtensionContext } from "./transcript/session-transcript-contract.js";
 
 const piCodingAgentMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
   estimateTokens: vi.fn((_message: unknown) => 100),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
-    "@mariozechner/pi-coding-agent",
+vi.mock("./pi-coding-agent-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("./pi-coding-agent-contract.js")>(
+    "./pi-coding-agent-contract.js",
   );
   return {
     ...actual,

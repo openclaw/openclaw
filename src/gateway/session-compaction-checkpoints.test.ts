@@ -2,9 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { AssistantMessage } from "../agents/pi-ai-contract.js";
+import {
+  CURRENT_SESSION_VERSION,
+  SessionManager,
+} from "../agents/transcript/session-transcript-contract.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,

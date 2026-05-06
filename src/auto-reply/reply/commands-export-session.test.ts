@@ -20,6 +20,8 @@ const hoisted = await vi.hoisted(async () => {
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
+    hasSqliteSessionTranscriptEventsMock: vi.fn(() => false),
+    exportSqliteSessionTranscriptJsonlMock: vi.fn(() => ""),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
@@ -40,6 +42,11 @@ vi.mock("./commands-system-prompt.js", () => ({
 
 vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: hoisted.pathExistsMock,
+}));
+
+vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
+  hasSqliteSessionTranscriptEvents: hoisted.hasSqliteSessionTranscriptEventsMock,
+  exportSqliteSessionTranscriptJsonl: hoisted.exportSqliteSessionTranscriptJsonlMock,
 }));
 
 vi.mock("node:fs", async () => {
@@ -126,6 +133,17 @@ function makeParams(): HandleCommandsParams {
   } as unknown as HandleCommandsParams;
 }
 
+function decodeExportedSessionData(html: unknown): unknown {
+  if (typeof html !== "string") {
+    throw new TypeError("expected export HTML string");
+  }
+  const match = html.match(/<script\s+id="session-data"[^>]*>([^<]*)<\/script>/);
+  if (!match?.[1]) {
+    throw new Error("missing session-data script");
+  }
+  return JSON.parse(Buffer.from(match[1], "base64").toString("utf-8"));
+}
+
 describe("buildExportSessionReply", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -154,6 +172,8 @@ describe("buildExportSessionReply", () => {
     });
     hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.pathExistsMock.mockResolvedValue(true);
+    hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(false);
+    hoisted.exportSqliteSessionTranscriptJsonlMock.mockReturnValue("");
     hoisted.exportHtmlTemplateContents.clear();
   });
 
@@ -236,6 +256,44 @@ describe("buildExportSessionReply", () => {
       ).toString("base64"),
     );
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
+  });
+
+  it("exports from scoped SQLite transcript events when the JSONL file is missing", async () => {
+    const { buildExportSessionReply } = await import("./commands-export-session.js");
+    hoisted.pathExistsMock.mockResolvedValue(false);
+    hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);
+    hoisted.exportSqliteSessionTranscriptJsonlMock.mockReturnValue(
+      [
+        JSON.stringify({ type: "session", id: "session-1" }),
+        JSON.stringify({
+          type: "message",
+          id: "m1",
+          parentId: null,
+          message: { role: "assistant", content: "sqlite export" },
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("✅ Session exported!");
+    expect(hoisted.exportSqliteSessionTranscriptJsonlMock).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionFile: "/tmp/target-store/session.jsonl",
+      sessionId: "session-1",
+    });
+    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
+    expect(typeof html).toBe("string");
+    const sessionData = decodeExportedSessionData(html) as {
+      header?: { type?: string; id?: string };
+      entries?: Array<{ id?: string; message?: { content?: string } }>;
+      leafId?: string;
+    };
+    expect(sessionData.header).toMatchObject({ type: "session", id: "session-1" });
+    expect(sessionData.entries).toHaveLength(1);
+    expect(sessionData.entries?.[0]?.message?.content).toBe("sqlite export");
+    expect(sessionData.leafId).toBe(sessionData.entries?.[0]?.id);
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {

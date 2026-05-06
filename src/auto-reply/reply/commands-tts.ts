@@ -255,6 +255,10 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
     const latest = await readLatestAssistantTextFromSessionTranscript(
       params.sessionEntry.sessionFile,
+      {
+        agentId: params.agentId,
+        sessionId: params.sessionEntry.sessionId,
+      },
     );
     const latestText = latest?.text.trim();
     if (!latestText || isSilentReplyPayloadText(latestText)) {

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
@@ -16,6 +15,7 @@ import {
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
+import type { SettingsManager } from "./pi-coding-agent-contract.js";
 
 const log = createSubsystemLogger("embedded-pi-settings");
 

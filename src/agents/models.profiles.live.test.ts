@@ -1,12 +1,3 @@
-import { writeSync } from "node:fs";
-import {
-  type Api,
-  completeSimple,
-  getModels,
-  getProviders,
-  type KnownProvider,
-  type Model,
-} from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
@@ -49,6 +40,7 @@ import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-help
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { type Api, completeSimple, type Model } from "./pi-ai-contract.js";
 import {
   isCloudflareOrHtmlErrorPage,
   isRateLimitErrorMessage,

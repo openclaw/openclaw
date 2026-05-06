@@ -1,4 +1,4 @@
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry } from "../../agents/model-registry-contract.js";
 import {
   appendCatalogSupplementRows,
   appendConfiguredProviderRows,

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import type { Component, SelectItem } from "@mariozechner/pi-tui";
 import { createSearchableSelectList } from "./components/selectors.js";
+import type { Component, SelectItem } from "./pi-tui-contract.js";
 
 type LocalShellDeps = {
   chatLog: {

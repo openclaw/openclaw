@@ -1,17 +1,17 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import {
-  estimateTokens,
-  generateSummary as piGenerateSummary,
-} from "@mariozechner/pi-coding-agent";
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { AgentMessage } from "./agent-core-contract.js";
+import type { ExtensionContext } from "./agent-extension-contract.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
+import {
+  estimateTokens,
+  generateSummary as piGenerateSummary,
+} from "./pi-coding-agent-contract.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 

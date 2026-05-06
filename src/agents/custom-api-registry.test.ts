@@ -1,12 +1,12 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
 import {
   clearApiProviders,
   createAssistantMessageEventStream,
   getApiProvider,
   registerBuiltInApiProviders,
   unregisterApiProviders,
-} from "@mariozechner/pi-ai";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureCustomApiRegistered, getCustomApiRegistrySourceId } from "./custom-api-registry.js";
+} from "./pi-ai-contract.js";
 
 function getRegisteredTestProvider() {
   const provider = getApiProvider("test-custom-api");

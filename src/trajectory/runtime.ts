@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { AgentToolArtifactStore } from "../agents/filesystem/agent-filesystem.js";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "../agents/queued-file-writer.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,6 +38,7 @@ type TrajectoryRuntimeInit = {
   modelApi?: string | null;
   workspaceDir?: string;
   writer?: QueuedFileWriter;
+  artifactStore?: AgentToolArtifactStore;
 };
 
 type TrajectoryRuntimeRecorder = {
@@ -270,6 +272,9 @@ export function createTrajectoryRuntimeRecorder(
   let droppedEvents = 0;
   let droppedEventBytes = 0;
   let captureStopped = false;
+  const artifactLines: string[] = [];
+  let artifactEventCount = 0;
+  let artifactWriteFailed = false;
 
   const writeBoundedLine = (line: string, options: { reserveSentinel: boolean }): boolean => {
     const jsonlLine = `${line}\n`;
@@ -289,7 +294,39 @@ export function createTrajectoryRuntimeRecorder(
       return false;
     }
     acceptedRuntimeBytes += lineBytes;
+    artifactLines.push(jsonlLine);
+    artifactEventCount += 1;
     return true;
+  };
+
+  const writeArtifactMirror = (): void => {
+    if (!params.artifactStore || artifactLines.length === 0 || artifactWriteFailed) {
+      return;
+    }
+    try {
+      params.artifactStore.write({
+        artifactId: "trajectory-runtime",
+        kind: "trajectory/runtime-jsonl",
+        metadata: {
+          traceSchema: "openclaw-trajectory-artifact",
+          schemaVersion: 1,
+          source: "runtime",
+          sessionId: params.sessionId,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
+          ...(params.provider ? { provider: params.provider } : {}),
+          ...(params.modelId ? { modelId: params.modelId } : {}),
+          ...(params.modelApi ? { modelApi: params.modelApi } : {}),
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          runtimeFile: filePath,
+          eventCount: artifactEventCount,
+          bytes: Buffer.byteLength(artifactLines.join(""), "utf8"),
+        },
+        blob: artifactLines.join(""),
+      });
+    } catch {
+      artifactWriteFailed = true;
+    }
   };
 
   const buildEventLine = (type: string, data?: Record<string, unknown>): string | undefined => {
@@ -353,6 +390,7 @@ export function createTrajectoryRuntimeRecorder(
         droppedEventBytes = 0;
       }
       await writer.flush();
+      writeArtifactMirror();
       if (!params.writer) {
         writers.delete(filePath);
       }

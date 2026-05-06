@@ -1,4 +1,4 @@
-import { Container, Spacer } from "@mariozechner/pi-tui";
+import { Container, Spacer } from "../pi-tui-contract.js";
 import { markdownTheme } from "../theme/theme.js";
 import { HyperlinkMarkdown } from "./hyperlink-markdown.js";
 

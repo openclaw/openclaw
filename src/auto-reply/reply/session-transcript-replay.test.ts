@@ -1,11 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_REPLAY_MAX_MESSAGES,
-  replayRecentUserAssistantMessages,
-} from "./session-transcript-replay.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const sqliteTranscriptMocks = vi.hoisted(() => ({
+  exportSqliteSessionTranscriptJsonl: vi.fn(() => ""),
+  hasSqliteSessionTranscriptEvents: vi.fn(() => false),
+}));
+
+vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
+  exportSqliteSessionTranscriptJsonl: sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl,
+  hasSqliteSessionTranscriptEvents: sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents,
+}));
+
+const { DEFAULT_REPLAY_MAX_MESSAGES, replayRecentUserAssistantMessages } =
+  await import("./session-transcript-replay.js");
 
 const j = (obj: unknown): string => `${JSON.stringify(obj)}\n`;
 
@@ -38,6 +47,8 @@ describe("replayRecentUserAssistantMessages", () => {
   let root = "";
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-replay-"));
+    sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue("");
+    sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(false);
   });
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
@@ -126,6 +137,47 @@ describe("replayRecentUserAssistantMessages", () => {
       "latest assistant",
       "follow-up",
       "answer",
+    ]);
+  });
+
+  it("replays from scoped SQLite transcript events when source JSONL is missing", async () => {
+    sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(true);
+    sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue(
+      [
+        j({ type: "session", id: "old-session" }),
+        j({ message: { role: "user", content: "sqlite user" } }),
+        j({ message: { role: "tool", content: "skip me" } }),
+        j({ message: { role: "assistant", content: "sqlite assistant" } }),
+      ].join(""),
+    );
+    const target = path.join(root, "next.jsonl");
+
+    expect(
+      await replayRecentUserAssistantMessages({
+        sourceAgentId: "target",
+        sourceSessionId: "old-session",
+        sourceTranscript: path.join(root, "missing.jsonl"),
+        targetTranscript: target,
+        newSessionId: "new-session",
+      }),
+    ).toBe(2);
+
+    expect(sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionId: "old-session",
+    });
+    expect(sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl).toHaveBeenCalledWith({
+      agentId: "target",
+      sessionId: "old-session",
+    });
+    const records = (await fs.readFile(target, "utf8"))
+      .split(/\r?\n/)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line));
+    expect(records[0]).toMatchObject({ type: "session", id: "new-session" });
+    expect(records.slice(1).map((r) => r.message.content)).toEqual([
+      "sqlite user",
+      "sqlite assistant",
     ]);
   });
 });

@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -13,6 +12,7 @@ import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.j
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import type { AgentToolResult } from "./agent-core-contract.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";

@@ -1,5 +1,5 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { expect } from "vitest";
+import type { AssistantMessage } from "./pi-ai-contract.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 type SubscribeEmbeddedPiSession = typeof subscribeEmbeddedPiSession;

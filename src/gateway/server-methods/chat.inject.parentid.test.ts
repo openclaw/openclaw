@@ -1,5 +1,9 @@
 import fs from "node:fs";
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
 
@@ -12,6 +16,11 @@ function readTranscriptLines(transcriptPath: string): string[] {
   }
   return lines;
 }
+
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+});
 
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
@@ -91,6 +100,48 @@ describe("gateway chat.inject transcript writes", () => {
       expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("mirrors injected assistant messages into SQLite when agent and session scope are known", async () => {
+    const { dir, transcriptPath } = createTranscriptFixtureSync({
+      prefix: "openclaw-chat-inject-sqlite-",
+      sessionId: "sess-1",
+    });
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-inject-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const appended = await appendInjectedAssistantMessageToTranscript({
+        transcriptPath,
+        agentId: "main",
+        sessionId: "sess-1",
+        message: "sqlite hello",
+      });
+      expect(appended.ok).toBe(true);
+
+      const events = loadSqliteSessionTranscriptEvents({
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        agentId: "main",
+        sessionId: "sess-1",
+      });
+      expect(events.map((entry) => entry.event)).toEqual([
+        expect.objectContaining({
+          type: "session",
+          id: "sess-1",
+        }),
+        expect.objectContaining({
+          type: "message",
+          id: appended.messageId,
+          message: expect.objectContaining({
+            role: "assistant",
+            model: "gateway-injected",
+          }),
+        }),
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 });

@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "../../agents/agent-core-contract.js";
 import { getChannelPlugin } from "./index.js";
 import type { ChannelMessageActionContext } from "./types.public.js";
 
@@ -14,7 +14,7 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
 
 export async function dispatchChannelMessageAction(
   ctx: ChannelMessageActionContext,
-): Promise<AgentToolResult<unknown> | null> {
+): Promise<AgentToolResult | null> {
   if (requiresTrustedRequesterSender(ctx) && !ctx.requesterSenderId?.trim()) {
     throw new Error(
       `Trusted sender identity is required for ${ctx.channel}:${ctx.action} in tool-driven contexts.`,

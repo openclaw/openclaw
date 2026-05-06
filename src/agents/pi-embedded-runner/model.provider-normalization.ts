@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { normalizeModelCompat } from "../../plugins/provider-model-compat.js";
+import type { Api, Model } from "../pi-ai-contract.js";
 
 export function normalizeResolvedProviderModel(params: {
   provider: string;

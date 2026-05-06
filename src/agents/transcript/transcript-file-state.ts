@@ -1,18 +1,22 @@
 import { randomUUID } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { appendRegularFile, appendRegularFileSync } from "../../infra/fs-safe.js";
+import { privateFileStore, privateFileStoreSync } from "../../infra/private-file-store.js";
+import type {
+  FileEntry,
+  SessionContext,
+  SessionEntry,
+  SessionHeader,
+  SessionTreeNode,
+} from "./session-transcript-contract.js";
 import {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   parseSessionEntries,
-  type FileEntry,
-  type SessionContext,
-  type SessionEntry,
-  type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
-import { appendRegularFile } from "../../infra/fs-safe.js";
-import { privateFileStore } from "../../infra/private-file-store.js";
+} from "./session-transcript-format.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
@@ -106,8 +110,67 @@ export class TranscriptFileState {
     return this.leafId ? this.byId.get(this.leafId) : undefined;
   }
 
+  getEntry(id: string): SessionEntry | undefined {
+    return this.byId.get(id);
+  }
+
+  getChildren(parentId: string): SessionEntry[] {
+    return this.entries.filter((entry) => entry.parentId === parentId);
+  }
+
   getLabel(id: string): string | undefined {
     return this.labelsById.get(id);
+  }
+
+  getTree(): SessionTreeNode[] {
+    const nodeById = new Map<string, SessionTreeNode>();
+    const roots: SessionTreeNode[] = [];
+    for (const entry of this.entries) {
+      nodeById.set(entry.id, {
+        entry,
+        children: [],
+        label: this.labelsById.get(entry.id),
+        labelTimestamp: this.labelTimestampsById.get(entry.id),
+      });
+    }
+
+    for (const entry of this.entries) {
+      const node = nodeById.get(entry.id);
+      if (!node) {
+        continue;
+      }
+      if (entry.parentId === null || entry.parentId === entry.id) {
+        roots.push(node);
+        continue;
+      }
+      const parent = nodeById.get(entry.parentId);
+      if (parent) {
+        parent.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    }
+
+    const stack = [...roots];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      node.children.sort((a, b) => Date.parse(a.entry.timestamp) - Date.parse(b.entry.timestamp));
+      stack.push(...node.children);
+    }
+    return roots;
+  }
+
+  getSessionName(): string | undefined {
+    for (let index = this.entries.length - 1; index >= 0; index -= 1) {
+      const entry = this.entries[index];
+      if (entry.type === "session_info") {
+        return entry.name?.trim() || undefined;
+      }
+    }
+    return undefined;
   }
 
   getBranch(fromId?: string): SessionEntry[] {
@@ -292,11 +355,34 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   return new TranscriptFileState({ header, entries, migrated });
 }
 
+export function readTranscriptFileStateSync(sessionFile: string): TranscriptFileState {
+  const raw = fsSync.readFileSync(sessionFile, "utf-8");
+  const fileEntries = parseSessionEntries(raw);
+  const headerBeforeMigration =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
+  migrateSessionEntries(fileEntries);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter(isSessionEntry);
+  return new TranscriptFileState({ header, entries, migrated });
+}
+
 export async function writeTranscriptFileAtomic(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
 ): Promise<void> {
   await privateFileStore(path.dirname(filePath)).writeText(
+    path.basename(filePath),
+    serializeTranscriptFileEntries(entries),
+  );
+}
+
+export function writeTranscriptFileAtomicSync(
+  filePath: string,
+  entries: Array<SessionHeader | SessionEntry>,
+): void {
+  privateFileStoreSync(path.dirname(filePath)).writeText(
     path.basename(filePath),
     serializeTranscriptFileEntries(entries),
   );
@@ -318,6 +404,28 @@ export async function persistTranscriptStateMutation(params: {
     return;
   }
   await appendRegularFile({
+    filePath: params.sessionFile,
+    content: `${params.appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+    rejectSymlinkParents: true,
+  });
+}
+
+export function persistTranscriptStateMutationSync(params: {
+  sessionFile: string;
+  state: TranscriptFileState;
+  appendedEntries: SessionEntry[];
+}): void {
+  if (params.appendedEntries.length === 0 && !params.state.migrated) {
+    return;
+  }
+  if (params.state.migrated) {
+    writeTranscriptFileAtomicSync(params.sessionFile, [
+      ...(params.state.header ? [params.state.header] : []),
+      ...params.state.entries,
+    ]);
+    return;
+  }
+  appendRegularFileSync({
     filePath: params.sessionFile,
     content: `${params.appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     rejectSymlinkParents: true,

@@ -6,7 +6,11 @@ import {
   parseSessionEntries,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
-} from "@mariozechner/pi-coding-agent";
+} from "../../agents/transcript/session-transcript-contract.js";
+import {
+  exportSqliteSessionTranscriptJsonl,
+  hasSqliteSessionTranscriptEvents,
+} from "../../config/sessions/transcript-store.sqlite.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -144,12 +148,26 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   }
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
-async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+function hasScopedSqliteTranscriptEvents(params: { agentId: string; sessionId: string }): boolean {
+  try {
+    return hasSqliteSessionTranscriptEvents(params);
+  } catch {
+    return false;
+  }
+}
+
+async function readSessionDataFromTranscript(params: {
+  agentId: string;
+  sessionFile: string;
+  sessionId: string;
+}): Promise<{
   header: SessionHeader | null;
   entries: PiSessionEntry[];
   leafId: string | null;
 }> {
-  const raw = await fsp.readFile(sessionFile, "utf-8");
+  const raw = hasScopedSqliteTranscriptEvents(params)
+    ? exportSqliteSessionTranscriptJsonl(params)
+    : await fsp.readFile(params.sessionFile, "utf-8");
   const fileEntries = parseSessionEntries(raw);
   migrateSessionEntries(fileEntries);
   const header =
@@ -172,14 +190,21 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   if (isReplyPayload(sessionTarget)) {
     return sessionTarget;
   }
-  const { entry, sessionFile } = sessionTarget;
+  const { agentId, entry, sessionFile } = sessionTarget;
 
-  if (!(await pathExists(sessionFile))) {
+  if (
+    !(await pathExists(sessionFile)) &&
+    !hasScopedSqliteTranscriptEvents({ agentId, sessionId: entry.sessionId })
+  ) {
     return { text: `❌ Session file not found: ${sessionFile}` };
   }
 
   // 2. Load session entries
-  const { entries, header, leafId } = await readSessionDataFromTranscript(sessionFile);
+  const { entries, header, leafId } = await readSessionDataFromTranscript({
+    agentId,
+    sessionFile,
+    sessionId: entry.sessionId,
+  });
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({

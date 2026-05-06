@@ -1,5 +1,5 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { TSchema } from "typebox";
+import type { AgentTool, AgentToolResult } from "../../agents/agent-core-contract.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
@@ -24,7 +24,7 @@ export type ChannelExposure = {
 export type ChannelOutboundTargetMode = "explicit" | "implicit" | "heartbeat";
 
 /** Agent tool registered by a channel plugin. */
-export type ChannelAgentTool = AgentTool<TSchema, unknown> & {
+export type ChannelAgentTool = AgentTool & {
   ownerOnly?: boolean;
 };
 
@@ -753,7 +753,7 @@ export type ChannelMessageActionAdapter = {
    * Prefer this for channel-specific poll semantics or extra poll parameters.
    * Core only parses the shared poll model when falling back to `outbound.sendPoll`.
    */
-  handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
+  handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult>;
 };
 
 export type ChannelPollResult = {

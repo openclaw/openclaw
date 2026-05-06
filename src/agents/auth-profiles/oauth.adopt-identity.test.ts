@@ -48,7 +48,7 @@ function expectOAuthProfileFields(
 // sub-agent store. Unit tests cover policy variants; this suite proves each
 // production branch refuses a mismatched accountId.
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("../pi-ai-oauth-contract.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }, { id: "anthropic" }],
 }));

@@ -1,6 +1,6 @@
-import type { Component, DefaultTextStyle, MarkdownTheme } from "@mariozechner/pi-tui";
-import { Markdown } from "@mariozechner/pi-tui";
 import { addOsc8Hyperlinks, extractUrls } from "../osc8-hyperlinks.js";
+import type { Component, DefaultTextStyle, MarkdownTheme } from "../pi-tui-contract.js";
+import { Markdown } from "../pi-tui-contract.js";
 
 /**
  * Wrapper around pi-tui's Markdown component that adds OSC 8 terminal

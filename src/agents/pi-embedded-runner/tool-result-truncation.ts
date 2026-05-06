@@ -1,23 +1,23 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { TextContent } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { resolveAgentContextLimits } from "../agent-scope.js";
+import type { TextContent } from "../pi-ai-contract.js";
 import {
   acquireSessionWriteLock,
   type SessionWriteLockAcquireTimeoutConfig,
   resolveSessionWriteLockAcquireTimeoutMs,
 } from "../session-write-lock.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
-import { log } from "./logger.js";
+import { SessionManager } from "../transcript/session-manager-contract.js";
 import {
   persistTranscriptStateMutation,
   readTranscriptFileState,
   type TranscriptFileState,
-} from "./transcript-file-state.js";
+} from "../transcript/transcript-file-state.js";
+import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
+import { log } from "./logger.js";
 import {
   rewriteTranscriptEntriesInSessionManager,
   rewriteTranscriptEntriesInState,

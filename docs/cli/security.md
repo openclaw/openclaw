@@ -75,8 +75,8 @@ openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summa
   define `allowFrom`
 - sets `logging.redactSensitive` from `"off"` to `"tools"`
 - tightens permissions for state/config and common sensitive files
-  (`credentials/*.json`, `auth-profiles.json`, `sessions.json`, session
-  `*.jsonl`)
+  (`state/openclaw.sqlite`, `credentials/*.json`, `auth-profiles.json`,
+  legacy `sessions.json`, session `*.jsonl`)
 - also tightens config include files referenced from `openclaw.json`
 - uses `chmod` on POSIX hosts and `icacls` resets on Windows
 

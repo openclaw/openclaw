@@ -4,15 +4,6 @@ import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import {
-  clampThinkingLevel,
-  type Api,
-  getModels,
-  getProviders,
-  type KnownProvider,
-  type Model,
-  type ModelThinkingLevel,
-} from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
@@ -41,6 +32,12 @@ import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import {
+  clampThinkingLevel,
+  type Api,
+  type Model,
+  type ModelThinkingLevel,
+} from "../agents/pi-ai-contract.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
 import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";

@@ -1,5 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   createAgentToolResultMiddlewareRunner,
   createCodexAppServerToolResultExtensionRunner,
@@ -17,6 +16,7 @@ import {
   type MessagingToolSend,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { ImageContent, TextContent } from "openclaw/plugin-sdk/provider-ai";
 import type { CodexDynamicToolsLoading } from "./config.js";
 import {
   type CodexDynamicToolCallOutputContentItem,
@@ -235,8 +235,8 @@ function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortS
 function collectToolTelemetry(params: {
   toolName: string;
   args: Record<string, unknown>;
-  result: AgentToolResult<unknown> | undefined;
-  mediaTrustResult?: AgentToolResult<unknown>;
+  result: AgentToolResult | undefined;
+  mediaTrustResult?: AgentToolResult;
   telemetry: CodexDynamicToolBridge["telemetry"];
   isError: boolean;
 }): void {
@@ -300,7 +300,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isToolResultError(result: AgentToolResult<unknown>): boolean {
+function isToolResultError(result: AgentToolResult): boolean {
   const details = result.details;
   if (!isRecord(details)) {
     return false;

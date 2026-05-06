@@ -63,11 +63,14 @@ src/agents/
 │   ├── runs.ts                    # Active run tracking, abort, queue
 │   ├── sandbox-info.ts            # Sandbox info for system prompt
 │   ├── session-manager-cache.ts   # SessionManager instance caching
-│   ├── session-manager-init.ts    # Session file initialization
 │   ├── system-prompt.ts           # System prompt builder
 │   ├── tool-split.ts              # Split tools into builtIn vs custom
 │   ├── types.ts                   # EmbeddedPiAgentMeta, EmbeddedPiRunResult
 │   └── utils.ts                   # ThinkLevel mapping, error description
+├── transcript/
+│   ├── session-transcript-contract.ts # OpenClaw-owned transcript/session types
+│   ├── session-manager.ts         # OpenClaw-owned file-backed SessionManager
+│   └── transcript-file-state.ts   # JSONL parse/mutate/write helpers
 ├── pi-embedded-subscribe.ts       # Session event subscription/dispatch
 ├── pi-embedded-subscribe.types.ts # SubscribeEmbeddedPiSessionParams
 ├── pi-embedded-subscribe.handlers.ts # Event handler factory
@@ -300,10 +303,10 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### Session files
 
-Sessions are JSONL files with tree structure (id/parentId linking). Pi's `SessionManager` handles persistence:
+Sessions are JSONL files with tree structure (id/parentId linking). OpenClaw owns the file-backed `SessionManager` value and keeps the PI-compatible shape behind `src/agents/transcript/session-transcript-contract.ts`:
 
 ```typescript
-const sessionManager = SessionManager.open(params.sessionFile);
+const sessionManager = openTranscriptSessionManager({ sessionFile: params.sessionFile });
 ```
 
 OpenClaw wraps this with `guardSessionManager()` for tool result safety.
@@ -314,7 +317,7 @@ OpenClaw wraps this with `guardSessionManager()` for tool result safety.
 
 ```typescript
 await prewarmSessionFile(params.sessionFile);
-sessionManager = SessionManager.open(params.sessionFile);
+sessionManager = openTranscriptSessionManager({ sessionFile: params.sessionFile });
 trackSessionManagerAccess(params.sessionFile);
 ```
 

@@ -1,6 +1,6 @@
 import path from "node:path";
-import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
+import type { AgentToolResult, AgentToolUpdateCallback } from "./agent-core-contract.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
@@ -111,7 +111,7 @@ function didEditLikelyApply(params: {
   return true;
 }
 
-function buildEditSuccessResult(pathParam: string, editCount: number): AgentToolResult<unknown> {
+function buildEditSuccessResult(pathParam: string, editCount: number): AgentToolResult {
   const text =
     editCount > 1
       ? `Successfully replaced ${editCount} block(s) in ${pathParam}.`
@@ -125,7 +125,7 @@ function buildEditSuccessResult(pathParam: string, editCount: number): AgentTool
       },
     ],
     details: { diff: "", firstChangedLine: undefined },
-  } as AgentToolResult<unknown>;
+  } as AgentToolResult;
 }
 
 function shouldAddMismatchHint(error: unknown) {
@@ -157,7 +157,7 @@ export function wrapEditToolWithRecovery(
       toolCallId: string,
       params: unknown,
       signal: AbortSignal | undefined,
-      onUpdate?: AgentToolUpdateCallback<unknown>,
+      onUpdate?: AgentToolUpdateCallback,
     ) => {
       const { pathParam, edits } = readEditToolParams(params);
       const absolutePath =

@@ -1,14 +1,14 @@
-import { Agent, type StreamFn } from "@mariozechner/pi-agent-core";
+import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { describe, expect, it } from "vitest";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
   type Context,
   type Model,
   type SimpleStreamOptions,
-} from "@mariozechner/pi-ai";
-import { streamSimpleOpenAICodexResponses } from "@mariozechner/pi-ai/openai-codex-responses";
-import { streamSimpleOpenAIResponses } from "@mariozechner/pi-ai/openai-responses";
-import { describe, expect, it } from "vitest";
+} from "./pi-ai-contract.js";
+import { streamSimpleOpenAICodexResponses } from "./pi-ai-openai-codex-responses-contract.js";
+import { streamSimpleOpenAIResponses } from "./pi-ai-openai-responses-contract.js";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-codex-responses">;
 

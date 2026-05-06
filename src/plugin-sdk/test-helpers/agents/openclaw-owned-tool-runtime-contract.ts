@@ -1,6 +1,6 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { vi } from "vitest";
-import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/pi-tools.before-tool-call.state.js";
+import type { AgentToolResult } from "../../../agents/agent-core-contract.js";
+import { __testing as beforeToolCallTesting } from "../../../agents/pi-tools.before-tool-call.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,
@@ -19,7 +19,7 @@ import {
 export function textToolResult(
   text: string,
   details: Record<string, unknown> = {},
-): AgentToolResult<unknown> {
+): AgentToolResult {
   return {
     content: [{ type: "text", text }],
     details,
@@ -30,7 +30,7 @@ export function mediaToolResult(
   text: string,
   mediaUrl: string,
   audioAsVoice = false,
-): AgentToolResult<unknown> {
+): AgentToolResult {
   return textToolResult(text, {
     media: {
       mediaUrl,
@@ -67,7 +67,7 @@ export function installOpenClawOwnedToolHooks(params?: {
  * Pair with `installOpenClawOwnedToolHooks()` when a test asserts before/after hook behavior.
  */
 export function installCodexToolResultMiddleware(
-  handler: (event: CodexAppServerToolResultEvent) => AgentToolResult<unknown>,
+  handler: (event: CodexAppServerToolResultEvent) => AgentToolResult,
 ) {
   const middleware = vi.fn(async (event: CodexAppServerToolResultEvent) => ({
     result: handler(event),

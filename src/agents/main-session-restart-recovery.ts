@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   type SessionEntry,
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
   updateSessionStore,
@@ -287,6 +288,7 @@ async function recoverStore(params: {
         params.storePath,
         entry.sessionFile,
         {
+          agentId: resolveAgentIdFromSessionKey(sessionKey),
           mode: "recent",
           maxMessages: 20,
           maxBytes: 256 * 1024,

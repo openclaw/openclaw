@@ -1,10 +1,10 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionEntry } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "../agent-core-contract.js";
+import type { SessionEntry } from "../transcript/session-transcript-contract.js";
 import {
   readTranscriptFileState,
   TranscriptFileState,
   writeTranscriptFileAtomic,
-} from "./transcript-file-state.js";
+} from "../transcript/transcript-file-state.js";
 
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
+import { appendSqliteSessionTranscriptEvent } from "../config/sessions/transcript-store.sqlite.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -114,6 +115,57 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     agentId: "main",
     sessionKey: "agent:main:main",
     sessionId: "sess-main",
+  });
+});
+
+test("sessions.reset emits before_reset hook with scoped SQLite transcript context", async () => {
+  const { dir } = await createSessionStoreDir();
+  const transcriptPath = path.join(dir, "missing-sess-main.jsonl");
+  appendSqliteSessionTranscriptEvent({
+    agentId: "main",
+    sessionId: "sess-main-sqlite",
+    event: {
+      type: "message",
+      id: "m1",
+      message: { role: "user", content: "hello from sqlite transcript" },
+    },
+  });
+
+  await writeSessionStore({
+    entries: {
+      main: {
+        sessionId: "sess-main-sqlite",
+        sessionFile: transcriptPath,
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  beforeResetHookState.hasBeforeResetHook = true;
+
+  const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
+    key: "main",
+    reason: "new",
+  });
+  expect(reset.ok).toBe(true);
+  expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
+  const [event, context] = (
+    beforeResetHookMocks.runBeforeReset.mock.calls as unknown as Array<[unknown, unknown]>
+  )[0] ?? [undefined, undefined];
+  expect(event).toMatchObject({
+    sessionFile: transcriptPath,
+    reason: "new",
+    messages: [
+      {
+        role: "user",
+        content: "hello from sqlite transcript",
+      },
+    ],
+  });
+  expect(context).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "sess-main-sqlite",
   });
 });
 

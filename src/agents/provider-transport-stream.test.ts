@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import type { Api, Model } from "./pi-ai-contract.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
   buildTransportAwareSimpleStreamFn,

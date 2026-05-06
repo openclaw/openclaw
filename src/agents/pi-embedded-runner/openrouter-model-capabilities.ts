@@ -6,8 +6,9 @@
  *
  * Cache layers (checked in order):
  * 1. In-memory Map (instant, cleared on process restart)
- * 2. On-disk JSON file (<stateDir>/cache/openrouter-models.json)
- * 3. OpenRouter API fetch (populates both layers)
+ * 2. SQLite KV cache (<stateDir>/state/openclaw.sqlite)
+ * 3. Compatibility JSON file (<stateDir>/cache/openrouter-models.json)
+ * 4. OpenRouter API fetch (populates all layers)
  *
  * Model capabilities are assumed stable — the cache has no TTL expiry.
  * A background refresh is triggered only when a model is not found in
@@ -25,12 +26,18 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import {
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+} from "../../state/openclaw-state-kv.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
 const DISK_CACHE_FILENAME = "openrouter-models.json";
+const SQLITE_CACHE_SCOPE = "openrouter_model_capabilities";
+const SQLITE_CACHE_KEY = "models";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,17 +95,37 @@ function resolveDiskCachePath(): string {
   return join(resolveDiskCacheDir(), DISK_CACHE_FILENAME);
 }
 
+function mapToDiskCachePayload(map: Map<string, OpenRouterModelCapabilities>): DiskCachePayload {
+  return {
+    models: Object.fromEntries(map),
+  };
+}
+
+function writeSqliteCache(map: Map<string, OpenRouterModelCapabilities>): void {
+  try {
+    writeOpenClawStateKvJson(SQLITE_CACHE_SCOPE, SQLITE_CACHE_KEY, mapToDiskCachePayload(map));
+  } catch (err: unknown) {
+    const message = formatErrorMessage(err);
+    log.debug(`Failed to write OpenRouter SQLite cache: ${message}`);
+  }
+}
+
 function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
     const cachePath = resolveDiskCachePath();
-    const payload: DiskCachePayload = {
-      models: Object.fromEntries(map),
-    };
-    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
+    privateFileStoreSync(dirname(cachePath)).writeJson(
+      basename(cachePath),
+      mapToDiskCachePayload(map),
+    );
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);
   }
+}
+
+function writePersistentCache(map: Map<string, OpenRouterModelCapabilities>): void {
+  writeSqliteCache(map);
+  writeDiskCache(map);
 }
 
 function isValidCapabilities(value: unknown): value is OpenRouterModelCapabilities {
@@ -115,31 +142,53 @@ function isValidCapabilities(value: unknown): value is OpenRouterModelCapabiliti
   );
 }
 
+function parseCachePayload(payload: unknown): Map<string, OpenRouterModelCapabilities> | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const models = (payload as DiskCachePayload).models;
+  if (!models || typeof models !== "object") {
+    return undefined;
+  }
+  const map = new Map<string, OpenRouterModelCapabilities>();
+  for (const [id, caps] of Object.entries(models)) {
+    if (isValidCapabilities(caps)) {
+      map.set(id, caps);
+    }
+  }
+  return map.size > 0 ? map : undefined;
+}
+
+function readSqliteCache(): Map<string, OpenRouterModelCapabilities> | undefined {
+  try {
+    return parseCachePayload(readOpenClawStateKvJson(SQLITE_CACHE_SCOPE, SQLITE_CACHE_KEY));
+  } catch {
+    return undefined;
+  }
+}
+
 function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
     const cachePath = resolveDiskCachePath();
     if (!existsSync(cachePath)) {
       return undefined;
     }
-    const raw = readFileSync(cachePath, "utf-8");
-    const payload = JSON.parse(raw) as unknown;
-    if (!payload || typeof payload !== "object") {
-      return undefined;
-    }
-    const models = (payload as DiskCachePayload).models;
-    if (!models || typeof models !== "object") {
-      return undefined;
-    }
-    const map = new Map<string, OpenRouterModelCapabilities>();
-    for (const [id, caps] of Object.entries(models)) {
-      if (isValidCapabilities(caps)) {
-        map.set(id, caps);
-      }
-    }
-    return map.size > 0 ? map : undefined;
+    return parseCachePayload(JSON.parse(readFileSync(cachePath, "utf-8")) as unknown);
   } catch {
     return undefined;
   }
+}
+
+function readPersistentCache(): Map<string, OpenRouterModelCapabilities> | undefined {
+  const sqliteCache = readSqliteCache();
+  if (sqliteCache) {
+    return sqliteCache;
+  }
+  const diskCache = readDiskCache();
+  if (diskCache) {
+    writeSqliteCache(diskCache);
+  }
+  return diskCache;
 }
 
 // ---------------------------------------------------------------------------
@@ -208,7 +257,7 @@ async function doFetch(): Promise<void> {
     }
 
     cache = map;
-    writeDiskCache(map);
+    writePersistentCache(map);
     log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
@@ -232,8 +281,8 @@ function triggerFetch(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the cache is populated. Checks in-memory first, then disk, then
- * triggers a background API fetch as a last resort.
+ * Ensure the cache is populated. Checks in-memory first, then persisted cache,
+ * then triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
 function ensureOpenRouterModelCache(): void {
@@ -241,11 +290,11 @@ function ensureOpenRouterModelCache(): void {
     return;
   }
 
-  // Try loading from disk before hitting the network.
-  const disk = readDiskCache();
-  if (disk) {
-    cache = disk;
-    log.debug(`Loaded ${disk.size} OpenRouter models from disk cache`);
+  // Try loading from persisted cache before hitting the network.
+  const persisted = readPersistentCache();
+  if (persisted) {
+    cache = persisted;
+    log.debug(`Loaded ${persisted.size} OpenRouter models from persisted cache`);
     return;
   }
 

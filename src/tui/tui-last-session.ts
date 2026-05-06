@@ -3,6 +3,13 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  deleteOpenClawStateKvJson,
+  listOpenClawStateKvJson,
+  readOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import type { TuiSessionList } from "./tui-backend.js";
 import type { SessionScope } from "./tui-types.js";
 
@@ -12,6 +19,7 @@ type LastSessionRecord = {
 };
 
 type LastSessionStore = Record<string, LastSessionRecord>;
+const TUI_LAST_SESSION_KV_SCOPE = "tui:last-session";
 
 export function resolveTuiLastSessionStatePath(stateDir = resolveStateDir()): string {
   return path.join(stateDir, "tui", "last-session.json");
@@ -43,6 +51,36 @@ async function readStore(filePath: string): Promise<LastSessionStore> {
   }
 }
 
+function stateKvOptionsForStateDir(stateDir?: string) {
+  return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
+}
+
+function normalizeLastSessionRecord(value: unknown): LastSessionRecord | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const sessionKey = typeof record.sessionKey === "string" ? record.sessionKey.trim() : "";
+  const updatedAt = typeof record.updatedAt === "number" ? record.updatedAt : null;
+  if (!sessionKey || updatedAt === null || !Number.isFinite(updatedAt)) {
+    return null;
+  }
+  return { sessionKey, updatedAt };
+}
+
+function writeTuiLastSessionKv(params: {
+  scopeKey: string;
+  record: LastSessionRecord;
+  stateDir?: string;
+}): void {
+  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+    TUI_LAST_SESSION_KV_SCOPE,
+    params.scopeKey,
+    params.record,
+    stateKvOptionsForStateDir(params.stateDir),
+  );
+}
+
 function normalizeMarker(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
@@ -71,9 +109,27 @@ export async function readTuiLastSessionKey(params: {
   scopeKey: string;
   stateDir?: string;
 }): Promise<string | null> {
+  const kvValue = readOpenClawStateKvJson(
+    TUI_LAST_SESSION_KV_SCOPE,
+    params.scopeKey,
+    stateKvOptionsForStateDir(params.stateDir),
+  );
+  const kvRecord = normalizeLastSessionRecord(kvValue);
+  if (kvRecord) {
+    return kvRecord.sessionKey;
+  }
+
   const store = await readStore(resolveTuiLastSessionStatePath(params.stateDir));
-  const value = store[params.scopeKey]?.sessionKey;
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  const diskRecord = normalizeLastSessionRecord(store[params.scopeKey]);
+  if (!diskRecord) {
+    return null;
+  }
+  writeTuiLastSessionKv({
+    scopeKey: params.scopeKey,
+    record: diskRecord,
+    stateDir: params.stateDir,
+  });
+  return diskRecord.sessionKey;
 }
 
 export async function writeTuiLastSessionKey(params: {
@@ -86,14 +142,62 @@ export async function writeTuiLastSessionKey(params: {
     return;
   }
   const filePath = resolveTuiLastSessionStatePath(params.stateDir);
-  const store = await readStore(filePath);
-  store[params.scopeKey] = {
+  const record = {
     sessionKey,
     updatedAt: Date.now(),
   };
+  writeTuiLastSessionKv({
+    scopeKey: params.scopeKey,
+    record,
+    stateDir: params.stateDir,
+  });
+  const store = await readStore(filePath);
+  store[params.scopeKey] = record;
   await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), store, {
     trailingNewline: true,
   });
+}
+
+export async function clearTuiLastSessionPointers(params: {
+  stateDir?: string;
+  sessionKeys: ReadonlySet<string>;
+}): Promise<number> {
+  if (params.sessionKeys.size === 0) {
+    return 0;
+  }
+  const removedScopeKeys = new Set<string>();
+  const kvOptions = stateKvOptionsForStateDir(params.stateDir);
+  for (const entry of listOpenClawStateKvJson<LastSessionRecord>(
+    TUI_LAST_SESSION_KV_SCOPE,
+    kvOptions,
+  )) {
+    const record = normalizeLastSessionRecord(entry.value);
+    if (record && params.sessionKeys.has(record.sessionKey)) {
+      if (deleteOpenClawStateKvJson(TUI_LAST_SESSION_KV_SCOPE, entry.key, kvOptions)) {
+        removedScopeKeys.add(entry.key);
+      }
+    }
+  }
+
+  const filePath = resolveTuiLastSessionStatePath(params.stateDir);
+  const store = await readStore(filePath);
+  const next: LastSessionStore = {};
+  let diskRemoved = 0;
+  for (const [key, value] of Object.entries(store)) {
+    const record = normalizeLastSessionRecord(value);
+    if (record && params.sessionKeys.has(record.sessionKey)) {
+      diskRemoved += 1;
+      removedScopeKeys.add(key);
+      continue;
+    }
+    next[key] = value;
+  }
+  if (diskRemoved > 0) {
+    await privateFileStore(path.dirname(filePath)).writeJson(path.basename(filePath), next, {
+      trailingNewline: true,
+    });
+  }
+  return removedScopeKeys.size;
 }
 
 export function resolveRememberedTuiSessionKey(params: {

@@ -1,9 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { Duplex } from "node:stream";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
 import type { Command } from "commander";
+import type { AgentMessage, StreamFn } from "../agents/agent-core-contract.js";
 import type {
   ApiKeyCredential,
   AuthProfileCredential,
@@ -12,6 +9,7 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import type { ModelRegistry } from "../agents/model-registry-contract.js";
 import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import type { ProviderSystemPromptContribution } from "../agents/system-prompt-contribution.js";
 import type { PromptMode } from "../agents/system-prompt.types.js";

@@ -1,4 +1,4 @@
-import { streamSimple } from "@mariozechner/pi-ai";
+import { streamSimple } from "../../pi-ai-contract.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 
 type SimpleStream = ReturnType<typeof streamSimple>;

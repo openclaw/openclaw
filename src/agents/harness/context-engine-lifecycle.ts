@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
 import {

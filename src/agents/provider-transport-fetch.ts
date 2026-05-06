@@ -1,4 +1,3 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -9,6 +8,7 @@ import {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import type { Api, Model } from "./pi-ai-contract.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,

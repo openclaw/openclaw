@@ -1,6 +1,6 @@
-import type { Model } from "@mariozechner/pi-ai";
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Model } from "./pi-ai-contract.js";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
 const {

@@ -1,4 +1,3 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listCodexAppServerExtensionFactories } from "../../plugins/codex-app-server-extension-factory.js";
 import type {
@@ -7,6 +6,7 @@ import type {
   CodexAppServerExtensionRuntime,
   CodexAppServerToolResultEvent,
 } from "../../plugins/codex-app-server-extension-types.js";
+import type { AgentToolResult } from "../agent-core-contract.js";
 
 const log = createSubsystemLogger("agents/harness");
 
@@ -33,7 +33,7 @@ export function createCodexAppServerToolResultExtensionRunner(
   return {
     async applyToolResultExtensions(
       event: CodexAppServerToolResultEvent,
-    ): Promise<AgentToolResult<unknown>> {
+    ): Promise<AgentToolResult> {
       await initPromise;
       let current = event.result;
       for (const handler of handlers) {

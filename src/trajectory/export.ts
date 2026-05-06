@@ -1,8 +1,13 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { FileEntry, SessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "../agents/agent-core-contract.js";
+import { exportSqliteToolArtifacts } from "../agents/filesystem/tool-artifact-store.sqlite.js";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import type {
+  FileEntry,
+  SessionEntry,
+  SessionHeader,
+} from "../agents/transcript/session-transcript-contract.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   jsonSupportBundleFile,
@@ -17,6 +22,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
@@ -724,11 +730,12 @@ function buildMetadataCapture(params: {
 function buildArtifactsCapture(params: {
   manifest: TrajectoryBundleManifest;
   runtimeEvents: TrajectoryEvent[];
+  toolArtifacts?: JsonRecord[];
 }): JsonRecord | undefined {
   const runtimeArtifacts = resolveLatestRuntimeEventData(params.runtimeEvents, "trace.artifacts");
   const runtimeCompletion = resolveLatestRuntimeEventData(params.runtimeEvents, "model.completed");
   const runtimeEnd = resolveLatestRuntimeEventData(params.runtimeEvents, "session.ended");
-  if (!runtimeArtifacts && !runtimeCompletion && !runtimeEnd) {
+  if (!runtimeArtifacts && !runtimeCompletion && !runtimeEnd && !params.toolArtifacts?.length) {
     return undefined;
   }
   return {
@@ -763,7 +770,35 @@ function buildArtifactsCapture(params: {
     messagingToolSentMediaUrls: runtimeArtifacts?.messagingToolSentMediaUrls,
     messagingToolSentTargets: runtimeArtifacts?.messagingToolSentTargets,
     lastToolError: runtimeArtifacts?.lastToolError,
+    ...(params.toolArtifacts?.length ? { toolArtifacts: params.toolArtifacts } : {}),
   };
+}
+
+function loadTrajectoryRunArtifacts(params: {
+  sessionKey?: string;
+  runtimeEvents: TrajectoryEvent[];
+}): JsonRecord[] {
+  const runIds = Array.from(
+    new Set(
+      params.runtimeEvents
+        .map((event) => event.runId?.trim())
+        .filter((runId): runId is string => Boolean(runId)),
+    ),
+  );
+  if (runIds.length === 0) {
+    return [];
+  }
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  return runIds.flatMap((runId) => {
+    try {
+      return exportSqliteToolArtifacts({ agentId, runId }).map((artifact) => {
+        const { blobBase64: _blobBase64, ...metadataOnly } = artifact;
+        return metadataOnly;
+      });
+    } catch {
+      return [];
+    }
+  });
 }
 
 function buildPromptsCapture(params: {
@@ -908,9 +943,14 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     runtimeEvents,
     events: rawEvents,
   });
+  const toolArtifacts = loadTrajectoryRunArtifacts({
+    sessionKey: params.sessionKey,
+    runtimeEvents,
+  });
   const artifactsCapture = buildArtifactsCapture({
     manifest,
     runtimeEvents,
+    toolArtifacts,
   });
   const promptsCapture = buildPromptsCapture({
     manifest,

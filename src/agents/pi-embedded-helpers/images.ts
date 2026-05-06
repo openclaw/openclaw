@@ -1,11 +1,11 @@
-import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, AgentToolResult } from "../agent-core-contract.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { stripThoughtSignatures } from "./bootstrap.js";
 
-type ContentBlock = AgentToolResult<unknown>["content"][number];
+type ContentBlock = AgentToolResult["content"][number];
 const EMPTY_CONTENT_PLACEHOLDER = "[empty content omitted]";
 
 function dropEmptyTextBlocks<T>(content: T[]): T[] {

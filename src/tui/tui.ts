@@ -2,16 +2,6 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  CombinedAutocompleteProvider,
-  Container,
-  Key,
-  Loader,
-  matchesKey,
-  ProcessTerminal,
-  Text,
-  TUI,
-} from "@mariozechner/pi-tui";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
@@ -29,6 +19,16 @@ import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
 import { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { GatewayChatClient } from "./gateway-chat.js";
+import {
+  CombinedAutocompleteProvider,
+  Container,
+  Key,
+  Loader,
+  matchesKey,
+  ProcessTerminal,
+  Text,
+  TUI,
+} from "./pi-tui-contract.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";

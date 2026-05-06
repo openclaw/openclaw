@@ -1,5 +1,5 @@
-import type { Context } from "@mariozechner/pi-ai";
 import { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
+import type { Context } from "./pi-ai-contract.js";
 
 export { buildCopilotIdeHeaders } from "../plugin-sdk/provider-auth.js";
 

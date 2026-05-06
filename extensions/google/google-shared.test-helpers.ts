@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/provider-ai";
 import { expect } from "vitest";
 
 function makeZeroUsageSnapshot() {

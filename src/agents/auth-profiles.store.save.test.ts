@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { resolveAuthStatePath, resolveAuthStorePath } from "./auth-profiles/paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -18,6 +20,23 @@ vi.mock("./auth-profiles/external-auth.js", () => ({
 }));
 
 describe("saveAuthProfileStore", () => {
+  let stateRoot = "";
+
+  beforeEach(async () => {
+    stateRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-root-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateRoot);
+  });
+
+  afterEach(async () => {
+    closeOpenClawStateDatabaseForTest();
+    clearRuntimeAuthProfileStoreSnapshots();
+    vi.unstubAllEnvs();
+    if (stateRoot) {
+      await fs.rm(stateRoot, { recursive: true, force: true });
+      stateRoot = "";
+    }
+  });
+
   it("strips plaintext when keyRef/tokenRef are present", async () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-"));
@@ -130,12 +149,11 @@ describe("saveAuthProfileStore", () => {
         refresh: "refresh-2",
       });
     } finally {
-      clearRuntimeAuthProfileStoreSnapshots();
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
 
-  it("writes runtime scheduling state to auth-state.json only", async () => {
+  it("writes runtime scheduling state to SQLite and auth-state.json compatibility", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-state-"));
     try {
       const store: AuthProfileStore = {
@@ -187,6 +205,17 @@ describe("saveAuthProfileStore", () => {
       expect(authState.order?.anthropic).toEqual(["anthropic:default"]);
       expect(authState.lastGood?.anthropic).toBe("anthropic:default");
       expect(authState.usageStats?.["anthropic:default"]?.lastUsed).toBe(123);
+      const sqliteState = readOpenClawStateKvJson(
+        "auth-profile-state",
+        resolveAuthStatePath(agentDir),
+      ) as {
+        order?: Record<string, string[]>;
+        lastGood?: Record<string, string>;
+        usageStats?: Record<string, { lastUsed?: number }>;
+      };
+      expect(sqliteState.order?.anthropic).toEqual(["anthropic:default"]);
+      expect(sqliteState.lastGood?.anthropic).toBe("anthropic:default");
+      expect(sqliteState.usageStats?.["anthropic:default"]?.lastUsed).toBe(123);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -256,8 +285,6 @@ describe("saveAuthProfileStore", () => {
         refresh: "main-refreshed-refresh-token",
       });
     } finally {
-      clearRuntimeAuthProfileStoreSnapshots();
-      vi.unstubAllEnvs();
       await fs.rm(root, { recursive: true, force: true });
     }
   });

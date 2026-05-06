@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "./agent-core-contract.js";
 import {
   hasUnredactedSessionsSpawnAttachments,
   isAllowedToolCallName,

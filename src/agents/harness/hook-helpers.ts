@@ -1,6 +1,6 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { AgentMessage } from "../agent-core-contract.js";
 import { consumeAdjustedParamsForToolCall } from "../pi-tools.before-tool-call.js";
 
 const log = createSubsystemLogger("agents/harness");

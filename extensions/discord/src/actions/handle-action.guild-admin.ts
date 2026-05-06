@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   readNumberParam,
   readStringArrayParam,
@@ -31,7 +31,7 @@ type Ctx = Pick<
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
-}): Promise<AgentToolResult<unknown> | undefined> {
+}): Promise<AgentToolResult | undefined> {
   const { ctx, resolveChannelId } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");

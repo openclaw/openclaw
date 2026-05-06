@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { AssistantMessage, Message, Tool } from "@mariozechner/pi-ai";
 import { Type } from "typebox";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -16,6 +15,7 @@ import {
   logLiveCache,
   resolveLiveDirectModel,
 } from "./live-cache-test-support.js";
+import type { AssistantMessage, Message, Tool } from "./pi-ai-contract.js";
 
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;

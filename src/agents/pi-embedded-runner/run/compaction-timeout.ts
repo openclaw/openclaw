@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "../../agent-core-contract.js";
 
 export type CompactionTimeoutSignal = {
   isTimeout: boolean;

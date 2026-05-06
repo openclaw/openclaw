@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -12,6 +10,7 @@ import type {
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import type { AgentMessage } from "./agent-core-contract.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -24,6 +23,7 @@ import {
 import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+import type { SessionManager } from "./transcript/session-transcript-contract.js";
 
 /**
  * Truncate oversized text content blocks in a tool result message.

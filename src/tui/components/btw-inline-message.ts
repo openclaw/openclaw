@@ -1,4 +1,4 @@
-import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { Container, Spacer, Text } from "../pi-tui-contract.js";
 import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 

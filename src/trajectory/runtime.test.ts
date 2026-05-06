@@ -2,6 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type {
+  AgentToolArtifact,
+  AgentToolArtifactExport,
+  AgentToolArtifactStore,
+  AgentToolArtifactWriteOptions,
+} from "../agents/filesystem/agent-filesystem.js";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
@@ -35,6 +41,34 @@ function expectTrajectoryRuntimeRecorder(
   }
   expect(typeof recorder.recordEvent).toBe("function");
   return recorder;
+}
+
+function createArtifactStoreRecorder(): {
+  writes: AgentToolArtifactWriteOptions[];
+  store: AgentToolArtifactStore;
+} {
+  const writes: AgentToolArtifactWriteOptions[] = [];
+  const store: AgentToolArtifactStore = {
+    write: (options) => {
+      writes.push(options);
+      return {
+        agentId: "agent-main",
+        runId: "run-1",
+        artifactId: options.artifactId ?? "generated",
+        kind: options.kind,
+        metadata: options.metadata ?? {},
+        size: Buffer.byteLength(
+          Buffer.isBuffer(options.blob) ? options.blob : (options.blob ?? ""),
+        ),
+        createdAt: 1,
+      };
+    },
+    list: () => [] satisfies AgentToolArtifact[],
+    read: () => null satisfies AgentToolArtifactExport | null,
+    export: () => [] satisfies AgentToolArtifactExport[],
+    deleteAll: () => 0,
+  };
+  return { writes, store };
 }
 
 describe("trajectory runtime", () => {
@@ -98,6 +132,54 @@ describe("trajectory runtime", () => {
     ]);
     expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
+  });
+
+  it("mirrors runtime trajectory capture into the artifact store on flush", async () => {
+    const writes: string[] = [];
+    const artifacts = createArtifactStoreRecorder();
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      sessionFile: "/tmp/session.jsonl",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "responses",
+      workspaceDir: "/tmp/workspace",
+      artifactStore: artifacts.store,
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    recorder?.recordEvent("context.compiled", { prompt: "hello" });
+    recorder?.recordEvent("model.completed", { status: "success" });
+    await recorder?.flush();
+
+    expect(artifacts.writes).toHaveLength(1);
+    expect(artifacts.writes[0]).toMatchObject({
+      artifactId: "trajectory-runtime",
+      kind: "trajectory/runtime-jsonl",
+      metadata: {
+        traceSchema: "openclaw-trajectory-artifact",
+        schemaVersion: 1,
+        source: "runtime",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        provider: "openai",
+        modelId: "gpt-5.4",
+        modelApi: "responses",
+        workspaceDir: "/tmp/workspace",
+        runtimeFile: "/tmp/session.trajectory.jsonl",
+        eventCount: 2,
+      },
+    });
+    expect(artifacts.writes[0]?.blob).toBe(writes.join(""));
   });
 
   it("bounds large runtime event fields before serialization", () => {

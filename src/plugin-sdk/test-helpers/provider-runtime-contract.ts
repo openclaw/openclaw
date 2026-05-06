@@ -9,7 +9,7 @@ import { createProviderUsageFetch, makeResponse } from "../test-env.js";
 
 const CONTRACT_SETUP_TIMEOUT_MS = 300_000;
 
-const OAUTH_MODULE_ID = "@mariozechner/pi-ai/oauth";
+const OAUTH_MODULE_ID = "../../agents/pi-ai-oauth-contract.js";
 const OPENAI_CODEX_PROVIDER_RUNTIME_MODULE_ID =
   "../../../extensions/openai/openai-codex-provider.runtime.js";
 const refreshOpenAICodexTokenMock = vi.fn();
@@ -22,7 +22,7 @@ const getOAuthProvidersMock = vi.fn(() => [
 function installProviderRuntimeContractMocks() {
   vi.doMock(OAUTH_MODULE_ID, async () => {
     const actual =
-      await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(OAUTH_MODULE_ID);
+      await vi.importActual<typeof import("../../agents/pi-ai-oauth-contract.js")>(OAUTH_MODULE_ID);
     return {
       ...actual,
       refreshOpenAICodexToken: refreshOpenAICodexTokenMock,

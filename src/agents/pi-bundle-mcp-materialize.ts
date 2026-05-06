@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import type { AgentToolResult } from "./agent-core-contract.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -17,11 +17,11 @@ function toAgentToolResult(params: {
   serverName: string;
   toolName: string;
   result: CallToolResult;
-}): AgentToolResult<unknown> {
+}): AgentToolResult {
   const content = Array.isArray(params.result.content)
-    ? (params.result.content as AgentToolResult<unknown>["content"])
+    ? (params.result.content as AgentToolResult["content"])
     : [];
-  const normalizedContent: AgentToolResult<unknown>["content"] =
+  const normalizedContent: AgentToolResult["content"] =
     content.length > 0
       ? content
       : params.result.structuredContent !== undefined
@@ -44,7 +44,7 @@ function toAgentToolResult(params: {
                 2,
               ),
             },
-          ] as AgentToolResult<unknown>["content"]);
+          ] as AgentToolResult["content"]);
   const details: Record<string, unknown> = {
     mcpServer: params.serverName,
     mcpTool: params.toolName,

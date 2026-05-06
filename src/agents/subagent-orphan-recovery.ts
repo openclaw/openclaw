@@ -355,6 +355,7 @@ export async function recoverOrphanedSubagentSessions(params: {
           storePath,
           entry.sessionFile,
           {
+            agentId: resolveAgentIdFromSessionKey(childSessionKey),
             mode: "recent",
             maxMessages: 200,
             maxBytes: 1024 * 1024,
