@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
-import { openBoundaryFile } from "../../infra/boundary-file-read.js";
+import { openRootFile } from "../../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAbortError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -97,6 +97,85 @@ function prependPreviousSummaryForRedistill(params: {
     return params.messages;
   }
   return [buildPreviousSummaryMessage(previousSummary), ...params.messages];
+}
+
+type SessionBranchEntry = {
+  type?: unknown;
+  message?: unknown;
+  customType?: unknown;
+  content?: unknown;
+  display?: unknown;
+  details?: unknown;
+  timestamp?: unknown;
+  summary?: unknown;
+  fromId?: unknown;
+};
+
+function coerceTimestamp(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return 0;
+}
+
+function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | undefined {
+  if (entry.type === "message" && entry.message && typeof entry.message === "object") {
+    return entry.message as AgentMessage;
+  }
+  if (entry.type === "custom_message") {
+    return {
+      role: "custom",
+      customType: typeof entry.customType === "string" ? entry.customType : "custom",
+      content: entry.content,
+      display: entry.display !== false,
+      details: entry.details,
+      timestamp: coerceTimestamp(entry.timestamp),
+    } as AgentMessage;
+  }
+  if (entry.type === "branch_summary") {
+    return {
+      role: "branchSummary",
+      summary: typeof entry.summary === "string" ? entry.summary : "",
+      fromId: typeof entry.fromId === "string" ? entry.fromId : "root",
+      timestamp: coerceTimestamp(entry.timestamp),
+    } as AgentMessage;
+  }
+  return undefined;
+}
+
+function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
+  const getBranch = (sessionManager as { getBranch?: unknown })?.getBranch;
+  if (typeof getBranch !== "function") {
+    return [];
+  }
+  let entries: unknown;
+  try {
+    entries = getBranch.call(sessionManager);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return entries
+    .map((entry) =>
+      entry && typeof entry === "object"
+        ? sessionBranchEntryToMessage(entry as SessionBranchEntry)
+        : undefined,
+    )
+    .filter((message): message is AgentMessage => Boolean(message));
+}
+
+function containsRealConversation(messages: AgentMessage[]): boolean {
+  return messages.some((message, index, allMessages) =>
+    isRealConversationMessage(message, allMessages, index),
+  );
 }
 
 /**
@@ -735,7 +814,7 @@ async function readWorkspaceContextForSummary(): Promise<string> {
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
-    const opened = await openBoundaryFile({
+    const opened = await openRootFile({
       absolutePath: agentsPath,
       rootPath: workspaceDir,
       boundaryLabel: "workspace root",
@@ -778,16 +857,26 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions: eventInstructions, signal } = event;
     const rawTurnPrefixMessages = preparation.turnPrefixMessages ?? [];
-    const baseMessagesToSummarize = stripRuntimeContextCustomMessages(
+    let baseMessagesToSummarize = stripRuntimeContextCustomMessages(
       preparation.messagesToSummarize,
     );
-    const baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
-    const hasRealSummarizable = baseMessagesToSummarize.some((message, index, messages) =>
-      isRealConversationMessage(message, messages, index),
-    );
-    const hasRealTurnPrefix = baseTurnPrefixMessages.some((message, index, messages) =>
-      isRealConversationMessage(message, messages, index),
-    );
+    let baseTurnPrefixMessages = stripRuntimeContextCustomMessages(rawTurnPrefixMessages);
+    let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
+    let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
+    if (!hasRealSummarizable && !hasRealTurnPrefix) {
+      const branchMessages = stripRuntimeContextCustomMessages(
+        collectSessionBranchMessages(ctx.sessionManager),
+      );
+      if (containsRealConversation(branchMessages)) {
+        log.info(
+          "Compaction safeguard: using session branch messages after compaction preparation omitted real conversation content.",
+        );
+        baseMessagesToSummarize = branchMessages;
+        baseTurnPrefixMessages = [];
+        hasRealSummarizable = true;
+        hasRealTurnPrefix = false;
+      }
+    }
     setCompactionSafeguardCancelReason(ctx.sessionManager, undefined);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
       // When there are no summarizable messages AND no real turn-prefix content,

@@ -27,21 +27,21 @@ Dedicated deep references:
 - [Slash commands](/tools/slash-commands) for the current built-in + bundled command catalog
 - owning channel/plugin pages for channel-specific command surfaces
 
-Config format is **JSON5** (comments + trailing commas allowed). All fields are optional — OpenClaw uses safe defaults when omitted.
+Config format is **JSON5** (comments + trailing commas allowed). All fields are optional - OpenClaw uses safe defaults when omitted.
 
 ---
 
 ## Channels
 
-Per-channel config keys moved to a dedicated page — see
-[Configuration — channels](/gateway/config-channels) for `channels.*`,
+Per-channel config keys moved to a dedicated page - see
+[Configuration - channels](/gateway/config-channels) for `channels.*`,
 including Slack, Discord, Telegram, WhatsApp, Matrix, iMessage, and other
 bundled channels (auth, access control, multi-account, mention gating).
 
 ## Agent defaults, multi-agent, sessions, and messages
 
-Moved to a dedicated page — see
-[Configuration — agents](/gateway/config-agents) for:
+Moved to a dedicated page - see
+[Configuration - agents](/gateway/config-agents) for:
 
 - `agents.defaults.*` (workspace, model, thinking, heartbeat, memory, media, skills, sandbox)
 - `multiAgent.*` (multi-agent routing and bindings)
@@ -54,13 +54,13 @@ Moved to a dedicated page — see
 ## Tools and custom providers
 
 Tool policy, experimental toggles, provider-backed tool config, and custom
-provider / base-URL setup moved to a dedicated page — see
-[Configuration — tools and custom providers](/gateway/config-tools).
+provider / base-URL setup moved to a dedicated page - see
+[Configuration - tools and custom providers](/gateway/config-tools).
 
 ## Models
 
 Provider definitions, model allowlists, and custom provider setup live in
-[Configuration — tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
+[Configuration - tools and custom providers](/gateway/config-tools#custom-providers-and-base-urls).
 The `models` root also owns global model-catalog behavior.
 
 ```json5
@@ -166,6 +166,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
   plugins: {
     enabled: true,
     allow: ["voice-call"],
+    bundledDiscovery: "allowlist",
     deny: [],
     load: {
       paths: ["~/Projects/oss/voice-call-plugin"],
@@ -187,10 +188,14 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
+- `bundledDiscovery`: defaults to `"allowlist"` for new configs, so a non-empty
+  `plugins.allow` also gates bundled provider plugins, including web-search
+  runtime providers. Doctor writes `"compat"` for migrated legacy allowlist
+  configs to preserve existing bundled provider behavior until you opt in.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.
-- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_agent_finalize`, and `agent_end`.
+- `plugins.entries.<id>.hooks.allowConversationAccess`: when `true`, trusted non-bundled plugins may read raw conversation content from typed hooks such as `llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, and `agent_end`.
 - `plugins.entries.<id>.subagent.allowModelOverride`: explicitly trust this plugin to request per-run `provider` and `model` overrides for background subagent runs.
 - `plugins.entries.<id>.subagent.allowedModels`: optional allowlist of canonical `provider/model` targets for trusted subagent overrides. Use `"*"` only when you intentionally want to allow any model.
 - `plugins.entries.<id>.config`: plugin-defined config object (validated by native OpenClaw plugin schema when available).
@@ -687,8 +692,10 @@ Validation and safety notes:
 }
 ```
 
-- `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
-- `full`: include `cliPath` + `sshPort`.
+- `minimal` (default when the bundled `bonjour` plugin is enabled): omit `cliPath` + `sshPort` from TXT records.
+- `full`: include `cliPath` + `sshPort`; LAN multicast advertising still requires the bundled `bonjour` plugin to be enabled.
+- `off`: suppress LAN multicast advertising without changing plugin enablement.
+- The bundled `bonjour` plugin auto-starts on macOS hosts and is opt-in on Linux, Windows, and containerized Gateway deployments.
 - Hostname defaults to the system hostname when it is a valid DNS label, falling back to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
 
 ### Wide-area (DNS-SD)
@@ -913,6 +920,7 @@ Notes:
     enabled: true,
     flags: ["telegram.*"],
     stuckSessionWarnMs: 30000,
+    stuckSessionAbortMs: 600000,
 
     otel: {
       enabled: false,
@@ -952,6 +960,7 @@ Notes:
 - `enabled`: master toggle for instrumentation output (default: `true`).
 - `flags`: array of flag strings enabling targeted log output (supports wildcards like `"telegram.*"` or `"*"`).
 - `stuckSessionWarnMs`: no-progress age threshold in ms for classifying long-running processing sessions as `session.long_running`, `session.stalled`, or `session.stuck`. Reply, tool, status, block, and ACP progress reset the timer; repeated `session.stuck` diagnostics back off while unchanged.
+- `stuckSessionAbortMs`: no-progress age threshold in ms before eligible stalled active work may be abort-drained for recovery. When unset, OpenClaw uses the safer extended embedded-run window of at least 10 minutes and 5x `stuckSessionWarnMs`.
 - `otel.enabled`: enables the OpenTelemetry export pipeline (default: `false`). For the full configuration, signal catalog, and privacy model, see [OpenTelemetry export](/gateway/opentelemetry).
 - `otel.endpoint`: collector URL for OTel export.
 - `otel.tracesEndpoint` / `otel.metricsEndpoint` / `otel.logsEndpoint`: optional signal-specific OTLP endpoints. When set, they override `otel.endpoint` for that signal only.
@@ -959,7 +968,7 @@ Notes:
 - `otel.headers`: extra HTTP/gRPC metadata headers sent with OTel export requests.
 - `otel.serviceName`: service name for resource attributes.
 - `otel.traces` / `otel.metrics` / `otel.logs`: enable trace, metrics, or log export.
-- `otel.sampleRate`: trace sampling rate `0`–`1`.
+- `otel.sampleRate`: trace sampling rate `0`-`1`.
 - `otel.flushIntervalMs`: periodic telemetry flush interval in ms.
 - `otel.captureContent`: opt-in raw content capture for OTEL span attributes. Defaults to off. Boolean `true` captures non-system message/tool content; the object form lets you enable `inputMessages`, `outputMessages`, `toolInputs`, `toolOutputs`, and `systemPrompt` explicitly.
 - `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`: environment toggle for latest experimental GenAI span provider attributes. By default spans keep the legacy `gen_ai.system` attribute for compatibility; GenAI metrics use bounded semantic attributes.
@@ -989,7 +998,7 @@ Notes:
 }
 ```
 
-- `channel`: release channel for npm/git installs — `"stable"`, `"beta"`, or `"dev"`.
+- `channel`: release channel for npm/git installs - `"stable"`, `"beta"`, or `"dev"`.
 - `checkOnStart`: check for npm updates when the gateway starts (default: `true`).
 - `auto.enabled`: enable background auto-update for package installs (default: `false`).
 - `auto.stableDelayHours`: minimum delay in hours before stable-channel auto-apply (default: `6`; max: `168`).
@@ -1153,9 +1162,9 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`–`10`).
-- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1–10 entries).
-- `retryOn`: error types that trigger retries — `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
+- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`-`10`).
+- `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
+- `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
 Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
 
@@ -1180,7 +1189,7 @@ Applies only to one-shot cron jobs. Recurring jobs use separate failure handling
 - `after`: consecutive failures before an alert fires (positive integer, min: `1`).
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
-- `mode`: delivery mode — `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
+- `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
 - `accountId`: optional account or channel id to scope alert delivery.
 
 ### `cron.failureDestination`

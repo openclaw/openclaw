@@ -34,6 +34,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     limit: "120",
     includeGlobal: false,
     includeUnknown: false,
+    showArchived: false,
+    filtersCollapsed: false,
     basePath: "",
     searchQuery: "",
     agentIdentityById: {},
@@ -48,6 +50,8 @@ function buildProps(result: SessionsListResult): SessionsProps {
     checkpointBusyKey: null,
     checkpointErrorByKey: {},
     onFiltersChange: () => undefined,
+    onToggleFiltersCollapsed: () => undefined,
+    onClearFilters: () => undefined,
     onSearchChange: () => undefined,
     onSortChange: () => undefined,
     onPageChange: () => undefined,
@@ -66,6 +70,129 @@ function buildProps(result: SessionsListResult): SessionsProps {
 }
 
 describe("sessions view", () => {
+  it("renders an explicit archived-session toggle", async () => {
+    const container = document.createElement("div");
+    const onFiltersChange = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        onFiltersChange,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const archivedToggle = container.querySelector(
+      ".session-archive-toggle input",
+    ) as HTMLInputElement | null;
+    expect(archivedToggle?.checked).toBe(false);
+
+    archivedToggle!.checked = true;
+    archivedToggle!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onFiltersChange).toHaveBeenCalledWith({
+      activeMinutes: "",
+      limit: "120",
+      includeGlobal: false,
+      includeUnknown: false,
+      showArchived: true,
+    });
+  });
+
+  it("uses one short styled tooltip per session filter", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "120",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const filters = container.querySelector(".sessions-filter-bar");
+    const activeField = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-input--minutes")
+      ?.closest("label");
+    const limitField = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-input--limit")
+      ?.closest("label");
+    const globalToggle = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
+      ?.closest("label");
+    const unknownToggle = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeUnknown]")
+      ?.closest("label");
+    const archivedToggle = filters
+      ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=showArchived]")
+      ?.closest("label");
+
+    expect(activeField?.getAttribute("data-tooltip")).toBe("Updated in the last 120 minutes.");
+    expect(limitField?.getAttribute("data-tooltip")).toBe("Max sessions to load.");
+    expect(globalToggle?.getAttribute("data-tooltip")).toBe("Include global sessions.");
+    expect(unknownToggle?.getAttribute("data-tooltip")).toBe("Include unknown sessions.");
+    expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
+    expect(
+      Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
+    ).toEqual([]);
+  });
+
+  it("keeps active and limit together and renders streamlined source toggles", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "120",
+        limit: "200",
+        includeGlobal: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const primaryRow = container.querySelector(".session-filter-primary-row");
+    expect(primaryRow?.querySelector(".session-filter-input--minutes")?.closest("label")).toBe(
+      primaryRow?.firstElementChild,
+    );
+    expect(primaryRow?.querySelector(".session-filter-input--limit")?.closest("label")).toBe(
+      primaryRow?.lastElementChild,
+    );
+
+    const toggleGroup = container.querySelector(".session-filter-toggle-group");
+    expect(toggleGroup?.getAttribute("role")).toBe("group");
+    expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
+    expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(3);
+    expect(
+      toggleGroup
+        ?.querySelector<HTMLInputElement>(".session-filter-check__input[name=includeGlobal]")
+        ?.closest("label")
+        ?.classList.contains("session-filter-check--active"),
+    ).toBe(true);
+    expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
+  });
+
+  it("collapses the whole session filter section from the header", async () => {
+    const container = document.createElement("div");
+    const onToggleFiltersCollapsed = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        filtersCollapsed: true,
+        onToggleFiltersCollapsed,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const toggle = container.querySelector<HTMLButtonElement>(".sessions-filter-panel__toggle");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".sessions-filter-bar")).toBeNull();
+
+    toggle?.click();
+
+    expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
+  });
+
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
@@ -220,6 +347,61 @@ describe("sessions view", () => {
     expect(keyCell?.getAttribute("title")).toBe("agent:unknown-agent:telegram:abc123");
   });
 
+  it("renders cron session kind distinctly", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult({
+            key: "agent:main:cron:daily-digest",
+            kind: "cron",
+            updatedAt: Date.now(),
+          }),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const badge = container.querySelector(".data-table-badge--cron");
+    expect(badge?.textContent?.trim()).toBe("cron");
+  });
+
+  it("renders and filters the session runtime", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:claude",
+              kind: "direct",
+              updatedAt: 20,
+              agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+            },
+            {
+              key: "agent:main:pi",
+              kind: "direct",
+              updatedAt: 10,
+              agentRuntime: { id: "pi", source: "implicit" },
+            },
+          ]),
+        ),
+        searchQuery: "fallback none",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
+    ).toContain("Runtime");
+    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
+      "claude-cli (fallback none)",
+    );
+    expect(container.textContent).not.toContain("agent:main:pi");
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(
@@ -239,6 +421,170 @@ describe("sessions view", () => {
     const text = container.querySelector(".session-key-cell")?.textContent ?? "";
     expect(text).toContain("agent:constructor:telegram:abc123");
     expect(text).not.toContain("Object (telegram)");
+  });
+
+  it("expands checkpoint details from row activation when checkpoints exist", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const row = container.querySelector("tbody tr.session-data-row");
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+    const tokenCell = container.querySelector(".session-token-cell");
+    expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+  });
+
+  it("renders the checkpoint count as the compaction disclosure", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const compactionCell = container.querySelector("tbody .session-compaction-col");
+    expect(compactionCell?.textContent).toContain("1 Checkpoint");
+    expect(compactionCell?.textContent).not.toContain("manual");
+    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
+
+    trigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("renders expanded session details with compaction history", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            status: "running",
+            runtimeMs: 125000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+        checkpointItemsByKey: {
+          "agent:main:main": [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123456,
+              tokensAfter: 38920,
+              summary: "Trimmed earlier setup chatter and kept the active execution plan.",
+              preCompaction: { sessionId: "session-1" },
+              postCompaction: { sessionId: "session-1" },
+            },
+          ],
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const details = container.querySelector(".session-details-panel");
+    expect(details?.textContent).toContain("Session details");
+    expect(details?.textContent).toContain("gpt-5.5");
+    expect(details?.textContent).toContain("openai");
+    expect(details?.textContent).toContain("2m 5s");
+    expect(details?.textContent).toContain("Compaction history");
+    expect(details?.textContent).toContain("123,456 to 38,920 tokens");
+    expect(details?.textContent).not.toContain("->");
+  });
+
+  it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:with-checkpoint",
+              kind: "direct",
+              updatedAt: 20,
+              compactionCheckpointCount: 1,
+              latestCompactionCheckpoint: {
+                checkpointId: "checkpoint-1",
+                createdAt: 20,
+                reason: "manual",
+              },
+            },
+            {
+              key: "agent:main:no-checkpoint",
+              kind: "direct",
+              updatedAt: 10,
+              compactionCheckpointCount: 0,
+            },
+          ]),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = container.querySelectorAll("tbody tr.session-data-row");
+    const checkbox = rows[0]?.querySelector("input[type=checkbox]");
+    checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
   });
 
   it("filters rows by agent identity name", async () => {
@@ -344,5 +690,54 @@ describe("sessions view", () => {
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();
     expect(onSelectPage).not.toHaveBeenCalled();
+  });
+
+  it("shows a reset action when filters hide every session", async () => {
+    const container = document.createElement("div");
+    const onClearFilters = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+          ]),
+        ),
+        searchQuery: "missing",
+        onClearFilters,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("No sessions match your filters.");
+    const showAll = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Show all",
+    );
+    expect(showAll).toBeTruthy();
+    showAll?.click();
+    expect(onClearFilters).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the plain empty state when no filters are active", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(buildMultiResult([])),
+        activeMinutes: "",
+        limit: "",
+        includeGlobal: true,
+        includeUnknown: true,
+        showArchived: true,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("No sessions found.");
+    expect(container.textContent).not.toContain("Show all");
   });
 });

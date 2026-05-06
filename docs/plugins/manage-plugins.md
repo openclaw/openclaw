@@ -92,7 +92,9 @@ when it was previously pinned to an exact version or tag.
 When `openclaw update` runs on the beta channel, default-line npm and ClawHub
 plugin records try the matching plugin `@beta` release first. If that beta
 release does not exist, OpenClaw falls back to the recorded default/latest spec.
-Exact versions and explicit tags such as `@rc` or `@beta` are preserved.
+For npm plugins, OpenClaw also falls back when the beta package exists but fails
+install validation. Exact versions and explicit tags such as `@rc` or `@beta`
+are preserved.
 
 ## Uninstall plugins
 
@@ -106,6 +108,11 @@ openclaw gateway restart
 Uninstall removes the plugin's config entry, plugin index record, allow/deny list
 entries, and linked load paths when applicable. Managed install directories are
 removed unless you pass `--keep-files`.
+
+In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall, enable,
+and disable commands are disabled. Manage those choices in the Nix source for
+the install instead; for nix-openclaw, use the agent-first
+[Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 
 ## Publish plugins
 

@@ -5,6 +5,7 @@ import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
@@ -136,12 +137,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const calledOpts = replySpy.mock.calls[0]?.[1] as {
         enableHeartbeatTool?: boolean;
         forceHeartbeatTool?: boolean;
+        sourceReplyDeliveryMode?: string;
       };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).toContain("notify=false");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
       expect(calledOpts.enableHeartbeatTool).toBe(true);
       expect(calledOpts.forceHeartbeatTool).toBe(true);
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
     });
   });
 
@@ -172,11 +175,51 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const calledOpts = replySpy.mock.calls[0]?.[1] as {
         enableHeartbeatTool?: boolean;
         forceHeartbeatTool?: boolean;
+        sourceReplyDeliveryMode?: string;
       };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
       expect(calledOpts.enableHeartbeatTool).toBe(true);
       expect(calledOpts.forceHeartbeatTool).toBe(true);
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
+    });
+  });
+
+  it("delivers Codex runtime failure notices during Codex heartbeat message-tool mode", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        agentHarnessId: "codex",
+      });
+      const usageLimitMessage =
+        "⚠️ You've reached your Codex subscription usage limit. Next reset in 42 minutes (2026-05-04T21:34:00.000Z). Run /codex account for current usage details.";
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: usageLimitMessage,
+          isError: true,
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      const calledOpts = replySpy.mock.calls[0]?.[1] as {
+        sourceReplyDeliveryMode?: string;
+      };
+      expect(result.status).toBe("ran");
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      expect(sendTelegram).toHaveBeenCalledWith(
+        TELEGRAM_GROUP,
+        usageLimitMessage,
+        expect.any(Object),
+      );
     });
   });
 
@@ -211,11 +254,13 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const calledOpts = replySpy.mock.calls[0]?.[1] as {
         enableHeartbeatTool?: boolean;
         forceHeartbeatTool?: boolean;
+        sourceReplyDeliveryMode?: string;
       };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
       expect(calledOpts.enableHeartbeatTool).toBe(true);
       expect(calledOpts.forceHeartbeatTool).toBe(true);
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
     });
   });
 
@@ -246,11 +291,13 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const calledOpts = replySpy.mock.calls[0]?.[1] as {
         enableHeartbeatTool?: boolean;
         forceHeartbeatTool?: boolean;
+        sourceReplyDeliveryMode?: string;
       };
       expect(calledCtx.Body).toContain("heartbeat_respond");
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
       expect(calledOpts.enableHeartbeatTool).toBe(true);
       expect(calledOpts.forceHeartbeatTool).toBe(true);
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
     });
   });
 
@@ -289,6 +336,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const calledOpts = replySpy.mock.calls[0]?.[1] as {
         enableHeartbeatTool?: boolean;
         forceHeartbeatTool?: boolean;
+        sourceReplyDeliveryMode?: string;
       };
       expect(calledCtx.Body).toContain("Run the following periodic tasks");
       expect(calledCtx.Body).toContain("Check deployment status");
@@ -296,6 +344,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expect(calledCtx.Body).not.toContain("HEARTBEAT_OK");
       expect(calledOpts.enableHeartbeatTool).toBe(true);
       expect(calledOpts.forceHeartbeatTool).toBe(true);
+      expect(calledOpts.sourceReplyDeliveryMode).toBe("message_tool_only");
     });
   });
 
@@ -325,11 +374,13 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       const calledOpts = replySpy.mock.calls[0]?.[1] as {
         enableHeartbeatTool?: boolean;
         forceHeartbeatTool?: boolean;
+        sourceReplyDeliveryMode?: string;
       };
       expect(calledCtx.Body).toContain("HEARTBEAT_OK");
       expect(calledCtx.Body).not.toContain("heartbeat_respond");
       expect(calledOpts.enableHeartbeatTool).toBeUndefined();
       expect(calledOpts.forceHeartbeatTool).toBeUndefined();
+      expect(calledOpts.sourceReplyDeliveryMode).toBeUndefined();
     });
   });
 });

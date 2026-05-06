@@ -41,6 +41,7 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@tloncorp/tlon-skill",
   "@zed-industries/codex-acp",
   "jiti",
+  "json5",
   "linkedom",
   "openclaw",
   "pdfjs-dist",
@@ -73,6 +74,7 @@ const rootBundledPluginRuntimeDependencies = [
 const config = {
   ignoreFiles: [
     "scripts/**",
+    "packages/*/dist/**",
     "**/__tests__/**",
     "src/test-utils/**",
     "**/test-helpers/**",
@@ -133,6 +135,7 @@ const config = {
     bundledPluginFile("msteams", "src/polls-store-memory.ts"),
     bundledPluginFile("voice-call", "src/providers/index.ts"),
   ],
+  ignore: ["packages/*/dist/**"],
   workspaces: {
     ".": {
       entry: rootEntries,
@@ -153,6 +156,10 @@ const config = {
     ui: {
       entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
       project: ["src/**/*.{ts,tsx}!"],
+    },
+    "packages/sdk": {
+      entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
     },
     "packages/*": {
       entry: ["index.js!", "scripts/postinstall.js!"],

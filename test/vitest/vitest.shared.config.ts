@@ -143,6 +143,14 @@ export const sharedVitestConfig = {
         find: "@openclaw/discord/api.js",
         replacement: path.join(repoRoot, "extensions", "discord", "api.ts"),
       },
+      {
+        find: "@openclaw/slack/api.js",
+        replacement: path.join(repoRoot, "extensions", "slack", "api.ts"),
+      },
+      {
+        find: "@openclaw/whatsapp/api.js",
+        replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -299,6 +307,7 @@ export const sharedVitestConfig = {
       "**/node_modules/**",
       "**/vendor/**",
       "dist/OpenClaw.app/**",
+      "**/._*",
       "**/*.live.test.ts",
       "**/*.e2e.test.ts",
     ],

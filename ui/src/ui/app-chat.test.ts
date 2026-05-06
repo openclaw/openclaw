@@ -41,6 +41,7 @@ let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
 let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHistory;
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
+let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
@@ -51,6 +52,7 @@ async function loadChatHelpers(): Promise<void> {
     steerQueuedChatMessage,
     navigateChatInputHistory,
     handleAbortChat,
+    refreshChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
     removeQueuedMessage,
@@ -433,6 +435,55 @@ describe("refreshChatAvatar", () => {
   });
 });
 
+describe("refreshChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  it("does not wait for secondary chat metadata refreshes before showing history", async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => undefined)) as never;
+    try {
+      const request = vi.fn((method: string) => {
+        if (method === "chat.history") {
+          return Promise.resolve({
+            messages: [{ role: "assistant", content: [{ type: "text", text: "ready" }] }],
+          });
+        }
+        return new Promise(() => undefined);
+      });
+      const host = makeHost({
+        client: { request } as unknown as ChatHost["client"],
+        sessionKey: "main",
+      });
+
+      const outcome = await Promise.race([
+        refreshChat(host).then(() => "resolved" as const),
+        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 20)),
+      ]);
+
+      expect(outcome).toBe("resolved");
+      expect(host.chatMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "ready" }] },
+      ]);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.list",
+        expect.objectContaining({
+          includeGlobal: true,
+          includeUnknown: true,
+        }),
+      );
+      expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+      expect(request).toHaveBeenCalledWith(
+        "commands.list",
+        expect.objectContaining({ includeArgs: true, scope: "text" }),
+      );
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+});
+
 describe("handleSendChat", () => {
   beforeAll(async () => {
     await loadChatHelpers();
@@ -713,6 +764,33 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
     expect(navigateChatInputHistory(host, "up")).toBe(true);
     expect(host.chatMessage).toBe("/btw what changed?");
+  });
+
+  it("sends /side through the detached BTW path", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {};
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatRunId: "run-main",
+      chatStream: "Working...",
+      chatMessage: "/side what changed?",
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        message: "/side what changed?",
+        deliver: false,
+      }),
+    );
+    expect(host.chatQueue).toEqual([]);
+    expect(host.chatRunId).toBe("run-main");
   });
 
   it("sends /btw without adopting a main chat run when idle", async () => {
