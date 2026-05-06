@@ -1760,16 +1760,17 @@ describe("runGatewayUpdate", () => {
       pkgRoot,
       npmRootOutput: nodeModules,
       installCommand: expectedInstallCommand,
-      onInstall: async () => {
+      onInstall: async (options) => {
+        const packageRoot = options?.packageRoot ?? pkgRoot;
         await fs.writeFile(
-          path.join(pkgRoot, "package.json"),
+          path.join(packageRoot, "package.json"),
           JSON.stringify({ name: "openclaw", version: "2.0.0" }),
           "utf-8",
         );
-        await writeBundledRuntimeSidecars(pkgRoot);
-        const inventory = await writePackageDistInventory(pkgRoot);
+        await writeBundledRuntimeSidecars(packageRoot);
+        const inventory = await writePackageDistInventory(packageRoot);
         expect(inventory).toContain(MATRIX_HELPER_API);
-        const matrixHelperApiPath = path.join(pkgRoot, MATRIX_HELPER_API);
+        const matrixHelperApiPath = path.join(packageRoot, MATRIX_HELPER_API);
         await expect(pathExists(matrixHelperApiPath)).resolves.toBe(true);
         await fs.rm(matrixHelperApiPath);
       },

@@ -53,6 +53,7 @@ export const SessionSchema = z
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
+    typingTtlSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),

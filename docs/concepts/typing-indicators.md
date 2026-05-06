@@ -6,8 +6,9 @@ title: "Typing indicators"
 ---
 
 Typing indicators are sent to the chat channel while a run is active. Use
-`agents.defaults.typingMode` to control **when** typing starts and `typingIntervalSeconds`
-to control **how often** it refreshes.
+`agents.defaults.typingMode` to control **when** typing starts, `typingIntervalSeconds`
+to control **how often** it refreshes, and `typingTtlSeconds` to control the
+stale-refresh cleanup window after typing keepalives stop.
 
 ## Defaults
 
@@ -38,9 +39,12 @@ Order of "how early it fires":
 
 ```json5
 {
-  agent: {
-    typingMode: "thinking",
-    typingIntervalSeconds: 6,
+  agents: {
+    defaults: {
+      typingMode: "thinking",
+      typingIntervalSeconds: 6,
+      typingTtlSeconds: 300,
+    },
   },
 }
 ```
@@ -52,6 +56,7 @@ You can override mode or cadence per session:
   session: {
     typingMode: "message",
     typingIntervalSeconds: 4,
+    typingTtlSeconds: 300,
   },
 }
 ```
@@ -71,6 +76,9 @@ You can override mode or cadence per session:
   channel does not support typing.
 - `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
   The default is 6 seconds.
+- `typingTtlSeconds` controls the **stale-refresh cleanup window** for repeated
+  typing indicators: each successful keepalive refreshes the timeout, and cleanup
+  runs only after keepalives stop for this duration. The default is 300 seconds.
 
 ## Related
 
