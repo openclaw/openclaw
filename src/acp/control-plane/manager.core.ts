@@ -97,12 +97,15 @@ function summarizeBackgroundTaskText(text: string): string {
   return `${normalized.slice(0, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
 }
 
-function appendBackgroundTaskProgressSummary(current: string, chunk: string): string {
-  const normalizedChunk = normalizeText(chunk)?.replace(/\s+/g, " ");
-  if (!normalizedChunk) {
+export function appendBackgroundTaskProgressSummary(current: string, chunk: string): string {
+  if (typeof chunk !== "string" || chunk.length === 0) {
     return current;
   }
-  const combined = current ? `${current} ${normalizedChunk}` : normalizedChunk;
+  // Token-streamed chunks (especially CJK) may split mid-word, so leading or
+  // trailing whitespace on a chunk carries the word-boundary signal. Collapse
+  // internal whitespace runs but do not trim chunk edges or force a join space.
+  const normalizedChunk = chunk.replace(/\s+/g, " ");
+  const combined = current + normalizedChunk;
   if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
     return combined;
   }
