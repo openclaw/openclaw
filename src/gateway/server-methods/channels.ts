@@ -9,6 +9,7 @@ import {
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -468,11 +469,26 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const rawChannel = (params as { channel?: unknown }).channel;
     const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
     if (!channelId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
-      );
+      const trimmedRaw =
+        typeof rawChannel === "string" && rawChannel.trim() ? rawChannel.trim() : null;
+      if (!trimmedRaw) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
+        );
+        return;
+      }
+      // normalizeChannelId resolves only against the active plugin registry, so a null
+      // result is ambiguous: the channel might be a known bundled channel that's disabled
+      // in openclaw.json, or it might be a typo / unknown channel id. Use the static
+      // bundled-channel catalog to distinguish so we don't tell typo users to add a
+      // channels.<typo> block.
+      const bundledId = normalizeChatChannelId(trimmedRaw);
+      const message = bundledId
+        ? `channel ${bundledId} is not enabled in openclaw.json; add a channels.${bundledId} block (with enabled: true) and restart the gateway`
+        : `channel ${trimmedRaw} is not a recognized channel id; check the channel name or install the plugin that provides it`;
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       return;
     }
     const plugin = getChannelPlugin(channelId);

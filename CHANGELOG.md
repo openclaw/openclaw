@@ -113,6 +113,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Channels/login: clarify the gateway error when `openclaw channels login <name>` is run for a channel that is missing from openclaw.json or unrecognized, instead of returning the opaque 'invalid channels.start channel' message. ([#77508](https://github.com/openclaw/openclaw/issues/77508))
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.
