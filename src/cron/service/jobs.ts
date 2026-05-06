@@ -139,6 +139,48 @@ function computeStaggeredCronPreviousRunAtMs(job: CronJob, nowMs: number) {
   return undefined;
 }
 
+function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
+  if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
+    return false;
+  }
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1);
+  return previous === runAtMs;
+}
+
+function shouldRepairFutureCronNextRunAtMs(params: { job: CronJob; nowMs: number }): boolean {
+  const { job, nowMs } = params;
+  const nextRun = job.state.nextRunAtMs;
+  if (
+    job.schedule.kind !== "cron" ||
+    !hasScheduledNextRunAtMs(nextRun) ||
+    nowMs >= nextRun ||
+    typeof job.state.runningAtMs === "number"
+  ) {
+    return false;
+  }
+
+  // Error retries may intentionally use a non-cron future timestamp while
+  // backoff is pending. Leave those retry slots to the execution path.
+  if (job.state.lastStatus === "error" && isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return false;
+  }
+
+  const naturalNext = computeStaggeredCronNextRunAtMs(job, nowMs);
+  if (!isFiniteTimestamp(naturalNext) || nextRun <= naturalNext) {
+    return false;
+  }
+  if (isStaggeredCronRunAtMs(job, nextRun)) {
+    return false;
+  }
+
+  const followingNaturalNext = computeStaggeredCronNextRunAtMs(job, naturalNext);
+  if (!isFiniteTimestamp(followingNaturalNext)) {
+    return false;
+  }
+  const naturalIntervalMs = followingNaturalNext - naturalNext;
+  return naturalIntervalMs > 0 && nextRun >= followingNaturalNext + naturalIntervalMs;
+}
+
 function resolveEveryAnchorMs(params: {
   schedule: { everyMs: number; anchorMs?: number };
   fallbackAnchorMs: number;
@@ -489,7 +531,7 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
     // a job that hasn't fired yet (e.g. during restart recovery).
     const nextRun = job.state.nextRunAtMs;
     const isDueOrMissing = !hasScheduledNextRunAtMs(nextRun) || now >= nextRun;
-    if (isDueOrMissing) {
+    if (isDueOrMissing || shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })) {
       if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
         changed = true;
       }
@@ -515,6 +557,10 @@ export function recomputeNextRunsForMaintenance(
     ({ job, nowMs: now }) => {
       let changed = false;
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
+        if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
+          changed = true;
+        }
+      } else if (shouldRepairFutureCronNextRunAtMs({ job, nowMs: now })) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
           changed = true;
         }

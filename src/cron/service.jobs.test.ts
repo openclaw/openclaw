@@ -3,6 +3,7 @@ import {
   applyJobPatch,
   createJob,
   recomputeNextRuns,
+  recomputeNextRunsForMaintenance,
   resolveJobPayloadTextForMain,
 } from "./service/jobs.js";
 import type { CronServiceState } from "./service/state.js";
@@ -731,5 +732,83 @@ describe("recomputeNextRuns", () => {
       expect(job.schedule.anchorMs).toBe(createdAtMs);
     }
     expect(job.state.nextRunAtMs).toBe(now);
+  });
+
+  it("repairs future cron nextRunAtMs values that are not schedule slots", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const badFuture = Date.parse("2026-05-12T16:00:00.000Z");
+    const expected = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-21-shanghai",
+      name: "daily 21 shanghai",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: badFuture },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(expected);
+  });
+
+  it("preserves valid future cron nextRunAtMs values during maintenance", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const validFuture = Date.parse("2026-05-05T13:00:00.000Z");
+    const job: CronJob = {
+      id: "daily-valid-future",
+      name: "daily valid future",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: validFuture },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(validFuture);
+  });
+
+  it("preserves cron retry backoff nextRunAtMs values during maintenance", () => {
+    const now = Date.parse("2025-12-13T04:02:00.000Z");
+    const retryAt = Date.parse("2025-12-13T04:10:00.000Z");
+    const job: CronJob = {
+      id: "backoff-pending",
+      name: "backoff pending",
+      enabled: true,
+      createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+      updatedAtMs: Date.parse("2025-12-13T04:01:10.000Z"),
+      schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "do not run during backoff" },
+      state: {
+        nextRunAtMs: retryAt,
+        lastRunAtMs: Date.parse("2025-12-13T04:01:00.000Z"),
+        lastStatus: "error",
+        consecutiveErrors: 4,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(retryAt);
   });
 });
