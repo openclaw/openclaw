@@ -594,6 +594,7 @@ actor MacNodeRuntime {
             params: params,
             command: command,
             env: evaluation.env,
+            agentId: evaluation.agentId,
             sessionKey: sessionKey,
             runId: runId,
             displayCommand: evaluation.displayCommand)
@@ -905,11 +906,21 @@ extension MacNodeRuntime {
         params: OpenClawSystemRunParams,
         command: [String],
         env: [String: String],
+        agentId: String?,
         sessionKey: String,
         runId: String,
         displayCommand: String) async throws -> BridgeInvokeResponse
     {
         let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
+
+        var execEnv = env
+        if let agentId = agentId, !agentId.isEmpty {
+            execEnv["OPENCLAW_AGENT_ID"] = agentId
+        }
+        if !sessionKey.isEmpty {
+            execEnv["OPENCLAW_SESSION_KEY"] = sessionKey
+        }
+
         await self.emitExecEvent(
             "exec.started",
             payload: ExecEventPayload(
@@ -920,7 +931,7 @@ extension MacNodeRuntime {
         let result = await ShellExecutor.runDetailed(
             command: command,
             cwd: params.cwd,
-            env: env,
+            env: execEnv,
             timeout: timeoutSec)
         let combined = [result.stdout, result.stderr, result.errorMessage]
             .compactMap(\.self)
