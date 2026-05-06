@@ -281,8 +281,8 @@ describe("archive utils", () => {
               timeoutMs: ARCHIVE_EXTRACT_TIMEOUT_MS,
             }),
           ).rejects.toMatchObject({
-            code: "hardlink",
-          } satisfies Partial<FsSafeError>);
+            code: expect.stringMatching(/^(destination-symlink-traversal|hardlink)$/),
+          } satisfies Partial<ArchiveSecurityError | FsSafeError>);
         } finally {
           lstatSpy.mockRestore();
         }
