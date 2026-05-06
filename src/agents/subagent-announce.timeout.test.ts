@@ -453,6 +453,48 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("data");
   });
 
+  it("reconciles a timed-out wait against persisted child success before announcing", async () => {
+    chatHistoryMessages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Inspection finished with the full result." }],
+      },
+    ];
+    sessionStore = {
+      "agent:main:subagent:worker": {
+        status: "done",
+        endedAt: 222,
+      },
+    };
+    callGatewayImpl = async (request) => {
+      if (request.method === "agent.wait") {
+        return { status: "timeout", startedAt: 111, endedAt: 200 };
+      }
+      if (request.method === "chat.history") {
+        return { messages: chatHistoryMessages };
+      }
+      return {};
+    };
+
+    await runAnnounceFlowForTest("run-timeout-reconciled-success", {
+      roundOneReply: undefined,
+      waitForCompletion: true,
+      outcome: undefined,
+    });
+
+    const directAgentCall = findFinalDirectAgentCall();
+    const internalEvents =
+      (directAgentCall?.params?.internalEvents as Array<{
+        status?: string;
+        statusLabel?: string;
+        result?: string;
+      }>) ?? [];
+    expect(internalEvents[0]?.status).toBe("ok");
+    expect(internalEvents[0]?.statusLabel).toBe("completed successfully");
+    expect(internalEvents[0]?.result).toContain("Inspection finished with the full result.");
+    expect(internalEvents[0]?.result).not.toContain("tool call(s) executed before timeout");
+  });
+
   it("does not announce cached reply text when the child run terminally failed", async () => {
     chatHistoryMessages = [
       { role: "assistant", content: [{ type: "text", text: "stale history output" }] },

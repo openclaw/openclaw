@@ -344,9 +344,10 @@ export async function readLatestSubagentOutputWithRetry(params: {
 export async function waitForSubagentRunOutcome(
   runId: string,
   timeoutMs: number,
+  sessionKey?: string,
 ): Promise<AgentWaitResult> {
   const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await subagentAnnounceOutputDeps.callGateway({
+  const wait = await subagentAnnounceOutputDeps.callGateway({
     method: "agent.wait",
     params: {
       runId,
@@ -354,6 +355,96 @@ export async function waitForSubagentRunOutcome(
     },
     timeoutMs: waitMs + 2000,
   });
+  if (wait?.status !== "timeout" || !sessionKey?.trim()) {
+    return wait;
+  }
+  return await reconcileTimedOutSubagentWaitUsingSessionEntry({ wait, sessionKey });
+}
+
+function findSessionEntryByKey(
+  store: Record<string, Record<string, unknown>>,
+  sessionKey: string,
+): Record<string, unknown> | undefined {
+  const direct = store[sessionKey];
+  if (direct) {
+    return direct;
+  }
+  const normalized = sessionKey.trim().toLowerCase();
+  for (const [key, entry] of Object.entries(store)) {
+    if (key.trim().toLowerCase() === normalized) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function loadSubagentSessionEntry(sessionKey: string): Record<string, unknown> | undefined {
+  const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const store = loadSessionStore(storePath) as Record<string, Record<string, unknown>>;
+  return findSessionEntryByKey(store, sessionKey);
+}
+
+function resolveCompletionFromSessionEntry(
+  sessionEntry: Record<string, unknown> | undefined,
+  fallbackEndedAt?: number,
+): AgentWaitResult | undefined {
+  const status = typeof sessionEntry?.status === "string" ? sessionEntry.status : undefined;
+  const endedAt =
+    typeof sessionEntry?.endedAt === "number" && Number.isFinite(sessionEntry.endedAt)
+      ? sessionEntry.endedAt
+      : fallbackEndedAt;
+  if (status === "done") {
+    return { status: "ok", endedAt };
+  }
+  if (status === "timeout") {
+    return { status: "timeout", endedAt };
+  }
+  if (status === "failed") {
+    return {
+      status: "error",
+      endedAt,
+      error: "session completed before registry settled",
+    };
+  }
+  if (status === "killed") {
+    return {
+      status: "error",
+      endedAt,
+      error: "subagent run terminated",
+    };
+  }
+  if (status !== "running" && typeof sessionEntry?.endedAt === "number") {
+    return { status: "ok", endedAt };
+  }
+  return undefined;
+}
+
+async function reconcileTimedOutSubagentWaitUsingSessionEntry(params: {
+  wait: AgentWaitResult;
+  sessionKey: string;
+}): Promise<AgentWaitResult> {
+  const attempts = isFastTestMode() ? 1 : 4;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const sessionEntry = loadSubagentSessionEntry(params.sessionKey);
+    const resolved = resolveCompletionFromSessionEntry(
+      sessionEntry,
+      typeof params.wait.endedAt === "number" ? params.wait.endedAt : undefined,
+    );
+    if (resolved) {
+      return {
+        ...params.wait,
+        ...resolved,
+      };
+    }
+    if (attempt + 1 < attempts) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100),
+      );
+    }
+  }
+  return params.wait;
 }
 
 export function applySubagentWaitOutcome(params: {
