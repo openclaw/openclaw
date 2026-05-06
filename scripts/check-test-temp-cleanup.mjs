@@ -82,25 +82,24 @@ export async function collectTestTempCleanupFindings(root = repoRoot) {
   return findings;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
-  const json = argv.includes("--json");
-  const findings = await collectTestTempCleanupFindings(repoRoot);
+export async function renderTestTempCleanupReport(params) {
+  const findings = await collectTestTempCleanupFindings(params.root ?? repoRoot);
   const writeStdout = (chunk) => {
-    if (io?.stdout?.write) {
-      io.stdout.write(chunk);
+    if (params.io?.stdout?.write) {
+      params.io.stdout.write(chunk);
       return;
     }
     process.stdout.write(chunk);
   };
   const writeStderr = (chunk) => {
-    if (io?.stderr?.write) {
-      io.stderr.write(chunk);
+    if (params.io?.stderr?.write) {
+      params.io.stderr.write(chunk);
       return;
     }
     process.stderr.write(chunk);
   };
 
-  if (json) {
+  if (params.json) {
     writeStdout(`${JSON.stringify(findings, null, 2)}\n`);
   } else if (findings.length > 0) {
     writeStderr("Test temp-dir cleanup findings:\n");
@@ -113,7 +112,19 @@ export async function main(argv = process.argv.slice(2), io) {
     );
   }
 
-  return findings.some((finding) => finding.severity === "error") ? 1 : 0;
+  return {
+    findings,
+    exitCode: findings.some((finding) => finding.severity === "error") ? 1 : 0,
+  };
+}
+
+export async function main(argv = process.argv.slice(2), io) {
+  const result = await renderTestTempCleanupReport({
+    root: repoRoot,
+    json: argv.includes("--json"),
+    io,
+  });
+  return result.exitCode;
 }
 
 runAsScript(import.meta.url, async (argv, io) => {
