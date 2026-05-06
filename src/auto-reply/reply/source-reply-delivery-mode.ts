@@ -6,6 +6,8 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   CommandSource?: "text" | "native";
+  /** Whether the bot was directly @mentioned (set by channel monitors for group/channel messages). */
+  WasMentioned?: boolean;
 };
 
 export function resolveSourceReplyDeliveryMode(params: {
@@ -16,6 +18,15 @@ export function resolveSourceReplyDeliveryMode(params: {
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.requested) {
+    // When the bot was directly @mentioned, override message_tool_only
+    // to automatic even when an explicit requested mode is provided.
+    // This covers channel monitors (Discord, Slack) that pre-resolve
+    // delivery mode without WasMentioned context.
+    const overrideMentioned =
+      params.ctx.WasMentioned === true && params.requested === "message_tool_only";
+    if (overrideMentioned) {
+      return "automatic";
+    }
     return params.messageToolAvailable === false && params.requested === "message_tool_only"
       ? "automatic"
       : params.requested;
@@ -32,6 +43,13 @@ export function resolveSourceReplyDeliveryMode(params: {
   } else {
     const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
     mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
+  }
+  // When the bot is directly @mentioned, always deliver replies automatically
+  // so users get a visible response to their mention. This override applies
+  // regardless of how "message_tool_only" was arrived at: config defaults,
+  // channel pre-resolution (Discord, Slack), or explicit requested modes.
+  if (params.ctx.WasMentioned === true && mode === "message_tool_only") {
+    mode = "automatic";
   }
   if (mode === "message_tool_only" && params.messageToolAvailable === false) {
     return "automatic";
