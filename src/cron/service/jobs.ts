@@ -337,7 +337,9 @@ export function recordScheduleComputeError(params: {
     );
 
     // Notify the user so the auto-disable is not silent (#28861).
-    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors. Last error: ${errText}`;
+    const nowMs = state.deps.nowMs();
+    const timestampLabel = new Date(nowMs).toISOString();
+    const notifyText = `⚠️ Cron job "${job.name}" has been auto-disabled after ${errorCount} consecutive schedule errors at ${timestampLabel}. Last error: ${errText}`;
     state.deps.enqueueSystemEvent(notifyText, {
       agentId: job.agentId,
       sessionKey: job.sessionKey,
