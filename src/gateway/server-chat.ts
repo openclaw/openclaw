@@ -278,6 +278,7 @@ export function createAgentEventHandler({
       endedAt: snapshotSource.endedAt,
       runtimeMs: snapshotSource.runtimeMs,
       abortedLastRun: snapshotSource.abortedLastRun,
+      pauseReason: snapshotSource.pauseReason,
     };
   };
 

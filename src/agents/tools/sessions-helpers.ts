@@ -32,7 +32,7 @@ export type SessionListDeliveryContext = {
   threadId?: string | number;
 };
 
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout" | "paused";
 
 export type SessionListRow = {
   key: string;

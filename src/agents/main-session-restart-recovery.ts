@@ -34,6 +34,12 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
   if (entry.subagentRole != null) {
     return true;
   }
+  // Sessions paused via `sessions_yield` are intentionally awaiting a queued
+  // continuation. Restart recovery would otherwise re-prompt them with the
+  // generic "previous turn was interrupted" message and race the follow-up.
+  if (entry.pauseReason === "sessions_yield") {
+    return true;
+  }
   return (
     isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) || isAcpSessionKey(sessionKey)
   );
