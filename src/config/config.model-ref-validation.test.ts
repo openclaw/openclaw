@@ -131,4 +131,132 @@ describe("config model reference validation", () => {
         'Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai-codex/gpt-5.5 for PI OAuth, or openai/gpt-5.5 with agentRuntime.id="codex" for the native Codex runtime.',
     });
   });
+
+  it("accepts statically suppressed provider/model pairs in the agent model catalog", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.4-mini",
+            },
+            models: {
+              "openai-codex/gpt-5.3-codex-spark": {
+                alias: "codex-sub-light",
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects active aliases that point at statically suppressed provider/model pairs", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex-sub-light",
+            },
+            models: {
+              "openai-codex/gpt-5.3-codex-spark": {
+                alias: "codex-sub-light",
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual({
+      path: "agents.defaults.model.primary",
+      message:
+        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    });
+  });
+
+  it("rejects active profiled aliases that point at statically suppressed provider/model pairs", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex-sub-light@work",
+            },
+            models: {
+              "openai-codex/gpt-5.3-codex-spark": {
+                alias: "codex-sub-light",
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual({
+      path: "agents.defaults.model.primary",
+      message:
+        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    });
+  });
+
+  it("rejects active slash-form aliases before provider/model parsing", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "codex/sub-light@work",
+            },
+            models: {
+              "openai-codex/gpt-5.3-codex-spark": {
+                alias: "codex/sub-light",
+              },
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createModelSuppressionRegistry(),
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual({
+      path: "agents.defaults.model.primary",
+      message:
+        "Unknown model: openai-codex/gpt-5.3-codex-spark. gpt-5.3-codex-spark is no longer exposed by the OpenAI or Codex catalogs. Use openai/gpt-5.5.",
+    });
+  });
 });
