@@ -589,7 +589,19 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings };
   }
 
-  if (removal.cleanup?.kind === "npm") {
+  const npmCleanupManifestExists =
+    removal.cleanup?.kind === "npm"
+      ? await fs
+          .access(path.join(removal.cleanup.npmRoot, "package.json"))
+          .then(() => true)
+          .catch(() => false)
+      : false;
+
+  if (!existed && removal.cleanup?.kind === "npm" && !npmCleanupManifestExists) {
+    return { directoryRemoved: false, warnings };
+  }
+
+  if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists) {
     const uninstall = await runCommandWithTimeout(
       [
         "npm",
