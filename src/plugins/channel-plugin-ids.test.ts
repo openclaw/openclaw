@@ -251,6 +251,15 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "lossless-claw",
+        kind: "context-engine",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+      },
+      {
         id: "demo-global-sidecar",
         channels: [],
         activation: {
@@ -418,7 +427,13 @@ function createStartupConfig(params: {
   allowPluginIds?: string[];
   noConfiguredChannels?: boolean;
   memorySlot?: string;
+  contextEngineSlot?: string;
 }) {
+  const slots = {
+    ...(params.memorySlot ? { memory: params.memorySlot } : {}),
+    ...(params.contextEngineSlot ? { contextEngine: params.contextEngineSlot } : {}),
+  };
+  const hasSlots = Object.keys(slots).length > 0;
   return {
     ...(params.noConfiguredChannels
       ? {
@@ -435,7 +450,7 @@ function createStartupConfig(params: {
       ? {
           plugins: {
             ...(params.allowPluginIds?.length ? { allow: params.allowPluginIds } : {}),
-            ...(params.memorySlot ? { slots: { memory: params.memorySlot } } : {}),
+            ...(hasSlots ? { slots } : {}),
             entries: Object.fromEntries(
               params.enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
             ),
@@ -447,12 +462,10 @@ function createStartupConfig(params: {
               allow: params.allowPluginIds,
             },
           }
-        : params.memorySlot
+        : hasSlots
           ? {
               plugins: {
-                slots: {
-                  memory: params.memorySlot,
-                },
+                slots,
               },
             }
           : {}),
@@ -948,6 +961,107 @@ describe("resolveGatewayStartupPluginIds", () => {
         enabledPluginIds: ["memory-lancedb"],
       }),
       expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("includes the selected context engine plugin in startup scope", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        contextEngineSlot: "lossless-claw",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
+    });
+  });
+
+  it("normalizes the raw context engine slot id before startup filtering", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        contextEngineSlot: "Lossless-Claw",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "lossless-claw"],
+    });
+  });
+
+  it("keeps the built-in legacy context engine out of startup scope", () => {
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        contextEngineSlot: "legacy",
+      }),
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("lets a selected context engine plugin bypass restrictive allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser", "memory-core"],
+          slots: { contextEngine: "lossless-claw" },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core", "lossless-claw"],
+    });
+  });
+
+  it("does not include a selected context engine plugin when plugins are disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        plugins: {
+          enabled: false,
+          slots: { contextEngine: "lossless-claw" },
+        },
+      } as OpenClawConfig,
+      expected: [],
+    });
+  });
+
+  it("does not include a selected context engine plugin when it is denied", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        plugins: {
+          deny: ["lossless-claw"],
+          slots: { contextEngine: "lossless-claw" },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("does not include a selected context engine plugin when it is explicitly disabled", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        plugins: {
+          slots: { contextEngine: "lossless-claw" },
+          entries: { "lossless-claw": { enabled: false } },
+        },
+      } as OpenClawConfig,
+      expected: ["demo-channel", "browser", "memory-core"],
+    });
+  });
+
+  it("includes a selected workspace context engine plugin in startup scope", () => {
+    const fixture = createManifestRegistryFixture();
+    useManifestRegistryFixture({
+      ...fixture,
+      plugins: [
+        ...fixture.plugins,
+        withManifestLoadPaths({
+          id: "workspace-context-engine",
+          kind: "context-engine",
+          channels: [],
+          origin: "workspace",
+          enabledByDefault: undefined,
+          providers: [],
+          cliBackends: [],
+        }),
+      ],
+    });
+    expectStartupPluginIdsCase({
+      config: createStartupConfig({
+        contextEngineSlot: "workspace-context-engine",
+      }),
+      expected: ["demo-channel", "browser", "memory-core", "workspace-context-engine"],
     });
   });
 
