@@ -705,6 +705,11 @@ function writeExecApprovalsRaw(filePath: string, raw: string) {
   let tempWritten = false;
   try {
     fs.writeFileSync(tempPath, raw, { mode: 0o600, flag: "wx" });
+    try {
+      fs.chmodSync(tempPath, 0o600);
+    } catch {
+      // best-effort on platforms without chmod
+    }
     tempWritten = true;
     renameExecApprovalsWithFallback(tempPath, filePath);
   } finally {
