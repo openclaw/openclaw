@@ -171,19 +171,42 @@ const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
-const relays = new Map<string, NativeHookRelayRegistration>();
-const relayBridges = new Map<string, NativeHookRelayBridgeRegistration>();
-const invocations: NativeHookRelayInvocation[] = [];
-const pendingPermissionApprovals = new Map<
-  string,
-  Promise<NativeHookRelayPermissionApprovalResult>
->();
-const permissionApprovalWindows = new Map<string, number[]>();
 const log = createSubsystemLogger("agents/harness/native-hook-relay");
 
 type NativeHookRelayPermissionDecision = "allow" | "deny";
 
 type NativeHookRelayPermissionApprovalResult = NativeHookRelayPermissionDecision | "defer";
+
+type NativeHookRelaySharedState = {
+  relays: Map<string, NativeHookRelayRegistration>;
+  relayBridges: Map<string, NativeHookRelayBridgeRegistration>;
+  invocations: NativeHookRelayInvocation[];
+  pendingPermissionApprovals: Map<string, Promise<NativeHookRelayPermissionApprovalResult>>;
+  permissionApprovalWindows: Map<string, number[]>;
+};
+
+const NATIVE_HOOK_RELAY_STATE_SYMBOL = Symbol.for("openclaw.nativeHookRelay.state");
+
+function getNativeHookRelaySharedState(): NativeHookRelaySharedState {
+  const globalRecord = globalThis as typeof globalThis & {
+    [NATIVE_HOOK_RELAY_STATE_SYMBOL]?: NativeHookRelaySharedState;
+  };
+  globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL] ??= {
+    relays: new Map<string, NativeHookRelayRegistration>(),
+    relayBridges: new Map<string, NativeHookRelayBridgeRegistration>(),
+    invocations: [],
+    pendingPermissionApprovals: new Map<string, Promise<NativeHookRelayPermissionApprovalResult>>(),
+    permissionApprovalWindows: new Map<string, number[]>(),
+  };
+  return globalRecord[NATIVE_HOOK_RELAY_STATE_SYMBOL];
+}
+
+const nativeHookRelayState = getNativeHookRelaySharedState();
+const relays = nativeHookRelayState.relays;
+const relayBridges = nativeHookRelayState.relayBridges;
+const invocations = nativeHookRelayState.invocations;
+const pendingPermissionApprovals = nativeHookRelayState.pendingPermissionApprovals;
+const permissionApprovalWindows = nativeHookRelayState.permissionApprovalWindows;
 
 type NativeHookRelayPermissionApprovalRequest = {
   provider: NativeHookRelayProvider;
