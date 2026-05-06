@@ -61,6 +61,7 @@ Docs: https://docs.openclaw.ai
 - QA/Mantis: return the copied Slack desktop screenshot path even when remote Slack QA fails, so the CLI still prints the failure screenshot artifact. Thanks @vincentkoc.
 - QA/Mantis: accept Blacksmith Testbox `tbx_...` lease ids from desktop smoke warmup, so provider overrides do not fail before inspect/run. Thanks @vincentkoc.
 - QA/Codex harness: add targeted live Docker/Testbox diagnostics, auth preflight checks, cache mount fixes, and app-server protocol checkout discovery so maintainer harness failures are easier to reproduce. Thanks @vincentkoc.
+- CI/Crabbox: default owned AWS fallback to `standard` multi-region capacity with broker hints enabled, reserving `beast` for explicit CPU-bound maintainer lanes.
 - Control UI/cron: make the New Job sidebar collapsible so the jobs list can reclaim space while keeping the form one click away. Thanks @BunsDev.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.
 - Plugins/migration: emit catalog-backed install hints when `plugins.entries` or `plugins.allow` references an official external plugin that is not installed, so upgraded configs point operators to `openclaw plugins install <spec>` instead of telling them to remove valid plugin config. (#77483) Thanks @hclsys.

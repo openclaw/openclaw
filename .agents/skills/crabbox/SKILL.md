@@ -296,6 +296,10 @@ When AWS capacity is under pressure, do not start with `class=beast`.
 OpenClaw's owned-cloud default is `standard`; escalate to `fast`, then `large`,
 and only use `beast` when the work is explicitly CPU-bound and the smaller class
 already failed the goal.
+Keep capacity hints enabled so brokered AWS leases print selected region/market,
+quota pressure, Spot fallback, and high-pressure class warnings. The OpenClaw
+repo config sets `capacity.hints: true`; use `CRABBOX_CAPACITY_HINTS=0` only
+when debugging hint rendering itself.
 
 Use `beast` only for exceptional lanes:
 

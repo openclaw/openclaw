@@ -5,6 +5,7 @@ capacity:
   market: spot
   strategy: most-available
   fallback: on-demand-after-120s
+  hints: true
   regions:
     - eu-west-1
     - eu-west-2
