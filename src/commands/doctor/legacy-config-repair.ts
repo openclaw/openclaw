@@ -1,21 +1,35 @@
 import { readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import { INCLUDE_KEY } from "../../config/includes.js";
 import { validateConfigObjectWithPlugins } from "../../config/validation.js";
-import { stripUnknownConfigKeys } from "../doctor-config-analysis.js";
+import { isRecord } from "../../utils.js";
 import { migrateLegacyConfig } from "./shared/legacy-config-migrate.js";
 
 type ConfigSnapshot = Awaited<ReturnType<typeof readConfigFileSnapshot>>;
+
+function containsAuthoredInclude(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, INCLUDE_KEY)) {
+    return true;
+  }
+  return Object.values(value).some((entry) => containsAuthoredInclude(entry));
+}
 
 export async function repairLegacyConfigForUpdateChannel(params: {
   configSnapshot: ConfigSnapshot;
   jsonMode: boolean;
 }): Promise<{ snapshot: ConfigSnapshot; repaired: boolean }> {
+  if (containsAuthoredInclude(params.configSnapshot.parsed)) {
+    return { snapshot: params.configSnapshot, repaired: false };
+  }
+
   const migrated = migrateLegacyConfig(params.configSnapshot.parsed);
   if (!migrated.config) {
     return { snapshot: params.configSnapshot, repaired: false };
   }
 
-  const stripped = stripUnknownConfigKeys(migrated.config);
-  const validated = validateConfigObjectWithPlugins(stripped.config);
+  const validated = validateConfigObjectWithPlugins(migrated.config);
   if (!validated.ok) {
     return { snapshot: params.configSnapshot, repaired: false };
   }
