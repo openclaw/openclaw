@@ -845,14 +845,36 @@ export function createHookRunner(
 
   /**
    * Run agent_end hook.
-   * Allows plugins to analyze completed conversations.
-   * Runs in parallel (fire-and-forget).
+   * Plugins with allowConversationAccess receive the full event including messages.
+   * Plugins with only allowStateAccess receive the event with messages stripped to [].
    */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
   ): Promise<void> {
-    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx);
+    const hooks = getHooksForName(registry, "agent_end");
+    if (hooks.length === 0) {
+      return;
+    }
+    const fullEvent = withAgentRunId(event, ctx);
+    const stateOnlyEvent: PluginHookAgentEndEvent = { ...fullEvent, messages: [] };
+    const promises = hooks.map(async (hook) => {
+      const hookEvent = hook.stateOnly ? stateOnlyEvent : fullEvent;
+      try {
+        const promise = Promise.resolve(
+          (hook.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(hookEvent, ctx),
+        );
+        const timeoutMs = getVoidHookTimeoutMs("agent_end", hook);
+        if (timeoutMs) {
+          await withHookTimeout(promise, timeoutMs, { unref: true });
+        } else {
+          await promise;
+        }
+      } catch (err) {
+        handleHookError({ hookName: "agent_end", pluginId: hook.pluginId, error: err });
+      }
+    });
+    await Promise.all(promises);
   }
 
   /**

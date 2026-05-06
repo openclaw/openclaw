@@ -967,4 +967,6 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   priority?: number;
   timeoutMs?: number;
   source: string;
+  /** When true, the handler registered with allowStateAccess but not allowConversationAccess; agent_end messages field will be stripped before dispatch. */
+  stateOnly?: boolean;
 };

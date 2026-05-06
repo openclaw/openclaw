@@ -928,6 +928,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.enabled": "Plugin Enabled",
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
+  "plugins.entries.*.hooks.allowStateAccess": "Allow State Access Hooks",
   "plugins.entries.*.hooks.allowPromptInjection": "Allow Prompt Injection Hooks",
   "plugins.entries.*.hooks.timeoutMs": "Plugin Hook Timeout (ms)",
   "plugins.entries.*.hooks.timeouts": "Plugin Hook Timeout Overrides",

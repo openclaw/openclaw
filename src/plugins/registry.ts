@@ -137,6 +137,7 @@ import {
   isConversationHookName,
   isPluginHookName,
   isPromptInjectionHookName,
+  isStateHookName,
   stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
@@ -226,6 +227,7 @@ export type {
 type PluginTypedHookPolicy = {
   allowPromptInjection?: boolean;
   allowConversationAccess?: boolean;
+  allowStateAccess?: boolean;
   timeoutMs?: number;
   timeouts?: Record<string, number>;
 };
@@ -2135,6 +2137,29 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         return;
       }
     }
+    let stateOnly = false;
+    if (isStateHookName(hookName)) {
+      const hasConversationAccess =
+        record.origin === "bundled"
+          ? policy?.allowConversationAccess !== false
+          : policy?.allowConversationAccess === true;
+      const hasStateAccess =
+        record.origin === "bundled"
+          ? policy?.allowStateAccess !== false
+          : policy?.allowStateAccess === true;
+      if (!hasConversationAccess && !hasStateAccess) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
+            `plugins.entries.${record.id}.hooks.allowStateAccess=true (or allowConversationAccess=true)`,
+        });
+        return;
+      }
+      stateOnly = !hasConversationAccess && hasStateAccess;
+    }
     const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
     record.hookCount += 1;
     registry.typedHooks.push({
@@ -2143,6 +2168,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       handler: effectiveHandler,
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(stateOnly ? { stateOnly: true } : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
   };
