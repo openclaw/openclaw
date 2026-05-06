@@ -60,21 +60,81 @@ echo "  OpenClaw message: Send warning via OpenClaw itself"
 echo "Enter your phone number for alerts (or leave blank to skip):"
 read -r PHONE_NUMBER
 
-# Update service file
-SERVICE_FILE="$SCRIPT_DIR/systemd/openclaw-auth-monitor.service"
-if [ -n "$NTFY_TOPIC" ]; then
-    sed -i "s|# Environment=NOTIFY_NTFY=.*|Environment=NOTIFY_NTFY=$NTFY_TOPIC|" "$SERVICE_FILE"
-fi
-if [ -n "$PHONE_NUMBER" ]; then
-    sed -i "s|# Environment=NOTIFY_PHONE=.*|Environment=NOTIFY_PHONE=$PHONE_NUMBER|" "$SERVICE_FILE"
-fi
-
 # Install systemd units
+SERVICE_TEMPLATE="$SCRIPT_DIR/systemd/openclaw-auth-monitor.service"
+SERVICE_TARGET="$HOME/.config/systemd/user/openclaw-auth-monitor.service"
+TIMER_TARGET="$HOME/.config/systemd/user/openclaw-auth-monitor.timer"
+AUTH_MONITOR_PATH="$SCRIPT_DIR/auth-monitor.sh"
+
 echo ""
 echo "Installing systemd timer..."
 mkdir -p ~/.config/systemd/user
-cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.service" ~/.config/systemd/user/
-cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.timer" ~/.config/systemd/user/
+cp "$SERVICE_TEMPLATE" "$SERVICE_TARGET"
+cp "$SCRIPT_DIR/systemd/openclaw-auth-monitor.timer" "$TIMER_TARGET"
+
+command -v python3 >/dev/null 2>&1 || {
+    echo "ERROR: python3 is required but not found."
+    exit 1
+}
+
+python3 - "$SERVICE_TARGET" "$AUTH_MONITOR_PATH" "$NTFY_TOPIC" "$PHONE_NUMBER" <<'PY'
+from pathlib import Path
+import sys
+
+service_path = Path(sys.argv[1])
+auth_monitor_path = sys.argv[2]
+ntfy_topic = sys.argv[3]
+phone_number = sys.argv[4]
+
+
+def systemd_quote_arg(value: str) -> str:
+    escaped = value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def replace_required(content: str, old: str, new: str, label: str) -> str:
+    updated = content.replace(old, new)
+    if updated == content:
+        print(f"ERROR: {label} placeholder not found in {service_path}", file=sys.stderr)
+        sys.exit(1)
+    return updated
+
+
+def replace_environment(content: str, key: str, placeholder: str, value: str) -> str:
+    """Render an optional Environment line while keeping reruns idempotent.
+
+    Older versions of this setup script edited the checked-in unit template in
+    place. Users rerunning setup from those checkouts may therefore have either
+    the original commented placeholder or an already-uncommented Environment
+    line. Accept both forms so setup can repair those installs instead of
+    failing before enabling the timer.
+    """
+    rendered = f"Environment={key}={value}"
+    replacements = (
+        (f"# Environment={key}={placeholder}", rendered),
+        (f"Environment={key}={placeholder}", rendered),
+    )
+    for old, new in replacements:
+        if old in content:
+            return content.replace(old, new)
+    print(f"ERROR: {key} placeholder not found in {service_path}", file=sys.stderr)
+    sys.exit(1)
+
+
+content = service_path.read_text()
+content = replace_required(
+    content,
+    "ExecStart=/home/admin/openclaw/scripts/auth-monitor.sh",
+    f"ExecStart={systemd_quote_arg(auth_monitor_path)}",
+    "ExecStart",
+)
+if ntfy_topic:
+    content = replace_environment(content, "NOTIFY_NTFY", "openclaw-alerts", ntfy_topic)
+if phone_number:
+    content = replace_environment(content, "NOTIFY_PHONE", "+1234567890", phone_number)
+service_path.write_text(content)
+PY
+
 systemctl --user daemon-reload
 systemctl --user enable --now openclaw-auth-monitor.timer
 
