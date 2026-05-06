@@ -270,7 +270,7 @@ export class GatewayClient {
         // Use raw URL if parsing fails
       }
       const error = new Error(
-        `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
+        "SECURITY ERROR: Connection to remote gateway over plaintext ws:// is blocked. " +
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
           "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
@@ -302,10 +302,10 @@ export class GatewayClient {
           return undefined;
         }
         if (!fingerprint) {
-          return new Error("Missing server TLS fingerprint");
+          return new Error("Connection security failed (missing fingerprint)");
         }
         if (fingerprint !== expected) {
-          return new Error("Server TLS fingerprint mismatch");
+          return new Error("Connection security failed (fingerprint mismatch)");
         }
         return undefined;
       };
