@@ -427,9 +427,22 @@ function hasHookRuntimeStartupIntent(params: {
   if (params.manifest?.activation?.onCapabilities?.includes("hook")) {
     return true;
   }
-  return hasExplicitHookPolicyConfig(
-    params.activationSourcePlugins.entries[params.plugin.pluginId],
-  );
+  const entry = params.activationSourcePlugins.entries[params.plugin.pluginId];
+  // Pre-v5.3 external extensions were registered at startup as long as the
+  // user explicitly enabled them. They never declared
+  // `activation.onCapabilities: ["hook"]` (that metadata didn't exist) and
+  // they didn't always set explicit `hooks.*` policy keys. After the v5.3
+  // tightening they get silently skipped, which is #78196.
+  //
+  // Treat any non-bundled plugin that the user has explicitly enabled as
+  // having legacy hook startup intent. We deliberately don't extend this to
+  // bundled plugins (which already control startup via manifest activation)
+  // and we don't extend it to merely allowlisted plugins (the negative
+  // ambient-load case is still required behavior).
+  if (params.plugin.origin !== "bundled" && entry?.enabled === true) {
+    return true;
+  }
+  return hasExplicitHookPolicyConfig(entry);
 }
 
 function canStartExplicitHookPlugin(params: {
