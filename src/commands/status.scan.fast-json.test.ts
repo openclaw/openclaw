@@ -11,6 +11,7 @@ import {
 
 const mocks = {
   ...createStatusScanSharedMocks("status-fast-json"),
+  callGateway: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(() => []),
   resolveMemorySearchConfig: vi.fn(),
 };
@@ -98,13 +99,59 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
+  it("keeps update checks off the default fast JSON path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ timeoutMs: 1234 }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
+  });
+
+  it("restores registry-backed update checks and remote git fetches when --all is requested", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 6500,
+        fetchGit: true,
+        includeRegistry: true,
+      }),
+    );
+  });
+
+  it("keeps the local status RPC fallback off the default fast JSON path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("restores the local status RPC fallback when --all is requested", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "status",
+        timeoutMs: 2000,
+      }),
+    );
+  });
+
   it("keeps the fast JSON summary off the channel plugin summary path", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
 
     await scanStatusJsonFast({}, {} as never);
 
     expect(mocks.getStatusSummary).toHaveBeenCalledWith(
-      expect.objectContaining({ includeChannelSummary: false }),
+      expect.objectContaining({ includeChannelSummary: false, includeTaskSummary: false }),
     );
   });
 

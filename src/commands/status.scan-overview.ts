@@ -132,6 +132,11 @@ export async function collectStatusScanOverview(params: {
   resolveHasConfiguredChannels?: (cfg: OpenClawConfig, sourceConfig: OpenClawConfig) => boolean;
   includeChannelsData?: boolean;
   includeLiveChannelStatus?: boolean;
+  includeUpdateCheck?: boolean;
+  includeUpdateFetch?: boolean;
+  includeUpdateRegistry?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number;
   includeChannelSetupRuntimeFallback?: boolean;
   useGatewayCallOverridesForChannelsStatus?: boolean;
   progress?: {
@@ -185,6 +190,11 @@ export async function collectStatusScanOverview(params: {
     cfg,
     hasConfiguredChannels,
     opts: params.opts,
+    includeUpdateCheck: params.includeUpdateCheck,
+    includeUpdateFetch: params.includeUpdateFetch,
+    includeUpdateRegistry: params.includeUpdateRegistry,
+    includeLocalStatusRpcFallback: params.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs: params.gatewayProbeTimeoutMs,
     getTailnetHostname: async (runner) =>
       await loadStatusScanDepsRuntimeModule().then(({ getTailnetHostname }) =>
         getTailnetHostname(runner),
@@ -285,6 +295,7 @@ export async function collectStatusScanOverview(params: {
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
   includeChannelSummary?: boolean;
+  includeTaskSummary?: boolean;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
@@ -294,6 +305,7 @@ export async function resolveStatusSummaryFromOverview(params: {
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
       includeChannelSummary: params.includeChannelSummary,
+      includeTaskSummary: params.includeTaskSummary,
     }),
   );
 }
