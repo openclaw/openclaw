@@ -245,6 +245,31 @@ describe("system events (session routing)", () => {
     ]);
   });
 
+  it("drains exec-shaped audience: 'internal' events through the wrap (audience overrides text-shape filter)", async () => {
+    // The exec-completion filter exists to keep user-facing exec completion
+    // events on the heartbeat relay path. `audience: "internal"` events
+    // route exclusively through the wrap-on-drain path, so they must drain
+    // here regardless of text shape — otherwise an exec-shaped internal
+    // event (e.g. cron output that literally starts with "Exec finished
+    // ...") falls into a no-consumer hole: this filter would strand it for
+    // the heartbeat path, but the heartbeat exec/consume selectors now
+    // skip internal events as well, so it would sit in the queue forever.
+    const key = "agent:main:test-audience-internal-exec-shaped";
+    enqueueSystemEvent("Exec finished (cron run, code 0) :: see attached output", {
+      sessionKey: key,
+      trusted: false,
+      audience: "internal",
+    });
+
+    const result = await drainFormattedEvents(key);
+    expect(result).toBeDefined();
+    // The internal event MUST be drained and wrapped, not stranded.
+    expect(result).toContain("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(result).toContain("Exec finished (cron run, code 0)");
+    expect(result).toContain("<<<END_OPENCLAW_INTERNAL_CONTEXT>>>");
+    expect(peekSystemEvents(key)).toEqual([]);
+  });
+
   it("drains generic events without consuming pending exec completions", async () => {
     const key = "agent:main:test-exec-completion-prefix";
     enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });

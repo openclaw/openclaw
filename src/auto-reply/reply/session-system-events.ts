@@ -22,8 +22,17 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 
+// Exclude user-facing exec-completion events so the heartbeat path can
+// consume them via its own relay surface. `audience: "internal"` events
+// always belong on this generic drain (which routes them to the
+// INTERNAL_RUNTIME_CONTEXT wrap) regardless of text shape — otherwise an
+// exec-shaped internal event (e.g. cron output literally starting with
+// "Exec finished...") falls into a no-consumer hole: this filter would
+// strand it for the heartbeat path, but the heartbeat exec/consume
+// selectors now skip internal events. The audience field is the source
+// of truth for routing; text-shape only matters for user-facing events.
 const selectGenericSystemEvents = (events: readonly SystemEvent[]): SystemEvent[] =>
-  events.filter((event) => !isExecCompletionEvent(event.text));
+  events.filter((event) => event.audience === "internal" || !isExecCompletionEvent(event.text));
 
 /** Drain queued system events, format as `System:` lines, return the block (or undefined). */
 export async function drainFormattedSystemEvents(params: {
