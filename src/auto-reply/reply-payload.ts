@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   InteractiveReply,
   MessagePresentation,
@@ -46,7 +47,75 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /** Media items that were dropped during normalization (blocked, inaccessible, etc.). */
+  droppedMedia?: DroppedMediaItem[];
 };
+
+export type DroppedMediaReasonCode =
+  | "normalization-failed"
+  | "blocked-path"
+  | "file-not-accessible"
+  | "data-url-rejected"
+  | "unknown";
+
+export type DroppedMediaItem = {
+  displayName: string;
+  code: DroppedMediaReasonCode;
+};
+
+/** Strip directory components from a media source so user-facing notices
+ *  never expose full filesystem paths. */
+export function sanitizeMediaDisplayName(mediaSource: string): string {
+  if (/^data:/i.test(mediaSource)) {
+    return "(inline data)";
+  }
+  // For URLs, use URL parsing to safely extract the pathname and avoid
+  // leaking userinfo, query tokens, or fragment identifiers.
+  try {
+    const parsed = new URL(mediaSource);
+    // Skip URL parsing for Windows drive-letter paths (e.g. "C:\..." parses
+    // with protocol "c:", but path.basename on POSIX won't split backslashes
+    // in the resulting pathname, leaking the full path).
+    if (parsed.protocol.length > 2) {
+      const pathname = parsed.pathname;
+      const basename = path.basename(pathname) || "(url)";
+      return basename.replace(/[`\n\r]/g, "_");
+    }
+  } catch {
+    // Not a valid URL — treat as a filesystem path.
+  }
+  // Normalize Windows backslash paths for cross-platform safety
+  const normalized = mediaSource.replace(/\\/g, "/");
+  // Strip URL query/fragment to avoid leaking signed tokens or credentials
+  const withoutParams = normalized.replace(/[?#].*$/, "");
+  const basename = path.basename(withoutParams) || mediaSource;
+  // Escape backticks, newlines, and carriage returns so the display name
+  // cannot break out of Markdown code spans in formatDroppedMediaNotice.
+  return basename.replace(/[`\n\r]/g, "_");
+}
+
+/** Derive a reason code from the error thrown during media normalization. */
+export function resolveDroppedMediaCode(err: unknown): DroppedMediaReasonCode {
+  if (!(err instanceof Error)) {
+    return "unknown";
+  }
+  const msg = err.message.toLowerCase();
+  if (msg.includes("blocked")) {
+    return "blocked-path";
+  }
+  if (msg.includes("data url") || /\bdata:\s*[a-z]/i.test(err.message)) {
+    return "data-url-rejected";
+  }
+  if (
+    msg.includes("enoent") ||
+    msg.includes("not found") ||
+    msg.includes("no such file") ||
+    msg.includes("not accessible")
+  ) {
+    return "file-not-accessible";
+  }
+  return "unknown";
+}
 
 export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;

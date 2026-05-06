@@ -2,10 +2,11 @@ import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-pay
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, sanitizeMediaDisplayName, type DroppedMediaItem } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -18,6 +19,8 @@ import {
 } from "./origin-routing.js";
 import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { applyReplyThreading, isRenderablePayload } from "./reply-payloads-base.js";
+
+const log = createSubsystemLogger("agent-runner-payloads");
 
 const replyPayloadsDedupeRuntimeLoader = createLazyImportLoader(
   () => import("./reply-payloads-dedupe.runtime.js"),
@@ -38,13 +41,24 @@ async function normalizeReplyPayloadMedia(params: {
   try {
     const normalized = await params.normalizeMediaPaths(params.payload);
     return copyReplyPayloadMetadata(params.payload, normalized);
-  } catch (err) {
-    logVerbose(`reply payload media normalization failed: ${String(err)}`);
+  } catch {
+    const originalMediaUrls = resolveSendableOutboundReplyParts(params.payload).mediaUrls;
+    log.warn(`reply payload media normalization failed`, {
+      mediaCount: originalMediaUrls.length,
+    });
+    const droppedMedia: DroppedMediaItem[] = originalMediaUrls.map((media) => ({
+      displayName: sanitizeMediaDisplayName(media),
+      code: "normalization-failed" as const,
+    }));
     return copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
+      droppedMedia:
+        [...(params.payload.droppedMedia ?? []), ...droppedMedia].length > 0
+          ? [...(params.payload.droppedMedia ?? []), ...droppedMedia]
+          : undefined,
     });
   }
 }

@@ -80,7 +80,10 @@ export function applyReplyTagsToPayload(
 }
 
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice });
+  return (
+    hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice }) ||
+    (payload.droppedMedia?.length ?? 0) > 0
+  );
 }
 
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {

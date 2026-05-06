@@ -1,4 +1,11 @@
-import { resolveChunkMode, resolveTextChunkLimit } from "../../auto-reply/chunk.js";
+import { sendMediaWithLeadingCaption } from "openclaw/plugin-sdk/reply-payload";
+import {
+  chunkByParagraph,
+  chunkMarkdownTextWithMode,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "../../auto-reply/chunk.js";
+import type { DroppedMediaItem, DroppedMediaReasonCode } from "../../auto-reply/reply-payload.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import type {
@@ -110,6 +117,29 @@ export type OutboundDurableDeliverySupport =
     };
 
 const log = createSubsystemLogger("outbound/deliver");
+
+const REASON_LABELS: Record<DroppedMediaReasonCode, string> = {
+  "normalization-failed": "file not accessible",
+  "blocked-path": "file path blocked",
+  "file-not-accessible": "file not accessible",
+  "data-url-rejected": "data URL not supported",
+  unknown: "file not accessible",
+};
+
+export function formatDroppedMediaNotice(dropped: readonly DroppedMediaItem[]): string {
+  if (dropped.length === 0) {
+    return "";
+  }
+  if (dropped.length === 1) {
+    const item = dropped[0];
+    return `\u26a0 Attachment not sent: \`${item.displayName}\` (${REASON_LABELS[item.code]})`;
+  }
+  const lines = dropped.map(
+    (item) => `\u2022 \`${item.displayName}\` \u2014 ${REASON_LABELS[item.code]}`,
+  );
+  return `\u26a0 ${dropped.length} attachments not sent:\n${lines.join("\n")}`;
+}
+
 let transcriptRuntimePromise:
   | Promise<typeof import("../../config/sessions/transcript.runtime.js")>
   | undefined;
@@ -717,7 +747,7 @@ function emitMessageDeliveryError(params: {
 function normalizeEmptyPayloadForDelivery(payload: ReplyPayload): ReplyPayload | null {
   const text = typeof payload.text === "string" ? payload.text : "";
   if (!text.trim()) {
-    if (!hasReplyPayloadContent({ ...payload, text })) {
+    if (!hasReplyPayloadContent({ ...payload, text }) && !payload.droppedMedia?.length) {
       return null;
     }
     if (text) {
@@ -1343,8 +1373,11 @@ async function deliverOutboundPayloadsCore(
       },
     );
   }
-  for (const payload of normalizedPayloads) {
+  const deliveredPayloadIndices = new Set<number>();
+  for (let payloadIndex = 0; payloadIndex < normalizedPayloads.length; payloadIndex++) {
+    const payload = normalizedPayloads[payloadIndex];
     let payloadSummary = buildPayloadSummary(payload);
+    let payloadDelivered = false;
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryStarted = false;
@@ -1410,7 +1443,7 @@ async function deliverOutboundPayloadsCore(
       const normalizedEffectivePayload = handler.normalizePayload
         ? handler.normalizePayload(renderedPayload)
         : renderedPayload;
-      const effectivePayload = normalizedEffectivePayload
+      let effectivePayload = normalizedEffectivePayload
         ? normalizeEmptyPayloadForDelivery(
             stripInternalRuntimeScaffoldingFromPayload(normalizedEffectivePayload),
           )
@@ -1418,8 +1451,46 @@ async function deliverOutboundPayloadsCore(
       if (!effectivePayload) {
         continue;
       }
+      payloadDelivered = true;
       payloadSummary = buildPayloadSummary(effectivePayload);
       startDeliveryDiagnostics(deliveryKindForPayload(effectivePayload, payloadSummary));
+
+      // Build dropped-media user notice.
+      // Note: this runs after normalizePayloadsForChannelDelivery, so the notice
+      // bypasses channel-specific text normalization. This is acceptable because
+      // the notice is a short generated string with displayNames already sanitized
+      // by sanitizeMediaDisplayName (no raw user paths or data: payloads).
+      let droppedMediaNotice: string | undefined;
+      if (payloadSummary.droppedMedia?.length) {
+        droppedMediaNotice = formatDroppedMediaNotice(payloadSummary.droppedMedia);
+      }
+      // When there are surviving media items, the notice is sent as a separate
+      // text message after the media to avoid oversizing media captions (many
+      // channels enforce strict caption length limits).
+      // Only inline the notice when there are no surviving media items AND the
+      // payload will actually be delivered via the structured sendPayload path.
+      // Both conditions are required: the adapter must implement sendPayload AND
+      // the structured fields must contain real content (not empty objects).
+      // Otherwise the notice would be silently lost when delivery falls through
+      // to the plain-text path.
+      const isStructuredPayload =
+        !!handler.sendPayload &&
+        hasReplyPayloadContent({
+          interactive: effectivePayload.interactive,
+          channelData: effectivePayload.channelData,
+        });
+      if (droppedMediaNotice && payloadSummary.mediaUrls.length === 0 && !isStructuredPayload) {
+        const separator = payloadSummary.text.trim() ? "\n\n" : "";
+        effectivePayload = {
+          ...effectivePayload,
+          text: (effectivePayload.text ?? "") + separator + droppedMediaNotice,
+        };
+        payloadSummary = {
+          ...payloadSummary,
+          text: payloadSummary.text + separator + droppedMediaNotice,
+        };
+        droppedMediaNotice = undefined;
+      }
 
       params.onPayload?.(payloadSummary);
       const replyToResolution = resolveCurrentReplyTo(effectivePayload);
@@ -1474,6 +1545,24 @@ async function deliverOutboundPayloadsCore(
           content: payloadSummary.hookContent ?? payloadSummary.text,
           messageId: delivery.messageId,
         });
+        if (droppedMediaNotice) {
+          // Preserve results length so the notice delivery does not
+          // shift results.at(-1) away from the primary reply id.
+          const preNoticeLen = results.length;
+          try {
+            await sendTextChunks(droppedMediaNotice, sendOverrides);
+          } catch (noticeErr) {
+            log.warn(
+              "Failed to send dropped-media notice after successful structured payload delivery",
+              {
+                channel,
+                to,
+                error: formatErrorMessage(noticeErr),
+              },
+            );
+          }
+          results.length = preNoticeLen;
+        }
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
@@ -1521,7 +1610,12 @@ async function deliverOutboundPayloadsCore(
             mediaCount: payloadSummary.mediaUrls.length,
           },
         );
-        const fallbackText = payloadSummary.text.trim();
+        const fallbackTextParts = [payloadSummary.text.trim()];
+        if (droppedMediaNotice) {
+          fallbackTextParts.push(droppedMediaNotice);
+          droppedMediaNotice = undefined;
+        }
+        const fallbackText = fallbackTextParts.filter(Boolean).join("\n\n");
         if (!fallbackText) {
           throw new Error(
             "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
@@ -1547,7 +1641,7 @@ async function deliverOutboundPayloadsCore(
         completeDeliveryDiagnostics(deliveredResults.length);
         emitMessageSent({
           success: results.length > beforeCount,
-          content: payloadSummary.hookContent ?? payloadSummary.text,
+          content: payloadSummary.hookContent ?? fallbackText,
           messageId,
         });
         continue;
@@ -1574,6 +1668,25 @@ async function deliverOutboundPayloadsCore(
         firstMessageId ??= delivery.messageId;
         lastMessageId = delivery.messageId;
       }
+      // Send dropped-media notice as a separate text message after media
+      // to avoid oversizing captions on channels with strict limits.
+      // Wrapped in its own try-catch so a transient text-send failure
+      // does not mark the already-delivered media payload as failed.
+      if (droppedMediaNotice) {
+        // Preserve results length so the notice delivery does not
+        // shift results.at(-1) away from the primary reply id.
+        const preNoticeLen = results.length;
+        try {
+          await sendTextChunks(droppedMediaNotice, sendOverrides);
+        } catch (noticeErr) {
+          log.warn("Failed to send dropped-media notice after successful media delivery", {
+            channel,
+            to,
+            error: formatErrorMessage(noticeErr),
+          });
+        }
+        results.length = preNoticeLen;
+      }
       await maybePinDeliveredMessage({
         handler,
         payload: effectivePayload,
@@ -1594,6 +1707,7 @@ async function deliverOutboundPayloadsCore(
       });
     } catch (err) {
       errorDeliveryDiagnostics(err);
+      payloadDelivered = false;
       emitMessageSent({
         success: false,
         content: payloadSummary.hookContent ?? payloadSummary.text,
@@ -1603,19 +1717,31 @@ async function deliverOutboundPayloadsCore(
         throw err;
       }
       params.onError?.(err, payloadSummary);
+    } finally {
+      if (payloadDelivered) {
+        deliveredPayloadIndices.add(payloadIndex);
+      }
     }
   }
-  if (params.mirror && results.length > 0) {
+  // Collect dropped-media from all payloads regardless of delivery status.
+  // A drop event means media was silently removed; that should always be
+  // recorded in the transcript for auditability even if the text payload
+  // itself failed or was cancelled.
+  const allDropped = normalizedPayloads.flatMap((p) => p.droppedMedia ?? []);
+  if (params.mirror && (results.length > 0 || allDropped.length > 0)) {
+    const droppedNotice = allDropped.length > 0 ? formatDroppedMediaNotice(allDropped) : "";
     const mirrorText = resolveMirroredTranscriptText({
       text: params.mirror.text,
       mediaUrls: params.mirror.mediaUrls,
     });
-    if (mirrorText) {
+    const combinedMirrorText =
+      [mirrorText, droppedNotice].filter(Boolean).join("\n\n") || undefined;
+    if (combinedMirrorText) {
       const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
       await appendAssistantMessageToSessionTranscript({
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,
-        text: mirrorText,
+        text: combinedMirrorText,
         idempotencyKey: params.mirror.idempotencyKey,
         config: params.cfg,
       });

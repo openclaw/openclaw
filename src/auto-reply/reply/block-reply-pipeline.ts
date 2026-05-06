@@ -43,6 +43,7 @@ export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     replyToId: payload.replyToId ?? null,
+    dropped: payload.droppedMedia?.map((d) => `${d.code}:${d.displayName}`) ?? [],
   });
 }
 
@@ -51,7 +52,11 @@ export function createBlockReplyContentKey(payload: ReplyPayload): string {
   // Content-only key used for final-payload suppression after block streaming.
   // This intentionally ignores replyToId so a streamed threaded payload and the
   // later final payload still collapse when they carry the same content.
-  return JSON.stringify({ text: reply.trimmedText, mediaList: reply.mediaUrls });
+  return JSON.stringify({
+    text: reply.trimmedText,
+    mediaList: reply.mediaUrls,
+    dropped: payload.droppedMedia?.map((d) => `${d.code}:${d.displayName}`) ?? [],
+  });
 }
 
 const withTimeout = async <T>(

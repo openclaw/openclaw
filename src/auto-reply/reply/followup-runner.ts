@@ -94,7 +94,8 @@ export function createFollowupRunner(params: {
 
     const sendablePayloads = payloads.filter(
       (payload): payload is ReplyPayload =>
-        hasOutboundReplyContent(payload) && !deliveryPlan.isSilentPayload(payload),
+        (hasOutboundReplyContent(payload) || (payload.droppedMedia?.length ?? 0) > 0) &&
+        !deliveryPlan.isSilentPayload(payload),
     );
 
     if (sendablePayloads.length === 0) {

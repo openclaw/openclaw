@@ -457,6 +457,43 @@ describe("createReplyMediaPathNormalizer", () => {
     });
   });
 
+  it("preserves existing droppedMedia entries from prior normalization passes", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("blocked"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["/blocked/new.png"],
+      droppedMedia: [{ displayName: "earlier.png", code: "file-not-accessible" as const }],
+    });
+
+    expect(result.droppedMedia).toHaveLength(2);
+    expect(result.droppedMedia![0]).toEqual({
+      displayName: "earlier.png",
+      code: "file-not-accessible",
+    });
+    expect(result.droppedMedia![1]).toMatchObject({ displayName: "new.png" });
+  });
+
+  it("keeps existing droppedMedia when current pass has no new drops", async () => {
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      mediaUrls: ["https://example.com/ok.png"],
+      droppedMedia: [{ displayName: "old.png", code: "blocked-path" as const }],
+    });
+
+    expect(result.droppedMedia).toEqual([{ displayName: "old.png", code: "blocked-path" }]);
+    expect(result.mediaUrls).toEqual(["https://example.com/ok.png"]);
+  });
+
   it("passes absolute local media sources into shared outbound media access", async () => {
     const absolutePath = "/Users/peter/Pictures/chart.png";
     const normalize = createReplyMediaPathNormalizer({
