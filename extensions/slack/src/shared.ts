@@ -104,7 +104,7 @@ export function createSlackPluginBase(params: {
         ],
       }),
       messageToolHints: ({ cfg, accountId }) =>
-        isSlackInteractiveRepliesEnabled({ cfg, accountId })
+        (isSlackInteractiveRepliesEnabled({ cfg, accountId })
           ? [
               "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
               "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
@@ -112,7 +112,14 @@ export function createSlackPluginBase(params: {
             ]
           : [
               "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
-            ],
+            ]
+        ).concat([
+          "",
+          "### Slack Formatting",
+          "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
+          "Do not use Slack mrkdwn syntax directly — OpenClaw converts Markdown to Slack-compatible formatting automatically.",
+          "In particular, do not use single *asterisks* for bold; use double **asterisks**.",
+        ]),
     },
     streaming: {
       blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },

@@ -816,9 +816,15 @@ describe("slackPlugin agentPrompt", () => {
       },
     });
 
-    expect(hints).toEqual([
+    expect(hints).toContain(
       "- Slack interactive replies are disabled. If needed, ask to set `channels.slack.capabilities.interactiveReplies=true` (or the same under `channels.slack.accounts.<account>.capabilities`).",
-    ]);
+    );
+    expect(hints).toContain(
+      "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
+    );
+    expect(hints).toContain(
+      "In particular, do not use single *asterisks* for bold; use double **asterisks**.",
+    );
   });
 
   it("shows Slack interactive reply directives when enabled", () => {
@@ -842,6 +848,9 @@ describe("slackPlugin agentPrompt", () => {
     );
     expect(hints).toContain(
       "- Slack selects: use `[[slack_select: Placeholder | Label:value, Other:other]]` to add a static select menu that routes the chosen value back as a Slack interaction system event.",
+    );
+    expect(hints).toContain(
+      "Use standard Markdown formatting (e.g., **bold**, *italic*, ~~strikethrough~~, `code`).",
     );
   });
 });
