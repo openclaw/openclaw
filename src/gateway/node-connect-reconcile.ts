@@ -24,12 +24,21 @@ export type NodeConnectPairingReconcileResult = {
 
 function resolveApprovedReconnectCommands(params: {
   pairedCommands: readonly string[] | undefined;
+  declaredCommands: readonly string[];
   allowlist: Set<string>;
+  defaultAllowlist: Set<string>;
 }) {
-  return normalizeDeclaredNodeCommands({
+  const pairedCommands = normalizeDeclaredNodeCommands({
     declaredCommands: Array.isArray(params.pairedCommands) ? params.pairedCommands : [],
     allowlist: params.allowlist,
   });
+  const safeDefaultCommands = normalizeDeclaredNodeCommands({
+    declaredCommands: params.declaredCommands.filter((command) =>
+      params.defaultAllowlist.has(command),
+    ),
+    allowlist: params.allowlist,
+  });
+  return [...new Set([...pairedCommands, ...safeDefaultCommands])];
 }
 
 function buildNodePairingRequestInput(params: {
@@ -59,10 +68,12 @@ export async function reconcileNodePairingOnConnect(params: {
   requestPairing: (input: NodePairingRequestInput) => Promise<PendingNodePairingResult>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
-  const allowlist = resolveNodeCommandAllowlist(params.cfg, {
+  const nodePolicyContext = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
-  });
+  };
+  const allowlist = resolveNodeCommandAllowlist(params.cfg, nodePolicyContext);
+  const defaultAllowlist = resolveNodeCommandAllowlist({}, nodePolicyContext);
   const declared = normalizeDeclaredNodeCommands({
     declaredCommands: Array.isArray(params.connectParams.commands)
       ? params.connectParams.commands
@@ -88,7 +99,9 @@ export async function reconcileNodePairingOnConnect(params: {
 
   const approvedCommands = resolveApprovedReconnectCommands({
     pairedCommands: params.pairedNode.commands,
+    declaredCommands: declared,
     allowlist,
+    defaultAllowlist,
   });
   const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
 

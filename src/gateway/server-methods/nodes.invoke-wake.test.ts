@@ -187,9 +187,10 @@ async function invokeNode(params: {
     }>;
   };
   requestParams?: Partial<Record<string, unknown>>;
+  logGateway?: { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn> };
 }) {
   const respond = vi.fn();
-  const logGateway = {
+  const logGateway = params.logGateway ?? {
     info: vi.fn(),
     warn: vi.fn(),
   };
@@ -291,6 +292,32 @@ describe("node.invoke APNs wake path", () => {
     expect(call?.[2]?.message).toBe("node not connected");
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes node ids in wake diagnostic logs", async () => {
+    mocks.loadApnsRegistration.mockResolvedValue(null);
+
+    const logGateway = {
+      info: vi.fn(),
+      warn: vi.fn(),
+    };
+    const nodeRegistry = {
+      get: vi.fn(() => undefined),
+      invoke: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    await invokeNode({
+      nodeRegistry,
+      requestParams: { nodeId: "private-node-id-123" },
+      logGateway,
+    });
+
+    const logLines = [...logGateway.info.mock.calls, ...logGateway.warn.mock.calls]
+      .flat()
+      .join("\n");
+    expect(logLines).toContain("nodeRef=sha256:");
+    expect(logLines).not.toContain("private-node-id-123");
+    expect(logLines).not.toContain("node=private-node-id-123");
   });
 
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {

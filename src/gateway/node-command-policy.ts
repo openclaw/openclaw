@@ -57,6 +57,7 @@ const SYSTEM_COMMANDS = [
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
 ];
+const EMBEDDED_DEVICE_COMMANDS = [...DEVICE_COMMANDS];
 const UNKNOWN_PLATFORM_COMMANDS = [
   ...CANVAS_COMMANDS,
   ...CAMERA_COMMANDS,
@@ -116,6 +117,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...SCREEN_COMMANDS,
   ],
   linux: [...SYSTEM_COMMANDS],
+  embedded: [...EMBEDDED_DEVICE_COMMANDS],
   windows: [
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
@@ -128,7 +130,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
   unknown: [...UNKNOWN_PLATFORM_COMMANDS],
 };
 
-type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "unknown";
+type PlatformId = "ios" | "android" | "macos" | "windows" | "linux" | "embedded" | "unknown";
 
 const PLATFORM_PREFIX_RULES: ReadonlyArray<{
   id: Exclude<PlatformId, "unknown">;
@@ -139,6 +141,7 @@ const PLATFORM_PREFIX_RULES: ReadonlyArray<{
   { id: "macos", prefixes: ["mac", "darwin"] },
   { id: "windows", prefixes: ["win"] },
   { id: "linux", prefixes: ["linux"] },
+  { id: "embedded", prefixes: ["esp32", "esp32-s3"] },
 ] as const;
 
 const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
@@ -150,6 +153,7 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   { id: "macos", tokens: ["mac"] },
   { id: "windows", tokens: ["windows"] },
   { id: "linux", tokens: ["linux"] },
+  { id: "embedded", tokens: ["voice-pe", "esp32"] },
 ] as const;
 
 function resolvePlatformIdByPrefix(value: string): Exclude<PlatformId, "unknown"> | undefined {
