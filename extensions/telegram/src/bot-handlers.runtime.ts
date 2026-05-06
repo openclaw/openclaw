@@ -153,6 +153,23 @@ export const registerTelegramHandlers = ({
         ? Math.max(10, Math.floor(telegramCfg.mediaGroupFlushMs))
         : MEDIA_GROUP_TIMEOUT_MS;
 
+  const DEFAULT_EDITED_MESSAGE_DEBOUNCE_MS = 2500;
+  const editedMessageDebounceMs =
+    typeof opts.testTimings?.editedMessageDebounceMs === "number" &&
+    Number.isFinite(opts.testTimings.editedMessageDebounceMs)
+      ? Math.max(10, Math.floor(opts.testTimings.editedMessageDebounceMs))
+      : DEFAULT_EDITED_MESSAGE_DEBOUNCE_MS;
+
+  type EditedMessageEntry = {
+    latestCtxForDedupe: TelegramUpdateKeyContext;
+    latestCtx: TelegramContext;
+    latestMsg: Message;
+    isGroup: boolean;
+    isForum: boolean;
+    timer: ReturnType<typeof setTimeout>;
+  };
+  const editedMessageBuffer = new Map<string, EditedMessageEntry>();
+
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
   let mediaGroupProcessing: Promise<void> = Promise.resolve();
 
@@ -2050,5 +2067,74 @@ export const registerTelegramHandlers = ({
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
     });
+  });
+
+  // Handle edited_message updates — streaming bots edit the same message repeatedly as tokens
+  // arrive. We debounce per (chatId, messageId) so only the final version reaches the pipeline.
+  bot.on("edited_message", async (ctx) => {
+    const msg = ctx.editedMessage;
+    if (!msg) {
+      return;
+    }
+    // Skip our own bot's edits to avoid echo loops.
+    if (msg.from?.id != null && msg.from.id === ctx.me?.id) {
+      return;
+    }
+    const chatId = msg.chat.id;
+    const messageId = msg.message_id;
+    const bufferKey = `${chatId}:${messageId}`;
+
+    const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const isForum = await resolveTelegramForumFlag({
+      chatId,
+      chatType: msg.chat.type,
+      isGroup,
+      isForum: msg.chat.is_forum,
+      getChat,
+    });
+    const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
+    const syntheticCtx = buildSyntheticContext(ctx, normalizedMsg);
+
+    const flushEdit = async (entry: EditedMessageEntry) => {
+      editedMessageBuffer.delete(bufferKey);
+      await handleInboundMessageLike({
+        ctxForDedupe: entry.latestCtxForDedupe,
+        ctx: entry.latestCtx,
+        msg: entry.latestMsg,
+        chatId,
+        isGroup: entry.isGroup,
+        isForum: entry.isForum,
+        messageThreadId: entry.latestMsg.message_thread_id,
+        senderId: entry.latestMsg.from?.id != null ? String(entry.latestMsg.from.id) : "",
+        senderUsername: entry.latestMsg.from?.username ?? "",
+        requireConfiguredGroup: false,
+        sendOversizeWarning: false,
+        oversizeLogMessage: "edited message media exceeds size limit",
+        errorMessage: "edited_message handler failed",
+      });
+    };
+
+    const existing = editedMessageBuffer.get(bufferKey);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.latestCtxForDedupe = ctx;
+      existing.latestCtx = syntheticCtx;
+      existing.latestMsg = normalizedMsg;
+      existing.timer = setTimeout(async () => {
+        await flushEdit(existing);
+      }, editedMessageDebounceMs);
+    } else {
+      const entry: EditedMessageEntry = {
+        latestCtxForDedupe: ctx,
+        latestCtx: syntheticCtx,
+        latestMsg: normalizedMsg,
+        isGroup,
+        isForum,
+        timer: setTimeout(async () => {
+          await flushEdit(entry);
+        }, editedMessageDebounceMs),
+      };
+      editedMessageBuffer.set(bufferKey, entry);
+    }
   });
 };

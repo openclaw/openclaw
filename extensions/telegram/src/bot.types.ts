@@ -28,6 +28,7 @@ export type TelegramBotOptions = {
   testTimings?: {
     mediaGroupFlushMs?: number;
     textFragmentGapMs?: number;
+    editedMessageDebounceMs?: number;
   };
   /** Pre-resolved Telegram transport to reuse across bot instances. If not provided, creates a new one. */
   telegramTransport?: TelegramTransport;
