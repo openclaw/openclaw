@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -38,6 +39,24 @@ describe("emitSubagentEndedHookOnce", () => {
       persist: vi.fn(),
       ...overrides,
     };
+  };
+
+  const readLastSubagentEndedEvent = () => {
+    const calls = lifecycleMocks.runSubagentEnded.mock.calls as unknown as Array<
+      [
+        {
+          final?: {
+            frozenResultTextAvailable: true;
+            textSha256: string;
+            byteLength: number;
+            capturedAt?: number;
+          };
+        },
+      ]
+    >;
+    const event = calls.at(-1)?.[0];
+    expect(event).toBeDefined();
+    return event!;
   };
 
   beforeAll(async () => {
@@ -110,6 +129,82 @@ describe("emitSubagentEndedHookOnce", () => {
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
     expect(typeof params.entry.endedHookEmittedAt).toBe("number");
     expect(params.persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes privacy-minimal frozen final metadata on subagent_ended", async () => {
+    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: () => true,
+      runSubagentEnded: lifecycleMocks.runSubagentEnded,
+    });
+
+    const finalText = "  child final answer 雪🚀  \n";
+    const capturedAt = Date.now() - 100;
+    const entry = {
+      ...createRunEntry(),
+      frozenResultText: finalText,
+      frozenResultCapturedAt: capturedAt,
+    };
+    const params = createEmitParams({ entry });
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
+
+    expect(emitted).toBe(true);
+    expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    const event = readLastSubagentEndedEvent();
+    expect(event).toMatchObject({
+      final: {
+        frozenResultTextAvailable: true,
+        textSha256: createHash("sha256").update(finalText, "utf8").digest("hex"),
+        byteLength: Buffer.byteLength(finalText, "utf8"),
+        capturedAt,
+      },
+    });
+    expect(event?.final?.textSha256).not.toBe(
+      createHash("sha256").update(finalText.trim(), "utf8").digest("hex"),
+    );
+    expect(JSON.stringify(event)).not.toContain(finalText);
+  });
+
+  it("includes frozen final metadata when capture timestamp is missing", async () => {
+    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: () => true,
+      runSubagentEnded: lifecycleMocks.runSubagentEnded,
+    });
+
+    const finalText = "final without timestamp";
+    const entry = {
+      ...createRunEntry(),
+      frozenResultText: finalText,
+    };
+    const params = createEmitParams({ entry });
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
+
+    expect(emitted).toBe(true);
+    const event = readLastSubagentEndedEvent();
+    expect(event.final).toEqual({
+      frozenResultTextAvailable: true,
+      textSha256: createHash("sha256").update(finalText, "utf8").digest("hex"),
+      byteLength: Buffer.byteLength(finalText, "utf8"),
+    });
+  });
+
+  it("omits frozen final metadata when no useful final text was captured", async () => {
+    lifecycleMocks.getGlobalHookRunner.mockReturnValue({
+      hasHooks: () => true,
+      runSubagentEnded: lifecycleMocks.runSubagentEnded,
+    });
+
+    const params = createEmitParams({
+      entry: {
+        ...createRunEntry(),
+        frozenResultText: "   ",
+        frozenResultCapturedAt: Date.now(),
+      },
+    });
+    const emitted = await mod.emitSubagentEndedHookOnce(params);
+
+    expect(emitted).toBe(true);
+    const event = readLastSubagentEndedEvent();
+    expect(event.final).toBeUndefined();
   });
 
   it("returns false when the global hook runner is not initialized yet", async () => {

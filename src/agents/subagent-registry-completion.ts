@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
@@ -63,6 +64,29 @@ export function resolveLifecycleOutcomeFromRunOutcome(
   return SUBAGENT_ENDED_OUTCOME_OK;
 }
 
+/**
+ * Build privacy-minimal metadata for the exact frozen child final string.
+ *
+ * Blank/whitespace-only finals are omitted, but non-blank values are not
+ * trimmed or otherwise canonicalized before hashing. `textSha256` is SHA-256
+ * over the exact UTF-8 bytes of `entry.frozenResultText`, and `byteLength` is
+ * that same UTF-8 byte count.
+ */
+export function buildSubagentEndedFinalMetadata(entry: SubagentRunRecord) {
+  const text = typeof entry.frozenResultText === "string" ? entry.frozenResultText : undefined;
+  if (!text?.trim()) {
+    return undefined;
+  }
+  return {
+    frozenResultTextAvailable: true as const,
+    textSha256: createHash("sha256").update(text, "utf8").digest("hex"),
+    byteLength: Buffer.byteLength(text, "utf8"),
+    ...(entry.frozenResultCapturedAt === undefined
+      ? {}
+      : { capturedAt: entry.frozenResultCapturedAt }),
+  };
+}
+
 export async function emitSubagentEndedHookOnce(params: {
   entry: SubagentRunRecord;
   reason: SubagentLifecycleEndedReason;
@@ -102,6 +126,7 @@ export async function emitSubagentEndedHookOnce(params: {
           endedAt: params.entry.endedAt,
           outcome: params.outcome,
           error: params.error,
+          final: buildSubagentEndedFinalMetadata(params.entry),
         },
         {
           runId: params.entry.runId,

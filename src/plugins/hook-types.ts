@@ -592,6 +592,22 @@ export type PluginHookSubagentEndedEvent = {
   endedAt?: number;
   outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
   error?: string;
+  /**
+   * Privacy-minimal metadata about the frozen child final result, when one was
+   * captured before the lifecycle hook emitted. Raw final text is intentionally
+   * not included; consumers that need content must resolve it from an
+   * explicitly authorized store/contract.
+   *
+   * The digest and byte length are computed from the exact UTF-8 bytes of the
+   * stored frozen final string. Non-blank values are not trimmed or otherwise
+   * canonicalized before hashing.
+   */
+  final?: {
+    frozenResultTextAvailable: true;
+    textSha256: string;
+    byteLength: number;
+    capturedAt?: number;
+  };
 };
 
 export type PluginHookGatewayContext = {
