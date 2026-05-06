@@ -12,3 +12,7 @@ export const LMSTUDIO_MODEL_PLACEHOLDER = "model-key-from-api-v1-models";
 export const LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH = 64000;
 export const LMSTUDIO_DEFAULT_MODEL_ID = "qwen/qwen3.5-9b";
 export const LMSTUDIO_PROVIDER_ID = "lmstudio";
+// Recommended TTL in seconds for users who opt into LM Studio's native load API TTL.
+// This is documentation/reference only; OpenClaw does not inject it automatically.
+// 300 = 5 minutes.
+export const LMSTUDIO_DEFAULT_LOAD_TTL_SECONDS = 300;

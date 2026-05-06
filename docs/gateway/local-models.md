@@ -76,6 +76,29 @@ Best current local stack. Load a large model in LM Studio (for example, a full-s
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
 - For WhatsApp, stick to Responses API so only final text is sent.
 
+By default, OpenClaw does not set an idle TTL when it asks LM Studio to load a
+model. LM Studio keeps its own JIT default, currently 60 minutes. To make
+preloaded models unload sooner after idle inference activity, opt into a shorter
+TTL in seconds:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        params: {
+          ttlSeconds: 300,
+        },
+      },
+    },
+  },
+}
+```
+
+This is useful for VRAM management on shared local boxes: LM Studio can
+auto-unload models after the configured idle window instead of keeping them
+resident indefinitely.
+
 Keep hosted models configured even when running local; use `models.mode: "merge"` so fallbacks stay available.
 
 ### Hybrid config: hosted primary, local fallback

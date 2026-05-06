@@ -65,7 +65,7 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function createWrappedLmstudioStream(
   baseStream: StreamFn,
-  params?: { baseUrl?: string },
+  params?: { baseUrl?: string; providerParams?: Record<string, unknown> },
 ): StreamFn {
   return wrapLmstudioInferencePreload({
     provider: "lmstudio",
@@ -75,6 +75,7 @@ function createWrappedLmstudioStream(
         providers: {
           lmstudio: {
             baseUrl: params?.baseUrl ?? "http://localhost:1234",
+            ...(params?.providerParams ? { params: params.providerParams } : {}),
             models: [],
           },
         },
@@ -135,6 +136,7 @@ describe("lmstudio stream wrapper", () => {
         baseUrl: "http://lmstudio.internal:1234/v1",
         modelKey: "qwen3-8b-instruct",
         requestedContextLength: 131072,
+        ttlSeconds: undefined,
         apiKey: "lmstudio-token",
         ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
       }),
@@ -160,10 +162,115 @@ describe("lmstudio stream wrapper", () => {
         baseUrl: "http://lmstudio.internal:1234/v1",
         modelKey: "qwen3-8b-instruct",
         requestedContextLength: 64000,
+        ttlSeconds: undefined,
         apiKey: "lmstudio-token",
         ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
       }),
     );
+  });
+
+  it("passes configured idle TTL to LM Studio model preload", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      providerParams: { ttlSeconds: 120 },
+    });
+
+    const events = await collectEvents(runWrappedLmstudioStream(wrapped, {}, undefined));
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlSeconds: 120 }),
+    );
+  });
+
+  it("does not pass idle TTL to preload when ttlSeconds is not configured", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+
+    const events = await collectEvents(runWrappedLmstudioStream(wrapped, {}, undefined));
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlSeconds: undefined }),
+    );
+  });
+
+  it("does not pass invalid provider ttlSeconds to model preload", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      providerParams: { ttlSeconds: -1 },
+    });
+
+    const events = await collectEvents(runWrappedLmstudioStream(wrapped, {}, undefined));
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledWith(
+      expect.objectContaining({ ttlSeconds: undefined }),
+    );
+  });
+
+  it("does not mutate OpenAI-compatible inference payloads with LM Studio TTL", async () => {
+    let observedPayload: Record<string, unknown> | undefined;
+    let transformedPayload: unknown;
+    const baseStream: StreamFn = vi.fn((_model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(async () => {
+        const payload = { model: "qwen3-8b-instruct", messages: [] };
+        observedPayload = payload;
+        transformedPayload = await options?.onPayload?.(payload, _model);
+        stream.push({ type: "done", reason: "stop", message: {} as never });
+        stream.end();
+      });
+      return stream;
+    });
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      providerParams: { ttlSeconds: 120 },
+    });
+
+    const events = await collectEvents(
+      runWrappedLmstudioStream(
+        wrapped,
+        {},
+        {
+          onPayload: async (payload: unknown) => payload,
+        },
+      ),
+    );
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(observedPayload).not.toHaveProperty("ttl");
+    expect(transformedPayload).toBe(observedPayload);
+    expect(transformedPayload).not.toHaveProperty("ttl");
+  });
+
+  it("does not inject invalid provider TTL config into OpenAI-compatible payloads", async () => {
+    let transformedPayload: unknown;
+    const baseStream: StreamFn = vi.fn((_model, _context, options) => {
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(async () => {
+        const payload = { model: "qwen3-8b-instruct", messages: [] };
+        transformedPayload = await options?.onPayload?.(payload, _model);
+        stream.push({ type: "done", reason: "stop", message: {} as never });
+        stream.end();
+      });
+      return stream;
+    });
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      providerParams: { ttlSeconds: -1 },
+    });
+
+    const events = await collectEvents(
+      runWrappedLmstudioStream(
+        wrapped,
+        {},
+        {
+          onPayload: async (payload: unknown) => payload,
+        },
+      ),
+    );
+
+    expect(events).toEqual([expect.objectContaining({ type: "done" })]);
+    expect(transformedPayload).not.toHaveProperty("ttl");
   });
 
   it("continues inference when preload fails", async () => {
