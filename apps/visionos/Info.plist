@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for HandTrackingProvider -->
+	<key>NSHandsTrackingUsageDescription</key>
+	<string>OpenClaw Node uses hand tracking to relay spatial gestures to the AI agent.</string>
+
+	<!-- Required for PlaneDetectionProvider, SceneReconstructionProvider, ImageTrackingProvider -->
+	<key>NSWorldSensingUsageDescription</key>
+	<string>OpenClaw Node uses world sensing to give the AI agent awareness of your environment.</string>
+
+	<!-- Required for CameraFrameProvider (Enterprise entitlement also required) -->
+	<key>NSMainCameraUsageDescription</key>
+	<string>OpenClaw Node uses the main camera to provide visual context to the AI agent.</string>
+
+	<!-- Required for LocationManager -->
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>OpenClaw Node can report your location to the AI agent when requested.</string>
+
+	<!-- Required for microphone (camera.clip with audio) -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>OpenClaw Node uses the microphone when capturing video clips for the AI agent.</string>
+
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationPreferredDefaultSceneSessionRole</key>
+		<string>UIWindowSceneSessionRoleApplication</string>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<true/>
+		<key>UISceneConfigurations</key>
+		<dict/>
+	</dict>
+</dict>
+</plist>
