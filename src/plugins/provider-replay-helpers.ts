@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { isGemma4ModelId } from "../shared/google-models.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
+import { isQwenModelRequiringReasoningStrip } from "../shared/qwen-models.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type {
   ProviderReasoningOutputMode,
@@ -40,7 +41,8 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
-    ...(modelApi === "openai-completions" && isGemma4ModelId(options.modelId)
+    ...(modelApi === "openai-completions" &&
+    (isGemma4ModelId(options.modelId) || isQwenModelRequiringReasoningStrip(options.modelId))
       ? { dropReasoningFromHistory: true }
       : {}),
   };

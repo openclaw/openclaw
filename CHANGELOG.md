@@ -113,6 +113,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/transcript: extend the OpenAI-compatible reasoning-replay strip to Qwen 3.x and QwQ model ids so self-hosted oMLX/vLLM/llama.cpp deployments no longer 422 on follow-up turns when Qwen returns `reasoning_content` blocks containing unescaped control characters. Fixes #46637. Thanks @lexhoefsloot.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.
