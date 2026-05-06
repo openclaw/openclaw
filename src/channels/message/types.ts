@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundDeliveryProjection } from "../../infra/outbound/delivery-projection.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 
@@ -176,6 +177,8 @@ export type ChannelMessageSendPayloadContext<TConfig = OpenClawConfig> =
 export type ChannelMessageSendResult = {
   receipt: MessageReceipt;
   messageId?: string;
+  /** Provider delivery projection. Provider acceptance alone is not user visibility or read acknowledgement. */
+  delivery?: OutboundDeliveryProjection;
 };
 
 export type ChannelMessageSendAttemptKind = "text" | "media" | "payload";

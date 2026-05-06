@@ -101,6 +101,9 @@ type TelegramSendOpts = {
 type TelegramSendResult = {
   messageId: string;
   chatId: string;
+  delivery?: {
+    providerAccepted: boolean;
+  };
 };
 
 type TelegramMessageLike = {
