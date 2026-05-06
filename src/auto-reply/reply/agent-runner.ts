@@ -38,7 +38,10 @@ import {
   buildFallbackNotice,
   resolveFallbackTransition,
 } from "../fallback-state.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import {
+  markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -92,6 +95,12 @@ import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
+
+function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
+  return payloads.map((payload) =>
+    setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
+  );
+}
 
 function buildInlinePluginStatusPayload(params: {
   entry: SessionEntry | undefined;
@@ -1699,14 +1708,17 @@ export async function runReplyAgent(params: {
       }
     }
     const prefixPayloads = [...verboseNotices];
-    const rawUserText =
-      runResult.meta?.finalPromptText ??
-      sessionCtx.CommandBody ??
-      sessionCtx.RawBody ??
-      sessionCtx.BodyForAgent ??
-      sessionCtx.Body;
-    const rawAssistantText =
-      runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText;
+    const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
+    const rawUserText = isHookBlockedRun
+      ? runResult.meta?.finalPromptText
+      : (runResult.meta?.finalPromptText ??
+        sessionCtx.CommandBody ??
+        sessionCtx.RawBody ??
+        sessionCtx.BodyForAgent ??
+        sessionCtx.Body);
+    const rawAssistantText = isHookBlockedRun
+      ? undefined
+      : (runResult.meta?.finalAssistantRawText ?? runResult.meta?.finalAssistantVisibleText);
     const traceAuthorized = followupRun.run.traceAuthorized === true;
     const executionTrace = mergeExecutionTrace({
       fallbackAttempts,
@@ -1837,6 +1849,9 @@ export async function runReplyAgent(params: {
     }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    }
+    if (isHookBlockedRun) {
+      finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
     }
 
     // Capture only policy-visible final payloads in session store to support

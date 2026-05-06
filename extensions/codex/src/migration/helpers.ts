@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 
 export async function exists(filePath: string): Promise<boolean> {
@@ -47,10 +48,8 @@ export async function readJsonObject(
   if (!filePath) {
     return {};
   }
-  try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8"));
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
-  } catch {
-    return {};
-  }
+  const { value: parsed } = await readJsonFileWithFallback<unknown>(filePath, {});
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
 }

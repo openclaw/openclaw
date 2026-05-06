@@ -651,12 +651,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     model: selectedModel,
     allowAsyncLoad: false,
   });
-  const activeContextTokens = resolveContextTokensForModel({
-    cfg: contextConfig,
-    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-    model: contextLookupModel,
-    allowAsyncLoad: false,
-  });
+  const explicitRuntimeContextTokens =
+    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
+      ? args.runtimeContextTokens
+      : undefined;
+  const activeContextTokens =
+    resolveContextTokensForModel({
+      cfg: contextConfig,
+      ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+      model: contextLookupModel,
+      allowAsyncLoad: false,
+    }) ?? explicitRuntimeContextTokens;
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -672,10 +677,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
       : undefined;
-  const explicitRuntimeContextTokens =
-    typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
-      ? args.runtimeContextTokens
-      : undefined;
   const explicitConfiguredContextTokens =
     typeof args.explicitConfiguredContextTokens === "number" &&
     args.explicitConfiguredContextTokens > 0
@@ -687,14 +688,18 @@ export function buildStatusMessage(args: StatusArgs): string {
         ? Math.min(explicitConfiguredContextTokens, activeContextTokens)
         : explicitConfiguredContextTokens
       : undefined;
+  const cappedAgentContextTokens =
+    typeof agentContextTokens === "number"
+      ? typeof activeContextTokens === "number"
+        ? Math.min(agentContextTokens, activeContextTokens)
+        : agentContextTokens
+      : undefined;
   const channelOverrideContextTokens = channelModelNote
     ? (explicitRuntimeContextTokens ??
       cappedConfiguredContextTokens ??
       (typeof activeContextTokens === "number"
-        ? typeof agentContextTokens === "number"
-          ? Math.min(agentContextTokens, activeContextTokens)
-          : activeContextTokens
-        : agentContextTokens))
+        ? (cappedAgentContextTokens ?? activeContextTokens)
+        : cappedAgentContextTokens))
     : undefined;
   // When a fallback model is active, the selected-model context limit that
   // callers keep on the agent config is often stale. Prefer an explicit runtime
@@ -743,7 +748,11 @@ export function buildStatusMessage(args: StatusArgs): string {
         ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
         model: contextLookupModel,
         contextTokensOverride:
-          channelOverrideContextTokens ?? persistedContextTokens ?? agentContextTokens,
+          channelOverrideContextTokens ??
+          persistedContextTokens ??
+          cappedConfiguredContextTokens ??
+          cappedAgentContextTokens ??
+          explicitRuntimeContextTokens,
         fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
         allowAsyncLoad: false,
       }) ?? DEFAULT_CONTEXT_TOKENS);

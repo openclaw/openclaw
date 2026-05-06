@@ -174,13 +174,13 @@ export class DiffArtifactStore {
   }
 
   async cleanupExpired(): Promise<void> {
-    await this.ensureRoot();
-    const entries = await fs.readdir(this.rootDir, { withFileTypes: true }).catch(() => []);
+    const root = await this.artifactRoot();
+    const entries = await root.list("", { withFileTypes: true }).catch(() => []);
     const now = Date.now();
 
     await Promise.all(
       entries
-        .filter((entry) => entry.isDirectory())
+        .filter((entry) => entry.isDirectory)
         .map(async (entry) => {
           const id = entry.name;
           const meta = await this.readMeta(id);
@@ -199,12 +199,7 @@ export class DiffArtifactStore {
             return;
           }
 
-          const artifactPath = this.artifactDir(id);
-          const stat = await fs.stat(artifactPath).catch(() => null);
-          if (!stat) {
-            return;
-          }
-          if (now - stat.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
+          if (now - entry.mtimeMs > SWEEP_FALLBACK_AGE_MS) {
             await this.deleteArtifact(id);
           }
         }),
