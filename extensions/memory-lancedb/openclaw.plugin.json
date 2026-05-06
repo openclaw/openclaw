@@ -69,6 +69,16 @@
       "label": "Storage Options",
       "advanced": true,
       "help": "Storage configuration options (access_key, secret_key, endpoint, etc.); supports ${ENV_VAR} values"
+    },
+    "triggers": {
+      "label": "Custom Capture Triggers",
+      "advanced": true,
+      "help": "Additional regex patterns (as strings) that trigger auto-capture"
+    },
+    "categoryRules": {
+      "label": "Category Rules",
+      "advanced": true,
+      "help": "Custom detection rules: object mapping category name to a regex string. Applied before built-in logic."
     }
   },
   "configSchema": {
@@ -121,6 +131,18 @@
         "maximum": 10000
       },
       "storageOptions": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+      },
+      "triggers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "categoryRules": {
         "type": "object",
         "additionalProperties": {
           "type": "string"

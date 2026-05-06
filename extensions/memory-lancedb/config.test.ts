@@ -132,4 +132,79 @@ describe("memory-lancedb config", () => {
       });
     }).toThrow("dreaming config must be an object");
   });
+
+  it("accepts valid triggers array", () => {
+    const parsed = memoryConfigSchema.parse({
+      embedding: { apiKey: "sk-test" },
+      triggers: ["anota esto", "mi proyecto|remember"],
+    });
+    expect(parsed.triggers).toEqual(["anota esto", "mi proyecto|remember"]);
+  });
+
+  it("rejects triggers that are not an array", () => {
+    expect(() =>
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        triggers: "remember",
+      }),
+    ).toThrow("triggers must be an array of regex strings");
+  });
+
+  it("rejects triggers with invalid regex", () => {
+    expect(() =>
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        triggers: ["valid", "["],
+      }),
+    ).toThrow("triggers[1] is not a valid regex");
+  });
+
+  it("accepts valid categoryRules object", () => {
+    const parsed = memoryConfigSchema.parse({
+      embedding: { apiKey: "sk-test" },
+      categoryRules: {
+        entity: "mi jefe|el cliente",
+        decision: "decidimos|vamos a usar",
+      },
+    });
+    expect(parsed.categoryRules).toEqual({
+      entity: "mi jefe|el cliente",
+      decision: "decidimos|vamos a usar",
+    });
+  });
+
+  it("rejects categoryRules with unknown category key", () => {
+    expect(() =>
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        categoryRules: { task: "hacer|pendiente" },
+      }),
+    ).toThrow('categoryRules key "task" must be one of');
+  });
+
+  it("rejects categoryRules with invalid regex value", () => {
+    expect(() =>
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        categoryRules: { entity: "[" },
+      }),
+    ).toThrow("categoryRules.entity is not a valid regex");
+  });
+
+  it("rejects categoryRules that is not an object", () => {
+    expect(() =>
+      memoryConfigSchema.parse({
+        embedding: { apiKey: "sk-test" },
+        categoryRules: ["entity"],
+      }),
+    ).toThrow("categoryRules must be an object");
+  });
+
+  it("returns undefined triggers and categoryRules when not set", () => {
+    const parsed = memoryConfigSchema.parse({
+      embedding: { apiKey: "sk-test" },
+    });
+    expect(parsed.triggers).toBeUndefined();
+    expect(parsed.categoryRules).toBeUndefined();
+  });
 });
