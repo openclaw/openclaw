@@ -4,16 +4,14 @@ import {
 } from "../agents/internal-runtime-context.js";
 import { sanitizeUserFacingText } from "../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import { truncateUtf16Safe } from "../utils.js";
-import type { TaskRecord } from "./task-registry.types.js";
-
-const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
+import { isActiveTaskStatus, type TaskRecord } from "./task-registry.types.js";
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
 export const TASK_STATUS_TITLE_MAX_CHARS = 80;
 export const TASK_STATUS_DETAIL_MAX_CHARS = 120;
 
 function isActiveTask(task: TaskRecord): boolean {
-  return ACTIVE_TASK_STATUSES.has(task.status);
+  return isActiveTaskStatus(task.status);
 }
 
 function isFailureTask(task: TaskRecord): boolean {
@@ -125,7 +123,12 @@ export function formatTaskStatusTitle(task: TaskRecord): string {
 }
 
 export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
-  if (task.status === "running" || task.status === "queued") {
+  if (
+    task.status === "running" ||
+    task.status === "queued" ||
+    task.status === "awaiting_approval" ||
+    task.status === "waiting_external"
+  ) {
     return (
       sanitizeTaskStatusText(task.progressSummary, { maxChars: TASK_STATUS_DETAIL_MAX_CHARS }) ||
       undefined
@@ -146,6 +149,211 @@ export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
       maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
     }) || undefined
   );
+}
+
+export type TaskOperationalSummary = {
+  state: "active" | "blocked" | "finished" | "failed" | "cancelled";
+  stage: string;
+  lastGoodStep?: string;
+  blocker?: string;
+  nextAction?: string;
+};
+
+export type TaskLifecycleEvent = {
+  event:
+    | "task.created"
+    | "task.started"
+    | "task.progressed"
+    | "task.blocked"
+    | "task.completed"
+    | "task.failed"
+    | "task.cancelled";
+  taskId: string;
+  status: TaskRecord["status"];
+  state: TaskOperationalSummary["state"];
+  stage: string;
+  fromStatus?: TaskRecord["status"];
+  summary?: string;
+  blocker?: string;
+  nextAction?: string;
+  updatedAt?: number;
+};
+
+function truncateTaskOperationalSegment(value: string, maxChars = 80): string {
+  return truncateTaskStatusText(value, maxChars);
+}
+
+export function buildTaskOperationalSummary(task: TaskRecord): TaskOperationalSummary {
+  const detail = formatTaskStatusDetail(task);
+  if (task.status === "queued") {
+    return {
+      state: "active",
+      stage: "queued",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      nextAction: "wait for start",
+    };
+  }
+  if (task.status === "running") {
+    return {
+      state: "active",
+      stage: "running",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      nextAction: "wait for completion",
+    };
+  }
+  if (task.status === "awaiting_approval") {
+    return {
+      state: "blocked",
+      stage: "awaiting approval",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      blocker: "approval required",
+      nextAction: "approve and continue",
+    };
+  }
+  if (task.status === "waiting_external") {
+    return {
+      state: "blocked",
+      stage: "waiting external",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      blocker: "external dependency",
+      nextAction: "wait for external result",
+    };
+  }
+  if (task.status === "succeeded") {
+    return {
+      state: "finished",
+      stage: "completed",
+      ...(detail ? { lastGoodStep: detail } : {}),
+      nextAction: "no action",
+    };
+  }
+  if (task.status === "cancelled") {
+    return {
+      state: "cancelled",
+      stage: "cancelled",
+      ...(detail ? { lastGoodStep: detail } : {}),
+    };
+  }
+  return {
+    state: "failed",
+    stage: task.status.replaceAll("_", " "),
+    ...(detail ? { blocker: detail } : {}),
+    nextAction: "inspect failure",
+  };
+}
+
+export function formatTaskOperationalSummary(
+  task: TaskRecord,
+  opts?: { maxChars?: number },
+): string {
+  const summary = buildTaskOperationalSummary(task);
+  const segments = [`${summary.state} · ${summary.stage}`];
+  if (summary.lastGoodStep) {
+    segments.push(
+      `last good step: ${truncateTaskOperationalSegment(summary.lastGoodStep, opts?.maxChars ?? 80)}`,
+    );
+  }
+  if (summary.blocker) {
+    segments.push(
+      `blocker: ${truncateTaskOperationalSegment(summary.blocker, opts?.maxChars ?? 80)}`,
+    );
+  }
+  if (summary.nextAction) {
+    segments.push(`next: ${summary.nextAction}`);
+  }
+  return segments.join(" · ");
+}
+
+export function buildTaskLifecycleEvent(
+  task: TaskRecord,
+  previousStatus?: TaskRecord["status"],
+): TaskLifecycleEvent {
+  const operational = buildTaskOperationalSummary(task);
+  const status = task.status;
+  let event: TaskLifecycleEvent["event"];
+  if (status === "queued") {
+    event = "task.created";
+  } else if (status === "running") {
+    event =
+      previousStatus === "queued" || previousStatus === undefined
+        ? "task.started"
+        : "task.progressed";
+  } else if (status === "awaiting_approval" || status === "waiting_external") {
+    event = "task.blocked";
+  } else if (status === "succeeded") {
+    event = "task.completed";
+  } else if (status === "failed" || status === "timed_out" || status === "lost") {
+    event = "task.failed";
+  } else if (status === "cancelled") {
+    event = "task.cancelled";
+  } else {
+    event = "task.progressed";
+  }
+  return {
+    event,
+    taskId: task.taskId,
+    status,
+    state: operational.state,
+    stage: operational.stage,
+    ...(previousStatus !== undefined ? { fromStatus: previousStatus } : {}),
+    ...(operational.lastGoodStep ? { summary: operational.lastGoodStep } : {}),
+    ...(operational.blocker ? { blocker: operational.blocker } : {}),
+    ...(operational.nextAction ? { nextAction: operational.nextAction } : {}),
+    ...(task.lastEventAt ? { updatedAt: task.lastEventAt } : {}),
+  };
+}
+
+export function formatTaskLifecycleEvent(event: TaskLifecycleEvent): string {
+  const parts: string[] = [event.state, event.stage];
+  if (event.fromStatus) {
+    parts.push(`from: ${event.fromStatus}`);
+  }
+  if (event.summary) {
+    parts.push(event.summary);
+  }
+  if (event.blocker) {
+    parts.push(`blocker: ${event.blocker}`);
+  }
+  if (event.nextAction && event.nextAction !== "no action") {
+    parts.push(`next: ${event.nextAction}`);
+  }
+  return parts.join(" · ");
+}
+
+export function buildTaskLifecycleEventFromRecord(
+  task: TaskRecord,
+  event: { kind: TaskRecord["status"] | "progress"; summary?: string },
+): TaskLifecycleEvent | null {
+  if (event.kind === "progress") {
+    const operational = buildTaskOperationalSummary(task);
+    return {
+      event: "task.progressed",
+      taskId: task.taskId,
+      status: task.status,
+      state: operational.state,
+      stage: operational.stage,
+      ...(event.summary ? { summary: event.summary } : {}),
+      ...(operational.blocker ? { blocker: operational.blocker } : {}),
+      ...(operational.nextAction ? { nextAction: operational.nextAction } : {}),
+      ...(task.lastEventAt ? { updatedAt: task.lastEventAt } : {}),
+    };
+  }
+  if (event.kind === "running") {
+    return buildTaskLifecycleEvent(task);
+  }
+  if (
+    event.kind === "awaiting_approval" ||
+    event.kind === "waiting_external" ||
+    event.kind === "succeeded" ||
+    event.kind === "failed" ||
+    event.kind === "timed_out" ||
+    event.kind === "cancelled" ||
+    event.kind === "lost" ||
+    event.kind === "queued"
+  ) {
+    return buildTaskLifecycleEvent(task);
+  }
+  return null;
 }
 
 export type TaskStatusSnapshot = {

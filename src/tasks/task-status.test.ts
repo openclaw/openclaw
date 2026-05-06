@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { TaskRecord } from "./task-registry.types.js";
 import {
+  buildTaskOperationalSummary,
+  buildTaskLifecycleEvent,
   buildTaskStatusSnapshot,
+  formatTaskLifecycleEvent,
+  formatTaskOperationalSummary,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
   sanitizeTaskStatusText,
@@ -142,5 +146,179 @@ describe("task status formatting", () => {
         ].join("\n"),
       ),
     ).toBe("");
+  });
+
+  it("builds a blocked operational summary for approval waits", () => {
+    const task = makeTask({
+      status: "awaiting_approval",
+      progressSummary: "patch applied",
+    });
+
+    expect(buildTaskOperationalSummary(task)).toMatchObject({
+      state: "blocked",
+      stage: "awaiting approval",
+      lastGoodStep: "patch applied",
+      blocker: "approval required",
+      nextAction: "approve and continue",
+    });
+    expect(formatTaskOperationalSummary(task)).toBe(
+      "blocked · awaiting approval · last good step: patch applied · blocker: approval required · next: approve and continue",
+    );
+  });
+
+  it("builds an active operational summary for running work", () => {
+    const task = makeTask({
+      status: "running",
+      progressSummary: "tests running",
+    });
+
+    expect(formatTaskOperationalSummary(task)).toBe(
+      "active · running · last good step: tests running · next: wait for completion",
+    );
+  });
+});
+
+describe("task lifecycle events", () => {
+  it("builds a task.created event for queued tasks", () => {
+    const task = makeTask({ status: "queued" });
+    const event = buildTaskLifecycleEvent(task, "queued");
+
+    expect(event.event).toBe("task.created");
+    expect(event.state).toBe("active");
+    expect(event.stage).toBe("queued");
+    expect(event.fromStatus).toBe("queued");
+    expect(event.nextAction).toBe("wait for start");
+  });
+
+  it("builds a task.started event when transitioning from queued to running", () => {
+    const task = makeTask({ status: "running", progressSummary: "initializing" });
+    const event = buildTaskLifecycleEvent(task, "queued");
+
+    expect(event.event).toBe("task.started");
+    expect(event.state).toBe("active");
+    expect(event.fromStatus).toBe("queued");
+    expect(event.summary).toContain("initializing");
+  });
+
+  it("builds a task.blocked event for awaiting_approval", () => {
+    const task = makeTask({
+      status: "awaiting_approval",
+      progressSummary: "patch applied",
+    });
+    const event = buildTaskLifecycleEvent(task, "running");
+
+    expect(event.event).toBe("task.blocked");
+    expect(event.state).toBe("blocked");
+    expect(event.blocker).toBe("approval required");
+    expect(event.nextAction).toBe("approve and continue");
+  });
+
+  it("builds a task.blocked event for waiting_external", () => {
+    const task = makeTask({
+      status: "waiting_external",
+      progressSummary: "awaiting user input",
+    });
+    const event = buildTaskLifecycleEvent(task, "running");
+
+    expect(event.event).toBe("task.blocked");
+    expect(event.state).toBe("blocked");
+    expect(event.blocker).toBe("external dependency");
+  });
+
+  it("builds a task.completed event for succeeded tasks", () => {
+    const task = makeTask({
+      status: "succeeded",
+      terminalSummary: "All tests passed",
+    });
+    const event = buildTaskLifecycleEvent(task, "running");
+
+    expect(event.event).toBe("task.completed");
+    expect(event.state).toBe("finished");
+    expect(event.summary).toContain("All tests passed");
+  });
+
+  it("builds a task.failed event for failed tasks", () => {
+    const task = makeTask({
+      status: "failed",
+      error: "AssertionError: expected 2 to equal 3",
+    });
+    const event = buildTaskLifecycleEvent(task, "running");
+
+    expect(event.event).toBe("task.failed");
+    expect(event.state).toBe("failed");
+    expect(event.blocker).toContain("AssertionError");
+  });
+
+  it("builds a task.cancelled event for cancelled tasks", () => {
+    const task = makeTask({ status: "cancelled" });
+    const event = buildTaskLifecycleEvent(task, "running");
+
+    expect(event.event).toBe("task.cancelled");
+    expect(event.state).toBe("cancelled");
+    expect(event.stage).toBe("cancelled");
+  });
+
+  it("omits fromStatus when previous status is not provided", () => {
+    const task = makeTask({ status: "running" });
+    const event = buildTaskLifecycleEvent(task);
+
+    expect(event.event).toBe("task.started");
+    expect(event.fromStatus).toBeUndefined();
+  });
+
+  it("formats a lifecycle event as a compact string", () => {
+    const task = makeTask({
+      status: "running",
+      progressSummary: "fetching data",
+    });
+    const event = buildTaskLifecycleEvent(task, "queued");
+    const formatted = formatTaskLifecycleEvent(event);
+
+    expect(formatted).toContain("active");
+    expect(formatted).toContain("running");
+    expect(formatted).toContain("from: queued");
+    expect(formatted).toContain("fetching data");
+  });
+
+  it("formats a blocked lifecycle event compactly", () => {
+    const task = makeTask({
+      status: "awaiting_approval",
+      progressSummary: "waiting for approval",
+    });
+    const event = buildTaskLifecycleEvent(task, "running");
+    const formatted = formatTaskLifecycleEvent(event);
+
+    expect(formatted).toContain("blocked");
+    expect(formatted).toContain("awaiting approval");
+    expect(formatted).toContain("blocker: approval required");
+    expect(formatted).toContain("next: approve and continue");
+  });
+
+  it("includes updatedAt when lastEventAt is set", () => {
+    const task = makeTask({
+      status: "succeeded",
+      lastEventAt: NOW,
+    });
+    const event = buildTaskLifecycleEvent(task, "running");
+
+    expect(event.updatedAt).toBe(NOW);
+  });
+
+  it("omits updatedAt when lastEventAt is not set", () => {
+    const task = makeTask({
+      status: "queued",
+      createdAt: NOW,
+    });
+    const event = buildTaskLifecycleEvent(task);
+
+    expect(event.updatedAt).toBeUndefined();
+  });
+
+  it("strips 'no action' from formatted output", () => {
+    const task = makeTask({ status: "succeeded" });
+    const event = buildTaskLifecycleEvent(task);
+    const formatted = formatTaskLifecycleEvent(event);
+
+    expect(formatted).not.toContain("no action");
   });
 });

@@ -55,7 +55,12 @@ import {
 } from "./task-registry.audit.js";
 import type { TaskAuditSummary } from "./task-registry.audit.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
-import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+  type TaskRegistrySummary,
+  type TaskStatus,
+} from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
@@ -281,7 +286,7 @@ function findTaskSessionEntry(
 }
 
 function isActiveTask(task: TaskRecord): boolean {
-  return task.status === "queued" || task.status === "running";
+  return isActiveTaskStatus(task.status);
 }
 
 function isTerminalTask(task: TaskRecord): boolean {

@@ -6,17 +6,24 @@ import {
   type TaskAuditSeverity,
   type TaskAuditSummary,
 } from "./task-registry.audit.shared.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  isActiveTaskStatus,
+  type TaskRecord,
+} from "./task-registry.types.js";
 
 export type TaskAuditOptions = {
   now?: number;
   tasks?: TaskRecord[];
   staleQueuedMs?: number;
   staleRunningMs?: number;
+  staleAwaitingApprovalMs?: number;
+  staleWaitingExternalMs?: number;
 };
 
 const DEFAULT_STALE_QUEUED_MS = 10 * 60_000;
 const DEFAULT_STALE_RUNNING_MS = 30 * 60_000;
+const DEFAULT_STALE_AWAITING_APPROVAL_MS = 12 * 60 * 60_000;
+const DEFAULT_STALE_WAITING_EXTERNAL_MS = 2 * 60 * 60_000;
 export { createEmptyTaskAuditSummary };
 export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSummary };
 
@@ -63,7 +70,7 @@ function findTimestampInconsistency(task: TaskRecord): TaskAuditFinding | null {
       detail: "endedAt is earlier than startedAt",
     });
   }
-  if ((task.status === "queued" || task.status === "running") && task.endedAt) {
+  if (isActiveTaskStatus(task.status) && task.endedAt) {
     return createFinding({
       severity: "warn",
       code: "inconsistent_timestamps",
@@ -94,6 +101,10 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
   const now = options.now ?? Date.now();
   const staleQueuedMs = options.staleQueuedMs ?? DEFAULT_STALE_QUEUED_MS;
   const staleRunningMs = options.staleRunningMs ?? DEFAULT_STALE_RUNNING_MS;
+  const staleAwaitingApprovalMs =
+    options.staleAwaitingApprovalMs ?? DEFAULT_STALE_AWAITING_APPROVAL_MS;
+  const staleWaitingExternalMs =
+    options.staleWaitingExternalMs ?? DEFAULT_STALE_WAITING_EXTERNAL_MS;
   const findings: TaskAuditFinding[] = [];
 
   for (const task of tasks) {
@@ -120,6 +131,30 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
           task,
           ageMs,
           detail: "running task appears stuck",
+        }),
+      );
+    }
+
+    if (task.status === "awaiting_approval" && ageMs >= staleAwaitingApprovalMs) {
+      findings.push(
+        createFinding({
+          severity: "warn",
+          code: "stale_awaiting_approval",
+          task,
+          ageMs,
+          detail: "task has been awaiting approval for an unusually long time",
+        }),
+      );
+    }
+
+    if (task.status === "waiting_external" && ageMs >= staleWaitingExternalMs) {
+      findings.push(
+        createFinding({
+          severity: "warn",
+          code: "stale_waiting_external",
+          task,
+          ageMs,
+          detail: "task has been waiting on an external dependency for too long",
         }),
       );
     }
@@ -154,8 +189,7 @@ export function listTaskAuditFindings(options: TaskAuditOptions = {}): TaskAudit
 
     if (
       task.status !== "lost" &&
-      task.status !== "queued" &&
-      task.status !== "running" &&
+      !isActiveTaskStatus(task.status) &&
       typeof task.cleanupAfter !== "number"
     ) {
       findings.push(
