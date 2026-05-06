@@ -4,6 +4,8 @@ import path from "node:path";
 import { vi } from "vitest";
 import { heartbeatRunnerTelegramPlugin } from "../../test/helpers/infra/heartbeat-runner-channel-plugins.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { updateSessionStore } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -35,23 +37,14 @@ export async function seedSessionStore(
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
-  let existingStore: Record<string, unknown> = {};
-  try {
-    existingStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
-  } catch {
-    existingStore = {};
-  }
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      ...existingStore,
-      [sessionKey]: {
-        sessionId: session.sessionId ?? "sid",
-        updatedAt: session.updatedAt ?? Date.now(),
-        ...session,
-      },
-    }),
-  );
+  await updateSessionStore(storePath, (store) => {
+    store[sessionKey] = {
+      ...(store[sessionKey] as SessionEntry | undefined),
+      sessionId: session.sessionId ?? "sid",
+      updatedAt: session.updatedAt ?? Date.now(),
+      ...session,
+    };
+  });
 }
 
 export async function seedMainSessionStore(

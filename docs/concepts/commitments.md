@@ -120,8 +120,11 @@ usage after eligible turns. The pass is hidden from the user-visible
 conversation, but it can read the recent exchange needed to decide whether a
 follow-up exists.
 
-Stored commitments are local OpenClaw state. They are operational memory, not
-long-term memory. Disable the feature with:
+Stored commitments are local OpenClaw state in
+`~/.openclaw/state/openclaw.sqlite` (`kv` scope `commitments`). Legacy
+`~/.openclaw/commitments/commitments.json` files are imported by
+`openclaw doctor --fix`. Commitments are operational memory, not long-term
+memory. Disable the feature with:
 
 ```bash
 openclaw config set commitments.enabled false

@@ -1,3 +1,7 @@
+import {
+  importLegacyCommitmentStoreFileToSqlite,
+  legacyCommitmentStoreFileExists,
+} from "../commitments/store.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   importLegacyDeviceAuthFileToSqlite,
@@ -36,6 +40,7 @@ type LegacyStateProbe = {
   devicePairing: boolean;
   nodePairing: boolean;
   channelPairing: boolean;
+  commitments: boolean;
   webPush: boolean;
   apns: boolean;
 };
@@ -49,6 +54,7 @@ async function probeLegacyRuntimeStateFiles(env: NodeJS.ProcessEnv): Promise<Leg
     devicePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "devices" }),
     nodePairing: await legacyPairingStateFilesExist({ baseDir, subdir: "nodes" }),
     channelPairing: await legacyChannelPairingFilesExist(env),
+    commitments: await legacyCommitmentStoreFileExists(env),
     webPush: await legacyWebPushFilesExist(baseDir),
     apns: await legacyApnsRegistrationFileExists(baseDir),
   };
@@ -70,7 +76,7 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
   }
   if (!params.prompter.shouldRepair) {
     note(
-      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import device, bootstrap, channel pairing, node pairing, and push state into SQLite.",
+      "Legacy runtime JSON state files detected. Run `openclaw doctor --fix` to import commitments, device, bootstrap, channel pairing, node pairing, and push state into SQLite.",
       "SQLite state",
     );
     return;
@@ -143,6 +149,14 @@ export async function maybeRepairLegacyRuntimeStateFiles(params: {
         changes.push(
           `- Imported ${result.requests} channel pairing request(s) and ${result.allowFrom} channel allowlist entr${result.allowFrom === 1 ? "y" : "ies"} into SQLite.`,
         );
+      }
+    });
+  }
+  if (probe.commitments) {
+    await runImport("Commitments", async () => {
+      const result = await importLegacyCommitmentStoreFileToSqlite(env);
+      if (result.imported) {
+        changes.push(`- Imported ${result.commitments} commitment record(s) into SQLite.`);
       }
     });
   }

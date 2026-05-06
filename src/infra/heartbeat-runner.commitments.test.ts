@@ -5,6 +5,7 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   runHeartbeatOnce,
   setHeartbeatsEnabled,
@@ -105,9 +106,7 @@ describe("runHeartbeatOnce commitments", () => {
         ],
       };
       if (params?.legacyRawSourceText) {
-        const commitmentStorePath = path.join(tmpDir, "commitments", "commitments.json");
-        await fs.mkdir(path.dirname(commitmentStorePath), { recursive: true });
-        await fs.writeFile(commitmentStorePath, JSON.stringify(storePayload, null, 2), "utf-8");
+        writeOpenClawStateKvJson("commitments", "store", storePayload);
       } else {
         await saveCommitmentStore(undefined, storePayload);
       }
