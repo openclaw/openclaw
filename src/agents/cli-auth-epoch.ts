@@ -27,7 +27,7 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
-export const CLI_AUTH_EPOCH_VERSION = 4;
+export const CLI_AUTH_EPOCH_VERSION = 5;
 
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
@@ -66,10 +66,19 @@ function encodeOAuthIdentity(credential: {
 }
 
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
-  if (credential.type === "oauth") {
-    return encodeOAuthIdentity(credential);
-  }
-  return JSON.stringify(["token", credential.provider, credential.token]);
+  // Identity-only hashing for both OAuth and token Claude CLI credentials.
+  // The Claude CLI keychain rewrite is not atomic: a token rotation can
+  // briefly produce a partial read where `refreshToken` is missing, and the
+  // parser falls back to a token-shaped credential. With the previous
+  // token-inclusive hash, that transient race flipped the auth-epoch and
+  // forced a session reset on every rotation. Routing both branches through
+  // `encodeOAuthIdentity` collapses partial reads and rotations onto the
+  // same provider-keyed identity hash, while a real account switch would
+  // still surface as different identity fields. Fixes #74312.
+  return encodeOAuthIdentity({
+    type: "oauth",
+    provider: credential.provider,
+  });
 }
 
 function encodeCodexCredential(credential: CodexCliCredential): string {
@@ -100,10 +109,14 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
         encodeUnknown(credential.metadata),
       ]);
     case "token":
+      // Drop `credential.token` from the hash so static-token rotation does
+      // not invalidate live sessions; identity fields (provider, tokenRef,
+      // email, displayName) are sufficient to detect real account changes.
+      // Mirrors the OAuth identity-only fix and keeps Claude-CLI auth-profile
+      // entries stable across keychain partial-read races. Refs #74312.
       return JSON.stringify([
         "token",
         credential.provider,
-        credential.token ?? null,
         encodeUnknown(credential.tokenRef),
         credential.email ?? null,
         credential.displayName ?? null,
@@ -121,7 +134,26 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
         ttlMs: 5000,
         allowKeychainPrompt: false,
       });
-      return credential ? hashCliAuthEpochPart(encodeClaudeCredential(credential)) : undefined;
+      // Null-safe identity fallback: when the keychain read fails entirely
+      // (transient parse failure, race with claude-cli's keychain rewrite),
+      // the parts-array shape would otherwise change between successful and
+      // null reads, which flips the resolved auth-epoch hash even after the
+      // identity-only encoder fix above. Encoding a synthetic identity-only
+      // credential keeps the `local:` part shape stable across these
+      // failures while a real account switch still produces a different
+      // identity hash. Empirically validated by the issue reporter on
+      // macOS over 5h of runtime. Refs #74312.
+      return hashCliAuthEpochPart(
+        encodeClaudeCredential(
+          credential ?? {
+            type: "oauth",
+            provider: "anthropic",
+            access: "",
+            refresh: "",
+            expires: 0,
+          },
+        ),
+      );
     }
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
