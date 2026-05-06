@@ -1,9 +1,12 @@
-import { Agent, EnvHttpProxyAgent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { hasEnvHttpProxyAgentConfigured, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
 import {
   createUndiciAutoSelectFamilyConnectOptions,
   resolveUndiciAutoSelectFamily,
 } from "./undici-family-policy.js";
+import {
+  loadUndiciGlobalDispatcherDeps,
+  type UndiciGlobalDispatcherDeps,
+} from "./undici-runtime.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
 
@@ -46,10 +49,12 @@ function resolveDispatcherKey(params: {
   return `${params.kind}:${params.timeoutMs}:${autoSelectToken}`;
 }
 
-function resolveCurrentDispatcherKind(): DispatcherKind | null {
+function resolveCurrentDispatcherKind(
+  runtime: Pick<UndiciGlobalDispatcherDeps, "getGlobalDispatcher">,
+): DispatcherKind | null {
   let dispatcher: unknown;
   try {
-    dispatcher = getGlobalDispatcher();
+    dispatcher = runtime.getGlobalDispatcher();
   } catch {
     return null;
   }
@@ -63,13 +68,15 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   if (!shouldUseEnvProxy) {
     return;
   }
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
   if (lastAppliedProxyBootstrap) {
-    if (resolveCurrentDispatcherKind() === "env-proxy") {
+    if (resolveCurrentDispatcherKind(runtime) === "env-proxy") {
       return;
     }
     lastAppliedProxyBootstrap = false;
   }
-  const currentKind = resolveCurrentDispatcherKind();
+  const currentKind = resolveCurrentDispatcherKind(runtime);
   if (currentKind === null) {
     return;
   }
@@ -92,8 +99,17 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   }
   const timeoutMs = Math.max(DEFAULT_UNDICI_STREAM_TIMEOUT_MS, Math.floor(timeoutMsRaw));
   _globalUndiciStreamTimeoutMs = timeoutMs;
-  const kind = resolveCurrentDispatcherKind();
+  if (!hasEnvHttpProxyAgentConfigured()) {
+    lastAppliedTimeoutKey = null;
+    return;
+  }
+  const runtime = loadUndiciGlobalDispatcherDeps();
+  const { EnvHttpProxyAgent, setGlobalDispatcher } = runtime;
+  const kind = resolveCurrentDispatcherKind(runtime);
   if (kind === null) {
+    return;
+  }
+  if (kind !== "env-proxy") {
     return;
   }
 
@@ -105,23 +121,13 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
 
   const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
-    if (kind === "env-proxy") {
-      const proxyOptions = {
-        ...resolveEnvHttpProxyAgentOptions(),
-        bodyTimeout: timeoutMs,
-        headersTimeout: timeoutMs,
-        ...(connect ? { connect } : {}),
-      } as ConstructorParameters<typeof EnvHttpProxyAgent>[0];
-      setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
-    } else {
-      setGlobalDispatcher(
-        new Agent({
-          bodyTimeout: timeoutMs,
-          headersTimeout: timeoutMs,
-          ...(connect ? { connect } : {}),
-        }),
-      );
-    }
+    const proxyOptions = {
+      ...resolveEnvHttpProxyAgentOptions(),
+      bodyTimeout: timeoutMs,
+      headersTimeout: timeoutMs,
+      ...(connect ? { connect } : {}),
+    } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
+    setGlobalDispatcher(new EnvHttpProxyAgent(proxyOptions));
     lastAppliedTimeoutKey = nextKey;
   } catch {
     // Best-effort hardening only.
@@ -140,17 +146,29 @@ export function resetGlobalUndiciStreamTimeoutsForTests(): void {
  */
 export function forceResetGlobalDispatcher(): void {
   lastAppliedTimeoutKey = null;
+  if (!hasEnvHttpProxyAgentConfigured()) {
+    if (!lastAppliedProxyBootstrap) {
+      return;
+    }
+    lastAppliedProxyBootstrap = false;
+    try {
+      const { Agent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
+      setGlobalDispatcher(new Agent());
+    } catch {
+      // Best-effort reset only.
+    }
+    return;
+  }
   lastAppliedProxyBootstrap = false;
   try {
+    const { EnvHttpProxyAgent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
     const proxyOptions = resolveEnvHttpProxyAgentOptions();
-    if (hasEnvHttpProxyAgentConfigured()) {
-      setGlobalDispatcher(
-        new EnvHttpProxyAgent(proxyOptions as ConstructorParameters<typeof EnvHttpProxyAgent>[0]),
-      );
-      lastAppliedProxyBootstrap = true;
-    } else {
-      setGlobalDispatcher(new Agent());
-    }
+    setGlobalDispatcher(
+      new EnvHttpProxyAgent(
+        proxyOptions as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0],
+      ),
+    );
+    lastAppliedProxyBootstrap = true;
   } catch {
     // Best-effort reset only.
   }
