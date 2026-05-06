@@ -46,7 +46,11 @@ export type ChannelsAddOptions = {
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["channel", "account"]);
 const NEXTCLOUD_TALK_CLI_ALIASES = new Set(["nextcloud-talk", "nc-talk", "nc"]);
 
-async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+async function resolveCatalogChannelEntry(
+  raw: string,
+  cfg: OpenClawConfig | null,
+  env?: NodeJS.ProcessEnv,
+) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
@@ -57,11 +61,12 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
           listTrustedChannelPluginCatalogEntries({
             cfg,
             workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
+            env,
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
         ({ listChannelPluginCatalogEntries }) =>
-          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+          listChannelPluginCatalogEntries({ excludeWorkspace: true, env }),
       );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
@@ -279,7 +284,9 @@ export async function channelsAddCommand(
 
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let catalogEntry = channel
+    ? undefined
+    : await resolveCatalogChannelEntry(rawChannel, nextConfig, process.env);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.

@@ -43,6 +43,7 @@ export function getTrustedChannelPluginCatalogEntry(
 ): ChannelPluginCatalogEntry | undefined {
   const candidate = getChannelPluginCatalogEntry(channelId, {
     workspaceDir: params.workspaceDir,
+    env: params.env,
   });
   if (isTrustedWorkspaceChannelCatalogEntry(candidate, params.cfg, params.env)) {
     return candidate;
@@ -50,6 +51,7 @@ export function getTrustedChannelPluginCatalogEntry(
   return getChannelPluginCatalogEntry(channelId, {
     workspaceDir: params.workspaceDir,
     excludeWorkspace: true,
+    env: params.env,
   });
 }
 
@@ -63,11 +65,13 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
 ): ChannelPluginCatalogEntry[] {
   const unfiltered = listChannelPluginCatalogEntries({
     workspaceDir: params.workspaceDir,
+    env: params.env,
   });
   const fallbackById = new Map(
     listChannelPluginCatalogEntries({
       workspaceDir: params.workspaceDir,
       excludeWorkspace: true,
+      env: params.env,
     }).map((entry) => [entry.id, entry]),
   );
   return unfiltered.flatMap((entry) => {
