@@ -103,6 +103,7 @@ Docs: https://docs.openclaw.ai
 
 - Control UI/performance: keep chat and channel tabs responsive while history payloads and channel probes are slow, label partial channel status, and record slow chat/config render timings in the event log. Thanks @BunsDev.
 - Control UI/sessions: fire the documented `/new` command and lifecycle hooks only for explicit Control UI session creation, restoring session-memory and custom hook capture without changing SDK parent-session creates. Fixes #76957. Thanks @BunsDev.
+- Status/session store: derive `totalTokens` for CLI backends from `agentMeta.lastCallUsage` (and set it on Claude CLI runs) so `/status` context usage is not shown as `?` while cache/token lines are populated. Fixes #78194.
 - Slack: preserve Socket Mode SDK error context and structured Slack API fields in reconnect logs, so startup failures no longer collapse to a bare `unknown error`.
 - iOS pairing: allow setup-code and manual `ws://` connects for private LAN and `.local` gateways while keeping Tailscale/public routes on `wss://`, and prefer explicit gateway passwords over stale bootstrap tokens in mixed-auth reconnects. Fixes #47887; carries forward #65185. Thanks @draix and @BunsDev.
 - Plugins/diagnostics: make source-only TypeScript package warnings actionable by explaining that missing compiled runtime output is a publisher packaging issue and pointing users to update/reinstall or disable/uninstall the plugin. Fixes #77835. Thanks @googlerest.
