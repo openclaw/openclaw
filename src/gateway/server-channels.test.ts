@@ -267,6 +267,29 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {
+    const startAccount = vi.fn(
+      async ({
+        setStatus,
+        accountId,
+      }: {
+        setStatus: ChannelGatewayContext["setStatus"];
+        accountId: string;
+      }) => {
+        setStatus({ accountId, terminalDisconnect: true });
+      },
+    );
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(200);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.terminalDisconnect).toBe(true);
+  });
+
   it("consumes rejected stop tasks during manual abort", async () => {
     const unhandledRejection = vi.fn();
     process.on("unhandledRejection", unhandledRejection);
