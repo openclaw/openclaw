@@ -297,6 +297,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
   });
 
+  it("forces sourceReplyDeliveryMode=automatic when caller opts in (#78204)", async () => {
+    // Regression for #78204: Feishu group mentions silently dropped because
+    // the cross-platform default of `message_tool_only` for groups was
+    // never overridden when the user did not configure visibleReplies.
+    // The bot now passes `defaultSourceReplyDeliveryMode: "automatic"`
+    // for Feishu group dispatch and the dispatcher must propagate that to
+    // replyOptions.
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+      defaultSourceReplyDeliveryMode: "automatic",
+    });
+
+    expect(result.replyOptions).toHaveProperty("sourceReplyDeliveryMode", "automatic");
+  });
+
+  it("does not force sourceReplyDeliveryMode when caller does not opt in", async () => {
+    const result = createFeishuReplyDispatcher({
+      cfg: {} as never,
+      agentId: "agent",
+      runtime: {} as never,
+      chatId: "oc_chat",
+    });
+
+    expect(result.replyOptions).not.toHaveProperty("sourceReplyDeliveryMode");
+  });
+
   it("enables core block streaming when Feishu blockStreaming is explicitly true", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",

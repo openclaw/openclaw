@@ -1301,6 +1301,20 @@ export async function handleFeishuMessage(params: {
           (ctx.suppressReplyTarget ? undefined : ctx.messageId))
         : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    // #78204: the cross-platform default for group/channel chats is
+    // `sourceReplyDeliveryMode: "message_tool_only"`, so when Feishu group
+    // mentions arrive and no explicit visibleReplies is configured, the
+    // typing indicator briefly shows and then the reply silently never
+    // lands (the model rarely uses the `message` tool in Feishu groups).
+    // For Feishu specifically we keep the historical behavior — automatic
+    // source replies for groups when the operator has not opted in to the
+    // message-tool flow. Explicit `visibleReplies` (including
+    // `message_tool`) is still honored.
+    const feishuVisibleRepliesConfigured =
+      cfg.messages?.groupChat?.visibleReplies !== undefined ||
+      cfg.messages?.visibleReplies !== undefined;
+    const defaultSourceReplyDeliveryMode =
+      isGroup && !feishuVisibleRepliesConfigured ? ("automatic" as const) : undefined;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1378,6 +1392,7 @@ export async function handleFeishuMessage(params: {
             mentionTargets: ctx.mentionTargets,
             accountId: account.accountId,
             identity,
+            ...(defaultSourceReplyDeliveryMode ? { defaultSourceReplyDeliveryMode } : {}),
             messageCreateTimeMs,
           });
 
@@ -1543,6 +1558,7 @@ export async function handleFeishuMessage(params: {
         mentionTargets: ctx.mentionTargets,
         accountId: account.accountId,
         identity,
+        ...(defaultSourceReplyDeliveryMode ? { defaultSourceReplyDeliveryMode } : {}),
         messageCreateTimeMs,
       });
 
