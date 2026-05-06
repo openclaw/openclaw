@@ -567,6 +567,7 @@ export async function runExecProcess(opts: {
   notifyOnExit: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
+  agentId?: string;
   sessionKey?: string;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
@@ -580,6 +581,8 @@ export async function runExecProcess(opts: {
   const shellRuntimeEnv: Record<string, string> = {
     ...opts.env,
     OPENCLAW_SHELL: "exec",
+    OPENCLAW_AGENT_ID: opts.agentId ?? "",
+    OPENCLAW_SESSION_KEY: opts.sessionKey ?? "",
   };
 
   const session: ProcessSession = {

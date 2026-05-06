@@ -42,6 +42,10 @@ vi.mock("../process/supervisor/index.js", () => ({
       const env = input.env ?? {};
       if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
+      } else if (command.includes("OPENCLAW_AGENT_ID")) {
+        input.onStdout?.(env.OPENCLAW_AGENT_ID ?? "");
+      } else if (command.includes("OPENCLAW_SESSION_KEY")) {
+        input.onStdout?.(env.OPENCLAW_SESSION_KEY ?? "");
       } else if (command.includes("SSLKEYLOGFILE")) {
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
       } else if (command.includes("$PATH")) {
@@ -177,6 +181,120 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(value).toBe("exec");
+  });
+
+  it("sets OPENCLAW_AGENT_ID from agent defaults", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+    });
+    const result = await tool.execute("call-openclaw-agent", {
+      command: 'printf "%s" "${OPENCLAW_AGENT_ID:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("main");
+  });
+
+  it("sets OPENCLAW_SESSION_KEY from agent defaults", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:main",
+    });
+    const result = await tool.execute("call-openclaw-session", {
+      command: 'printf "%s" "${OPENCLAW_SESSION_KEY:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("agent:main:main");
+  });
+
+  it("user env cannot override OPENCLAW_AGENT_ID", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      agentId: "main",
+    });
+    const result = await tool.execute("call-agent-override", {
+      command: 'printf "%s" "${OPENCLAW_AGENT_ID:-}"',
+      env: { OPENCLAW_AGENT_ID: "hacked" },
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    // Trusted agentId overrides user-provided env.
+    expect(value).toBe("main");
+  });
+
+  it("user env cannot override OPENCLAW_SESSION_KEY", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:main",
+    });
+    const result = await tool.execute("call-session-override", {
+      command: 'printf "%s" "${OPENCLAW_SESSION_KEY:-}"',
+      env: { OPENCLAW_SESSION_KEY: "hacked" },
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    // Trusted sessionKey overrides user-provided env.
+    expect(value).toBe("agent:main:main");
+  });
+
+  it("clears OPENCLAW_AGENT_ID to empty string when not provided", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-agent-clear", {
+      command: 'printf "%s" "${OPENCLAW_AGENT_ID:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("");
+  });
+
+  it("clears OPENCLAW_SESSION_KEY to empty string when not provided", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+    const result = await tool.execute("call-session-clear", {
+      command: 'printf "%s" "${OPENCLAW_SESSION_KEY:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe("");
   });
 
   it("throws security violation when env.PATH is provided", async () => {
