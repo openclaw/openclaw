@@ -6,6 +6,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookSessionsSendTask } from "../../plugins/types.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -21,7 +23,9 @@ import {
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AgentWaitResult,
+  type AssistantReplySnapshot,
   readLatestAssistantReplySnapshot,
+  waitForAgentRun,
   waitForAgentRunAndReadUpdatedAssistantReply,
 } from "../run-wait.js";
 import { loadSessionEntryByKey } from "../subagent-announce-delivery.js";
@@ -74,6 +78,111 @@ function isRequesterParentOfNativeSubagentSession(params: {
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
   return result.endedAt !== undefined || Boolean(result.stopReason || result.livenessState);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readOptionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readSessionsSendHookTask(
+  params: Record<string, unknown>,
+  defaults: {
+    message: string;
+    timeoutSeconds: number;
+    announceTimeoutMs: number;
+    maxPingPongTurns: number;
+    requesterSessionKey?: string;
+    requesterChannel?: string;
+  },
+): PluginHookSessionsSendTask | undefined {
+  const rawTask = isRecord(params.task) ? params.task : undefined;
+  if (!rawTask) {
+    return undefined;
+  }
+  const rawConstraints = isRecord(rawTask.constraints) ? rawTask.constraints : undefined;
+  const rawRuntime = isRecord(rawTask.runtime) ? rawTask.runtime : undefined;
+  const rawRequester = isRecord(rawTask.requester) ? rawTask.requester : undefined;
+  const rawCancelTarget = isRecord(rawRuntime?.cancelTarget) ? rawRuntime.cancelTarget : undefined;
+  return {
+    intent: normalizeOptionalString(
+      typeof rawTask.intent === "string" ? rawTask.intent : undefined,
+    ),
+    instructions:
+      normalizeOptionalString(
+        typeof rawTask.instructions === "string" ? rawTask.instructions : undefined,
+      ) ?? defaults.message,
+    constraints: {
+      timeoutSeconds:
+        readOptionalFiniteNumber(rawConstraints?.timeoutSeconds) ?? defaults.timeoutSeconds,
+      maxPingPongTurns:
+        readOptionalFiniteNumber(rawConstraints?.maxPingPongTurns) ?? defaults.maxPingPongTurns,
+    },
+    runtime: {
+      waitRunId: normalizeOptionalString(
+        typeof rawRuntime?.waitRunId === "string" ? rawRuntime.waitRunId : undefined,
+      ),
+      // Trust boundary: callers may pass arbitrary task/runtime metadata in tool args.
+      // Do not propagate caller-supplied roundOneReply into delegated announce seeding;
+      // only plugin-owned dispatch results or core-verified reply history may seed it.
+      roundOneReply: undefined,
+      announceTimeoutMs:
+        readOptionalFiniteNumber(rawRuntime?.announceTimeoutMs) ?? defaults.announceTimeoutMs,
+      maxPingPongTurns:
+        readOptionalFiniteNumber(rawRuntime?.maxPingPongTurns) ?? defaults.maxPingPongTurns,
+      cancelTarget: rawCancelTarget
+        ? {
+            kind: normalizeOptionalString(
+              typeof rawCancelTarget.kind === "string" ? rawCancelTarget.kind : undefined,
+            ),
+            sessionKey: normalizeOptionalString(
+              typeof rawCancelTarget.sessionKey === "string"
+                ? rawCancelTarget.sessionKey
+                : undefined,
+            ),
+            runId: normalizeOptionalString(
+              typeof rawCancelTarget.runId === "string" ? rawCancelTarget.runId : undefined,
+            ),
+          }
+        : undefined,
+    },
+    requester: {
+      sessionKey:
+        normalizeOptionalString(
+          typeof rawRequester?.sessionKey === "string" ? rawRequester.sessionKey : undefined,
+        ) ?? defaults.requesterSessionKey,
+      channel:
+        normalizeOptionalString(
+          typeof rawRequester?.channel === "string" ? rawRequester.channel : undefined,
+        ) ?? defaults.requesterChannel,
+    },
+    correlationId: normalizeOptionalString(
+      typeof rawTask.correlationId === "string" ? rawTask.correlationId : undefined,
+    ),
+    parentRunId: normalizeOptionalString(
+      typeof rawTask.parentRunId === "string" ? rawTask.parentRunId : undefined,
+    ),
+  };
+}
+
+async function readSessionsSendBaselineSnapshot(params: {
+  sessionKey: string;
+  callGateway: GatewayCaller;
+}): Promise<{ snapshot?: AssistantReplySnapshot; error?: string }> {
+  try {
+    return {
+      snapshot: await readLatestAssistantReplySnapshot({
+        sessionKey: params.sessionKey,
+        limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+        callGateway: params.callGateway,
+      }),
+    };
+  } catch (err) {
+    return { error: formatErrorMessage(err) };
+  }
 }
 
 async function startAgentRun(params: {
@@ -294,19 +403,6 @@ export function createSessionsSendTool(opts?: {
         });
       }
 
-      // Capture the pre-run assistant snapshot before starting the nested run.
-      // Fast in-process test doubles and short-circuit agent paths can finish
-      // before we reach the post-run read, which would otherwise make the new
-      // reply look like the baseline and hide it from the caller.
-      const baselineReply =
-        timeoutSeconds === 0
-          ? undefined
-          : await readLatestAssistantReplySnapshot({
-              sessionKey: resolvedKey,
-              limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
-              callGateway: gatewayCall,
-            });
-
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
         requesterChannel: opts?.agentChannel,
@@ -369,7 +465,11 @@ export function createSessionsSendTool(opts?: {
         ? ({ status: "skipped", mode: "announce" } as const)
         : ({ status: "pending", mode: "announce" } as const);
 
-      const startA2AFlow = (roundOneReply?: string, waitRunId?: string) => {
+      const startA2AFlow = (
+        roundOneReply?: string,
+        waitRunId?: string,
+        baseline?: AssistantReplySnapshot,
+      ) => {
         if (skipA2AFlow) {
           return;
         }
@@ -381,11 +481,194 @@ export function createSessionsSendTool(opts?: {
           maxPingPongTurns,
           requesterSessionKey,
           requesterChannel,
-          baseline: baselineReply,
+          baseline,
           roundOneReply,
           waitRunId,
         });
       };
+
+      const hookRunner = getGlobalHookRunner();
+      let hookBaselineForFallback: AssistantReplySnapshot | undefined;
+      if (hookRunner?.hasHooks("sessions_send")) {
+        // Delegated plugins may start and finish the child run before returning a
+        // waitRunId. Take a non-fatal pre-hook snapshot so fast completions are
+        // not mistaken for the baseline, while direct plugin handling remains
+        // independent from core reply-history failures.
+        const delegatedBaseline: { snapshot?: AssistantReplySnapshot; error?: string } =
+          timeoutSeconds === 0
+            ? {}
+            : await readSessionsSendBaselineSnapshot({
+                sessionKey: resolvedKey,
+                callGateway: gatewayCall,
+              });
+        if (!delegatedBaseline.error) {
+          hookBaselineForFallback = delegatedBaseline.snapshot;
+        }
+        const hookTask = readSessionsSendHookTask(params, {
+          message,
+          timeoutSeconds,
+          announceTimeoutMs,
+          maxPingPongTurns,
+          requesterSessionKey,
+          requesterChannel,
+        });
+        const hookResult = await hookRunner.runSessionsSend(
+          {
+            sessionKey: resolvedKey,
+            target: {
+              sessionKey: resolvedKey,
+              displayKey,
+            },
+            message,
+            ...(hookTask ? { task: hookTask } : {}),
+            rawParams: params,
+          },
+          {
+            requesterSessionKey,
+            requesterChannel,
+          },
+        );
+        if (hookResult?.handled) {
+          if (hookResult.mode === "direct") {
+            return jsonResult(
+              isRecord(hookResult.result)
+                ? hookResult.result
+                : {
+                    status: "ok",
+                    result: hookResult.result,
+                    sessionKey: displayKey,
+                  },
+            );
+          }
+
+          const delegatedWaitRunId = normalizeOptionalString(hookResult.dispatch.waitRunId);
+          const delegatedRunId = delegatedWaitRunId ?? hookResult.dispatch.taskId;
+          const delegatedRoundOneReply = normalizeOptionalString(hookResult.dispatch.roundOneReply);
+          if (timeoutSeconds === 0) {
+            startA2AFlow(delegatedRoundOneReply, delegatedWaitRunId);
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "accepted",
+              sessionKey: displayKey,
+              delivery,
+            });
+          }
+          if (!delegatedWaitRunId) {
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "error",
+              error: "Delegated sessions_send hook result missing waitRunId for waited send",
+              sessionKey: displayKey,
+            });
+          }
+          if (delegatedBaseline.error && !delegatedRoundOneReply) {
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "error",
+              error: `Unable to snapshot delegated sessions_send reply history before dispatch: ${delegatedBaseline.error}`,
+              sessionKey: displayKey,
+            });
+          }
+          if (delegatedBaseline.error) {
+            const wait = await waitForAgentRun({
+              runId: delegatedWaitRunId,
+              timeoutMs,
+              callGateway: gatewayCall,
+            });
+            if (wait.status === "timeout") {
+              if (!isTerminalAgentWaitTimeout(wait)) {
+                startA2AFlow(delegatedRoundOneReply, delegatedWaitRunId);
+                return jsonResult({
+                  runId: delegatedRunId,
+                  status: "accepted",
+                  sessionKey: displayKey,
+                  delivery,
+                });
+              }
+              return jsonResult({
+                runId: delegatedRunId,
+                status: "timeout",
+                error: wait.error,
+                sessionKey: displayKey,
+              });
+            }
+            if (wait.status === "error") {
+              return jsonResult({
+                runId: delegatedRunId,
+                status: "error",
+                error: wait.error ?? "agent error",
+                sessionKey: displayKey,
+              });
+            }
+            startA2AFlow(delegatedRoundOneReply, delegatedWaitRunId);
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "ok",
+              sessionKey: displayKey,
+              delivery,
+            });
+          }
+          const delegatedResult = await waitForAgentRunAndReadUpdatedAssistantReply({
+            runId: delegatedWaitRunId,
+            sessionKey: resolvedKey,
+            timeoutMs,
+            limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+            baseline: delegatedBaseline.snapshot,
+            callGateway: gatewayCall,
+          });
+          if (delegatedResult.status === "timeout") {
+            if (!isTerminalAgentWaitTimeout(delegatedResult)) {
+              startA2AFlow(delegatedRoundOneReply, delegatedWaitRunId, delegatedBaseline.snapshot);
+              return jsonResult({
+                runId: delegatedRunId,
+                status: "accepted",
+                sessionKey: displayKey,
+                delivery,
+              });
+            }
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "timeout",
+              error: delegatedResult.error,
+              sessionKey: displayKey,
+            });
+          }
+          if (delegatedResult.status === "error") {
+            return jsonResult({
+              runId: delegatedRunId,
+              status: "error",
+              error: delegatedResult.error ?? "agent error",
+              sessionKey: displayKey,
+            });
+          }
+          const reply = delegatedResult.replyText;
+          startA2AFlow(
+            delegatedRoundOneReply ?? reply ?? undefined,
+            undefined,
+            delegatedBaseline.snapshot,
+          );
+          return jsonResult({
+            runId: delegatedRunId,
+            status: "ok",
+            reply,
+            sessionKey: displayKey,
+            delivery,
+          });
+        }
+      }
+
+      // Capture the pre-run assistant snapshot only after plugin hooks declined.
+      // Hook-owned direct delivery must not be blocked by local reply-history
+      // assumptions, while core fallback still snapshots before starting a run.
+      const baselineReply =
+        timeoutSeconds === 0
+          ? undefined
+          : (hookBaselineForFallback ??
+            (await readLatestAssistantReplySnapshot({
+              sessionKey: resolvedKey,
+              limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+              callGateway: gatewayCall,
+            })));
 
       if (timeoutSeconds === 0) {
         const start = await startAgentRun({
@@ -398,7 +681,7 @@ export function createSessionsSendTool(opts?: {
           return start.result;
         }
         runId = start.runId;
-        startA2AFlow(undefined, runId);
+        startA2AFlow(undefined, runId, baselineReply);
         return jsonResult({
           runId,
           status: "accepted",
@@ -428,7 +711,7 @@ export function createSessionsSendTool(opts?: {
 
       if (result.status === "timeout") {
         if (!isTerminalAgentWaitTimeout(result)) {
-          startA2AFlow(undefined, runId);
+          startA2AFlow(undefined, runId, baselineReply);
           return jsonResult({
             runId,
             status: "accepted",
@@ -452,7 +735,7 @@ export function createSessionsSendTool(opts?: {
         });
       }
       const reply = result.replyText;
-      startA2AFlow(reply ?? undefined);
+      startA2AFlow(reply ?? undefined, undefined, baselineReply);
 
       return jsonResult({
         runId,

@@ -127,6 +127,13 @@ export type {
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
+export type {
+  PluginHookSessionsSendCancelTarget,
+  PluginHookSessionsSendContext,
+  PluginHookSessionsSendEvent,
+  PluginHookSessionsSendResult,
+  PluginHookSessionsSendTask,
+} from "../plugins/types.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
 export type { HistoryEntry } from "../auto-reply/reply/history.js";
 export type { ReplyPayload } from "./reply-payload.js";

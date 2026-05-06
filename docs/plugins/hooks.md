@@ -119,6 +119,7 @@ observation-only.
 
 - **`before_tool_call`** - rewrite tool params, block execution, or require approval
 - `after_tool_call` - observe tool results, errors, and duration
+- **`sessions_send`** - claim `sessions_send` delivery directly or delegate it to a plugin-owned dispatcher
 - **`tool_result_persist`** - rewrite the assistant message produced from a tool result
 - **`before_message_write`** - inspect or block an in-progress message write (rare)
 
@@ -148,6 +149,8 @@ observation-only.
 - **`before_install`** - inspect skill or plugin install scans and optionally block
 
 ## Tool call policy
+
+`sessions_send` receives the resolved target session, original message, sanitized optional task metadata, and raw tool params. It may return `{ handled: false }`, a direct result, or a delegated dispatch result with a plugin-owned `taskId`/`waitRunId`. Core ignores caller-supplied `task.runtime.roundOneReply`; delegated announce seeding can only come from plugin dispatch output or reply history verified by the core wait path.
 
 `before_tool_call` receives:
 
