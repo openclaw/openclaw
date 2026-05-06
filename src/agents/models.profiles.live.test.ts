@@ -43,7 +43,11 @@ import {
   isCloudflareOrHtmlErrorPage,
   isRateLimitErrorMessage,
 } from "./pi-embedded-helpers/errors.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
+import {
+  discoverAuthStorage,
+  discoverModels,
+  normalizeDiscoveredPiModel,
+} from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -757,7 +761,9 @@ describeLive("live models (profile keys)", () => {
       });
       logProgress("[live-models] loading model registry");
       const models = await withLiveStageTimeout(
-        Promise.resolve().then(() => discoverModels(authStorage, agentDir).getAll()),
+        Promise.resolve().then(() =>
+          discoverModels(authStorage, agentDir, { normalizeModels: false }).getAll(),
+        ),
         "[live-models] load model registry",
       );
 
@@ -825,7 +831,10 @@ describeLive("live models (profile keys)", () => {
             });
             continue;
           }
-          candidates.push({ model, apiKeyInfo });
+          candidates.push({
+            model: normalizeDiscoveredPiModel(model, agentDir),
+            apiKeyInfo,
+          });
         } catch (err) {
           skipped.push({ model: id, reason: String(err) });
         }
