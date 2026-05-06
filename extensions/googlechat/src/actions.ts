@@ -16,12 +16,14 @@ import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accou
 import {
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isGoogleChatMessageResourceName,
+  isGoogleChatThreadResourceName,
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
 import { getGoogleChatRuntime } from "./runtime.js";
-import { resolveGoogleChatOutboundSpace } from "./targets.js";
+import { normalizeGoogleChatTarget, resolveGoogleChatOutboundSpace } from "./targets.js";
 
 const providerId = "googlechat";
 
@@ -43,6 +45,68 @@ function isReactionsEnabled(accounts: Array<{ config: { actions?: unknown } }>) 
 
 function resolveAppUserNames(account: { config: { botUser?: string | null } }) {
   return new Set(["users/app", account.config.botUser?.trim()].filter(Boolean) as string[]);
+}
+
+function allowsImplicitToolThread(mode: string | undefined): boolean {
+  return mode === "first" || mode === "all";
+}
+
+function isCurrentGoogleChatTarget(params: {
+  to: string;
+  currentChannelId: string | undefined;
+}): boolean {
+  const target = normalizeGoogleChatTarget(params.to) ?? params.to.trim();
+  const current = params.currentChannelId
+    ? (normalizeGoogleChatTarget(params.currentChannelId) ?? params.currentChannelId.trim())
+    : undefined;
+  return Boolean(target && current && target === current);
+}
+
+function resolveActionThreadId(params: {
+  to: string;
+  explicitThreadId: string | undefined;
+  explicitReplyTo: string | undefined;
+  inboundThreadId: string | undefined;
+  currentChannelId: string | undefined;
+  currentMessageId: string | number | undefined;
+  replyToMode: string | undefined;
+  hasRepliedRef: { value: boolean } | undefined;
+}) {
+  const markFirstReply = () => {
+    if (params.replyToMode === "first" && params.hasRepliedRef) {
+      params.hasRepliedRef.value = true;
+    }
+  };
+  const explicitTarget = params.explicitThreadId ?? params.explicitReplyTo;
+  if (isGoogleChatThreadResourceName(explicitTarget)) {
+    markFirstReply();
+    return explicitTarget;
+  }
+  if (isGoogleChatMessageResourceName(explicitTarget)) {
+    if (explicitTarget === params.currentMessageId) {
+      markFirstReply();
+      return params.inboundThreadId;
+    }
+    return undefined;
+  }
+  if (explicitTarget) {
+    markFirstReply();
+    return explicitTarget;
+  }
+  if (
+    !allowsImplicitToolThread(params.replyToMode) ||
+    !isCurrentGoogleChatTarget({
+      to: params.to,
+      currentChannelId: params.currentChannelId,
+    })
+  ) {
+    return undefined;
+  }
+  if (params.replyToMode === "first" && params.hasRepliedRef?.value) {
+    return undefined;
+  }
+  markFirstReply();
+  return params.inboundThreadId;
 }
 
 async function loadGoogleChatActionMedia(params: {
@@ -99,6 +163,7 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
     mediaAccess,
     mediaLocalRoots,
     mediaReadFile,
+    toolContext,
   }) => {
     const account = resolveGoogleChatAccount({
       cfg: cfg,
@@ -123,7 +188,24 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
         readStringParam(params, "media", { trim: false }) ??
         readStringParam(params, "filePath", { trim: false }) ??
         readStringParam(params, "path", { trim: false });
-      const threadId = readStringParam(params, "threadId") ?? readStringParam(params, "replyTo");
+      const inboundThreadId =
+        typeof toolContext?.currentThreadTs === "string" &&
+        isGoogleChatThreadResourceName(toolContext.currentThreadTs)
+          ? toolContext.currentThreadTs
+          : undefined;
+      const threadId = resolveActionThreadId({
+        to,
+        explicitThreadId: readStringParam(params, "threadId"),
+        explicitReplyTo: readStringParam(params, "replyTo"),
+        inboundThreadId,
+        currentChannelId:
+          typeof toolContext?.currentChannelId === "string"
+            ? toolContext.currentChannelId
+            : undefined,
+        currentMessageId: toolContext?.currentMessageId,
+        replyToMode: toolContext?.replyToMode,
+        hasRepliedRef: toolContext?.hasRepliedRef,
+      });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
 
       if (mediaUrl) {

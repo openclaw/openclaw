@@ -34,9 +34,17 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
 }));
 
-vi.mock("gaxios", () => ({
-  Gaxios: mocks.gaxiosCtor,
+vi.mock("google-auth-library", () => ({
+  GoogleAuth: function MockGoogleAuth() {},
+  OAuth2Client: function MockOAuth2Client() {},
+  gaxios: {
+    Gaxios: mocks.gaxiosCtor,
+  },
 }));
+
+vi.mock("gaxios", () => {
+  throw new Error("Google Chat auth must use google-auth-library's bundled gaxios.");
+});
 
 let __testing: typeof import("./google-auth.runtime.js").__testing;
 let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogleAuthFetch;

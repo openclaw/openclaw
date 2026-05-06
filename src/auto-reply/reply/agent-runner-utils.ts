@@ -161,6 +161,15 @@ export function buildThreadingToolContext(params: {
   };
 }
 
+export function resolveAutoThreadingTargets(sessionCtx: TemplateContext): {
+  currentMessageId: string | undefined;
+  implicitReplyToId: string | undefined;
+} {
+  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const implicitReplyToId = currentMessageId;
+  return { currentMessageId, implicitReplyToId };
+}
+
 export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 

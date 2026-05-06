@@ -25,6 +25,7 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  resolveAutoThreadingTargets,
   resolveModelFallbackOptions,
   resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
@@ -239,6 +240,65 @@ describe("agent-runner-utils", () => {
       currentChannelId: "telegram:-1003841603622",
       currentThreadTs: "928",
       currentMessageId: "2284",
+    });
+  });
+
+  it("keeps implicit reply target on currentMessageId when MessageThreadId is present", () => {
+    const targets = resolveAutoThreadingTargets({
+      MessageSidFull: "spaces/AAA/messages/123",
+      MessageSid: "spaces/AAA/messages/123",
+      MessageThreadId: "spaces/AAA/threads/xyz",
+    });
+
+    expect(targets).toEqual({
+      currentMessageId: "spaces/AAA/messages/123",
+      implicitReplyToId: "spaces/AAA/messages/123",
+    });
+  });
+
+  it("falls back to currentMessageId when MessageThreadId is missing", () => {
+    const targets = resolveAutoThreadingTargets({
+      MessageSidFull: "msg-full-1",
+      MessageSid: "msg-1",
+    });
+
+    expect(targets).toEqual({
+      currentMessageId: "msg-full-1",
+      implicitReplyToId: "msg-full-1",
+    });
+  });
+
+  it("falls back to MessageSid when MessageSidFull is missing", () => {
+    const targets = resolveAutoThreadingTargets({
+      MessageSid: "msg-7",
+      MessageThreadId: "thread-7",
+    });
+
+    expect(targets).toEqual({
+      currentMessageId: "msg-7",
+      implicitReplyToId: "msg-7",
+    });
+  });
+
+  it("treats blank MessageThreadId as missing", () => {
+    const targets = resolveAutoThreadingTargets({
+      MessageSidFull: "msg-full-2",
+      MessageSid: "msg-2",
+      MessageThreadId: "   ",
+    });
+
+    expect(targets).toEqual({
+      currentMessageId: "msg-full-2",
+      implicitReplyToId: "msg-full-2",
+    });
+  });
+
+  it("returns undefined targets when neither sid nor thread is present", () => {
+    const targets = resolveAutoThreadingTargets({});
+
+    expect(targets).toEqual({
+      currentMessageId: undefined,
+      implicitReplyToId: undefined,
     });
   });
 
