@@ -310,6 +310,19 @@ export async function runServiceStart(params: {
       });
       return;
     }
+    if (startResult.outcome === "already-running") {
+      emitActionMessage({
+        json,
+        emit,
+        payload: {
+          ok: true,
+          result: "already-running",
+          message: `${params.serviceNoun} service is already running.`,
+          service: buildDaemonServiceSnapshot(params.service, startResult.state.loaded),
+        },
+      });
+      return;
+    }
     if (startResult.outcome === "repair-required") {
       try {
         const handled = await params.repairLoadedService?.({

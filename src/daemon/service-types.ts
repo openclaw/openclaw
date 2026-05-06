@@ -57,6 +57,7 @@ export type GatewayServiceStartRepairIssue = {
 export type GatewayServiceStartResult =
   | { outcome: "started"; state: GatewayServiceState }
   | { outcome: "scheduled"; state: GatewayServiceState }
+  | { outcome: "already-running"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState }
   | {
       outcome: "repair-required";

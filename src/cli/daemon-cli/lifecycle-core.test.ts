@@ -359,6 +359,7 @@ describe("runServiceRestart token drift", () => {
   });
 
   it("emits scheduled when service start routes through a scheduled restart", async () => {
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     service.restart.mockResolvedValue({ outcome: "scheduled" });
 
     await runServiceStart({
@@ -372,6 +373,15 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("emits already-running when start finds the service already up (issue #60087)", async () => {
+    await runServiceStart(createServiceRunArgs());
+
+    expect(service.restart).not.toHaveBeenCalled();
+    const payload = readJsonLog<{ result?: string; message?: string }>();
+    expect(payload.result).toBe("already-running");
+    expect(payload.message).toBe("Gateway service is already running.");
   });
 
   it("repairs stale loaded services during start before reporting success", async () => {
@@ -425,6 +435,7 @@ describe("runServiceRestart token drift", () => {
 
   it("fails start when restarting a stopped installed service errors", async () => {
     service.isLoaded.mockResolvedValue(false);
+    service.readRuntime.mockResolvedValue({ status: "stopped" });
     service.restart.mockRejectedValue(new Error("launchctl kickstart failed: permission denied"));
 
     await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
