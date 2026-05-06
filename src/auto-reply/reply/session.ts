@@ -22,7 +22,6 @@ import {
 } from "../../config/sessions/reset.js";
 import { resolveAndPersistSessionFile } from "../../config/sessions/session-file.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { loadSessionStore, updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
@@ -34,7 +33,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
-import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { closeTrackedBrowserTabsForSessions } from "../../plugin-sdk/browser-maintenance.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -260,7 +258,6 @@ export async function initSessionState(params: {
       ? { ...ctx, SessionKey: targetSessionKey }
       : ctx;
   const sessionCfg = cfg.session;
-  const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
@@ -765,7 +762,6 @@ export async function initSessionState(params: {
     sessionsDir: path.dirname(storePath),
     fallbackSessionFile,
     activeSessionKey: sessionKey,
-    maintenanceConfig,
   });
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
@@ -799,14 +795,6 @@ export async function initSessionState(params: {
     },
     {
       activeSessionKey: sessionKey,
-      maintenanceConfig,
-      onWarn: (warning) =>
-        deliverSessionMaintenanceWarning({
-          cfg,
-          sessionKey,
-          entry: sessionEntry,
-          warning,
-        }),
     },
   );
 

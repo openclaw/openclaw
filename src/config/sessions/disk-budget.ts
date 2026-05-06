@@ -68,27 +68,6 @@ function canonicalizePathForComparison(filePath: string): string {
   }
 }
 
-function measureStoreBytes(store: Record<string, SessionEntry>): number {
-  return Buffer.byteLength(JSON.stringify(store, null, 2), "utf-8");
-}
-
-function measureStoreEntryChunkBytes(key: string, entry: SessionEntry): number {
-  const singleEntryStore = JSON.stringify({ [key]: entry }, null, 2);
-  if (!singleEntryStore.startsWith("{\n") || !singleEntryStore.endsWith("\n}")) {
-    return measureStoreBytes({ [key]: entry }) - 4;
-  }
-  const chunk = singleEntryStore.slice(2, -2);
-  return Buffer.byteLength(chunk, "utf-8");
-}
-
-function buildStoreEntryChunkSizeMap(store: Record<string, SessionEntry>): Map<string, number> {
-  const out = new Map<string, number>();
-  for (const [key, entry] of Object.entries(store)) {
-    out.set(key, measureStoreEntryChunkBytes(key, entry));
-  }
-  return out;
-}
-
 function getEntryUpdatedAt(entry?: SessionEntry): number {
   if (!entry) {
     return 0;
@@ -350,10 +329,9 @@ export async function enforceSessionDiskBudget(params: {
   const fileSizesByPath = new Map(files.map((file) => [file.canonicalPath, file.size]));
   const simulatedRemovedPaths = new Set<string>();
   const resolvedStorePath = canonicalizePathForComparison(params.storePath);
-  const storeFile = files.find((file) => file.canonicalPath === resolvedStorePath);
-  let projectedStoreBytes = measureStoreBytes(params.store);
-  let total =
-    files.reduce((sum, file) => sum + file.size, 0) - (storeFile?.size ?? 0) + projectedStoreBytes;
+  let total = files
+    .filter((file) => file.canonicalPath !== resolvedStorePath)
+    .reduce((sum, file) => sum + file.size, 0);
   const totalBefore = total;
   if (total <= maxBytes) {
     return {
@@ -421,7 +399,6 @@ export async function enforceSessionDiskBudget(params: {
   if (total > highWaterBytes) {
     const activeSessionKey = normalizeOptionalLowercaseString(params.activeSessionKey);
     const sessionIdRefCounts = buildSessionIdRefCounts(params.store);
-    const entryChunkBytesByKey = buildStoreEntryChunkSizeMap(params.store);
     const keys = Object.keys(params.store).toSorted((a, b) => {
       const aTime = getEntryUpdatedAt(params.store[a]);
       const bTime = getEntryUpdatedAt(params.store[b]);
@@ -441,17 +418,7 @@ export async function enforceSessionDiskBudget(params: {
       if (isProtectedSessionMaintenanceEntry(key, entry)) {
         continue;
       }
-      const previousProjectedBytes = projectedStoreBytes;
       delete params.store[key];
-      const chunkBytes = entryChunkBytesByKey.get(key);
-      entryChunkBytesByKey.delete(key);
-      if (typeof chunkBytes === "number" && Number.isFinite(chunkBytes) && chunkBytes >= 0) {
-        // Removing any one pretty-printed top-level entry always removes the entry chunk plus ",\n" (2 bytes).
-        projectedStoreBytes = Math.max(2, projectedStoreBytes - (chunkBytes + 2));
-      } else {
-        projectedStoreBytes = measureStoreBytes(params.store);
-      }
-      total += projectedStoreBytes - previousProjectedBytes;
       removedEntries += 1;
 
       const sessionId = entry.sessionId;

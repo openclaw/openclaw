@@ -864,9 +864,9 @@ export async function noteStateIntegrity(
       warnings.push(
         [
           `- ${missing.length}/${recentTranscriptCandidates.length} recent sessions are missing transcripts.`,
-          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
-          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run`)}`,
-          `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
+          `  Import legacy session indexes: ${formatCliCommand("openclaw doctor --fix")}`,
+          `  Preview cleanup impact: ${formatCliCommand("openclaw sessions cleanup --dry-run")}`,
+          `  Prune missing entries: ${formatCliCommand("openclaw sessions cleanup --enforce --fix-missing")}`,
         ].join("\n"),
       );
     }

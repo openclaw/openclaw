@@ -53,24 +53,11 @@ export async function prepareGatewayPluginBootstrap(params: {
   if (shouldRunStartupMaintenance) {
     const { runChannelPluginStartupMaintenance } =
       await import("../channels/plugins/lifecycle-startup.js");
-    const startupTasks = [
-      runChannelPluginStartupMaintenance({
-        cfg: startupMaintenanceConfig,
-        env: process.env,
-        log: params.log,
-      }),
-    ];
-    if (!params.minimalTestGateway) {
-      const { runStartupSessionMigration } = await import("./server-startup-session-migration.js");
-      startupTasks.push(
-        runStartupSessionMigration({
-          cfg: params.cfgAtStart,
-          env: process.env,
-          log: params.log,
-        }),
-      );
-    }
-    await Promise.all(startupTasks);
+    await runChannelPluginStartupMaintenance({
+      cfg: startupMaintenanceConfig,
+      env: process.env,
+      log: params.log,
+    });
   }
 
   initSubagentRegistry();

@@ -30,7 +30,6 @@ const NON_CHANNEL_DEP_KEYS = new Set([
   "hasOwnProperty",
   "inspect",
   "log",
-  "migrateOrphanedSessionKeys",
   "nowMs",
   "onEvent",
   "requestHeartbeat",

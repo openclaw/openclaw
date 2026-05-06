@@ -208,9 +208,9 @@ describe("state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toEqual([
-      `Canonicalized 2 orphaned session key(s) in ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       "Imported 4 session index row(s) into SQLite for agent worker-1",
+      "Canonicalized 2 legacy session key(s)",
       "Moved trace.jsonl → agents/worker-1/sessions",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
