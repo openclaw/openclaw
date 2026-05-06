@@ -192,6 +192,26 @@ function buildTelegramConnectOptions(params: {
   return Object.keys(connect).length > 0 ? connect : null;
 }
 
+/**
+ * Opt-in IPv4-only dispatcher policy for Telegram API.
+ *
+ * Some hosts (notably Windows 11 with broken or partial IPv6 connectivity)
+ * see chronic Telegram polling stalls because the dual-stack happy-eyeballs
+ * attempt sits in the IPv6 half-open state long enough to wedge the long-poll
+ * dispatcher pool. The existing sticky-fallback path eventually pins to IPv4,
+ * but only after burning a long timeout on every reconnect cycle.
+ *
+ * Setting OPENCLAW_TELEGRAM_FORCE_IPV4=1 (or true/yes/on) skips the dual-stack
+ * dance entirely and pins all Telegram API connections to IPv4 from startup,
+ * which on affected hosts eliminates the recurring polling stalls. Default
+ * remains IPv6-preferred to avoid changing behavior for users where IPv6 works.
+ */
+function isTelegramForceIpv4FromEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.OPENCLAW_TELEGRAM_FORCE_IPV4?.trim().toLowerCase();
+  if (!raw) return false;
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
 function shouldBypassEnvProxyForTelegramApi(env: NodeJS.ProcessEnv = process.env): boolean {
   const noProxyValue = env.no_proxy ?? env.NO_PROXY ?? "";
   if (!noProxyValue) {
@@ -609,11 +629,15 @@ export function resolveTelegramTransport(
   }
 
   const useEnvProxy = !resolvedExplicitProxyUrl && hasEnvProxy;
+  const forceIpv4FromEnv = isTelegramForceIpv4FromEnv();
+  if (forceIpv4FromEnv) {
+    log.info("OPENCLAW_TELEGRAM_FORCE_IPV4 set; pinning Telegram dispatcher to IPv4 from startup");
+  }
   const defaultDispatcherResolution = resolveTelegramDispatcherPolicy({
-    autoSelectFamily: autoSelectDecision.value,
-    dnsResultOrder,
+    autoSelectFamily: forceIpv4FromEnv ? false : autoSelectDecision.value,
+    dnsResultOrder: forceIpv4FromEnv ? "ipv4first" : dnsResultOrder,
     useEnvProxy,
-    forceIpv4: false,
+    forceIpv4: forceIpv4FromEnv,
     proxyUrl: resolvedExplicitProxyUrl,
   });
   const defaultDispatcher = createTelegramDispatcher(defaultDispatcherResolution.policy);

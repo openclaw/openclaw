@@ -967,6 +967,11 @@ channels:
       - `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`
       - `OPENCLAW_TELEGRAM_ENABLE_AUTO_SELECT_FAMILY=1`
       - `OPENCLAW_TELEGRAM_DNS_RESULT_ORDER=ipv4first`
+      - `OPENCLAW_TELEGRAM_FORCE_IPV4=1` — pins every Telegram dispatcher to
+        IPv4 from startup (`forceIpv4: true`, `autoSelectFamily: false`,
+        `dnsResultOrder: ipv4first`) instead of waiting for the sticky-fallback
+        path to engage after eligible failures. Only useful on hosts where
+        IPv6 is broken or partially routed.
     - Validate DNS answers:
 
 ```bash
