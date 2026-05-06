@@ -52,6 +52,13 @@ case "$CODEX_HARNESS_AUTH_MODE" in
     ;;
 esac
 
+if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$PROFILE_FILE"
+  set +a
+fi
+
 if [[ "$CODEX_HARNESS_AUTH_MODE" == "api-key" && -z "${OPENAI_API_KEY:-}" ]]; then
   echo "ERROR: OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key requires OPENAI_API_KEY." >&2
   exit 1
