@@ -53,7 +53,6 @@ describe("qa scenario catalog", () => {
     const codexLeakConfig = readQaScenarioExecutionConfig("codex-harness-no-meta-leak") as
       | {
           harnessRuntime?: string;
-          harnessFallback?: string;
           expectedReply?: string;
           forbiddenReplySubstrings?: string[];
         }
@@ -73,7 +72,8 @@ describe("qa scenario catalog", () => {
     );
     expect(codexLeak.title).toBe("Codex harness no meta leak");
     expect(codexLeakConfig?.harnessRuntime).toBe("codex");
-    expect(codexLeakConfig?.harnessFallback).toBe("none");
+    expect(JSON.stringify(codexLeak.execution.flow)).toContain("agentRuntime");
+    expect(JSON.stringify(codexLeak.execution.flow)).not.toContain("embeddedHarness");
     expect(codexLeakConfig?.expectedReply).toBe("QA_LEAK_OK");
     expect(codexLeakConfig?.forbiddenReplySubstrings).toContain("checking thread context");
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
@@ -123,9 +123,9 @@ describe("qa scenario catalog", () => {
     );
   });
 
-  it("includes the GPT-5.4 thinking visibility switch scenario", () => {
-    const scenario = readQaScenarioById("gpt54-thinking-visibility-switch");
-    const config = readQaScenarioExecutionConfig("gpt54-thinking-visibility-switch") as
+  it("includes the GPT-5.5 thinking visibility switch scenario", () => {
+    const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
+    const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as
       | {
           requiredLiveProvider?: string;
           requiredLiveModel?: string;
@@ -135,17 +135,116 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt54-thinking-visibility-switch.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.md");
     expect(config?.requiredLiveProvider).toBe("openai");
-    expect(config?.requiredLiveModel).toBe("gpt-5.4");
+    expect(config?.requiredLiveModel).toBe("gpt-5.5");
     expect(config?.offDirective).toBe("/think off");
-    expect(config?.maxDirective).toBe("/think max");
+    expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "enables reasoning display and disables thinking",
-      "switches to max thinking",
-      "verifies max thinking emits visible reasoning",
-      "verifies max thinking completes the answer",
+      "switches to medium thinking",
+      "verifies medium thinking emits visible reasoning",
+      "verifies medium thinking completes the answer",
+    ]);
+  });
+
+  it("includes the OpenAI native web search live scenario", () => {
+    const scenario = readQaScenarioById("openai-native-web-search-live");
+    const config = readQaScenarioExecutionConfig("openai-native-web-search-live") as
+      | {
+          requiredProvider?: string;
+          requiredModel?: string;
+          expectedMarker?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/openai-native-web-search-live.md");
+    expect(scenario.gatewayConfigPatch?.tools).toEqual({
+      web: {
+        search: {
+          enabled: true,
+          provider: null,
+        },
+      },
+    });
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.5");
+    expect(config?.expectedMarker).toBe("WEB-SEARCH-OK");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "confirms live OpenAI GPT-5.5 web search auto mode",
+      "searches official OpenAI News through the live model",
+    ]);
+  });
+
+  it("includes the Kitchen Sink live OpenAI plugin gauntlet", () => {
+    const scenario = readQaScenarioById("kitchen-sink-live-openai");
+    const config = readQaScenarioExecutionConfig("kitchen-sink-live-openai") as
+      | {
+          requiredProviderMode?: string;
+          requiredProvider?: string;
+          pluginSpec?: string;
+          pluginId?: string;
+          pluginPersonality?: string;
+          adversarialPersonality?: string;
+          expectedSurfaceIds?: Record<string, string[]>;
+          expectedAdversarialDiagnostics?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/plugins/kitchen-sink-live-openai.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.pluginSpec).toBe("npm:@openclaw/kitchen-sink@latest");
+    expect(config?.pluginId).toBe("openclaw-kitchen-sink-fixture");
+    expect(config?.pluginPersonality).toBe("conformance");
+    expect(config?.adversarialPersonality).toBe("adversarial");
+    expect(config?.expectedSurfaceIds?.webSearchProviderIds).toContain(
+      "kitchen-sink-web-search-provider",
+    );
+    expect(config?.expectedSurfaceIds?.realtimeVoiceProviderIds).toContain(
+      "kitchen-sink-realtime-voice-provider",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "only bundled plugins can register agent tool result middleware",
+    );
+    expect(config?.expectedAdversarialDiagnostics).toContain(
+      "control UI descriptor registration requires id, surface, label, and valid optional fields",
+    );
+    expect(
+      config?.expectedAdversarialDiagnostics?.every((entry) => typeof entry === "string"),
+    ).toBe(true);
+    expect(JSON.stringify(scenario.execution.flow)).toContain("--runtime");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "installs and inspects the Kitchen Sink plugin",
+      "restarts gateway with Kitchen Sink configured",
+      "exercises command inventory and MCP tool surfaces",
+      "runs live OpenAI turn with Kitchen Sink loaded",
+      "records gateway CPU RSS and log anomaly evidence",
+      "verifies adversarial diagnostics personality",
+    ]);
+  });
+
+  it("includes the thinking slash model remap scenario", () => {
+    const scenario = readQaScenarioById("thinking-slash-model-remap");
+    const config = readQaScenarioExecutionConfig("thinking-slash-model-remap") as
+      | {
+          requiredProviderMode?: string;
+          anthropicModelRef?: string;
+          openAiXhighModelRef?: string;
+          noXhighModelRef?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/models/thinking-slash-model-remap.md");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.anthropicModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(config?.openAiXhighModelRef).toBe("openai/gpt-5.5");
+    expect(config?.noXhighModelRef).toBe("anthropic/claude-sonnet-4-6");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "selects Anthropic and verifies adaptive options",
+      "maps adaptive to medium when switching to OpenAI",
+      "maps xhigh to high on a model without xhigh",
     ]);
   });
 

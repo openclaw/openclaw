@@ -1,9 +1,10 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
@@ -252,6 +253,11 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env: process.env });
+  if (tokenConflict) {
+    warnings.push(...tokenConflict.warningLines);
+  }
+
   const warnDmPolicy = async (params: {
     label: string;
     provider: ChannelId;
@@ -269,6 +275,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       provider: params.provider,
       accountId: params.accountId,
       allowFrom: params.allowFrom,
+      dmPolicy,
       normalizeEntry: params.normalizeEntry,
     });
     const dmScope = cfg.session?.dmScope ?? "main";
@@ -304,7 +311,10 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   };
 
-  for (const plugin of listChannelPlugins()) {
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+    includePersistedAuthState: true,
+    includeSetupFallbackPlugins: true,
+  })) {
     if (!plugin.security) {
       continue;
     }

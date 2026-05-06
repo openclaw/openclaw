@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect } from "vitest";
 import {
   installChannelActionsContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
-} from "../../../test/helpers/channels/registry-contract-suites.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { describe, expect } from "vitest";
 import { slackPlugin } from "../api.js";
 import { slackSetupPlugin } from "../setup-plugin-api.js";
 
@@ -40,10 +40,10 @@ describe("slack actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: slackDefaultActions,
-        expectedCapabilities: ["blocks"],
+        expectedCapabilities: ["presentation"],
       },
       {
-        name: "interactive replies add the shared interactive capability",
+        name: "interactive replies keep the shared presentation capability",
         cfg: {
           channels: {
             slack: {
@@ -56,7 +56,7 @@ describe("slack actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: slackDefaultActions,
-        expectedCapabilities: ["blocks", "interactive"],
+        expectedCapabilities: ["presentation"],
       },
       {
         name: "missing tokens disables the actions surface",

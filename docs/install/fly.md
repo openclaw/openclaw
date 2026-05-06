@@ -1,6 +1,6 @@
 ---
-title: Fly.io
 summary: "Step-by-step Fly.io deployment for OpenClaw with persistent storage and HTTPS"
+title: Fly.io
 read_when:
   - Deploying OpenClaw on Fly.io
   - Setting up Fly volumes, secrets, and first-run config
@@ -45,7 +45,7 @@ read_when:
   <Step title="Configure fly.toml">
     Edit `fly.toml` to match your app name and requirements.
 
-    **Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `fly.private.toml`.
+    **Security note:** The default config exposes a public URL. For a hardened deployment with no public IP, see [Private Deployment](#private-deployment-hardened) or use `deploy/fly.private.toml`.
 
     ```toml
     app = "my-openclaw"  # Your app name
@@ -193,7 +193,14 @@ read_when:
       },
       "gateway": {
         "mode": "local",
-        "bind": "auto"
+        "bind": "auto",
+        "controlUi": {
+          "allowedOrigins": [
+            "https://my-openclaw.fly.dev",
+            "http://localhost:3000",
+            "http://127.0.0.1:3000"
+          ]
+        }
       },
       "meta": {}
     }
@@ -201,6 +208,12 @@ read_when:
     ```
 
     **Note:** With `OPENCLAW_STATE_DIR=/data`, the config path is `/data/openclaw.json`.
+
+    **Note:** Replace `https://my-openclaw.fly.dev` with your real Fly app
+    origin. Gateway startup seeds local Control UI origins from the runtime
+    `--bind` and `--port` values so first boot can proceed before config exists,
+    but browser access through Fly still needs the exact HTTPS origin listed in
+    `gateway.controlUi.allowedOrigins`.
 
     **Note:** The Discord token can come from either:
 
@@ -282,7 +295,7 @@ fly machine update <machine-id> --vm-memory 2048 -y
 
 **Note:** 512MB is too small. 1GB may work but can OOM under load or with verbose logging. **2GB is recommended.**
 
-### Gateway Lock Issues
+### Gateway lock issues
 
 Gateway refuses to start with "already running" errors.
 
@@ -297,7 +310,7 @@ fly machine restart <machine-id>
 
 The lock file is at `/data/gateway.*.lock` (not in a subdirectory).
 
-### Config Not Being Read
+### Config not being read
 
 `--allow-unconfigured` only bypasses the startup guard. It does not create or repair `/data/openclaw.json`, so make sure your real config exists and includes `gateway.mode="local"` when you want a normal local gateway start.
 
@@ -307,7 +320,7 @@ Verify the config exists:
 fly ssh console --command "cat /data/openclaw.json"
 ```
 
-### Writing Config via SSH
+### Writing config via SSH
 
 The `fly ssh console -C` command doesn't support shell redirection. To write a config file:
 
@@ -326,7 +339,7 @@ fly sftp shell
 fly ssh console --command "rm /data/openclaw.json"
 ```
 
-### State Not Persisting
+### State not persisting
 
 If you lose auth profiles, channel/provider state, or sessions after a restart,
 the state dir is writing to the container filesystem.
@@ -347,7 +360,7 @@ fly status
 fly logs
 ```
 
-### Updating Machine Command
+### Updating machine command
 
 If you need to change the startup command without a full redeploy:
 
@@ -364,7 +377,7 @@ fly machine update <machine-id> --vm-memory 2048 --command "node dist/index.js g
 
 **Note:** After `fly deploy`, the machine command may reset to what's in `fly.toml`. If you made manual changes, re-apply them after deploy.
 
-## Private Deployment (Hardened)
+## Private deployment (hardened)
 
 By default, Fly allocates public IPs, making your gateway accessible at `https://your-app.fly.dev`. This is convenient but means your deployment is discoverable by internet scanners (Shodan, Censys, etc.).
 
@@ -379,11 +392,11 @@ For a hardened deployment with **no public exposure**, use the private template.
 
 ### Setup
 
-Use `fly.private.toml` instead of the standard config:
+Use `deploy/fly.private.toml` instead of the standard config:
 
 ```bash
 # Deploy with private config
-fly deploy -c fly.private.toml
+fly deploy -c deploy/fly.private.toml
 ```
 
 Or convert an existing deployment:
@@ -398,7 +411,7 @@ fly ips release <public-ipv6> -a my-openclaw
 
 # Switch to private config so future deploys don't re-allocate public IPs
 # (remove [http_service] or deploy with the private template)
-fly deploy -c fly.private.toml
+fly deploy -c deploy/fly.private.toml
 
 # Allocate private-only IPv6
 fly ips allocate-v6 --private -a my-openclaw
@@ -502,3 +515,10 @@ See [Fly.io pricing](https://fly.io/docs/about/pricing/) for details.
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
 - Keep OpenClaw up to date: [Updating](/install/updating)
+
+## Related
+
+- [Install overview](/install)
+- [Hetzner](/install/hetzner)
+- [Docker](/install/docker)
+- [VPS hosting](/vps)

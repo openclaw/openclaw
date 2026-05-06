@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import {
@@ -18,7 +18,7 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
 
 export type ClaudeBundleCommandSpec = {
   pluginId: string;
@@ -56,7 +56,7 @@ function stripFrontmatter(content: string): string {
 
 function readClaudeBundleManifest(rootDir: string): Record<string, unknown> {
   const manifestPath = path.join(rootDir, CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH);
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: rootDir,
     boundaryLabel: "plugin root",
@@ -176,10 +176,10 @@ export function loadEnabledClaudeBundleCommands(params: {
   if (!hasExplicitPluginConfig(params.cfg?.plugins)) {
     return [];
   }
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
-    cache: false,
+    includeDisabled: true,
   });
   const normalizedPlugins = normalizePluginsConfig(params.cfg?.plugins);
   const commands: ClaudeBundleCommandSpec[] = [];

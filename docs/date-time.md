@@ -3,7 +3,7 @@ summary: "Date and time handling across envelopes, prompts, tools, and connector
 read_when:
   - You are changing how timestamps are shown to the model or users
   - You are debugging time formatting in messages or system prompt output
-title: "Date and Time"
+title: "Date and time"
 ---
 
 # Date & Time
@@ -62,7 +62,7 @@ You can override this behavior:
 [WhatsApp +1555 +30s 2026-01-18T05:19Z] follow-up
 ```
 
-## System prompt: Current Date & Time
+## System prompt: current date and time
 
 If the user timezone is known, the system prompt includes a dedicated
 **Current Date & Time** section with the **time zone only** (no clock/time format)

@@ -6,13 +6,14 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
+const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../terminal/note.js", () => ({
   note,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({
-  listChannelPlugins: () => pluginRegistry.list,
+vi.mock("../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: listReadOnlyChannelPluginsForConfigMock,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({
@@ -28,6 +29,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
   beforeEach(() => {
     note.mockClear();
+    listReadOnlyChannelPluginsForConfigMock.mockReset();
+    listReadOnlyChannelPluginsForConfigMock.mockImplementation(() => pluginRegistry.list);
     pluginRegistry.list = [];
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -148,6 +151,54 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("CRITICAL");
   });
 
+  it("warns when OPENCLAW_GATEWAY_TOKEN env overrides gateway.auth.token config (#74271)", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: {
+        auth: {
+          token: "config-token-456",
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+    expect(message).toContain("env-first precedence");
+  });
+
+  it("does not warn when only env token is set without config token", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-only";
+    const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
+  it("does not warn when config token uses OPENCLAW_GATEWAY_TOKEN SecretRef", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+      secrets: { providers: { default: { source: "env" } } },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
+  it("does not warn about local gateway auth token precedence in remote mode", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
   it("treats whitespace token as missing", async () => {
     const cfg = {
       gateway: { bind: "lan", auth: { mode: "token", token: "   " } },
@@ -197,6 +248,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
     ];
     const cfg = { session: { dmScope: "main" } } as OpenClawConfig;
     await noteSecurityWarnings(cfg);
+    expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(cfg, {
+      includePersistedAuthState: true,
+      includeSetupFallbackPlugins: true,
+    });
     const message = lastMessage();
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
   });
@@ -454,6 +509,13 @@ describe("noteSecurityWarnings gateway exposure", () => {
     ];
 
     await noteSecurityWarnings({} as OpenClawConfig);
+    expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(
+      {},
+      {
+        includePersistedAuthState: true,
+        includeSetupFallbackPlugins: true,
+      },
+    );
     const message = lastMessage();
     expect(message).toContain("[secrets]");
     expect(message).toContain("failed to resolve account");

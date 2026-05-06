@@ -13,27 +13,18 @@ const AudioFormatPolicySchema = z
   })
   .optional();
 
-const QQBotSpeechQueryParamsSchema = z.record(z.string(), z.string()).optional();
-
-const QQBotSpeechProviderSchema = z.object({
-  enabled: z.boolean().optional(),
-  provider: z.string().optional(),
-  baseUrl: z.string().optional(),
-  apiKey: z.string().optional(),
-  model: z.string().optional(),
-});
-
-const QQBotTtsSchema = QQBotSpeechProviderSchema.extend({
-  voice: z.string().optional(),
-  authStyle: z.enum(["bearer", "api-key"]).optional(),
-  queryParams: QQBotSpeechQueryParamsSchema,
-  speed: z.number().optional(),
-})
+const QQBotSttSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    provider: z.string().optional(),
+    baseUrl: z.string().optional(),
+    apiKey: z.string().optional(),
+    model: z.string().optional(),
+  })
   .strict()
   .optional();
 
-const QQBotSttSchema = QQBotSpeechProviderSchema.strict().optional();
-
+/** When `true`, same as `mode: "partial"` and `c2cStreamApi: true` for C2C. Object form kept for legacy configs. */
 const QQBotStreamingSchema = z
   .union([
     z.boolean(),
@@ -41,10 +32,26 @@ const QQBotStreamingSchema = z
       .object({
         /** "partial" (default) enables block streaming; "off" disables it. */
         mode: z.enum(["off", "partial"]).default("partial"),
+        /** @deprecated Prefer `streaming: true`. */
+        c2cStreamApi: z.boolean().optional(),
       })
       .passthrough(),
   ])
   .optional();
+
+const QQBotExecApprovalsSchema = z
+  .object({
+    enabled: z.union([z.boolean(), z.literal("auto")]).optional(),
+    approvers: z.array(z.string()).optional(),
+    agentFilter: z.array(z.string()).optional(),
+    sessionFilter: z.array(z.string()).optional(),
+    target: z.enum(["dm", "channel", "both"]).optional(),
+  })
+  .strict()
+  .optional();
+
+const QQBotDmPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
+const QQBotGroupPolicySchema = z.enum(["open", "allowlist", "disabled"]).optional();
 
 const QQBotAccountSchema = z
   .object({
@@ -54,6 +61,9 @@ const QQBotAccountSchema = z
     clientSecret: buildSecretInputSchema().optional(),
     clientSecretFile: z.string().optional(),
     allowFrom: AllowFromListSchema,
+    groupAllowFrom: AllowFromListSchema,
+    dmPolicy: QQBotDmPolicySchema,
+    groupPolicy: QQBotGroupPolicySchema,
     systemPrompt: z.string().optional(),
     markdownSupport: z.boolean().optional(),
     voiceDirectUploadFormats: z.array(z.string()).optional(),
@@ -62,11 +72,11 @@ const QQBotAccountSchema = z
     upgradeUrl: z.string().optional(),
     upgradeMode: z.enum(["doc", "hot-reload"]).optional(),
     streaming: QQBotStreamingSchema,
+    execApprovals: QQBotExecApprovalsSchema,
   })
   .passthrough();
 
 export const QQBotConfigSchema = QQBotAccountSchema.extend({
-  tts: QQBotTtsSchema,
   stt: QQBotSttSchema,
   accounts: z.object({}).catchall(QQBotAccountSchema.passthrough()).optional(),
   defaultAccount: z.string().optional(),

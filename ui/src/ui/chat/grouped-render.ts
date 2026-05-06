@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { until } from "lit/directives/until.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -14,19 +15,13 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../types/chat-types.ts";
-import { agentLogoUrl } from "../views/agents-utils.ts";
+import { resolveLocalUserName } from "../user-identity.ts";
+export { resolveAssistantTextAvatar } from "../views/agents-utils.ts";
+import { renderChatAvatar } from "./chat-avatar.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
-import {
-  extractTextCached,
-  extractThinkingCached,
-  formatReasoningMarkdown,
-} from "./message-extract.ts";
-import {
-  isToolResultMessage,
-  normalizeMessage,
-  normalizeRoleForGrouping,
-} from "./message-normalizer.ts";
-import { isTtsSupported, speakText, stopTts, isTtsSpeaking } from "./speech.ts";
+import { extractThinkingCached, formatReasoningMarkdown } from "./message-extract.ts";
+import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
+import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import {
   extractToolCards,
   renderExpandedToolCardContent,
@@ -37,30 +32,100 @@ import {
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
-  | { status: "available" }
+  | { status: "available"; mediaTicket?: string; mediaTicketExpiresAt?: number }
   | { status: "unavailable"; reason: string; checkedAt: number };
 
 const assistantAttachmentAvailabilityCache = new Map<string, AssistantAttachmentAvailability>();
+const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
+const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
+
+export type ChatTimestampDisplay = {
+  label: string;
+  title: string;
+  dateTime: string;
+};
+
+export function formatChatTimestampForDisplay(timestamp: number): ChatTimestampDisplay {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) {
+    return {
+      label: "Unknown date",
+      title: "Unknown date",
+      dateTime: "",
+    };
+  }
+
+  return {
+    label: date.toLocaleString([], {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    title: date.toLocaleString([], {
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+      timeZoneName: "short",
+    }),
+    dateTime: date.toISOString(),
+  };
+}
+
+function renderChatTimestamp(timestamp: number) {
+  const display = formatChatTimestampForDisplay(timestamp);
+  return html`
+    <time class="chat-group-timestamp" datetime=${display.dateTime} title=${display.title}>
+      ${display.label}
+    </time>
+  `;
+}
 
 export function resetAssistantAttachmentAvailabilityCacheForTest() {
   assistantAttachmentAvailabilityCache.clear();
+  for (const timer of assistantAttachmentRefreshTimers.values()) {
+    clearTimeout(timer);
+  }
+  assistantAttachmentRefreshTimers.clear();
+  for (const blobUrl of managedImageBlobUrlResolvedCache.values()) {
+    URL.revokeObjectURL(blobUrl);
+  }
+  managedImageBlobUrlCache.clear();
+  managedImageBlobUrlResolvedCache.clear();
+  managedImageBlobUrlMissCache.clear();
 }
 
 type ImageBlock = {
   url: string;
+  openUrl?: string;
   alt?: string;
+  width?: number;
+  height?: number;
 };
 
 type ImageRenderOptions = {
   localMediaPreviewRoots?: readonly string[];
   basePath?: string;
   authToken?: string | null;
+  onRequestUpdate?: () => void;
 };
 
 type RenderableImageBlock = ImageBlock & {
   displayUrl: string;
 };
+
+type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
+
+const managedImageBlobUrlCache = new Map<string, Promise<string | null>>();
+const managedImageBlobUrlResolvedCache = new Map<string, string>();
+const managedImageBlobUrlMissCache = new Map<string, number>();
+const MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS = 5_000;
 
 function appendImageBlock(images: ImageBlock[], block: ImageBlock) {
   if (!images.some((entry) => entry.url === block.url && entry.alt === block.alt)) {
@@ -108,6 +173,56 @@ function isImageTranscriptMediaPath(path: string, mediaType: unknown): boolean {
   );
 }
 
+function isAudioTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("audio/")) {
+    return true;
+  }
+  const ext = getFileExtension(path);
+  return (
+    ext !== undefined && ["aac", "flac", "m4a", "mp3", "oga", "ogg", "opus", "wav"].includes(ext)
+  );
+}
+
+function isVideoTranscriptMediaPath(path: string, mediaType: unknown): boolean {
+  if (typeof mediaType === "string" && mediaType.trim().toLowerCase().startsWith("video/")) {
+    return true;
+  }
+  const ext = getFileExtension(path);
+  return ext !== undefined && ["m4v", "mov", "mp4", "webm"].includes(ext);
+}
+
+function labelForMediaPath(mediaPath: string): string {
+  const trimmed = mediaPath.trim();
+  try {
+    if (/^https?:\/\//i.test(trimmed)) {
+      const parsed = new URL(trimmed);
+      return parsed.pathname.split("/").pop()?.trim() || parsed.hostname || trimmed;
+    }
+  } catch {}
+  return trimmed.split(/[\\/]/).pop()?.trim() || trimmed;
+}
+
+function extractTranscriptMediaEntries(message: unknown): Array<{
+  path: string;
+  mediaType: unknown;
+}> {
+  const m = message as Record<string, unknown>;
+  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
+    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
+    : typeof m.MediaPath === "string"
+      ? [m.MediaPath]
+      : [];
+  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
+    ? m.MediaTypes
+    : typeof m.MediaType === "string"
+      ? [m.MediaType]
+      : [];
+  return transcriptMediaPaths.map((mediaPath, index) => ({
+    path: mediaPath,
+    mediaType: transcriptMediaTypes[index],
+  }));
+}
+
 function extractImages(message: unknown): ImageBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
@@ -123,15 +238,22 @@ function extractImages(message: unknown): ImageBlock[] {
       if (b.type === "image") {
         // Handle source object format (from sendChatMessage)
         const source = b.source as Record<string, unknown> | undefined;
+        const imageMeta = {
+          alt: typeof b.alt === "string" ? b.alt : undefined,
+          openUrl: typeof b.openUrl === "string" ? b.openUrl : undefined,
+          width: typeof b.width === "number" ? b.width : undefined,
+          height: typeof b.height === "number" ? b.height : undefined,
+        };
         if (source?.type === "base64" && typeof source.data === "string") {
           appendImageBlock(images, {
             url: buildBase64ImageUrl({
               data: source.data,
               mediaType: typeof source.media_type === "string" ? source.media_type : undefined,
             }),
+            ...imageMeta,
           });
         } else if (typeof b.url === "string") {
-          appendImageBlock(images, { url: b.url });
+          appendImageBlock(images, { url: b.url, ...imageMeta });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
@@ -164,18 +286,8 @@ function extractImages(message: unknown): ImageBlock[] {
     }
   }
 
-  const transcriptMediaPaths = Array.isArray(m.MediaPaths)
-    ? m.MediaPaths.filter((value): value is string => typeof value === "string")
-    : typeof m.MediaPath === "string"
-      ? [m.MediaPath]
-      : [];
-  const transcriptMediaTypes = Array.isArray(m.MediaTypes)
-    ? m.MediaTypes
-    : typeof m.MediaType === "string"
-      ? [m.MediaType]
-      : [];
-  for (const [index, mediaPath] of transcriptMediaPaths.entries()) {
-    if (!isImageTranscriptMediaPath(mediaPath, transcriptMediaTypes[index])) {
+  for (const { path: mediaPath, mediaType } of extractTranscriptMediaEntries(message)) {
+    if (!isImageTranscriptMediaPath(mediaPath, mediaType)) {
       continue;
     }
     appendImageBlock(images, { url: mediaPath });
@@ -184,10 +296,38 @@ function extractImages(message: unknown): ImageBlock[] {
   return images;
 }
 
-export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
+function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
+  const attachments: AttachmentItem[] = [];
+  for (const { path: mediaPath, mediaType } of extractTranscriptMediaEntries(message)) {
+    if (isImageTranscriptMediaPath(mediaPath, mediaType)) {
+      continue;
+    }
+    const kind = isAudioTranscriptMediaPath(mediaPath, mediaType)
+      ? "audio"
+      : isVideoTranscriptMediaPath(mediaPath, mediaType)
+        ? "video"
+        : "document";
+    attachments.push({
+      type: "attachment",
+      attachment: {
+        url: mediaPath,
+        kind,
+        label: labelForMediaPath(mediaPath),
+        ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
+      },
+    });
+  }
+  return attachments;
+}
+
+export function renderReadingIndicatorGroup(
+  assistant?: AssistantIdentity,
+  basePath?: string,
+  authToken?: string | null,
+) {
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
           <span class="chat-reading-indicator__dots">
@@ -205,16 +345,13 @@ export function renderStreamingGroup(
   onOpenSidebar?: (content: SidebarContent) => void,
   assistant?: AssistantIdentity,
   basePath?: string,
+  authToken?: string | null,
 ) {
-  const timestamp = new Date(startedAt).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
   const name = assistant?.name ?? "Assistant";
 
   return html`
     <div class="chat-group assistant">
-      ${renderAvatar("assistant", assistant, basePath)}
+      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
         ${renderGroupedMessage(
           {
@@ -228,7 +365,7 @@ export function renderStreamingGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${name}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
+          ${renderChatTimestamp(startedAt)}
         </div>
       </div>
     </div>
@@ -249,6 +386,8 @@ export function renderMessageGroup(
     onRequestUpdate?: () => void;
     assistantName?: string;
     assistantAvatar?: string | null;
+    userName?: string | null;
+    userAvatar?: string | null;
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
@@ -261,10 +400,14 @@ export function renderMessageGroup(
 ) {
   const normalizedRole = normalizeRoleForGrouping(group.role);
   const assistantName = opts.assistantName ?? "Assistant";
+  const resolvedUserName = resolveLocalUserName({
+    name: opts.userName ?? null,
+    avatar: opts.userAvatar ?? null,
+  });
   const userLabel = group.senderLabel?.trim();
   const who =
     normalizedRole === "user"
-      ? (userLabel ?? "You")
+      ? (userLabel ?? resolvedUserName)
       : normalizedRole === "assistant"
         ? assistantName
         : normalizedRole === "tool"
@@ -278,23 +421,24 @@ export function renderMessageGroup(
         : normalizedRole === "tool"
           ? "tool"
           : "other";
-  const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
-    hour: "numeric",
-    minute: "2-digit",
-  });
 
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
   return html`
     <div class="chat-group ${roleClass}">
-      ${renderAvatar(
+      ${renderChatAvatar(
         group.role,
         {
           name: assistantName,
           avatar: opts.assistantAvatar ?? null,
         },
+        {
+          name: opts.userName ?? null,
+          avatar: opts.userAvatar ?? null,
+        },
         opts.basePath,
+        opts.assistantAttachmentAuthToken,
       )}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) =>
@@ -303,6 +447,7 @@ export function renderMessageGroup(
             item.key,
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
+              duplicateCount: item.duplicateCount ?? 1,
               showReasoning: opts.showReasoning,
               showToolCalls: opts.showToolCalls ?? true,
               autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
@@ -322,9 +467,7 @@ export function renderMessageGroup(
         )}
         <div class="chat-group-footer">
           <span class="chat-sender-name">${who}</span>
-          <span class="chat-group-timestamp">${timestamp}</span>
-          ${renderMessageMeta(meta)}
-          ${normalizedRole === "assistant" && isTtsSupported() ? renderTtsButton(group) : nothing}
+          ${renderChatTimestamp(group.timestamp)} ${renderMessageMeta(meta)}
           ${opts.onDelete
             ? renderDeleteButton(opts.onDelete, normalizedRole === "user" ? "left" : "right")
             : nothing}
@@ -354,6 +497,7 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   let cost = 0;
   let model: string | null = null;
   let hasUsage = false;
+  let maxPromptTokens = 0;
 
   for (const { message } of group.messages) {
     const m = message as Record<string, unknown>;
@@ -363,10 +507,15 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
     const usage = m.usage as Record<string, number> | undefined;
     if (usage) {
       hasUsage = true;
-      input += usage.input ?? usage.inputTokens ?? 0;
-      output += usage.output ?? usage.outputTokens ?? 0;
-      cacheRead += usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
-      cacheWrite += usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      const callInput = usage.input ?? usage.inputTokens ?? 0;
+      const callOutput = usage.output ?? usage.outputTokens ?? 0;
+      const callCacheRead = usage.cacheRead ?? usage.cache_read_input_tokens ?? 0;
+      const callCacheWrite = usage.cacheWrite ?? usage.cache_creation_input_tokens ?? 0;
+      input += callInput;
+      output += callOutput;
+      cacheRead += callCacheRead;
+      cacheWrite += callCacheWrite;
+      maxPromptTokens = Math.max(maxPromptTokens, callInput + callCacheRead + callCacheWrite);
     }
     const c = m.cost as Record<string, number> | undefined;
     if (c?.total) {
@@ -382,7 +531,9 @@ function extractGroupMeta(group: MessageGroup, contextWindow: number | null): Gr
   }
 
   const contextPercent =
-    contextWindow && input > 0 ? Math.min(Math.round((input / contextWindow) * 100), 100) : null;
+    contextWindow && maxPromptTokens > 0
+      ? Math.min(Math.round((maxPromptTokens / contextWindow) * 100), 100)
+      : null;
 
   return { input, output, cacheRead, cacheWrite, cost, model, contextPercent };
 }
@@ -449,23 +600,22 @@ function renderMessageMeta(meta: GroupMeta | null) {
     return nothing;
   }
 
-  return html`<span class="msg-meta">${parts}</span>`;
-}
-
-function extractGroupText(group: MessageGroup): string {
-  const parts: string[] = [];
-  for (const { message } of group.messages) {
-    const text = extractTextCached(message);
-    if (text?.trim()) {
-      parts.push(text.trim());
-    }
-  }
-  return parts.join("\n\n");
+  return html`
+    <details class="msg-meta">
+      <summary class="msg-meta__summary" title="Show message context details">
+        <span class="msg-meta__summary-icon" aria-hidden="true">${icons.chevronRight}</span>
+        <span>Context</span>
+      </summary>
+      <span class="msg-meta__details">${parts}</span>
+    </details>
+  `;
 }
 
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
 
 type DeleteConfirmSide = "left" | "right";
+
+const deleteConfirmDismissers = new WeakMap<Element, () => void>();
 
 function shouldSkipDeleteConfirm(): boolean {
   try {
@@ -473,6 +623,15 @@ function shouldSkipDeleteConfirm(): boolean {
   } catch {
     return false;
   }
+}
+
+function dismissDeleteConfirm(element: Element) {
+  const dismiss = deleteConfirmDismissers.get(element);
+  if (dismiss) {
+    dismiss();
+    return;
+  }
+  element.remove();
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -491,7 +650,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           const wrap = btn.closest(".chat-delete-wrap") as HTMLElement;
           const existing = wrap?.querySelector(".chat-delete-confirm");
           if (existing) {
-            existing.remove();
+            dismissDeleteConfirm(existing);
             return;
           }
           const popover = document.createElement("div");
@@ -513,161 +672,47 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
           const yes = popover.querySelector(".chat-delete-confirm__yes")!;
           const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
 
-          cancel.addEventListener("click", () => popover.remove());
+          let dismissed = false;
+          function dismissPopover() {
+            if (dismissed) {
+              return;
+            }
+            dismissed = true;
+            document.removeEventListener("click", closeOnOutside, true);
+            deleteConfirmDismissers.delete(popover);
+            popover.remove();
+          }
+          function closeOnOutside(evt: MouseEvent) {
+            const target = evt.target;
+            if (target instanceof Node && !popover.contains(target) && !btn.contains(target)) {
+              dismissPopover();
+            }
+          }
+
+          deleteConfirmDismissers.set(popover, dismissPopover);
+
+          cancel.addEventListener("click", dismissPopover);
           yes.addEventListener("click", () => {
             if (check.checked) {
               try {
                 getSafeLocalStorage()?.setItem(SKIP_DELETE_CONFIRM_KEY, "1");
               } catch {}
             }
-            popover.remove();
+            dismissPopover();
             onDelete();
           });
 
-          // Close on click outside
-          const closeOnOutside = (evt: MouseEvent) => {
-            if (!popover.contains(evt.target as Node) && evt.target !== btn) {
-              popover.remove();
-              document.removeEventListener("click", closeOnOutside, true);
+          requestAnimationFrame(() => {
+            if (!dismissed && popover.isConnected) {
+              document.addEventListener("click", closeOnOutside, true);
             }
-          };
-          requestAnimationFrame(() => document.addEventListener("click", closeOnOutside, true));
+          });
         }}
       >
         ${icons.trash ?? icons.x}
       </button>
     </span>
   `;
-}
-
-function renderTtsButton(group: MessageGroup) {
-  return html`
-    <button
-      class="btn btn--xs chat-tts-btn"
-      type="button"
-      title=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      aria-label=${isTtsSpeaking() ? "Stop speaking" : "Read aloud"}
-      @click=${(e: Event) => {
-        const btn = e.currentTarget as HTMLButtonElement;
-        if (isTtsSpeaking()) {
-          stopTts();
-          btn.classList.remove("chat-tts-btn--active");
-          btn.title = "Read aloud";
-          return;
-        }
-        const text = extractGroupText(group);
-        if (!text) {
-          return;
-        }
-        btn.classList.add("chat-tts-btn--active");
-        btn.title = "Stop speaking";
-        speakText(text, {
-          onEnd: () => {
-            if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
-            }
-          },
-          onError: () => {
-            if (btn.isConnected) {
-              btn.classList.remove("chat-tts-btn--active");
-              btn.title = "Read aloud";
-            }
-          },
-        });
-      }}
-    >
-      ${icons.volume2}
-    </button>
-  `;
-}
-
-function renderAvatar(
-  role: string,
-  assistant?: Pick<AssistantIdentity, "name" | "avatar">,
-  basePath?: string,
-) {
-  const normalized = normalizeRoleForGrouping(role);
-  const assistantName = assistant?.name?.trim() || "Assistant";
-  const assistantAvatar = assistant?.avatar?.trim() || "";
-  const initial =
-    normalized === "user"
-      ? html`
-          <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-            <circle cx="12" cy="8" r="4" />
-            <path d="M20 21a8 8 0 1 0-16 0" />
-          </svg>
-        `
-      : normalized === "assistant"
-        ? html`
-            <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-              <path d="M12 2l2.4 7.2H22l-6 4.8 2.4 7.2L12 16l-6.4 5.2L8 14 2 9.2h7.6z" />
-            </svg>
-          `
-        : normalized === "tool"
-          ? html`
-              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                <path
-                  d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53a7.76 7.76 0 0 0 .07-1 7.76 7.76 0 0 0-.07-.97l2.11-1.63a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.15 7.15 0 0 0-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4a.49.49 0 0 0-.49.42l-.38 2.65a7.15 7.15 0 0 0-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46a.49.49 0 0 0 .12.64L4.57 11a7.9 7.9 0 0 0 0 1.94l-2.11 1.69a.49.49 0 0 0-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.72 1.69.98l.38 2.65c.05.24.26.42.49.42h4c.23 0 .44-.18.49-.42l.38-2.65a7.15 7.15 0 0 0 1.69-.98l2.49 1a.5.5 0 0 0 .61-.22l2-3.46a.49.49 0 0 0-.12-.64z"
-                />
-              </svg>
-            `
-          : html`
-              <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18">
-                <circle cx="12" cy="12" r="10" />
-                <text
-                  x="12"
-                  y="16.5"
-                  text-anchor="middle"
-                  font-size="14"
-                  font-weight="600"
-                  fill="var(--bg, #fff)"
-                >
-                  ?
-                </text>
-              </svg>
-            `;
-  const className =
-    normalized === "user"
-      ? "user"
-      : normalized === "assistant"
-        ? "assistant"
-        : normalized === "tool"
-          ? "tool"
-          : "other";
-
-  if (assistantAvatar && normalized === "assistant") {
-    if (isAvatarUrl(assistantAvatar)) {
-      return html`<img
-        class="chat-avatar ${className}"
-        src="${assistantAvatar}"
-        alt="${assistantName}"
-      />`;
-    }
-    return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
-      src="${agentLogoUrl(basePath ?? "")}"
-      alt="${assistantName}"
-    />`;
-  }
-
-  /* Assistant with no custom avatar: use logo when basePath available */
-  if (normalized === "assistant" && basePath) {
-    const logoUrl = agentLogoUrl(basePath);
-    return html`<img
-      class="chat-avatar ${className} chat-avatar--logo"
-      src="${logoUrl}"
-      alt="${assistantName}"
-    />`;
-  }
-
-  return html`<div class="chat-avatar ${className}">${initial}</div>`;
-}
-
-function isAvatarUrl(value: string): boolean {
-  return (
-    /^https?:\/\//i.test(value) || /^data:image\//i.test(value) || value.startsWith("/") // Relative paths from avatar endpoint
-  );
 }
 
 function resolveRenderableMessageImages(
@@ -681,14 +726,26 @@ function resolveRenderableMessageImages(
     if (isLocalImage && !canProxyLocalImage) {
       return [];
     }
+    const availability = canProxyLocalImage
+      ? resolveAssistantAttachmentAvailability(
+          img.url,
+          opts?.localMediaPreviewRoots ?? [],
+          opts?.basePath,
+          opts?.authToken,
+          opts?.onRequestUpdate,
+        )
+      : { status: "available" as const };
+    if (availability.status !== "available") {
+      return [];
+    }
     const displayUrl = canProxyLocalImage
-      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, opts?.authToken)
+      ? buildAssistantAttachmentUrl(img.url, opts?.basePath, availability.mediaTicket)
       : img.url;
     return [{ ...img, displayUrl }];
   });
 }
 
-function renderMessageImages(images: RenderableImageBlock[]) {
+function renderMessageImages(images: RenderableImageBlock[], opts?: ImageRenderOptions) {
   if (images.length === 0) {
     return nothing;
   }
@@ -697,20 +754,31 @@ function renderMessageImages(images: RenderableImageBlock[]) {
     openExternalUrlSafe(url, { allowDataImage: true });
   };
 
-  return html`
-    <div class="chat-message-images">
-      ${images.map(
-        (img) => html`
-          <img
-            src=${img.displayUrl}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => openImage(img.displayUrl)}
-          />
-        `,
-      )}
-    </div>
+  const renderImageElement = (img: RenderableImageBlock, previewUrl: string) => html`
+    <img
+      src=${previewUrl}
+      alt=${img.alt ?? "Attached image"}
+      class="chat-message-image"
+      width=${img.width ?? nothing}
+      height=${img.height ?? nothing}
+      @click=${() => openImage(previewUrl)}
+    />
   `;
+
+  const renderImage = (img: RenderableImageBlock) => {
+    if (!isManagedOutgoingImageSource(img.displayUrl)) {
+      return renderImageElement(img, img.displayUrl);
+    }
+    const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts).then((previewUrl) => {
+      if (!previewUrl) {
+        return nothing;
+      }
+      return renderImageElement(img, previewUrl);
+    });
+    return until(preview, nothing);
+  };
+
+  return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;
 }
 
 function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
@@ -731,7 +799,7 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
 
 function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
-  if (/^\/(?:__openclaw__|media)\//.test(trimmed)) {
+  if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
     return false;
   }
   return (
@@ -823,7 +891,7 @@ function isLocalAttachmentPreviewAllowed(
 function buildAssistantAttachmentUrl(
   source: string,
   basePath?: string,
-  authToken?: string | null,
+  mediaTicket?: string | null,
 ): string {
   if (!isLocalAssistantAttachmentSource(source)) {
     return source;
@@ -831,20 +899,144 @@ function buildAssistantAttachmentUrl(
   const normalizedBasePath =
     basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
   const params = new URLSearchParams({ source });
-  const normalizedToken = authToken?.trim();
-  if (normalizedToken) {
-    params.set("token", normalizedToken);
+  const normalizedMediaTicket = mediaTicket?.trim();
+  if (normalizedMediaTicket) {
+    params.set("mediaTicket", normalizedMediaTicket);
   }
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
 
-function buildAssistantAttachmentMetaUrl(
+function isManagedOutgoingImageSource(source: string): boolean {
+  const trimmed = source.trim();
+  if (trimmed.startsWith("/api/chat/media/outgoing/")) {
+    return true;
+  }
+  try {
+    const parsed = new URL(trimmed, window.location.origin);
+    return (
+      parsed.origin === window.location.origin &&
+      parsed.pathname.startsWith("/api/chat/media/outgoing/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function resolveManagedOutgoingImageRequesterSessionKey(source: string): string | null {
+  try {
+    const parsed = new URL(source, window.location.origin);
+    const parts = parsed.pathname.split("/");
+    const encodedSessionKey = parts[5];
+    return encodedSessionKey ? decodeURIComponent(encodedSessionKey) : null;
+  } catch {
+    return null;
+  }
+}
+
+function buildManagedOutgoingImageFetchUrl(source: string, basePath?: string): string {
+  if (!source.startsWith("/")) {
+    return source;
+  }
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  return `${normalizedBasePath}${source}`;
+}
+
+async function resolveManagedOutgoingImageBlobUrl(
   source: string,
-  basePath?: string,
-  authToken?: string | null,
-): string {
-  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath, authToken);
+  opts?: ImageRenderOptions,
+): Promise<string | null> {
+  const authToken = opts?.authToken?.trim() ?? "";
+  const fetchUrl = buildManagedOutgoingImageFetchUrl(source, opts?.basePath);
+  const cacheKey = `${fetchUrl}::${authToken}`;
+  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const missAt = managedImageBlobUrlMissCache.get(cacheKey);
+  if (missAt && Date.now() - missAt < MANAGED_IMAGE_BLOB_URL_MISS_RETRY_MS) {
+    return null;
+  }
+  let pending = managedImageBlobUrlCache.get(cacheKey);
+  if (!pending) {
+    pending = (async () => {
+      const requesterSessionKey = resolveManagedOutgoingImageRequesterSessionKey(source);
+      const headers = new Headers({ Accept: "image/*" });
+      if (authToken) {
+        headers.set("Authorization", `Bearer ${authToken}`);
+      }
+      if (requesterSessionKey) {
+        headers.set("x-openclaw-requester-session-key", requesterSessionKey);
+      }
+      const res = await fetch(fetchUrl, {
+        method: "GET",
+        headers,
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        return null;
+      }
+      const blob = await res.blob();
+      if (!blob.type.startsWith("image/")) {
+        managedImageBlobUrlMissCache.set(cacheKey, Date.now());
+        return null;
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
+      managedImageBlobUrlMissCache.delete(cacheKey);
+      return blobUrl;
+    })().finally(() => {
+      managedImageBlobUrlCache.delete(cacheKey);
+    });
+    managedImageBlobUrlCache.set(cacheKey, pending);
+  }
+  return pending;
+}
+
+function buildAssistantAttachmentMetaUrl(source: string, basePath?: string): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
   return `${attachmentUrl}${attachmentUrl.includes("?") ? "&" : "?"}meta=1`;
+}
+
+function clearAssistantAttachmentRefreshTimer(cacheKey: string) {
+  const timer = assistantAttachmentRefreshTimers.get(cacheKey);
+  if (timer) {
+    clearTimeout(timer);
+    assistantAttachmentRefreshTimers.delete(cacheKey);
+  }
+}
+
+function scheduleAssistantAttachmentRefresh(
+  cacheKey: string,
+  availability: AssistantAttachmentAvailability,
+  onRequestUpdate: (() => void) | undefined,
+) {
+  clearAssistantAttachmentRefreshTimer(cacheKey);
+  if (
+    availability.status !== "available" ||
+    !availability.mediaTicket ||
+    !availability.mediaTicketExpiresAt ||
+    !onRequestUpdate
+  ) {
+    return;
+  }
+  const refreshInMs = Math.max(
+    0,
+    availability.mediaTicketExpiresAt -
+      Date.now() -
+      ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS,
+  );
+  const timer = setTimeout(() => {
+    assistantAttachmentRefreshTimers.delete(cacheKey);
+    const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
+    if (cached?.status !== "available" || cached.mediaTicket !== availability.mediaTicket) {
+      return;
+    }
+    assistantAttachmentAvailabilityCache.delete(cacheKey);
+    onRequestUpdate();
+  }, refreshInMs);
+  assistantAttachmentRefreshTimers.set(cacheKey, timer);
 }
 
 function resolveAssistantAttachmentAvailability(
@@ -864,30 +1056,63 @@ function resolveAssistantAttachmentAvailability(
   const cacheKey = `${basePath ?? ""}::${normalizedAuthToken}::${source}`;
   const cached = assistantAttachmentAvailabilityCache.get(cacheKey);
   if (cached) {
+    const now = Date.now();
     if (
       cached.status === "unavailable" &&
-      Date.now() - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+      now - cached.checkedAt >= ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS
+    ) {
+      assistantAttachmentAvailabilityCache.delete(cacheKey);
+    } else if (
+      cached.status === "available" &&
+      cached.mediaTicket &&
+      (!cached.mediaTicketExpiresAt ||
+        cached.mediaTicketExpiresAt - now <= ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS)
     ) {
       assistantAttachmentAvailabilityCache.delete(cacheKey);
     } else {
+      scheduleAssistantAttachmentRefresh(cacheKey, cached, onRequestUpdate);
       return cached;
     }
   }
+  clearAssistantAttachmentRefreshTimer(cacheKey);
   assistantAttachmentAvailabilityCache.set(cacheKey, { status: "checking" });
   if (typeof fetch === "function") {
-    void fetch(buildAssistantAttachmentMetaUrl(source, basePath, authToken), {
+    const headers = new Headers({ Accept: "application/json" });
+    if (normalizedAuthToken) {
+      headers.set("Authorization", `Bearer ${normalizedAuthToken}`);
+    }
+    void fetch(buildAssistantAttachmentMetaUrl(source, basePath), {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers,
       credentials: "same-origin",
     })
       .then(async (res) => {
         const payload = (await res.json().catch(() => null)) as {
           available?: boolean;
+          mediaTicket?: string;
+          mediaTicketExpiresAt?: string;
           reason?: string;
         } | null;
         if (payload?.available === true) {
-          assistantAttachmentAvailabilityCache.set(cacheKey, { status: "available" });
+          const mediaTicket = payload.mediaTicket?.trim();
+          const mediaTicketExpiresAt = Date.parse(payload.mediaTicketExpiresAt ?? "");
+          if (mediaTicket && !Number.isFinite(mediaTicketExpiresAt)) {
+            clearAssistantAttachmentRefreshTimer(cacheKey);
+            assistantAttachmentAvailabilityCache.set(cacheKey, {
+              status: "unavailable",
+              reason: "Attachment unavailable",
+              checkedAt: Date.now(),
+            });
+            return;
+          }
+          const availability: AssistantAttachmentAvailability = {
+            status: "available",
+            ...(mediaTicket ? { mediaTicket, mediaTicketExpiresAt } : {}),
+          };
+          assistantAttachmentAvailabilityCache.set(cacheKey, availability);
+          scheduleAssistantAttachmentRefresh(cacheKey, availability, onRequestUpdate);
         } else {
+          clearAssistantAttachmentRefreshTimer(cacheKey);
           assistantAttachmentAvailabilityCache.set(cacheKey, {
             status: "unavailable",
             reason: payload?.reason?.trim() || "Attachment unavailable",
@@ -896,6 +1121,7 @@ function resolveAssistantAttachmentAvailability(
         }
       })
       .catch(() => {
+        clearAssistantAttachmentRefreshTimer(cacheKey);
         assistantAttachmentAvailabilityCache.set(cacheKey, {
           status: "unavailable",
           reason: "Attachment unavailable",
@@ -940,7 +1166,7 @@ function renderAssistantAttachmentStatusCard(params: {
 }
 
 function renderAssistantAttachments(
-  attachments: Array<Extract<MessageContentItem, { type: "attachment" }>>,
+  attachments: AttachmentItem[],
   localMediaPreviewRoots: readonly string[],
   basePath?: string,
   authToken?: string | null,
@@ -961,7 +1187,7 @@ function renderAssistantAttachments(
         );
         const attachmentUrl =
           availability.status === "available"
-            ? buildAssistantAttachmentUrl(attachment.url, basePath, authToken)
+            ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
             : null;
         if (attachment.kind === "image") {
           if (!attachmentUrl) {
@@ -1146,6 +1372,7 @@ function renderGroupedMessage(
   messageKey: string,
   opts: {
     isStreaming: boolean;
+    duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
     autoExpandToolCalls?: boolean;
@@ -1179,6 +1406,7 @@ function renderGroupedMessage(
     localMediaPreviewRoots: opts.localMediaPreviewRoots ?? [],
     basePath: opts.basePath,
     authToken: opts.assistantAttachmentAuthToken,
+    onRequestUpdate: opts.onRequestUpdate,
   };
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);
   const hasImages = images.length > 0;
@@ -1194,9 +1422,9 @@ function renderGroupedMessage(
     .join("\n")
     .trim();
   const assistantAttachments = normalizedMessage.content.filter(
-    (item): item is Extract<MessageContentItem, { type: "attachment" }> =>
-      item.type === "attachment",
+    (item): item is AttachmentItem => item.type === "attachment",
   );
+  const visibleAttachments = [...assistantAttachments, ...extractTranscriptAttachments(message)];
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );
@@ -1211,7 +1439,13 @@ function renderGroupedMessage(
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
-  const bubbleClasses = ["chat-bubble", opts.isStreaming ? "streaming" : "", "fade-in"]
+  const isToolMessage = normalizedRole === "tool" || isToolResult;
+  const bubbleClasses = [
+    "chat-bubble",
+    isToolMessage ? "chat-bubble--tool-shell" : "",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -1221,14 +1455,13 @@ function renderGroupedMessage(
     !markdown &&
     !visibleToolCards &&
     !hasImages &&
-    assistantAttachments.length === 0 &&
+    visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !normalizedMessage.replyTarget
   ) {
     return nothing;
   }
 
-  const isToolMessage = normalizedRole === "tool" || isToolResult;
   const toolMessageDisclosureId = `toolmsg:${messageKey}`;
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
@@ -1247,6 +1480,7 @@ function renderGroupedMessage(
       : "Tool output";
 
   const hasActions = canCopyMarkdown || canExpand;
+  const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
     <div class="${bubbleClasses}">
@@ -1281,9 +1515,9 @@ function renderGroupedMessage(
               ${toolMessageExpanded
                 ? html`
                     <div class="chat-tool-msg-body">
-                      ${renderMessageImages(images)}
+                      ${renderMessageImages(images, imageRenderOptions)}
                       ${renderAssistantAttachments(
-                        assistantAttachments,
+                        visibleAttachments,
                         opts.localMediaPreviewRoots ?? [],
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
@@ -1337,9 +1571,9 @@ function renderGroupedMessage(
             </div>
           `
         : html`
-            ${renderMessageImages(images)}
+            ${renderMessageImages(images, imageRenderOptions)}
             ${renderAssistantAttachments(
-              assistantAttachments,
+              visibleAttachments,
               opts.localMediaPreviewRoots ?? [],
               opts.basePath,
               opts.assistantAttachmentAuthToken,
@@ -1386,6 +1620,15 @@ function renderGroupedMessage(
                 })
               : nothing}
           `}
+      ${duplicateCount > 1
+        ? html`<div
+            class="chat-duplicate-count"
+            aria-label=${`${duplicateCount} consecutive identical messages collapsed`}
+            title=${`${duplicateCount} consecutive identical messages collapsed`}
+          >
+            ×${duplicateCount}
+          </div>`
+        : nothing}
     </div>
   `;
 }

@@ -32,6 +32,7 @@ import {
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
@@ -73,7 +74,11 @@ export async function handleDirectiveOnly(
   const agentDir = resolveAgentDir(params.cfg, activeAgentId);
   const runtimeIsSandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveRuntimePolicySessionKey({
+      cfg: params.cfg,
+      ctx: params.ctx,
+      sessionKey: params.sessionKey,
+    }),
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
   const allowInternalExecPersistence = canPersistInternalExecDirective({
@@ -99,6 +104,7 @@ export async function handleDirectiveOnly(
     aliasIndex,
     allowedModelCatalog,
     resetModelOverride,
+    workspaceDir: params.workspaceDir,
     surface: params.surface,
     sessionEntry,
   });
@@ -125,6 +131,12 @@ export async function handleDirectiveOnly(
 
   const resolvedProvider = modelSelection?.provider ?? provider;
   const resolvedModel = modelSelection?.model ?? model;
+  const thinkingCatalog =
+    params.thinkingCatalog && params.thinkingCatalog.length > 0
+      ? params.thinkingCatalog
+      : allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : undefined;
   const fastModeState = resolveFastModeState({
     cfg: params.cfg,
     provider: resolvedProvider,
@@ -143,12 +155,12 @@ export async function handleDirectiveOnly(
       return {
         text: withOptions(
           `Current thinking level: ${level}.`,
-          formatThinkingLevels(resolvedProvider, resolvedModel),
+          formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog),
         ),
       };
     }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
@@ -295,10 +307,11 @@ export async function handleDirectiveOnly(
       provider: resolvedProvider,
       model: resolvedModel,
       level: directives.thinkLevel,
+      catalog: thinkingCatalog,
     })
   ) {
     return {
-      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel)}.`,
+      text: `Thinking level "${directives.thinkLevel}" is not supported for ${resolvedProvider}/${resolvedModel}. Use one of: ${formatThinkingLevels(resolvedProvider, resolvedModel, ", ", thinkingCatalog)}.`,
     };
   }
 
@@ -313,11 +326,13 @@ export async function handleDirectiveOnly(
       provider: resolvedProvider,
       model: resolvedModel,
       level: nextThinkLevel,
+      catalog: thinkingCatalog,
     })
       ? resolveSupportedThinkingLevel({
           provider: resolvedProvider,
           model: resolvedModel,
           level: nextThinkLevel,
+          catalog: thinkingCatalog,
         })
       : undefined;
   const shouldRemapUnsupportedThinkLevel =
@@ -449,6 +464,7 @@ export async function handleDirectiveOnly(
         key: sessionKey,
         nextProvider: modelSelection.provider,
         nextModel: modelSelection.model,
+        nextModelOverrideSource: "user",
         nextAuthProfileId: profileOverride,
         nextAuthProfileIdSource: profileOverride ? "user" : undefined,
       });
@@ -580,7 +596,7 @@ export async function handleDirectiveOnly(
     parts.push(
       modelSelection.isDefault
         ? `Model reset to default (${labelWithAlias}).`
-        : `Model set to ${labelWithAlias}.`,
+        : `Model set to ${labelWithAlias} for this session.`,
     );
     if (profileOverride) {
       parts.push(`Auth profile set to ${profileOverride}.`);

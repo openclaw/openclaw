@@ -1,26 +1,44 @@
+import fs from "node:fs";
 import type { Context, Model } from "@mariozechner/pi-ai";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
 import plugin from "./index.js";
+import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
+
+type MoonshotManifest = {
+  providerAuthEnvVars?: Record<string, string[]>;
+};
+
+function readManifest(): MoonshotManifest {
+  return JSON.parse(
+    fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as MoonshotManifest;
+}
 
 describe("moonshot provider plugin", () => {
-  it("owns replay policy for OpenAI-compatible Moonshot transports", async () => {
+  it("mirrors Kimi web-search env credentials in manifest metadata", () => {
+    const manifestEnvVars = readManifest().providerAuthEnvVars?.moonshot ?? [];
+
+    expect(manifestEnvVars).toEqual(expect.arrayContaining(createKimiWebSearchProvider().envVars));
+  });
+
+  it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(
-      provider.buildReplayPolicy?.({
-        provider: "moonshot",
-        modelApi: "openai-completions",
-        modelId: "kimi-k2.6",
-      } as never),
-    ).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
+    const policy = provider.buildReplayPolicy?.({
+      provider: "moonshot",
+      modelApi: "openai-completions",
+      modelId: "kimi-k2.6",
+    } as never);
+
+    expect(policy).toMatchObject({
       applyAssistantFirstOrderingFix: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
     });
+    expect(policy).not.toHaveProperty("sanitizeToolCallIds");
+    expect(policy).not.toHaveProperty("toolCallIdMode");
   });
 
   it("wires moonshot-thinking stream hooks", async () => {

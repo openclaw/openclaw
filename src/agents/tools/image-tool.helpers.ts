@@ -2,7 +2,7 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { estimateBase64DecodedBytes } from "../../media/base64.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { findNormalizedProviderValue } from "../model-selection.js";
+import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
@@ -134,6 +134,106 @@ export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
 
+function formatConfiguredImageModelRef(provider: string, modelId: string): string {
+  const slash = modelId.indexOf("/");
+  if (slash > 0 && normalizeProviderId(modelId.slice(0, slash)) === provider) {
+    return modelId;
+  }
+  return `${provider}/${modelId}`;
+}
+
+function modelIdMatchesProviderlessRef(params: {
+  provider: string;
+  modelId: string;
+  ref: string;
+}): boolean {
+  const candidates = new Set([params.modelId]);
+  const slash = params.modelId.indexOf("/");
+  if (slash > 0 && normalizeProviderId(params.modelId.slice(0, slash)) === params.provider) {
+    candidates.add(params.modelId.slice(slash + 1));
+  }
+  const normalizedRef = normalizeLowercaseStringOrEmpty(params.ref);
+  for (const candidate of candidates) {
+    if (candidate === params.ref || normalizeLowercaseStringOrEmpty(candidate) === normalizedRef) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
+  const providers = params.cfg?.models?.providers;
+  if (!providers || typeof providers !== "object") {
+    return [];
+  }
+
+  const matches = new Set<string>();
+  for (const [providerKey, providerConfig] of Object.entries(providers)) {
+    const provider = normalizeProviderId(providerKey);
+    if (!provider || !Array.isArray(providerConfig?.models)) {
+      continue;
+    }
+    for (const entry of providerConfig.models) {
+      const modelId = entry?.id?.trim();
+      if (!modelId || !Array.isArray(entry?.input) || !entry.input.includes("image")) {
+        continue;
+      }
+      if (!modelIdMatchesProviderlessRef({ provider, modelId, ref: params.ref })) {
+        continue;
+      }
+      matches.add(formatConfiguredImageModelRef(provider, modelId));
+    }
+  }
+  return [...matches];
+}
+
+function resolveProviderlessConfiguredImageModelRef(params: {
+  cfg?: OpenClawConfig;
+  ref: string;
+}): string {
+  const ref = params.ref.trim();
+  if (!ref || ref.includes("/")) {
+    return ref;
+  }
+
+  const matches = findConfiguredImageModelMatches({ cfg: params.cfg, ref });
+  if (matches.length === 0) {
+    return ref;
+  }
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  throw new Error(
+    `Ambiguous image model "${ref}". Configure a provider-prefixed ref such as ${matches
+      .map((match) => `"${match}"`)
+      .join(" or ")}.`,
+  );
+}
+
+export function resolveConfiguredImageModelRefs(params: {
+  cfg?: OpenClawConfig;
+  imageModelConfig: ImageModelConfig;
+}): ImageModelConfig {
+  const primary = params.imageModelConfig.primary?.trim();
+  const fallbacks = params.imageModelConfig.fallbacks
+    ?.map((ref) => resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref }))
+    .filter((ref) => ref.length > 0);
+
+  return {
+    ...(params.imageModelConfig.primary !== undefined
+      ? {
+          primary: primary
+            ? resolveProviderlessConfiguredImageModelRef({ cfg: params.cfg, ref: primary })
+            : primary,
+        }
+      : {}),
+    ...(fallbacks && fallbacks.length > 0 ? { fallbacks } : {}),
+    ...(params.imageModelConfig.timeoutMs !== undefined
+      ? { timeoutMs: params.imageModelConfig.timeoutMs }
+      : {}),
+  };
+}
+
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -145,5 +245,11 @@ export function resolveProviderVisionModelFromConfig(params: {
   const models = providerCfg?.models ?? [];
   const picked = models.find((m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"));
   const id = (picked?.id ?? "").trim();
-  return id ? `${params.provider}/${id}` : null;
+  if (!id) {
+    return null;
+  }
+  const slash = id.indexOf("/");
+  const idProvider = slash === -1 ? "" : normalizeLowercaseStringOrEmpty(id.slice(0, slash));
+  const selectedProvider = normalizeLowercaseStringOrEmpty(params.provider);
+  return idProvider && idProvider === selectedProvider ? id : `${params.provider}/${id}`;
 }

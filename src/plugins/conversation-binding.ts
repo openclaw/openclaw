@@ -10,7 +10,7 @@ import {
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
-import { writeJsonAtomic } from "../infra/json-files.js";
+import { writeJson } from "../infra/json-files.js";
 import { type ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -74,6 +74,7 @@ type PendingPluginBindingRequest = {
   requestedBySenderId?: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 };
 
 type PluginBindingApprovalAction = {
@@ -94,6 +95,7 @@ type PluginBindingMetadata = {
   pluginRoot: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 };
 
 type PluginBindingResolveResult =
@@ -172,6 +174,13 @@ function normalizeConversation(params: PluginBindingConversation): PluginBinding
         ? Math.trunc(params.threadId)
         : normalizeOptionalString(params.threadId?.toString()),
   };
+}
+
+function normalizeBindingData(data: unknown): Record<string, unknown> | undefined {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return undefined;
+  }
+  return { ...(data as Record<string, unknown>) };
 }
 
 function toConversationRef(params: PluginBindingConversation): ConversationRef {
@@ -370,7 +379,7 @@ async function saveApprovals(file: PluginBindingApprovalsFile): Promise<void> {
   const state = getPluginBindingGlobalState();
   state.approvalsCache = file;
   state.approvalsLoaded = true;
-  await writeJsonAtomic(filePath, file, {
+  await writeJson(filePath, file, {
     mode: 0o600,
     trailingNewline: true,
   });
@@ -425,6 +434,7 @@ function buildBindingMetadata(params: {
   pluginRoot: string;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }): PluginBindingMetadata {
   return {
     pluginBindingOwner: PLUGIN_BINDING_OWNER,
@@ -433,6 +443,7 @@ function buildBindingMetadata(params: {
     pluginRoot: params.pluginRoot,
     summary: normalizeOptionalString(params.summary),
     detachHint: normalizeOptionalString(params.detachHint),
+    data: normalizeBindingData(params.data),
   };
 }
 
@@ -486,6 +497,7 @@ export function toPluginConversationBinding(
     boundAt: record.boundAt,
     summary: metadata.summary,
     detachHint: metadata.detachHint,
+    data: metadata.data,
   };
 }
 
@@ -532,19 +544,21 @@ function bindConversationFromIdentity(params: {
   conversation: PluginBindingConversation;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }): Promise<PluginConversationBinding> {
   return bindConversationNow({
     identity: buildPluginBindingIdentity(params.identity),
     conversation: params.conversation,
     summary: params.summary,
     detachHint: params.detachHint,
+    data: params.data,
   });
 }
 
 function bindConversationFromRequest(
   request: Pick<
     PendingPluginBindingRequest,
-    "pluginId" | "pluginName" | "pluginRoot" | "conversation" | "summary" | "detachHint"
+    "pluginId" | "pluginName" | "pluginRoot" | "conversation" | "summary" | "detachHint" | "data"
   >,
 ): Promise<PluginConversationBinding> {
   return bindConversationFromIdentity({
@@ -552,6 +566,7 @@ function bindConversationFromRequest(
     conversation: request.conversation,
     summary: request.summary,
     detachHint: request.detachHint,
+    data: request.data,
   });
 }
 
@@ -577,6 +592,7 @@ async function bindConversationNow(params: {
   conversation: PluginBindingConversation;
   summary?: string;
   detachHint?: string;
+  data?: Record<string, unknown>;
 }): Promise<PluginConversationBinding> {
   const ref = toConversationRef(params.conversation);
   const targetSessionKey = buildPluginBindingSessionKey({
@@ -596,6 +612,7 @@ async function bindConversationNow(params: {
       pluginRoot: params.identity.pluginRoot,
       summary: params.summary,
       detachHint: params.detachHint,
+      data: params.data,
     }),
   });
   const binding = toPluginConversationBinding(record);
@@ -634,7 +651,7 @@ function buildDetachHintSuffix(detachHint?: string): string {
 }
 
 export function buildPluginBindingUnavailableText(binding: PluginConversationBinding): string {
-  return `The bound plugin ${resolvePluginBindingDisplayName(binding)} is not currently loaded. Routing this message to OpenClaw instead.${buildDetachHintSuffix(binding.detachHint)}`;
+  return `The bound plugin ${resolvePluginBindingDisplayName(binding)} is not currently loaded. Routing this message to OpenClaw instead. If this started after an update, run "openclaw doctor --fix"; otherwise reinstall or enable the plugin.${buildDetachHintSuffix(binding.detachHint)}`;
 }
 
 export function buildPluginBindingDeclinedText(binding: PluginConversationBinding): string {
@@ -765,6 +782,7 @@ export async function requestPluginConversationBinding(params: {
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
+      data: params.binding?.data,
     });
     logPluginBindingLifecycleEvent({
       event: "auto-refresh",
@@ -789,6 +807,7 @@ export async function requestPluginConversationBinding(params: {
       conversation,
       summary: params.binding?.summary,
       detachHint: params.binding?.detachHint,
+      data: params.binding?.data,
     });
     logPluginBindingLifecycleEvent({
       event: "auto-approved",
@@ -811,6 +830,7 @@ export async function requestPluginConversationBinding(params: {
     requestedBySenderId: normalizeOptionalString(params.requestedBySenderId),
     summary: normalizeOptionalString(params.binding?.summary),
     detachHint: normalizeOptionalString(params.binding?.detachHint),
+    data: normalizeBindingData(params.binding?.data),
   };
   pendingRequests.set(request.id, request);
   logPluginBindingLifecycleEvent({
@@ -955,6 +975,7 @@ async function notifyPluginConversationBindingResolved(params: {
         request: {
           summary: params.request.summary,
           detachHint: params.request.detachHint,
+          data: params.request.data,
           requestedBySenderId: params.request.requestedBySenderId,
           conversation: params.request.conversation,
         },

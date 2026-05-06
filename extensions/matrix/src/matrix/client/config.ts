@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   coerceSecretRef,
@@ -11,7 +12,6 @@ import {
 } from "../../account-selection.js";
 import { resolveMatrixAccountStringValues } from "../../auth-precedence.js";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
-import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import {
   findMatrixAccountConfig,
@@ -32,7 +32,6 @@ import {
   resolveGlobalMatrixEnvConfig,
   resolveMatrixEnvAuthReadiness,
   resolveScopedMatrixEnvConfig,
-  type MatrixEnvConfig,
 } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
@@ -449,10 +448,8 @@ function buildMatrixNetworkFields(params: {
 export { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 export {
   hasReadyMatrixEnvAuth,
-  resolveGlobalMatrixEnvConfig,
   resolveMatrixEnvAuthReadiness,
   resolveScopedMatrixEnvConfig,
-  type MatrixEnvConfig,
 } from "./env-auth.js";
 export {
   resolveValidatedMatrixHomeserverUrl,
@@ -556,8 +553,8 @@ function resolveImplicitMatrixAccountId(
   return normalizeAccountId(resolveMatrixDefaultOrOnlyAccountId(cfg, env));
 }
 
-export function resolveMatrixAuthContext(params?: {
-  cfg?: CoreConfig;
+export function resolveMatrixAuthContext(params: {
+  cfg: CoreConfig;
   env?: NodeJS.ProcessEnv;
   accountId?: string | null;
 }): {
@@ -566,7 +563,7 @@ export function resolveMatrixAuthContext(params?: {
   accountId: string;
   resolved: MatrixResolvedConfig;
 } {
-  const cfg = params?.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+  const cfg = requireRuntimeConfig(params.cfg, "Matrix auth context") as CoreConfig;
   const env = params?.env ?? process.env;
   const explicitAccountId = normalizeOptionalAccountId(params?.accountId);
   const effectiveAccountId = explicitAccountId ?? resolveImplicitMatrixAccountId(cfg, env);
@@ -600,7 +597,16 @@ export async function resolveMatrixAuth(params?: {
   env?: NodeJS.ProcessEnv;
   accountId?: string | null;
 }): Promise<MatrixAuth> {
-  const { cfg, env, accountId, resolved } = resolveMatrixAuthContext(params);
+  if (!params?.cfg) {
+    throw new Error(
+      "Matrix auth requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const { cfg, env, accountId, resolved } = resolveMatrixAuthContext({
+    cfg: params.cfg,
+    env: params.env,
+    accountId: params.accountId,
+  });
   const accessToken =
     (await resolveConfiguredMatrixAuthSecretInput({
       cfg,

@@ -1,15 +1,23 @@
-import { Type } from "@sinclair/typebox";
-import { createMessageToolButtonsSchema } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
+import {
+  createAttachedChannelResultAdapter,
+  type ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import {
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -98,15 +106,7 @@ function describeMattermostMessageTool({
 
   return {
     actions,
-    capabilities: enabledAccounts.length > 0 ? ["buttons"] : [],
-    schema:
-      enabledAccounts.length > 0
-        ? {
-            properties: {
-              buttons: Type.Optional(createMessageToolButtonsSchema()),
-            },
-          }
-        : null,
+    capabilities: enabledAccounts.length > 0 ? ["presentation"] : [],
   };
 }
 
@@ -180,7 +180,15 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       throw new Error("Mattermost send requires a target (to).");
     }
 
-    const message = typeof params.message === "string" ? params.message : "";
+    const presentation = normalizeMessagePresentation(params.presentation);
+    const message = presentation
+      ? renderMessagePresentationFallbackText({
+          text: typeof params.message === "string" ? params.message : "",
+          presentation,
+        })
+      : typeof params.message === "string"
+        ? params.message
+        : "";
     // Match the shared runner semantics: trim empty reply IDs away before
     // falling back from replyToId to replyTo on direct plugin calls.
     const replyToId =
@@ -193,9 +201,26 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
     const result = await (
       await loadMattermostChannelRuntime()
     ).sendMessageMattermost(to, message, {
+      cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: Array.isArray(params.buttons) ? params.buttons : undefined,
+      buttons: presentation
+        ? presentationToInteractiveReply(presentation)
+            ?.blocks.filter((block) => block.type === "buttons")
+            .map((block) =>
+              block.buttons.flatMap((button) =>
+                button.value
+                  ? [
+                      {
+                        text: button.label,
+                        callback_data: button.value,
+                        style: button.style,
+                      },
+                    ]
+                  : [],
+              ),
+            )
+        : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });
@@ -240,6 +265,83 @@ function parseMattermostReactActionParams(params: Record<string, unknown>): {
   };
 }
 
+const mattermostOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
+  textChunkLimit: 4000,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
+  resolveTarget: ({ to }) => {
+    const trimmed = to?.trim();
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to Mattermost requires --to <channelId|@username|user:ID|channel:ID>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  },
+  ...createAttachedChannelResultAdapter({
+    channel: "mattermost",
+    sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) =>
+      await (
+        await loadMattermostChannelRuntime()
+      ).sendMessageMattermost(to, text, {
+        cfg,
+        accountId: accountId ?? undefined,
+        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+      }),
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      replyToId,
+      threadId,
+    }) =>
+      await (
+        await loadMattermostChannelRuntime()
+      ).sendMessageMattermost(to, text, {
+        cfg,
+        accountId: accountId ?? undefined,
+        mediaUrl,
+        mediaLocalRoots,
+        replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
+      }),
+  }),
+};
+
+const mattermostMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "mattermost",
+  outbound: mattermostOutbound,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        discardPending: true,
+      },
+    },
+  },
+});
+
 export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = createChatChannelPlugin({
   base: {
     id: "mattermost",
@@ -271,6 +373,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       resolveRequireMention: resolveMattermostGroupRequireMention,
     },
     actions: mattermostMessageActions,
+    message: mattermostMessageAdapter,
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
@@ -286,6 +389,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         (await loadMattermostChannelRuntime()).listMattermostDirectoryPeers(params),
     }),
     messaging: {
+      targetPrefixes: ["mattermost"],
       defaultMarkdownTableMode: "off",
       normalizeTarget: normalizeMattermostMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
@@ -410,54 +514,5 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     }),
   },
   security: mattermostSecurityAdapter,
-  outbound: {
-    base: {
-      deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      resolveTarget: ({ to }) => {
-        const trimmed = to?.trim();
-        if (!trimmed) {
-          return {
-            ok: false,
-            error: new Error(
-              "Delivering to Mattermost requires --to <channelId|@username|user:ID|channel:ID>",
-            ),
-          };
-        }
-        return { ok: true, to: trimmed };
-      },
-    },
-    attachedResults: {
-      channel: "mattermost",
-      sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) =>
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(to, text, {
-          cfg,
-          accountId: accountId ?? undefined,
-          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-        }),
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId,
-        replyToId,
-        threadId,
-      }) =>
-        await (
-          await loadMattermostChannelRuntime()
-        ).sendMessageMattermost(to, text, {
-          cfg,
-          accountId: accountId ?? undefined,
-          mediaUrl,
-          mediaLocalRoots,
-          replyToId: replyToId ?? (threadId != null ? String(threadId) : undefined),
-        }),
-    },
-  },
+  outbound: mattermostOutbound,
 });

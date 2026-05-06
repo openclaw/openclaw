@@ -1,6 +1,11 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import type {
+  MatrixConfig,
+  MatrixRoomConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -16,7 +21,9 @@ const DEFAULT_ROUTE = {
 
 type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
+  accountConfig?: MatrixConfig;
   cfg?: unknown;
+  liveCfg?: unknown;
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
@@ -35,6 +42,7 @@ type MatrixHandlerTestHarnessOptions = {
   dmThreadReplies?: "off" | "inbound" | "always";
   dmSessionScope?: "per-user" | "per-room";
   streaming?: MatrixStreamingMode;
+  previewToolProgressEnabled?: boolean;
   blockStreamingEnabled?: boolean;
   dmEnabled?: boolean;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
@@ -118,7 +126,64 @@ export function createMatrixHandlerTestHarness(
       counts: { final: 0, block: 0, tool: 0 },
     }));
   const enqueueSystemEvent = options.enqueueSystemEvent ?? vi.fn();
-  const cfgForHandler = options.cfg ?? {};
+  const runPrepared = vi.fn(
+    async (
+      turn: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["runPrepared"]>[0],
+    ) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  );
+  const run = vi.fn(
+    async (params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["run"]>[0]) => {
+      const input = await params.adapter.ingest(params.raw);
+      if (!input) {
+        return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
+      }
+      const eventClass = (await params.adapter.classify?.(input)) ?? {
+        kind: "message" as const,
+        canStartAgentTurn: true,
+      };
+      const preflightResult = await params.adapter.preflight?.(input, eventClass);
+      const preflight =
+        preflightResult && "kind" in preflightResult
+          ? { admission: preflightResult }
+          : (preflightResult ?? {});
+      const turn = await params.adapter.resolveTurn(input, eventClass, preflight);
+      if ("runDispatch" in turn) {
+        return await runPrepared(turn);
+      }
+      throw new Error("matrix test helper only supports prepared turn dispatch");
+    },
+  );
+  const dmPolicy = options.dmPolicy ?? "open";
+  const allowFrom = options.allowFrom ?? (dmPolicy === "open" ? ["*"] : []);
+  const cfgForHandler =
+    options.cfg ??
+    ({
+      channels: {
+        matrix: {
+          dm: {
+            allowFrom,
+          },
+        },
+      },
+    } as const);
 
   const handler = createMatrixRoomMessageHandler({
     client: {
@@ -128,7 +193,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        loadConfig: () => cfgForHandler,
+        current: () => options.liveCfg ?? cfgForHandler,
       },
       channel: {
         pairing: {
@@ -192,6 +257,10 @@ export function createMatrixHandlerTestHarness(
               }
             }),
         },
+        turn: {
+          run,
+          runPrepared,
+        },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),
         },
@@ -202,6 +271,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
+    accountConfig: options.accountConfig,
     runtime:
       options.runtime ??
       ({
@@ -215,7 +285,7 @@ export function createMatrixHandlerTestHarness(
         error: () => {},
       } as RuntimeLogger),
     logVerboseMessage: options.logVerboseMessage ?? (() => {}),
-    allowFrom: options.allowFrom ?? [],
+    allowFrom,
     allowFromResolvedEntries: options.allowFromResolvedEntries,
     groupAllowFrom: options.groupAllowFrom ?? [],
     groupAllowFromResolvedEntries: options.groupAllowFromResolvedEntries,
@@ -228,9 +298,10 @@ export function createMatrixHandlerTestHarness(
     dmThreadReplies: options.dmThreadReplies,
     dmSessionScope: options.dmSessionScope,
     streaming: options.streaming ?? "off",
+    previewToolProgressEnabled: options.previewToolProgressEnabled ?? false,
     blockStreamingEnabled: options.blockStreamingEnabled ?? false,
     dmEnabled: options.dmEnabled ?? true,
-    dmPolicy: options.dmPolicy ?? "open",
+    dmPolicy,
     textLimit: options.textLimit ?? 8_000,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
     startupMs: options.startupMs ?? 0,

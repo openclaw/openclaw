@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatPluginConfigIssue } from "openclaw/plugin-sdk/extension-shared";
@@ -12,19 +13,11 @@ import type {
   AcpxMcpServer,
   ResolvedAcpxPluginConfig,
 } from "./config-schema.js";
-export {
-  ACPX_NON_INTERACTIVE_POLICIES,
-  ACPX_PERMISSION_MODES,
-  type AcpxMcpServer,
-  type AcpxNonInteractivePermissionPolicy,
-  type AcpxPermissionMode,
-  type AcpxPluginConfig,
-  type McpServerConfig,
-  type ResolvedAcpxPluginConfig,
-  createAcpxPluginConfigSchema,
-} from "./config-schema.js";
+export { type ResolvedAcpxPluginConfig } from "./config-schema.js";
 
-export const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
+const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
+const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
+const requireFromHere = createRequire(import.meta.url);
 
 function isAcpxPluginRoot(dir: string): boolean {
   return (
@@ -101,8 +94,6 @@ export function resolveAcpxPluginRoot(moduleUrl: string = import.meta.url): stri
   );
 }
 
-export const ACPX_PLUGIN_ROOT = resolveAcpxPluginRoot();
-
 const DEFAULT_PERMISSION_MODE: AcpxPermissionMode = "approve-reads";
 const DEFAULT_NON_INTERACTIVE_POLICY: AcpxNonInteractivePermissionPolicy = "fail";
 const DEFAULT_QUEUE_OWNER_TTL_SECONDS = 0.1;
@@ -140,9 +131,15 @@ function resolveOpenClawRoot(currentRoot: string): string {
   return path.resolve(currentRoot, "..");
 }
 
-export function resolvePluginToolsMcpServerConfig(
-  moduleUrl: string = import.meta.url,
-): McpServerConfig {
+function resolveTsxImportSpecifier(): string {
+  try {
+    return requireFromHere.resolve("tsx");
+  } catch {
+    return "tsx";
+  }
+}
+
+function resolvePluginToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
   const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
   const openClawRoot = resolveOpenClawRoot(pluginRoot);
   const distEntry = path.join(openClawRoot, "dist", "mcp", "plugin-tools-serve.js");
@@ -155,25 +152,54 @@ export function resolvePluginToolsMcpServerConfig(
   const sourceEntry = path.join(openClawRoot, "src", "mcp", "plugin-tools-serve.ts");
   return {
     command: process.execPath,
-    args: ["--import", "tsx", sourceEntry],
+    args: ["--import", resolveTsxImportSpecifier(), sourceEntry],
+  };
+}
+
+function resolveOpenClawToolsMcpServerConfig(moduleUrl: string = import.meta.url): McpServerConfig {
+  const pluginRoot = resolveAcpxPluginRoot(moduleUrl);
+  const openClawRoot = resolveOpenClawRoot(pluginRoot);
+  const distEntry = path.join(openClawRoot, "dist", "mcp", "openclaw-tools-serve.js");
+  if (fs.existsSync(distEntry)) {
+    return {
+      command: process.execPath,
+      args: [distEntry],
+    };
+  }
+  const sourceEntry = path.join(openClawRoot, "src", "mcp", "openclaw-tools-serve.ts");
+  return {
+    command: process.execPath,
+    args: ["--import", resolveTsxImportSpecifier(), sourceEntry],
   };
 }
 
 function resolveConfiguredMcpServers(params: {
   mcpServers?: Record<string, McpServerConfig>;
   pluginToolsMcpBridge: boolean;
+  openClawToolsMcpBridge: boolean;
   moduleUrl?: string;
 }): Record<string, McpServerConfig> {
   const resolved = { ...params.mcpServers };
-  if (!params.pluginToolsMcpBridge) {
-    return resolved;
-  }
-  if (resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME]) {
+  if (params.pluginToolsMcpBridge && resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME]) {
     throw new Error(
       `mcpServers.${ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME} is reserved when pluginToolsMcpBridge=true`,
     );
   }
-  resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME] = resolvePluginToolsMcpServerConfig(params.moduleUrl);
+  if (params.openClawToolsMcpBridge && resolved[ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME]) {
+    throw new Error(
+      `mcpServers.${ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME} is reserved when openClawToolsMcpBridge=true`,
+    );
+  }
+  if (params.pluginToolsMcpBridge) {
+    resolved[ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME] = resolvePluginToolsMcpServerConfig(
+      params.moduleUrl,
+    );
+  }
+  if (params.openClawToolsMcpBridge) {
+    resolved[ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME] = resolveOpenClawToolsMcpServerConfig(
+      params.moduleUrl,
+    );
+  }
   return resolved;
 }
 
@@ -204,9 +230,11 @@ export function resolveAcpxPluginConfig(params: {
   const cwd = path.resolve(normalized.cwd?.trim() || fallbackCwd);
   const stateDir = path.resolve(normalized.stateDir?.trim() || path.join(workspaceDir, "state"));
   const pluginToolsMcpBridge = normalized.pluginToolsMcpBridge === true;
+  const openClawToolsMcpBridge = normalized.openClawToolsMcpBridge === true;
   const mcpServers = resolveConfiguredMcpServers({
     mcpServers: normalized.mcpServers,
     pluginToolsMcpBridge,
+    openClawToolsMcpBridge,
     moduleUrl: params.moduleUrl,
   });
   const agents = Object.fromEntries(
@@ -216,14 +244,21 @@ export function resolveAcpxPluginConfig(params: {
     ]),
   );
 
+  // Lowercase probeAgent so lookups match the registry keys built above, which
+  // also go through normalizeLowercaseStringOrEmpty. Without this, a user who
+  // writes `probeAgent: "OpenCode"` would silently miss the stored "opencode"
+  // key.
+  const probeAgent = normalizeLowercaseStringOrEmpty(normalized.probeAgent) || undefined;
+
   return {
     cwd,
     stateDir,
-    probeAgent: normalized.probeAgent,
+    probeAgent,
     permissionMode: normalized.permissionMode ?? DEFAULT_PERMISSION_MODE,
     nonInteractivePermissions:
       normalized.nonInteractivePermissions ?? DEFAULT_NON_INTERACTIVE_POLICY,
     pluginToolsMcpBridge,
+    openClawToolsMcpBridge,
     strictWindowsCmdWrapper:
       normalized.strictWindowsCmdWrapper ?? DEFAULT_STRICT_WINDOWS_CMD_WRAPPER,
     timeoutSeconds: normalized.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,

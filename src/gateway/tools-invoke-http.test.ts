@@ -7,6 +7,10 @@ type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
 
+const pluginToolMetaState = vi.hoisted(
+  () => new Map<string, { pluginId: string; optional: boolean }>(),
+);
+
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
   runBeforeToolCallHook: vi.fn(
@@ -22,7 +26,11 @@ let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
 
 // Perf: keep this suite pure unit. Mock heavyweight config/session modules.
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => cfg,
+  getRuntimeConfig: () => cfg,
+}));
+
+vi.mock("../config/io.js", () => ({
+  getRuntimeConfig: () => cfg,
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -59,7 +67,8 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
-  getPluginToolMeta: () => undefined,
+  getPluginToolMeta: (tool: { name?: string }) =>
+    typeof tool?.name === "string" ? pluginToolMetaState.get(tool.name) : undefined,
 }));
 
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
@@ -128,6 +137,16 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "nodes" }),
     },
     {
+      name: "browser",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "browser" }),
+    },
+    {
+      name: "plugin_doctor",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, permissionFlow: true }),
+    },
+    {
       name: "owner_only_test",
       ownerOnly: true,
       parameters: { type: "object", properties: {} },
@@ -181,7 +200,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return tools;
+      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
     },
   };
 });
@@ -196,6 +215,7 @@ vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
+const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
 
 let pluginHttpHandlers: Array<(req: IncomingMessage, res: ServerResponse) => Promise<boolean>> = [];
 
@@ -249,6 +269,8 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
+  pluginToolMetaState.clear();
+  pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -371,6 +393,21 @@ const expectOkInvokeResponse = async (res: Response) => {
   return body as { ok: boolean; result?: Record<string, unknown> };
 };
 
+const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {
+  const respond = vi.fn();
+  await toolsInvokeHandlers["tools.invoke"]({
+    params,
+    respond: respond as never,
+    context: { getRuntimeConfig: () => cfg } as never,
+    client: { connect: { role: "operator", scopes } } as never,
+    req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
+    isWebchatConnect: () => false,
+  });
+  return respond.mock.calls[0] as
+    | [boolean, { ok?: boolean; toolName?: string; output?: unknown; error?: unknown }?, unknown?]
+    | undefined;
+};
+
 const setMainAllowedTools = (params: {
   allow: string[];
   gatewayAllow?: string[];
@@ -410,6 +447,7 @@ describe("POST /tools/invoke", () => {
         toolName: "agents_list",
         ctx: expect.objectContaining({
           agentId: "main",
+          config: cfg,
           sessionKey: "agent:main:main",
           loopDetection: { warnAt: 3 },
         }),
@@ -436,6 +474,45 @@ describe("POST /tools/invoke", () => {
 
     expect(res.status).toBe(200);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+
+  it("allows the requested plugin tool through Gateway profile filtering", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { profile: "minimal" },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toMatchObject({ ok: true, permissionFlow: true });
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toEqual(
+      expect.arrayContaining(["plugin_doctor"]),
+    );
+  });
+
+  it("uses tools.alsoAllow for optional plugin discovery without loading every plugin tool", async () => {
+    cfg = {
+      ...cfg,
+      agents: { list: [{ id: "main", default: true }] },
+      tools: { alsoAllow: ["plugin_doctor"] },
+    };
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_doctor",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toMatchObject({ ok: true, permissionFlow: true });
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).toEqual(
+      expect.arrayContaining(["plugin_doctor"]),
+    );
+    expect(lastCreateOpenClawToolsContext?.pluginToolAllowlist).not.toContain("*");
   });
 
   it("blocks tool execution when before_tool_call rejects the invoke", async () => {
@@ -877,5 +954,117 @@ describe("POST /tools/invoke", () => {
     expect(patchRes.status).toBe(404);
     expect(nodesRes.status).toBe(404);
     expect(nodesAdminRes.status).toBe(404);
+  });
+
+  it("falls back to plugin-backed tools when a cataloged core tool has no core implementation", async () => {
+    setMainAllowedTools({ allow: ["browser"] });
+
+    const res = await invokeToolAuthed({
+      tool: "browser",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toEqual({ ok: true, result: "browser" });
+    expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
+  });
+});
+
+describe("tools.invoke Gateway RPC", () => {
+  it("invokes a tool through the SDK-facing RPC envelope", async () => {
+    allowAgentsListForMain();
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey: "main",
+      idempotencyKey: "rpc-tool-test",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: true,
+      toolName: "agents_list",
+      output: { ok: true, result: [] },
+      source: "core",
+    });
+    expect(lastCreateOpenClawToolsContext?.allowGatewaySubagentBinding).toBe(true);
+    expect(hookMocks.runBeforeToolCallHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalMode: "report",
+        toolName: "agents_list",
+        toolCallId: "rpc-rpc-tool-test",
+        ctx: expect.objectContaining({
+          agentId: "main",
+          config: cfg,
+          sessionKey: "agent:main:main",
+        }),
+      }),
+    );
+  });
+
+  it("returns typed approval-needed refusal when the policy hook blocks", async () => {
+    setMainAllowedTools({ allow: ["tools_invoke_test"] });
+    hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      deniedReason: "plugin-approval",
+      reason: "Plugin approval required",
+      params: { mode: "ok" },
+    });
+
+    const call = await invokeToolsRpc({
+      name: "tools_invoke_test",
+      args: { mode: "ok" },
+      sessionKey: "main",
+      confirm: false,
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "tools_invoke_test",
+      requiresApproval: true,
+      error: {
+        code: "requires_approval",
+        message: "Plugin approval required",
+      },
+    });
+  });
+
+  it("rejects mismatched session and agent scope", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, tools: { allow: ["agents_list"] } },
+          { id: "other", tools: { allow: ["agents_list"] } },
+        ],
+      },
+    };
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      sessionKey: "agent:main:main",
+      agentId: "other",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "agents_list",
+      error: {
+        code: "validation_error",
+        message: 'agent id "other" does not match session agent "main"',
+      },
+    });
+  });
+
+  it("rejects malformed params at the RPC boundary", async () => {
+    const call = await invokeToolsRpc({ name: "" });
+
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("invalid tools.invoke params"),
+    });
   });
 });

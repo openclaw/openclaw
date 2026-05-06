@@ -2,7 +2,7 @@ import type { Dispatcher } from "undici";
 import { logWarn } from "../../logger.js";
 import { captureHttpExchange } from "../../proxy-capture/runtime.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
-import { hasProxyEnvConfigured } from "./proxy-env.js";
+import { hasProxyEnvConfigured, shouldUseEnvHttpProxyForUrl } from "./proxy-env.js";
 import { retainSafeHeadersForCrossOriginRedirect as retainSafeRedirectHeaders } from "./redirect-headers.js";
 import {
   fetchWithRuntimeDispatcher,
@@ -19,11 +19,24 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
+import { _globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
 } from "./undici-runtime.js";
+
+function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | undefined {
+  if (fromParams !== undefined) {
+    return fromParams;
+  }
+  // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
+  // (avoids reading Undici's non-public `.options` field)
+  if (_globalUndiciStreamTimeoutMs !== undefined) {
+    return _globalUndiciStreamTimeoutMs;
+  }
+  return undefined;
+}
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -54,6 +67,7 @@ export type GuardedFetchOptions = {
   allowCrossOriginUnsafeRedirectReplay?: boolean;
   timeoutMs?: number;
   signal?: AbortSignal;
+  requireHttps?: boolean;
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
@@ -72,6 +86,7 @@ export type GuardedFetchResult = {
   response: Response;
   finalUrl: string;
   release: () => Promise<void>;
+  refreshTimeout?: () => void;
 };
 
 type GuardedFetchPresetOptions = Omit<
@@ -107,6 +122,10 @@ function resolveGuardedFetchMode(params: GuardedFetchOptions): GuardedFetchMode 
   return GUARDED_FETCH_MODE.STRICT;
 }
 
+function isManagedProxyActive(): boolean {
+  return process.env["OPENCLAW_PROXY_ACTIVE"] === "1";
+}
+
 function assertExplicitProxySupportsPinnedDns(
   url: URL,
   dispatcherPolicy?: PinnedDispatcherPolicy,
@@ -125,6 +144,7 @@ function assertExplicitProxySupportsPinnedDns(
 
 function createPolicyDispatcherWithoutPinnedDns(
   dispatcherPolicy?: PinnedDispatcherPolicy,
+  timeoutMs?: number,
 ): Dispatcher | null {
   if (!dispatcherPolicy) {
     return null;
@@ -133,23 +153,28 @@ function createPolicyDispatcherWithoutPinnedDns(
   if (dispatcherPolicy.mode === "direct") {
     return createHttp1Agent(
       dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : undefined,
+      timeoutMs,
     );
   }
 
   if (dispatcherPolicy.mode === "env-proxy") {
-    return createHttp1EnvHttpProxyAgent({
-      ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
-      ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
-    });
+    return createHttp1EnvHttpProxyAgent(
+      {
+        ...(dispatcherPolicy.connect ? { connect: { ...dispatcherPolicy.connect } } : {}),
+        ...(dispatcherPolicy.proxyTls ? { proxyTls: { ...dispatcherPolicy.proxyTls } } : {}),
+      },
+      timeoutMs,
+    );
   }
 
   const proxyUrl = dispatcherPolicy.proxyUrl.trim();
-  return dispatcherPolicy.proxyTls
-    ? createHttp1ProxyAgent({
-        uri: proxyUrl,
-        requestTls: { ...dispatcherPolicy.proxyTls },
-      })
-    : createHttp1ProxyAgent({ uri: proxyUrl });
+  if (dispatcherPolicy.proxyTls) {
+    return createHttp1ProxyAgent(
+      { uri: proxyUrl, requestTls: { ...dispatcherPolicy.proxyTls } },
+      timeoutMs,
+    );
+  }
+  return createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
 }
 
 async function assertExplicitProxyAllowed(
@@ -169,21 +194,20 @@ async function assertExplicitProxyAllowed(
   if (!["http:", "https:"].includes(parsedProxyUrl.protocol)) {
     throw new Error("Explicit proxy URL must use http or https");
   }
+  const proxyPolicy: SsrFPolicy | undefined =
+    policy || dispatcherPolicy.allowPrivateProxy === true
+      ? {
+          ...policy,
+          // The proxy hostname is operator-configured, not user input. Target-scoped
+          // allowlists must not reject a configured proxy host before the request
+          // target gets checked against that same allowlist below.
+          hostnameAllowlist: undefined,
+          ...(dispatcherPolicy.allowPrivateProxy === true ? { allowPrivateNetwork: true } : {}),
+        }
+      : undefined;
   await resolvePinnedHostnameWithPolicy(parsedProxyUrl.hostname, {
     lookupFn,
-    policy:
-      dispatcherPolicy.allowPrivateProxy === true
-        ? {
-            // The proxy hostname is operator-configured, not user input.
-            // Clear the target-scoped hostnameAllowlist so configured proxies
-            // like localhost or internal hosts aren't rejected by an allowlist
-            // that was built for the target URL (e.g. api.telegram.org).
-            // Private-network IP checks still apply via allowPrivateNetwork.
-            ...policy,
-            allowPrivateNetwork: true,
-            hostnameAllowlist: undefined,
-          }
-        : policy,
+    policy: proxyPolicy,
   });
 }
 
@@ -291,9 +315,11 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
-  const { signal, cleanup } = buildTimeoutAbortSignal({
+  const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    operation: "fetchWithSsrFGuard",
+    url: params.url,
   });
 
   let released = false;
@@ -323,6 +349,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       await release();
       throw new Error("Invalid URL: must be http or https");
     }
+    if (params.requireHttps === true && parsedUrl.protocol !== "https:") {
+      await release();
+      throw new Error("URL must use https");
+    }
 
     let dispatcher: Dispatcher | null = null;
     try {
@@ -336,26 +366,48 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       );
       await assertExplicitProxyAllowed(params.dispatcherPolicy, params.lookupFn, params.policy);
       const canUseTrustedEnvProxy =
-        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
+        mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY &&
+        shouldUseEnvHttpProxyForUrl(parsedUrl.toString());
+      const canUseManagedProxy =
+        mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
+      const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
+
+      // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
+      // the pre-DNS hostname/IP policy checks from the pinned path.
+      if (canUseTrustedEnvProxy || params.pinDns === false) {
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
+      }
+
       if (canUseTrustedEnvProxy) {
-        dispatcher = createHttp1EnvHttpProxyAgent();
+        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
+      } else if (canUseManagedProxy) {
+        await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
+          lookupFn: params.lookupFn,
+          policy: params.policy,
+        });
+        dispatcher = createHttp1EnvHttpProxyAgent(undefined, timeoutMs);
       } else if (usesTrustedExplicitProxyMode) {
         // Explicit proxy targets are still checked against the caller's hostname
         // policy, but the proxy does the DNS resolution for the final target.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, params.policy);
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else if (params.pinDns === false) {
         await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
           policy: params.policy,
         });
-        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy);
+        dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
       } else {
         const pinned = await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
           policy: params.policy,
         });
-        dispatcher = createPinnedDispatcher(pinned, params.dispatcherPolicy, params.policy);
+        dispatcher = createPinnedDispatcher(
+          pinned,
+          params.dispatcherPolicy,
+          params.policy,
+          timeoutMs,
+        );
       }
 
       const init: DispatcherAwareRequestInit = {
@@ -435,12 +487,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         response,
         finalUrl: currentUrl,
         release: async () => release(dispatcher),
+        refreshTimeout: refresh,
       };
     } catch (err) {
       if (err instanceof SsrFBlockedError) {
         const context = params.auditContext ?? "url-fetch";
         logWarn(
-          `security: blocked URL fetch (${context}) target=${parsedUrl.origin}${parsedUrl.pathname} reason=${err.message}`,
+          `security: blocked URL fetch (${context}) targetOrigin=${parsedUrl.origin} reason=${err.message}`,
         );
       }
       await release(dispatcher);

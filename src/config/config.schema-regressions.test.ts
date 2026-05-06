@@ -2,6 +2,18 @@ import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
+  it("accepts session write-lock acquire timeout", () => {
+    const res = validateConfigObject({
+      session: {
+        writeLock: {
+          acquireTimeoutMs: 60_000,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -145,6 +157,20 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          compaction: {
+            truncateAfterCompaction: true,
+            maxActiveTranscriptBytes: "20mb",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
   it("accepts string values for agents defaults model inputs", () => {
     const res = validateConfigObject({
       agents: {
@@ -202,10 +228,71 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts browser local startup timeout settings", () => {
+    const res = validateConfigObject({
+      browser: {
+        localLaunchTimeoutMs: 45_000,
+        localCdpReadyTimeoutMs: 30_000,
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects out-of-range browser local startup timeout settings", () => {
+    const res = validateConfigObject({
+      browser: {
+        localLaunchTimeoutMs: 120_001,
+        localCdpReadyTimeoutMs: 0,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
         extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("accepts browser.tabCleanup overrides", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          enabled: true,
+          idleMinutes: 10,
+          maxTabsPerSession: 10,
+          sweepMinutes: 5,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects browser.tabCleanup.sweepMinutes when not positive", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          sweepMinutes: 0,
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
+  it("rejects unknown keys under browser.tabCleanup", () => {
+    const res = validateConfigObject({
+      browser: {
+        tabCleanup: {
+          unknownKey: true as unknown,
+        },
       },
     });
 

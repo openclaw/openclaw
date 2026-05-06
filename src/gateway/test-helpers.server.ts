@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
@@ -20,7 +19,7 @@ import {
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeMainKey,
@@ -29,6 +28,8 @@ import {
 } from "../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -65,11 +66,14 @@ const GATEWAY_TEST_ENV_KEYS = [
   "USERPROFILE",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
   "OPENCLAW_SKIP_CANVAS_HOST",
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_SKIP_PROVIDERS",
   "OPENCLAW_SKIP_CRON",
@@ -225,6 +229,8 @@ async function setupGatewayTestHome() {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
   delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
 }
 
 function applyGatewaySkipEnv() {
@@ -235,6 +241,7 @@ function applyGatewaySkipEnv() {
   process.env.OPENCLAW_SKIP_PROVIDERS = "1";
   process.env.OPENCLAW_SKIP_CRON = "1";
   process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+  process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
     ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
     : "openclaw-test-no-bundled-extensions";
@@ -249,6 +256,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
     await fs.rm(stateDir, {
@@ -360,6 +369,8 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   clearGatewaySubagentRuntime();
   resetLogger();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;
@@ -490,20 +501,6 @@ export async function getFreePort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
-export async function occupyPort(): Promise<{
-  server: ReturnType<typeof createServer>;
-  port: number;
-}> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as AddressInfo).port;
-      resolve({ server, port });
-    });
-  });
-}
-
 type GatewayTestMessage = {
   type?: string;
   id?: string;
@@ -555,27 +552,38 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   timeoutMs = 10_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("timeout")), timeoutMs);
-    const closeHandler = (code: number, reason: Buffer) => {
+    let timer: ReturnType<typeof setTimeout>;
+    function cleanup() {
       clearTimeout(timer);
       ws.off("message", handler);
+      ws.off("close", closeHandler);
+    }
+    function closeHandler(code: number, reason: Buffer) {
+      cleanup();
       reject(new Error(`closed ${code}: ${reason.toString()}`));
-    };
-    const handler = (data: WebSocket.RawData) => {
+    }
+    function handler(data: WebSocket.RawData) {
       const obj = JSON.parse(rawDataToString(data)) as T;
       if (filter(obj)) {
-        clearTimeout(timer);
-        ws.off("message", handler);
-        ws.off("close", closeHandler);
+        cleanup();
         resolve(obj);
       }
-    };
+    }
+    timer = setTimeout(() => {
+      cleanup();
+      reject(new Error("timeout"));
+    }, timeoutMs);
+    timer.unref?.();
     ws.on("message", handler);
     ws.once("close", closeHandler);
   });
 }
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
+  // Tests mutate testState-backed config before server startup; discard earlier
+  // helper reads so startup observes the current fixture state.
+  resetConfigRuntimeState();
+  clearSessionStoreCacheForTest();
   const mod = await getServerModule();
   const resolvedOpts =
     opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;

@@ -7,7 +7,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./message-normalizer.ts";
+import { isToolResultMessage } from "./role-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
@@ -47,6 +47,18 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   }
   if (typeof item.content === "string") {
     return item.content;
+  }
+  if (Array.isArray(item.content)) {
+    const parts = item.content.flatMap((entry) => {
+      if (!entry || typeof entry !== "object") {
+        return [];
+      }
+      const text = (entry as { text?: unknown }).text;
+      return typeof text === "string" ? [text] : [];
+    });
+    if (parts.length > 0) {
+      return parts.join("\n");
+    }
   }
   return undefined;
 }
@@ -303,10 +315,14 @@ export function renderToolPreview(
   `;
 }
 
-export function buildSidebarContent(value: string): SidebarContent {
+export function buildSidebarContent(
+  value: string,
+  options?: { rawText?: string | null },
+): SidebarContent {
   return {
     kind: "markdown",
     content: value,
+    ...(options?.rawText ? { rawText: options.rawText } : {}),
   };
 }
 

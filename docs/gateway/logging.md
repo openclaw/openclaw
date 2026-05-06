@@ -3,7 +3,7 @@ summary: "Logging surfaces, file logs, WS log styles, and console formatting"
 read_when:
   - Changing logging output or formats
   - Debugging CLI or gateway output
-title: "Gateway Logging"
+title: "Gateway logging"
 ---
 
 # Logging
@@ -15,10 +15,23 @@ OpenClaw has two log “surfaces”:
 - **Console output** (what you see in the terminal / Debug UI).
 - **File logs** (JSON lines) written by the gateway logger.
 
+At startup, the Gateway logs the resolved default agent model together with the
+mode defaults that affect new sessions, for example:
+
+```text
+agent model: openai-codex/gpt-5.5 (thinking=medium, fast=on)
+```
+
+`thinking` comes from the default agent, model params, or global agent default;
+when it is unset, the startup summary shows `medium`. `fast` comes from the
+default agent or model `fastMode` params.
+
 ## File-based logger
 
 - Default rolling log file is under `/tmp/openclaw/` (one file per day): `openclaw-YYYY-MM-DD.log`
   - Date uses the gateway host's local timezone.
+- Active log files rotate at `logging.maxFileBytes` (default: 100 MB), keeping
+  up to five numbered archives and continuing to write a fresh active file.
 - The log file path and level can be configured via `~/.openclaw/openclaw.json`:
   - `logging.file`
   - `logging.level`
@@ -39,6 +52,9 @@ openclaw logs --follow
   raise the file log level.
 - To capture verbose-only details in file logs, set `logging.level` to `debug` or
   `trace`.
+- Trace logging also includes diagnostic timing summaries for selected hot paths,
+  such as plugin tool factory preparation. See
+  [/tools/plugin#slow-plugin-tool-setup](/tools/plugin#slow-plugin-tool-setup).
 
 ## Console capture
 
@@ -50,16 +66,25 @@ You can tune console verbosity independently via:
 - `logging.consoleLevel` (default `info`)
 - `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
-## Tool summary redaction
+## Redaction
 
-Verbose tool summaries (e.g. `🛠️ Exec: ...`) can mask sensitive tokens before they hit the
-console stream. This is **tools-only** and does not alter file logs.
+OpenClaw can mask sensitive tokens before log or transcript output leaves the
+process. This logging redaction policy is applied at console, file-log, OTLP
+log-record, and session transcript text sinks, so matching secret values are
+masked before JSONL lines or messages are written to disk.
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)
 - `logging.redactPatterns`: array of regex strings (overrides defaults)
   - Use raw regex strings (auto `gi`), or `/pattern/flags` if you need custom flags.
   - Matches are masked by keeping the first 6 + last 4 chars (length >= 18), otherwise `***`.
-  - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, and popular token prefixes.
+  - Defaults cover common key assignments, CLI flags, JSON fields, bearer headers, PEM blocks, popular token prefixes, and payment credential field names such as card number, CVC/CVV, shared payment token, and payment credential.
+
+Some safety boundaries always redact regardless of `logging.redactSensitive`.
+That includes Control UI tool-call events, `sessions_history` tool output,
+diagnostics support exports, provider error observations, exec approval command
+display, and Gateway WebSocket protocol logs. These surfaces may still use
+`logging.redactPatterns` as additional patterns, but `redactSensitive: "off"`
+does not make them emit raw secrets.
 
 ## Gateway WebSocket logs
 
@@ -111,3 +136,9 @@ Behavior:
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.
+
+## Related
+
+- [Logging](/logging)
+- [OpenTelemetry export](/gateway/opentelemetry)
+- [Diagnostics export](/gateway/diagnostics)

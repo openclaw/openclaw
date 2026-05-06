@@ -6,8 +6,6 @@ read_when:
 title: "Venice AI"
 ---
 
-# Venice AI
-
 Venice AI provides **privacy-focused AI inference** with support for uncensored models and access to major proprietary models through their anonymized proxy. All inference is private by default — no training on your data, no logging.
 
 ## Why Venice in OpenClaw
@@ -105,7 +103,7 @@ openclaw models set venice/claude-opus-4-6
 List all available models:
 
 ```bash
-openclaw models list | grep venice
+openclaw models list --all --provider venice
 ```
 
 You can also run `openclaw configure`, select **Model/auth**, and choose **Venice AI**.
@@ -125,7 +123,16 @@ Use the table below to pick the right model for your use case.
 
 </Tip>
 
-## Available models (41 total)
+## DeepSeek V4 replay behavior
+
+If Venice exposes DeepSeek V4 models such as `venice/deepseek-v4-pro` or
+`venice/deepseek-v4-flash`, OpenClaw fills the required DeepSeek V4
+`reasoning_content` replay placeholder on assistant messages when the proxy
+omits it. Venice rejects DeepSeek's native top-level `thinking` control, so
+OpenClaw keeps that provider-specific replay fix separate from the native
+DeepSeek provider's thinking controls.
+
+## Built-in catalog (41 total)
 
 <AccordionGroup>
   <Accordion title="Private models (26) — fully private, no logging">
@@ -182,7 +189,7 @@ Use the table below to pick the right model for your use case.
 
 ## Model discovery
 
-OpenClaw automatically discovers models from the Venice API when `VENICE_API_KEY` is set. If the API is unreachable, it falls back to a static catalog.
+OpenClaw ships a manifest-backed Venice seed catalog for read-only model listing. Runtime refresh can still discover models from the Venice API, and falls back to the manifest catalog if the API is unreachable.
 
 The `/models` endpoint is public (no auth needed for listing), but inference requires a valid API key.
 

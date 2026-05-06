@@ -1,15 +1,13 @@
 ---
+summary: "Install and configure Node.js for OpenClaw - version requirements, install options, and PATH troubleshooting"
 title: "Node.js"
-summary: "Install and configure Node.js for OpenClaw — version requirements, install options, and PATH troubleshooting"
 read_when:
   - "You need to install Node.js before installing OpenClaw"
   - "You installed OpenClaw but `openclaw` is command not found"
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-# Node.js
-
-OpenClaw requires **Node 22.14 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically — this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
+OpenClaw requires **Node 22.14 or newer**. **Node 24 is the default and recommended runtime** for installs, CI, and release workflows. Node 22 remains supported via the active LTS line. The [installer script](/install#alternative-install-methods) will detect and install Node automatically - this page is for when you want to set up Node yourself and make sure everything is wired up correctly (versions, PATH, global installs).
 
 ## Check your version
 
@@ -70,9 +68,9 @@ If this prints `v24.x.x` or higher, you're on the recommended default. If it pri
 <Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
   Version managers let you switch between Node versions easily. Popular options:
 
-- [**fnm**](https://github.com/Schniz/fnm) — fast, cross-platform
-- [**nvm**](https://github.com/nvm-sh/nvm) — widely used on macOS/Linux
-- [**mise**](https://mise.jdx.dev/) — polyglot (Node, Python, Ruby, etc.)
+- [**fnm**](https://github.com/Schniz/fnm) - fast, cross-platform
+- [**nvm**](https://github.com/nvm-sh/nvm) - widely used on macOS/Linux
+- [**mise**](https://mise.jdx.dev/) - polyglot (Node, Python, Ruby, etc.)
 
 Example with fnm:
 
@@ -139,6 +137,6 @@ Add the `export PATH=...` line to your `~/.bashrc` or `~/.zshrc` to make it perm
 
 ## Related
 
-- [Install Overview](/install) — all installation methods
-- [Updating](/install/updating) — keeping OpenClaw up to date
-- [Getting Started](/start/getting-started) — first steps after install
+- [Install Overview](/install) - all installation methods
+- [Updating](/install/updating) - keeping OpenClaw up to date
+- [Getting Started](/start/getting-started) - first steps after install

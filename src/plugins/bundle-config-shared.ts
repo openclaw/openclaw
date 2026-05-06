@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isRecord } from "../utils.js";
 import { normalizePluginsConfig, resolveEffectivePluginActivationState } from "./config-state.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type ReadBundleJsonResult =
   | { ok: true; raw: Record<string, unknown> }
@@ -23,11 +23,11 @@ export function readBundleJsonObject(params: {
   rootDir: string;
   relativePath: string;
   onOpenFailure?: (
-    failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>,
+    failure: Extract<ReturnType<typeof openRootFileSync>, { ok: false }>,
   ) => ReadBundleJsonResult;
 }): ReadBundleJsonResult {
   const absolutePath = path.join(params.rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath,
     rootPath: params.rootDir,
     boundaryLabel: "plugin root",
@@ -50,11 +50,11 @@ export function readBundleJsonObject(params: {
 }
 
 export function resolveBundleJsonOpenFailure(params: {
-  failure: Extract<ReturnType<typeof openBoundaryFileSync>, { ok: false }>;
+  failure: Extract<ReturnType<typeof openRootFileSync>, { ok: false }>;
   relativePath: string;
   allowMissing?: boolean;
 }): ReadBundleJsonResult {
-  return matchBoundaryFileOpenFailure(params.failure, {
+  return matchRootFileOpenFailure(params.failure, {
     path: () => {
       if (params.allowMissing) {
         return { ok: true, raw: {} };
@@ -107,9 +107,10 @@ export function loadEnabledBundleConfig<TConfig, TDiagnostic>(params: {
     return { config: params.createEmptyConfig(), diagnostics: [] };
   }
 
-  const registry = loadPluginManifestRegistry({
+  const registry = loadPluginManifestRegistryForPluginRegistry({
     workspaceDir: params.workspaceDir,
     config: params.cfg,
+    includeDisabled: true,
   });
   const diagnostics: TDiagnostic[] = [];
   let merged = params.createEmptyConfig();

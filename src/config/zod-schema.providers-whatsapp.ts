@@ -13,6 +13,7 @@ import {
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
+  ReplyToModeSchema,
 } from "./zod-schema.core.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
@@ -22,11 +23,21 @@ const WhatsAppGroupEntrySchema = z
     requireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     toolsBySender: ToolPolicyBySenderSchema,
+    systemPrompt: z.string().optional(),
   })
   .strict()
   .optional();
 
 const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
+
+const WhatsAppDirectEntrySchema = z
+  .object({
+    systemPrompt: z.string().optional(),
+  })
+  .strict()
+  .optional();
+
+const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
 
 const WhatsAppAckReactionSchema = z
   .object({
@@ -36,6 +47,18 @@ const WhatsAppAckReactionSchema = z
   })
   .strict()
   .optional();
+
+function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  if (!Object.hasOwn(value, "exposeErrorText")) {
+    return value;
+  }
+  const next = { ...(value as Record<string, unknown>) };
+  delete next.exposeErrorText;
+  return next;
+}
 
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
@@ -65,11 +88,13 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: WhatsAppGroupsSchema,
+    direct: WhatsAppDirectSchema,
     ackReaction: WhatsAppAckReactionSchema,
     reactionLevel: z.enum(["off", "ack", "minimal", "extensive"]).optional(),
     debounceMs: params.useDefaults
       ? z.number().int().nonnegative().optional().default(0)
       : z.number().int().nonnegative().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,
   };
@@ -117,7 +142,7 @@ function enforceAllowlistDmPolicyAllowFrom(params: {
   });
 }
 
-export const WhatsAppAccountSchema = z
+const WhatsAppAccountObjectSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: false }),
     name: z.string().optional(),
@@ -128,7 +153,12 @@ export const WhatsAppAccountSchema = z
   })
   .strict();
 
-export const WhatsAppConfigSchema = z
+export const WhatsAppAccountSchema = z.preprocess(
+  stripDeprecatedWhatsAppNoopKeys,
+  WhatsAppAccountObjectSchema,
+);
+
+const WhatsAppConfigObjectSchema = z
   .object({
     ...buildWhatsAppCommonShape({ useDefaults: true }),
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
@@ -193,3 +223,8 @@ export const WhatsAppConfigSchema = z
       });
     }
   });
+
+export const WhatsAppConfigSchema = z.preprocess(
+  stripDeprecatedWhatsAppNoopKeys,
+  WhatsAppConfigObjectSchema,
+);

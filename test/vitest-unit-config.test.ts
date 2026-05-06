@@ -6,6 +6,7 @@ import {
   createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
   loadIncludePatternsFromEnv,
+  resolveDefaultUnitCoverageIncludePatterns,
 } from "./vitest/vitest.unit.config.ts";
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-unit-config-");
@@ -78,6 +79,13 @@ describe("unit vitest config", () => {
   it("keeps acp and ui tests out of the generic unit lane", () => {
     const unitConfig = createUnitVitestConfig({});
     expect(unitConfig.test?.exclude).toEqual(expect.arrayContaining(["extensions/**", "test/**"]));
+    expect(unitConfig.test?.include).not.toEqual(
+      expect.arrayContaining([
+        "ui/src/ui/app-chat.test.ts",
+        "ui/src/ui/chat/**/*.test.ts",
+        "ui/src/ui/views/chat.test.ts",
+      ]),
+    );
   });
 
   it("narrows the active include list to CLI file filters when present", () => {
@@ -109,6 +117,41 @@ describe("unit vitest config", () => {
     expect(unitConfig.test?.exclude).toEqual(
       expect.arrayContaining(["src/commands/**", "src/config/**", "src/security/**"]),
     );
+  });
+
+  it("scopes default coverage to source files owned by the unit lane", () => {
+    const unitConfig = createUnitVitestConfig({});
+    expect(unitConfig.test?.coverage?.include).toEqual(
+      expect.arrayContaining([
+        "src/commitments/runtime.ts",
+        "src/media-generation/runtime-shared.ts",
+        "src/web-search/runtime.ts",
+      ]),
+    );
+    expect(unitConfig.test?.coverage?.include).not.toEqual(
+      expect.arrayContaining(["src/markdown/render.ts", "src/security/audit-workspace-skills.ts"]),
+    );
+  });
+
+  it("derives default coverage includes from non-fast unit tests with sibling source files", () => {
+    expect(resolveDefaultUnitCoverageIncludePatterns()).toEqual(
+      expect.arrayContaining([
+        "packages/memory-host-sdk/src/host/embeddings.ts",
+        "src/commitments/store.ts",
+        "src/tools/planner.ts",
+      ]),
+    );
+  });
+
+  it("leaves coverage include filters unset for explicit unit include lists", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        includePatterns: ["src/commitments/runtime.test.ts"],
+      },
+    );
+
+    expect(unitConfig.test?.coverage?.include).toBeUndefined();
   });
 
   it("keeps bundled unit include files out of the resolved exclude list", () => {

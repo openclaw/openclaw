@@ -100,6 +100,45 @@ describe("createMattermostDraftStream", () => {
     expect(stream.postId()).toBeUndefined();
   });
 
+  it("discardPending keeps the preview post but ignores later updates", async () => {
+    const { client, calls } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      rootId: "root-1",
+      throttleMs: 0,
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    await stream.discardPending();
+    stream.update("Late update");
+    await stream.flush();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.path).toBe("/posts");
+    expect(stream.postId()).toBe("post-1");
+  });
+
+  it("seal keeps the preview post and cancels pending final overwrites", async () => {
+    const { client, calls } = createMockClient();
+    const stream = createMattermostDraftStream({
+      client,
+      channelId: "channel-1",
+      rootId: "root-1",
+      throttleMs: 0,
+    });
+
+    stream.update("Working...");
+    await stream.flush();
+    stream.update("Stale final draft");
+    await stream.seal();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.path).toBe("/posts");
+    expect(stream.postId()).toBe("post-1");
+  });
+
   it("stop flushes the last pending update and ignores later ones", async () => {
     const { client, calls } = createMockClient();
     const stream = createMattermostDraftStream({
@@ -204,11 +243,28 @@ describe("createMattermostDraftStream", () => {
 });
 
 describe("buildMattermostToolStatusText", () => {
-  it("renders a status with the tool name", () => {
-    expect(buildMattermostToolStatusText({ name: "read" })).toBe("Running `read`…");
+  it("renders a status with the shared tool label", () => {
+    expect(buildMattermostToolStatusText({ name: "read" })).toBe("📖 Read");
   });
 
-  it("falls back to a generic running tool status", () => {
-    expect(buildMattermostToolStatusText({ name: "exec" })).toBe("Running `exec`…");
+  it("honors raw exec detail mode", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      }),
+    ).toBe("🛠️ Exec: run tests, `pnpm test -- --watch=false`");
+  });
+
+  it("can hide raw exec detail from status text", () => {
+    expect(
+      buildMattermostToolStatusText({
+        name: "exec",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+        config: { streaming: { preview: { commandText: "status" } } },
+      }),
+    ).toBe("🛠️ Exec");
   });
 });

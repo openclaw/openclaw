@@ -13,10 +13,16 @@ export const baseConfigSnapshot = {
   legacyIssues: [],
 };
 
-export type TestRuntime = {
+type TestRuntime = {
   log: MockFn<RuntimeEnv["log"]>;
   error: MockFn<RuntimeEnv["error"]>;
   exit: MockFn<RuntimeEnv["exit"]>;
+};
+
+type CapturingTestRuntime = {
+  runtime: RuntimeEnv;
+  logs: string[];
+  errors: string[];
 };
 
 export function createTestRuntime(): TestRuntime {
@@ -28,6 +34,17 @@ export function createTestRuntime(): TestRuntime {
     error,
     exit,
   };
+}
+
+export function createCapturingTestRuntime(): CapturingTestRuntime {
+  const logs: string[] = [];
+  const errors: string[] = [];
+  const runtime = {
+    log: (message: unknown) => logs.push(String(message)),
+    error: (message: unknown) => errors.push(String(message)),
+    exit: (_code?: number) => undefined,
+  };
+  return { runtime, logs, errors };
 }
 
 export function createThrowingTestRuntime(): RuntimeEnv {

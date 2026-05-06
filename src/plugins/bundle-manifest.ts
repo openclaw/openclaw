@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { matchBoundaryFileOpenFailure, openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -92,19 +92,21 @@ function slugifyPluginId(raw: string | undefined, rootDir: string): string {
 
 function loadBundleManifestFile(params: {
   rootDir: string;
+  rootRealPath?: string;
   manifestRelativePath: string;
   rejectHardlinks: boolean;
   allowMissing?: boolean;
 }): BundleManifestFileLoadResult {
   const manifestPath = path.join(params.rootDir, params.manifestRelativePath);
-  const opened = openBoundaryFileSync({
+  const opened = openRootFileSync({
     absolutePath: manifestPath,
     rootPath: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     boundaryLabel: "plugin root",
     rejectHardlinks: params.rejectHardlinks,
   });
   if (!opened.ok) {
-    return matchBoundaryFileOpenFailure(opened, {
+    return matchRootFileOpenFailure(opened, {
       path: () => {
         if (params.allowMissing) {
           return { ok: true, raw: {}, manifestPath };
@@ -327,6 +329,7 @@ function buildCursorCapabilities(raw: Record<string, unknown>, rootDir: string):
 
 export function loadBundleManifest(params: {
   rootDir: string;
+  rootRealPath?: string;
   bundleFormat: PluginBundleFormat;
   rejectHardlinks?: boolean;
 }): BundleManifestLoadResult {
@@ -339,6 +342,7 @@ export function loadBundleManifest(params: {
         : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
   const loaded = loadBundleManifestFile({
     rootDir: params.rootDir,
+    ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),
     manifestRelativePath,
     rejectHardlinks,
     allowMissing: params.bundleFormat === "claude",

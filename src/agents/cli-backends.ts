@@ -5,8 +5,10 @@ import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type {
   CliBackendAuthEpochMode,
+  CliBackendNormalizeConfigContext,
   CliBundleMcpMode,
   CliBackendPlugin,
+  CliBackendNativeToolMode,
   PluginTextTransforms,
 } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -36,9 +38,11 @@ export type ResolvedCliBackend = {
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
+  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  nativeToolMode?: CliBackendNativeToolMode;
 };
 
-export type ResolvedCliBackendLiveTest = {
+type ResolvedCliBackendLiveTest = {
   defaultModelRef?: string;
   defaultImageProbe: boolean;
   defaultMcpProbe: boolean;
@@ -50,12 +54,17 @@ type FallbackCliBackendPolicy = {
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   baseConfig?: CliBackendConfig;
-  normalizeConfig?: (config: CliBackendConfig) => CliBackendConfig;
+  normalizeConfig?: (
+    config: CliBackendConfig,
+    context?: CliBackendNormalizeConfigContext,
+  ) => CliBackendConfig;
   transformSystemPrompt?: CliBackendPlugin["transformSystemPrompt"];
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
+  resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  nativeToolMode?: CliBackendNativeToolMode;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -92,6 +101,8 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
     prepareExecution: entry.backend.prepareExecution,
+    resolveExecutionArgs: entry.backend.resolveExecutionArgs,
+    nativeToolMode: entry.backend.nativeToolMode,
   };
 }
 
@@ -134,8 +145,10 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   }
   const baseFresh = base.reliability?.watchdog?.fresh ?? {};
   const baseResume = base.reliability?.watchdog?.resume ?? {};
+  const baseOutputLimits = base.reliability?.outputLimits ?? {};
   const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
   const overrideResume = override.reliability?.watchdog?.resume ?? {};
+  const overrideOutputLimits = override.reliability?.outputLimits ?? {};
   return {
     ...base,
     ...override,
@@ -149,6 +162,10 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     reliability: {
       ...base.reliability,
       ...override.reliability,
+      outputLimits: {
+        ...baseOutputLimits,
+        ...overrideOutputLimits,
+      },
       watchdog: {
         ...base.reliability?.watchdog,
         ...override.reliability?.watchdog,
@@ -188,15 +205,23 @@ export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendL
 export function resolveCliBackendConfig(
   provider: string,
   cfg?: OpenClawConfig,
+  options: { agentId?: string } = {},
 ): ResolvedCliBackend | null {
   const normalized = normalizeBackendKey(provider);
+  const normalizeContext: CliBackendNormalizeConfigContext = {
+    backendId: normalized,
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(cfg ? { config: cfg } : {}),
+  };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   const override = pickBackendConfig(configured, normalized);
   const registered = resolveRegisteredBackend(normalized);
   if (registered) {
     const merged = mergeBackendConfig(registered.config, override);
-    const config = registered.normalizeConfig ? registered.normalizeConfig(merged) : merged;
+    const config = registered.normalizeConfig
+      ? registered.normalizeConfig(merged, normalizeContext)
+      : merged;
     const command = config.command?.trim();
     if (!command) {
       return null;
@@ -215,6 +240,8 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
       prepareExecution: registered.prepareExecution,
+      resolveExecutionArgs: registered.resolveExecutionArgs,
+      nativeToolMode: registered.nativeToolMode,
     };
   }
 
@@ -224,7 +251,7 @@ export function resolveCliBackendConfig(
       return null;
     }
     const baseConfig = fallbackPolicy.normalizeConfig
-      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig)
+      ? fallbackPolicy.normalizeConfig(fallbackPolicy.baseConfig, normalizeContext)
       : fallbackPolicy.baseConfig;
     const command = baseConfig.command?.trim();
     if (!command) {
@@ -243,13 +270,15 @@ export function resolveCliBackendConfig(
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
       prepareExecution: fallbackPolicy.prepareExecution,
+      resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
+      nativeToolMode: fallbackPolicy.nativeToolMode,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
     ? mergeBackendConfig(fallbackPolicy.baseConfig, override)
     : override;
   const config = fallbackPolicy?.normalizeConfig
-    ? fallbackPolicy.normalizeConfig(mergedFallback)
+    ? fallbackPolicy.normalizeConfig(mergedFallback, normalizeContext)
     : mergedFallback;
   const command = config.command?.trim();
   if (!command) {
@@ -268,6 +297,8 @@ export function resolveCliBackendConfig(
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
     prepareExecution: fallbackPolicy?.prepareExecution,
+    resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
+    nativeToolMode: fallbackPolicy?.nativeToolMode,
   };
 }
 

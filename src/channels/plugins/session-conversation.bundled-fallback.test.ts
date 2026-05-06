@@ -21,12 +21,12 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
   );
   return {
     ...actual,
-    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => (
-      (fallbackState.loadCalls += 1),
-      dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
+    tryLoadActivatedBundledPluginPublicSurfaceModuleSync: ({ dirName }: { dirName: string }) => {
+      fallbackState.loadCalls += 1;
+      return dirName === fallbackState.activeDirName && fallbackState.resolveSessionConversation
         ? { resolveSessionConversation: fallbackState.resolveSessionConversation }
-        : null
-    ),
+        : null;
+    },
   };
 });
 
@@ -138,7 +138,7 @@ describe("session conversation bundled fallback", () => {
     });
   });
 
-  it("reuses the bundled fallback loader result across repeated calls", () => {
+  it("delegates repeated fallback calls through the public-surface loader", () => {
     enableThreadedFallback();
 
     expect(resolveSessionConversationRef("agent:main:mock-threaded:group:room:topic:42")).toEqual(
@@ -155,6 +155,6 @@ describe("session conversation bundled fallback", () => {
         threadId: "43",
       }),
     );
-    expect(fallbackState.loadCalls).toBe(1);
+    expect(fallbackState.loadCalls).toBe(2);
   });
 });

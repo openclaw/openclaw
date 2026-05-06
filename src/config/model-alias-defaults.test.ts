@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
 
 describe("applyModelDefaults", () => {
+  beforeEach(() => {
+    vi.stubEnv(
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      path.resolve(import.meta.dirname, "../../extensions"),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   function buildProxyProviderConfig(overrides?: { contextWindow?: number; maxTokens?: number }) {
     return {
       models: {

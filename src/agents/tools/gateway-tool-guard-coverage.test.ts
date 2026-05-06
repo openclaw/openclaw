@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST,
   assertGatewayConfigMutationAllowedForTest,
-  PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST,
 } from "./gateway-tool.js";
 
 function expectBlocked(
@@ -57,21 +57,116 @@ function expectAllowedApply(
 }
 
 describe("gateway config mutation guard coverage", () => {
-  it("keeps advisory-critical protected path coverage in the production denylist", () => {
-    expect(PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST).toEqual(
+  it("keeps a narrow allowlist of agent-tunable config paths", () => {
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toEqual(
       expect.arrayContaining([
-        "agents.defaults.sandbox",
-        "agents.list[].sandbox",
-        "agents.list[].tools",
-        "agents.list[].embeddedPi",
-        "tools.fs",
-        "plugins.allow",
-        "plugins.entries",
-        "hooks.token",
-        "hooks.allowRequestSessionKey",
-        "browser.ssrfPolicy",
-        "mcp.servers",
+        "agents.defaults.systemPromptOverride",
+        "agents.defaults.model",
+        "agents.defaults.subagents.thinking",
+        "agents.list[].id",
+        "agents.list[].model",
+        "agents.list[].subagents.thinking",
+        "channels.*.requireMention",
+        "messages.visibleReplies",
+        "messages.groupChat.visibleReplies",
       ]),
+    );
+  });
+
+  it("allows documented subagent thinking default edits via config.patch", () => {
+    expectAllowed(
+      {},
+      {
+        agents: {
+          defaults: {
+            subagents: { thinking: "medium" },
+          },
+        },
+      },
+    );
+    expectAllowed(
+      {
+        agents: {
+          defaults: {
+            subagents: { thinking: "low" },
+          },
+        },
+      },
+      {
+        agents: {
+          defaults: {
+            subagents: { thinking: "high" },
+          },
+        },
+      },
+    );
+  });
+
+  it("allows documented per-agent subagent thinking edits via config.patch", () => {
+    expectAllowed(
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { thinking: "low" } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { thinking: "medium" } }],
+        },
+      },
+    );
+    expectAllowed(
+      { agents: { list: [] as Array<Record<string, unknown>> } },
+      {
+        agents: {
+          list: [{ id: "helper", subagents: { thinking: "medium" } }],
+        },
+      },
+    );
+  });
+
+  it("keeps neighboring subagent policy fields protected via config.patch", () => {
+    expectBlocked(
+      { agents: { defaults: { subagents: { allowAgents: ["worker"] } } } },
+      { agents: { defaults: { subagents: { allowAgents: ["*"] } } } },
+    );
+    expectBlocked(
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { requireAgentId: true } }],
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "worker", subagents: { requireAgentId: false } }],
+        },
+      },
+    );
+  });
+
+  it("allows visible reply delivery mode edits via config.patch", () => {
+    expectAllowed(
+      {},
+      {
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "automatic" },
+        },
+      },
+    );
+    expectAllowed(
+      {
+        messages: {
+          visibleReplies: "automatic",
+          groupChat: { visibleReplies: "message_tool" },
+        },
+      },
+      {
+        messages: {
+          visibleReplies: "message_tool",
+          groupChat: { visibleReplies: "automatic" },
+        },
+      },
     );
   });
 
@@ -268,6 +363,34 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
+  it("blocks gateway.remote.url redirect via config.patch", () => {
+    expectBlocked(
+      { gateway: { remote: { url: "wss://gateway.example/ws" } } },
+      { gateway: { remote: { url: "wss://attacker.example/collect" } } },
+    );
+  });
+
+  it("blocks global tools policy rewrites via config.patch", () => {
+    expectBlocked(
+      { tools: { allow: ["read"] } },
+      { tools: { allow: ["read", "exec"], elevated: { enabled: true } } },
+    );
+  });
+
+  it("blocks memory.qmd.command rewrites via config.patch", () => {
+    expectBlocked(
+      { memory: { qmd: { command: "/usr/local/bin/qmd" } } },
+      { memory: { qmd: { command: "/tmp/attacker.sh" } } },
+    );
+  });
+
+  it("blocks browser.executablePath rewrites via config.patch", () => {
+    expectBlocked(
+      { browser: { executablePath: "/usr/bin/chromium" } },
+      { browser: { executablePath: "/tmp/pwn" } },
+    );
+  });
+
   it("allows adding a new agent without protected subfields via config.patch", () => {
     expectAllowed(
       {
@@ -390,13 +513,13 @@ describe("gateway config mutation guard coverage", () => {
     expectAllowed(
       {
         agents: {
-          defaults: { prompt: "You are a helpful assistant." },
+          defaults: { systemPromptOverride: "You are a helpful assistant." },
           list: [{ id: "worker", model: "sonnet-4" }],
         },
       },
       {
         agents: {
-          defaults: { prompt: "You are a terse assistant." },
+          defaults: { systemPromptOverride: "You are a terse assistant." },
           list: [{ id: "worker", model: "opus-4.6" }],
         },
       },
@@ -407,12 +530,18 @@ describe("gateway config mutation guard coverage", () => {
     expectBlockedApply(
       {
         agents: {
-          defaults: { sandbox: { mode: "all" }, prompt: "You are a helpful assistant." },
+          defaults: {
+            sandbox: { mode: "all" },
+            systemPromptOverride: "You are a helpful assistant.",
+          },
         },
       },
       {
         agents: {
-          defaults: { sandbox: { mode: "off" }, prompt: "You are a terse assistant." },
+          defaults: {
+            sandbox: { mode: "off" },
+            systemPromptOverride: "You are a terse assistant.",
+          },
         },
       },
     );
@@ -440,14 +569,42 @@ describe("gateway config mutation guard coverage", () => {
     expectAllowedApply(
       {
         agents: {
-          defaults: { prompt: "You are a helpful assistant." },
+          defaults: { systemPromptOverride: "You are a helpful assistant." },
           list: [{ id: "worker", model: "sonnet-4" }],
         },
       },
       {
         agents: {
-          defaults: { prompt: "You are a terse assistant." },
+          defaults: { systemPromptOverride: "You are a terse assistant." },
           list: [{ id: "worker", model: "opus-4.6" }],
+        },
+      },
+    );
+  });
+
+  it("allows requireMention edits at Telegram topic depth via config.patch", () => {
+    expectAllowed(
+      {
+        channels: {
+          telegram: {
+            groups: {
+              "-1001234567890": {
+                requireMention: true,
+                topics: { "99": { requireMention: true } },
+              },
+            },
+          },
+        },
+      },
+      {
+        channels: {
+          telegram: {
+            groups: {
+              "-1001234567890": {
+                topics: { "99": { requireMention: false } },
+              },
+            },
+          },
         },
       },
     );

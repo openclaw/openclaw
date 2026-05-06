@@ -6,7 +6,12 @@ import type { CliDeps } from "../cli/deps.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
-import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
+import {
+  createCliDeps,
+  expectDirectTelegramDelivery,
+  mockAgentPayloads,
+  runTelegramAnnounceTurn,
+} from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -152,10 +157,14 @@ function resolveCoreChannelSender(
 function createCliDelegatingOutbound(params: {
   channel: CoreChannel;
   deliveryMode?: ChannelOutboundAdapter["deliveryMode"];
+  preferFinalAssistantVisibleText?: boolean;
   resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
 }): ChannelOutboundAdapter {
   return {
     deliveryMode: params.deliveryMode ?? "direct",
+    ...(params.preferFinalAssistantVisibleText !== undefined
+      ? { preferFinalAssistantVisibleText: params.preferFinalAssistantVisibleText }
+      : {}),
     ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
     sendText: async ({ cfg, to, text, accountId, deps }) =>
       withRequiredMessageId(
@@ -175,6 +184,48 @@ const identityResolveTarget: ChannelOutboundAdapter["resolveTarget"] = ({ to }) 
     : { ok: false, error: new Error("target is required") };
 };
 
+function makeRunMeta(finalAssistantVisibleText: string) {
+  return {
+    durationMs: 5,
+    agentMeta: { sessionId: "s", provider: "p", model: "m" },
+    finalAssistantVisibleText,
+  };
+}
+
+async function expectTelegramAnnounceDelivery({
+  expected,
+  meta,
+  payloads,
+  to,
+}: {
+  expected: Parameters<typeof expectDirectTelegramDelivery>[1];
+  meta?: Parameters<typeof mockAgentPayloads>[1];
+  payloads: Parameters<typeof mockAgentPayloads>[0];
+  to: string;
+}): Promise<void> {
+  await withTempCronHome(async (home) => {
+    const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+    const deps = createCliDeps();
+    if (meta) {
+      mockAgentPayloads(payloads, meta);
+    } else {
+      mockAgentPayloads(payloads);
+    }
+
+    const res = await runTelegramAnnounceTurn({
+      home,
+      storePath,
+      deps,
+      delivery: { mode: "announce", channel: "telegram", to },
+    });
+
+    expect(res.status).toBe("ok");
+    expect(res.delivered).toBe(true);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+    expectDirectTelegramDelivery(deps, expected);
+  });
+}
+
 describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
   beforeEach(() => {
     setupIsolatedAgentTurnMocks({ fast: true });
@@ -192,7 +243,10 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
           pluginId: "discord",
           plugin: createOutboundTestPlugin({
             id: "discord",
-            outbound: createCliDelegatingOutbound({ channel: "discord" }),
+            outbound: createCliDelegatingOutbound({
+              channel: "discord",
+              preferFinalAssistantVisibleText: true,
+            }),
           }),
           source: "test",
         },
@@ -236,6 +290,31 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
       });
     });
 
+    if (testCase.channel === "discord") {
+      it("collapses Discord text-only announce delivery to the final assistant text", async () => {
+        await expectCoreChannelAnnounceDelivery({
+          testCase,
+          payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+          meta: {
+            meta: {
+              durationMs: 5,
+              agentMeta: { sessionId: "s", provider: "p", model: "m" },
+              finalAssistantVisibleText: "Final weather summary",
+            },
+          },
+          assertSend: (sendFn) => {
+            expect(sendFn).toHaveBeenCalledTimes(1);
+            expect(sendFn).toHaveBeenCalledWith(
+              testCase.expectedTo,
+              "Final weather summary",
+              expect.any(Object),
+            );
+          },
+        });
+      });
+      continue;
+    }
+
     it(`preserves multi-payload text-only announce delivery for ${testCase.name} even when final assistant text exists`, async () => {
       await expectCoreChannelAnnounceDelivery({
         testCase,
@@ -265,4 +344,74 @@ describe("runCronIsolatedAgentTurn core-channel direct delivery", () => {
       });
     });
   }
+});
+
+describe("runCronIsolatedAgentTurn telegram forum-topic direct delivery", () => {
+  beforeEach(() => {
+    setupIsolatedAgentTurnMocks();
+  });
+
+  it("routes forum-topic telegram targets through the correct delivery path", async () => {
+    await expectTelegramAnnounceDelivery({
+      to: "123:topic:42",
+      payloads: [{ text: "forum message" }],
+      expected: {
+        chatId: "123",
+        text: "forum message",
+        messageThreadId: 42,
+      },
+    });
+  });
+
+  it("preserves explicit supergroup topic targets for cron announce delivery", async () => {
+    await expectTelegramAnnounceDelivery({
+      to: "-1003774691294:topic:47",
+      payloads: [{ text: "topic 47 completion" }],
+      expected: {
+        chatId: "-1003774691294",
+        text: "topic 47 completion",
+        messageThreadId: 47,
+      },
+    });
+  });
+
+  it("delivers only the final assistant-visible text to forum-topic telegram targets", async () => {
+    await expectTelegramAnnounceDelivery({
+      to: "123:topic:42",
+      payloads: [
+        { text: "section 1" },
+        { text: "temporary error", isError: true },
+        { text: "section 2" },
+      ],
+      meta: { meta: makeRunMeta("section 1\nsection 2") },
+      expected: {
+        chatId: "123",
+        text: "section 1\nsection 2",
+        messageThreadId: 42,
+      },
+    });
+  });
+
+  it("routes plain telegram targets through the correct delivery path", async () => {
+    await expectTelegramAnnounceDelivery({
+      to: "123",
+      payloads: [{ text: "plain message" }],
+      expected: {
+        chatId: "123",
+        text: "plain message",
+      },
+    });
+  });
+
+  it("delivers only the final assistant-visible text to plain telegram targets", async () => {
+    await expectTelegramAnnounceDelivery({
+      to: "123",
+      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+      meta: { meta: makeRunMeta("Final weather summary") },
+      expected: {
+        chatId: "123",
+        text: "Final weather summary",
+      },
+    });
+  });
 });

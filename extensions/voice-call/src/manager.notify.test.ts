@@ -37,6 +37,15 @@ class DelayedPlayTtsProvider extends FakeProvider {
   }
 }
 
+class FailStartListeningProvider extends FakeProvider {
+  override async startListening(
+    input: Parameters<FakeProvider["startListening"]>[0],
+  ): Promise<void> {
+    this.startListeningCalls.push(input);
+    throw new Error("synthetic start listening failure");
+  }
+}
+
 function requireCall(
   manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
   callId: string,
@@ -177,6 +186,38 @@ describe("CallManager notify and mapping", () => {
     expectFirstPlayTtsText(provider, "Twilio non-stream");
   });
 
+  it("lets realtime conversations own the initial greeting instead of posting legacy TwiML", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000010",
+      "Tell Nana dinner is at 6pm.",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-twilio-realtime");
+
+    expect(provider.playTtsCalls).toHaveLength(0);
+    expect(requireCall(manager, callId).metadata).toEqual(
+      expect.objectContaining({ initialMessage: "Tell Nana dinner is at 6pm." }),
+    );
+  });
+
+  it("still speaks initial message in notify mode when realtime is enabled", async () => {
+    const { manager, provider } = await createManagerHarness(
+      { realtime: { enabled: true, provider: "openai" } },
+      new FakeProvider("twilio"),
+    );
+
+    const callId = await initiateCallWithMessage(manager, "+15550000011", "Notify text", "notify");
+    await answerCall(manager, callId, "evt-notify-twilio-realtime");
+
+    expectFirstPlayTtsText(provider, "Notify text");
+  });
+
   it("waits for stream connect in conversation mode when Twilio streaming is enabled", async () => {
     const { manager, provider } = await createManagerHarness(
       { streaming: { enabled: true } },
@@ -211,6 +252,58 @@ describe("CallManager notify and mapping", () => {
     await answerCall(manager, callId, "evt-conversation-twilio-stream-unavailable");
 
     expectFirstPlayTtsText(provider, "Twilio stream unavailable");
+  });
+
+  it("starts listening after the initial greeting for Telnyx conversation calls", async () => {
+    const { manager, provider } = await createManagerHarness({}, new FakeProvider("telnyx"));
+
+    const callId = await initiateCallWithMessage(
+      manager,
+      "+15550000012",
+      "Telnyx hello",
+      "conversation",
+    );
+    await answerCall(manager, callId, "evt-conversation-telnyx");
+
+    expectFirstPlayTtsText(provider, "Telnyx hello");
+    expect(provider.startListeningCalls).toEqual([
+      expect.objectContaining({
+        callId,
+        providerCallId: "call-uuid",
+      }),
+    ]);
+    expect(requireCall(manager, callId).state).toBe("listening");
+  });
+
+  it("logs fire-and-forget initial-message failures instead of leaking unhandled rejections", async () => {
+    const provider = new FailStartListeningProvider("twilio");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { manager } = await createManagerHarness({ streaming: { enabled: false } }, provider);
+
+      const callId = await initiateCallWithMessage(
+        manager,
+        "+15550000013",
+        "Twilio hello",
+        "conversation",
+      );
+      await answerCall(manager, callId, "evt-initial-message-start-listening-fails");
+
+      expectFirstPlayTtsText(provider, "Twilio hello");
+      expect(provider.startListeningCalls).toEqual([
+        expect.objectContaining({
+          callId,
+          providerCallId: "call-uuid",
+        }),
+      ]);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `[voice-call] Failed to speak initial message for call ${callId}: synthetic start listening failure`,
+        ),
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("preserves initialMessage after a failed first playback and retries on next trigger", async () => {

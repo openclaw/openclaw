@@ -3,7 +3,7 @@ summary: "How OpenClaw builds prompt context and reports token usage + costs"
 read_when:
   - Explaining token usage, costs, or context windows
   - Debugging context growth or compaction behavior
-title: "Token Use and Costs"
+title: "Token use and costs"
 ---
 
 # Token use & costs
@@ -21,7 +21,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
   with optional per-agent override at
   `agents.list[].skillsLimits.maxSkillsPromptChars`.
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present or `memory.md` as a lowercase fallback). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but bare `/new` and `/reset` can prepend a one-shot startup-context block with recent daily memory for that first turn. That startup prelude is controlled by `agents.defaults.startupContext`.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` when present). Lowercase root `memory.md` is not injected; it is legacy repair input for `openclaw doctor --fix` when paired with `MEMORY.md`. Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 12000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 60000). `memory/*.md` daily files are not part of the normal bootstrap prompt; they remain on-demand via memory tools on ordinary turns, but reset/startup model runs can prepend a one-shot startup-context block with recent daily memory for that first turn. Bare chat `/new` and `/reset` commands are acknowledged without invoking the model. The startup prelude is controlled by `agents.defaults.startupContext`.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -101,6 +101,13 @@ Assistant transcript entries persist the same normalized usage shape, including
 returns usage metadata. This gives `/usage cost` and transcript-backed session
 status a stable source even after the live runtime state is gone.
 
+OpenClaw keeps provider usage accounting separate from the current context
+snapshot. Provider `usage.total` can include cached input, output, and multiple
+tool-loop model calls, so it is useful for cost and telemetry but can overstate
+the live context window. Context displays and diagnostics use the latest prompt
+snapshot (`promptTokens`, or the last model call when no prompt snapshot is
+available) for `context.used`.
+
 ## Cost estimation (when shown)
 
 Costs are estimated from your model pricing config:
@@ -112,6 +119,14 @@ models.providers.<provider>.models[].cost
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
 `cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
 never show dollar cost.
+
+After sidecars and channels reach the Gateway ready path, OpenClaw starts an
+optional background pricing bootstrap for configured model refs that do not
+already have local pricing. That bootstrap fetches remote OpenRouter and LiteLLM
+pricing catalogs. Set `models.pricing.enabled: false` to skip those catalog
+fetches on offline or restricted networks; explicit
+`models.providers.*.models[].cost` entries continue to drive local cost
+estimates.
 
 ## Cache TTL and pruning impact
 
@@ -212,3 +227,9 @@ rejects that combination with HTTP 401.
 - Prefer smaller models for verbose, exploratory work.
 
 See [Skills](/tools/skills) for the exact skill list overhead formula.
+
+## Related
+
+- [API usage and costs](/reference/api-usage-costs)
+- [Prompt caching](/reference/prompt-caching)
+- [Usage tracking](/concepts/usage-tracking)

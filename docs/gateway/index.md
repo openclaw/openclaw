@@ -2,10 +2,8 @@
 summary: "Runbook for the Gateway service, lifecycle, and operations"
 read_when:
   - Running or debugging the gateway process
-title: "Gateway Runbook"
+title: "Gateway runbook"
 ---
-
-# Gateway runbook
 
 Use this page for day-1 startup and day-2 operations of the Gateway service.
 
@@ -114,6 +112,14 @@ All of these run on the main Gateway port and use the same trusted operator auth
 | Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
 | Bind mode    | CLI/override → `gateway.bind` → `loopback`                    |
 
+Installed gateway services record the resolved `--port` in supervisor metadata. After changing `gateway.port`, run `openclaw doctor --fix` or `openclaw gateway install --force` so launchd/systemd/schtasks starts the process on the new port.
+
+Gateway startup uses the same effective port and bind when it seeds local
+Control UI origins for non-loopback binds. For example, `--bind lan --port 3000`
+seeds `http://localhost:3000` and `http://127.0.0.1:3000` before runtime
+validation runs. Add any remote browser origins, such as HTTPS proxy URLs, to
+`gateway.controlUi.allowedOrigins` explicitly.
+
 ### Hot reload modes
 
 | `gateway.reload.mode` | Behavior                                   |
@@ -162,6 +168,20 @@ What to expect:
   answers.
 - If that is intentional, isolate ports, config/state, and workspace roots per gateway.
 
+Checklist per instance:
+
+- Unique `gateway.port`
+- Unique `OPENCLAW_CONFIG_PATH`
+- Unique `OPENCLAW_STATE_DIR`
+- Unique `agents.defaults.workspace`
+
+Example:
+
+```bash
+OPENCLAW_CONFIG_PATH=~/.openclaw/a.json OPENCLAW_STATE_DIR=~/.openclaw-a openclaw gateway --port 19001
+OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19002
+```
+
 Detailed setup: [/gateway/multiple-gateways](/gateway/multiple-gateways).
 
 ## Remote access
@@ -196,6 +216,8 @@ openclaw gateway status
 openclaw gateway restart
 openclaw gateway stop
 ```
+
+Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start`; on macOS, `gateway stop` intentionally disables the LaunchAgent before stopping it.
 
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
@@ -267,31 +289,12 @@ Use the same service body as the user unit, but install it under
 `/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
 `ExecStart=` if your `openclaw` binary lives elsewhere.
 
+Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
+
   </Tab>
 </Tabs>
 
-## Multiple gateways on one host
-
-Most setups should run **one** Gateway.
-Use multiple only for strict isolation/redundancy (for example a rescue profile).
-
-Checklist per instance:
-
-- Unique `gateway.port`
-- Unique `OPENCLAW_CONFIG_PATH`
-- Unique `OPENCLAW_STATE_DIR`
-- Unique `agents.defaults.workspace`
-
-Example:
-
-```bash
-OPENCLAW_CONFIG_PATH=~/.openclaw/a.json OPENCLAW_STATE_DIR=~/.openclaw-a openclaw gateway --port 19001
-OPENCLAW_CONFIG_PATH=~/.openclaw/b.json OPENCLAW_STATE_DIR=~/.openclaw-b openclaw gateway --port 19002
-```
-
-See: [Multiple gateways](/gateway/multiple-gateways).
-
-### Dev profile quick path
+## Dev profile quick path
 
 ```bash
 openclaw --dev setup
@@ -365,3 +368,10 @@ Related:
 - [Health](/gateway/health)
 - [Doctor](/gateway/doctor)
 - [Authentication](/gateway/authentication)
+
+## Related
+
+- [Configuration](/gateway/configuration)
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Remote access](/gateway/remote)
+- [Secrets management](/gateway/secrets)

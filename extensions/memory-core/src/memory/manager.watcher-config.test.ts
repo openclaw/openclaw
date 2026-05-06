@@ -5,23 +5,55 @@ import type {
   MemorySearchConfig,
   OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { MemoryIndexManager } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
-const { watchMock } = vi.hoisted(() => ({
-  watchMock: vi.fn(() => ({
-    on: vi.fn(),
-    close: vi.fn(async () => undefined),
-  })),
-}));
+const { createdWatchers, memoryLoggerWarn, watchMock } = vi.hoisted(() => {
+  type WatchEvent = "add" | "change" | "unlink" | "unlinkDir" | "error";
+  type WatchCallback = (value?: unknown) => void;
+  function createMockWatcher() {
+    const handlers = new Map<WatchEvent, WatchCallback[]>();
+    const watcher = {
+      on: vi.fn((event: WatchEvent, callback: WatchCallback) => {
+        handlers.set(event, [...(handlers.get(event) ?? []), callback]);
+        return watcher;
+      }),
+      close: vi.fn(async () => undefined),
+      emit: (event: WatchEvent, value?: unknown) => {
+        for (const callback of handlers.get(event) ?? []) {
+          callback(value);
+        }
+      },
+    };
+    return watcher;
+  }
+  const watchers: Array<ReturnType<typeof createMockWatcher>> = [];
+  const result = {
+    createdWatchers: watchers,
+    memoryLoggerWarn: vi.fn(),
+    watchMock: vi.fn(() => {
+      const watcher = createMockWatcher();
+      watchers.push(watcher);
+      return watcher;
+    }),
+  };
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.test.memoryWatchFactory")] =
+    result.watchMock;
+  return result;
+});
 
-vi.mock("chokidar", () => ({
-  default: { watch: watchMock },
-  watch: watchMock,
-}));
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: memoryLoggerWarn,
+    }),
+  };
+});
 
 vi.mock("./sqlite-vec.js", () => ({
   loadSqliteVecExtension: async () => ({ ok: false, error: "sqlite-vec disabled in tests" }),
@@ -39,28 +71,21 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
-type MemoryIndexModule = typeof import("./index.js");
-type MemoryEmbeddingProvidersModule =
-  typeof import("../../../../src/plugins/memory-embedding-providers.js");
-
-let getMemorySearchManager: MemoryIndexModule["getMemorySearchManager"];
-let closeAllMemorySearchManagers: MemoryIndexModule["closeAllMemorySearchManagers"];
-let clearRegistry: MemoryEmbeddingProvidersModule["clearMemoryEmbeddingProviders"];
-let registerAdapter: MemoryEmbeddingProvidersModule["registerMemoryEmbeddingProvider"];
+import {
+  clearMemoryEmbeddingProviders as clearRegistry,
+  registerMemoryEmbeddingProvider as registerAdapter,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  closeAllMemorySearchManagers,
+  getMemorySearchManager,
+  type MemoryIndexManager,
+} from "./index.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
   let workspaceDir = "";
   let extraDir = "";
-
-  beforeAll(async () => {
-    vi.resetModules();
-    ({ getMemorySearchManager, closeAllMemorySearchManagers } = await import("./index.js"));
-    ({
-      clearMemoryEmbeddingProviders: clearRegistry,
-      registerMemoryEmbeddingProvider: registerAdapter,
-    } = await import("../../../../src/plugins/memory-embedding-providers.js"));
-  });
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -68,8 +93,14 @@ describe("memory watcher config", () => {
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
   });
 
+  afterAll(() => {
+    Reflect.deleteProperty(globalThis, Symbol.for("openclaw.test.memoryWatchFactory"));
+  });
+
   afterEach(async () => {
+    vi.useRealTimers();
     watchMock.mockClear();
+    createdWatchers.length = 0;
     if (manager) {
       await manager.close();
       manager = null;
@@ -81,10 +112,6 @@ describe("memory watcher config", () => {
       workspaceDir = "";
       extraDir = "";
     }
-  });
-
-  afterAll(() => {
-    vi.resetModules();
   });
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
@@ -109,6 +136,7 @@ describe("memory watcher config", () => {
       },
     };
     return {
+      memory: { backend: "builtin" },
       agents: {
         defaults,
         list: [{ id: "main", default: true }],
@@ -122,6 +150,8 @@ describe("memory watcher config", () => {
     if (!result.manager) {
       throw new Error("manager missing");
     }
+    expect(result.manager.status().backend).toBe("builtin");
+    expect(result.manager.status().sources).toContain("memory");
     manager = result.manager as unknown as MemoryIndexManager;
   }
 
@@ -139,11 +169,11 @@ describe("memory watcher config", () => {
     expect(watchedPaths).toEqual(
       expect.arrayContaining([
         path.join(workspaceDir, "MEMORY.md"),
-        path.join(workspaceDir, "memory.md"),
         path.join(workspaceDir, "memory"),
-        path.join(extraDir, "**", "*.md"),
+        extraDir,
       ]),
     );
+    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
@@ -153,15 +183,30 @@ describe("memory watcher config", () => {
       true,
     );
     expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
-    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.tmp"))).toBe(true);
-    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"))).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.tmp"), {})).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"), {})).toBe(true);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.json"), undefined)).toBe(
+      false,
+    );
     expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"), {})).toBe(false);
     expect(
       ignored?.(path.join(workspaceDir, "memory", "project"), { isDirectory: () => true }),
     ).toBe(false);
   });
 
-  it("watches multimodal extensions with case-insensitive globs", async () => {
+  it("does not start watchers for one-shot CLI managers", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    const result = await getMemorySearchManager({ cfg, agentId: "main", purpose: "cli" });
+    expect(result.manager).not.toBeNull();
+    manager = result.manager as unknown as MemoryIndexManager;
+
+    expect(watchMock).not.toHaveBeenCalled();
+  });
+
+  it("watches multimodal extra directories with filtered extensions", async () => {
     await setupWatcherWorkspace({ name: "PHOTO.PNG", contents: "png" });
     const cfg = createWatcherConfig({
       provider: "gemini",
@@ -178,16 +223,52 @@ describe("memory watcher config", () => {
       Record<string, unknown>,
     ];
     expect(watchedPaths).toEqual(
-      expect.arrayContaining([
-        path.join(extraDir, "**", "*.[pP][nN][gG]"),
-        path.join(extraDir, "**", "*.[wW][aA][vV]"),
-      ]),
+      expect.arrayContaining([path.join(workspaceDir, "MEMORY.md"), path.join(extraDir)]),
     );
+    expect(watchedPaths.every((watchPath) => !watchPath.includes("*"))).toBe(true);
 
     const ignored = options.ignored as WatchIgnoredFn | undefined;
     expect(ignored).toBeTypeOf("function");
     expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"))).toBe(false);
+    expect(ignored?.(path.join(extraDir, "nested", "PHOTO.PNG"), {})).toBe(false);
     expect(ignored?.(path.join(extraDir, "nested", "voice.WAV"))).toBe(false);
-    expect(ignored?.(path.join(extraDir, "nested", "metadata.json"))).toBe(true);
+    expect(ignored?.(path.join(extraDir, "nested", "voice.WAV"), {})).toBe(false);
+    expect(ignored?.(path.join(extraDir, "nested", "metadata.json"), {})).toBe(true);
+  });
+
+  it.each(["add", "change", "unlink", "unlinkDir"] as const)(
+    "schedules watch sync on %s",
+    async (event) => {
+      await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+      const cfg = createWatcherConfig();
+
+      await expectWatcherManager(cfg);
+      vi.useFakeTimers();
+      const syncSpy = vi
+        .spyOn(
+          manager as unknown as {
+            sync: (params?: { reason?: string }) => Promise<void>;
+          },
+          "sync",
+        )
+        .mockResolvedValue(undefined);
+
+      createdWatchers[0]?.emit(event);
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
+    },
+  );
+
+  it("attaches a logging non-throwing watcher error listener", async () => {
+    await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
+    const cfg = createWatcherConfig();
+
+    await expectWatcherManager(cfg);
+
+    const watcher = createdWatchers[0];
+    expect(watcher?.on).toHaveBeenCalledWith("error", expect.any(Function));
+    expect(() => watcher?.emit("error", new Error("watcher error: ENOSPC"))).not.toThrow();
+    expect(memoryLoggerWarn).toHaveBeenCalledWith("memory watcher error: watcher error: ENOSPC");
   });
 });

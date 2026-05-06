@@ -18,11 +18,12 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
+import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
@@ -89,14 +90,11 @@ function resolveDiskCachePath(): string {
 
 function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
-    const cacheDir = resolveDiskCacheDir();
-    if (!existsSync(cacheDir)) {
-      mkdirSync(cacheDir, { recursive: true });
-    }
+    const cachePath = resolveDiskCachePath();
     const payload: DiskCachePayload = {
       models: Object.fromEntries(map),
     };
-    writeFileSync(resolveDiskCachePath(), JSON.stringify(payload), "utf-8");
+    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to write OpenRouter disk cache: ${message}`);
@@ -171,10 +169,10 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       model.max_output_tokens ??
       8192,
     cost: {
-      input: parseFloat(model.pricing?.prompt || "0") * 1_000_000,
-      output: parseFloat(model.pricing?.completion || "0") * 1_000_000,
-      cacheRead: parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
-      cacheWrite: parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
+      input: Number.parseFloat(model.pricing?.prompt || "0") * 1_000_000,
+      output: Number.parseFloat(model.pricing?.completion || "0") * 1_000_000,
+      cacheRead: Number.parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
+      cacheWrite: Number.parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
     },
   };
 }
@@ -238,7 +236,7 @@ function triggerFetch(): void {
  * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
-export function ensureOpenRouterModelCache(): void {
+function ensureOpenRouterModelCache(): void {
   if (cache) {
     return;
   }

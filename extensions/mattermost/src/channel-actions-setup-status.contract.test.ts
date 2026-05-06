@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect } from "vitest";
 import {
   installChannelActionsContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
-} from "../../../test/helpers/channels/registry-contract-suites.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { describe, expect } from "vitest";
 import { mattermostPlugin, mattermostSetupPlugin } from "../channel-plugin-api.js";
 
 describe("mattermost actions contract", () => {
@@ -24,7 +24,7 @@ describe("mattermost actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send", "react"],
-        expectedCapabilities: ["buttons"],
+        expectedCapabilities: ["presentation"],
       },
       {
         name: "reactions can be disabled while send stays available",
@@ -39,7 +39,7 @@ describe("mattermost actions contract", () => {
           },
         } as OpenClawConfig,
         expectedActions: ["send"],
-        expectedCapabilities: ["buttons"],
+        expectedCapabilities: ["presentation"],
       },
       {
         name: "missing bot credentials disables the actions surface",

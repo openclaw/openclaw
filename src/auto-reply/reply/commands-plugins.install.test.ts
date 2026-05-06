@@ -6,12 +6,19 @@ import { createCommandWorkspaceHarness } from "./commands-filesystem.test-suppor
 import { handlePluginsCommand } from "./commands-plugins.js";
 import { buildPluginsCommandParams } from "./commands.test-harness.js";
 
-const { installPluginFromPathMock, installPluginFromClawHubMock, persistPluginInstallMock } =
-  vi.hoisted(() => ({
-    installPluginFromPathMock: vi.fn(),
-    installPluginFromClawHubMock: vi.fn(),
-    persistPluginInstallMock: vi.fn(),
-  }));
+const {
+  installPluginFromNpmSpecMock,
+  installPluginFromPathMock,
+  installPluginFromClawHubMock,
+  installPluginFromGitSpecMock,
+  persistPluginInstallMock,
+} = vi.hoisted(() => ({
+  installPluginFromNpmSpecMock: vi.fn(),
+  installPluginFromPathMock: vi.fn(),
+  installPluginFromClawHubMock: vi.fn(),
+  installPluginFromGitSpecMock: vi.fn(),
+  persistPluginInstallMock: vi.fn(),
+}));
 
 vi.mock("../../plugins/install.js", async () => {
   const actual = await vi.importActual<typeof import("../../plugins/install.js")>(
@@ -19,6 +26,7 @@ vi.mock("../../plugins/install.js", async () => {
   );
   return {
     ...actual,
+    installPluginFromNpmSpec: installPluginFromNpmSpecMock,
     installPluginFromPath: installPluginFromPathMock,
   };
 });
@@ -30,6 +38,16 @@ vi.mock("../../plugins/clawhub.js", async () => {
   return {
     ...actual,
     installPluginFromClawHub: installPluginFromClawHubMock,
+  };
+});
+
+vi.mock("../../plugins/git-install.js", async () => {
+  const actual = await vi.importActual<typeof import("../../plugins/git-install.js")>(
+    "../../plugins/git-install.js",
+  );
+  return {
+    ...actual,
+    installPluginFromGitSpec: installPluginFromGitSpecMock,
   };
 });
 
@@ -49,8 +67,10 @@ function buildPluginsParams(commandBodyNormalized: string, workspaceDir: string)
 
 describe("handleCommands /plugins install", () => {
   afterEach(async () => {
+    installPluginFromNpmSpecMock.mockReset();
     installPluginFromPathMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    installPluginFromGitSpecMock.mockReset();
     persistPluginInstallMock.mockReset();
     await workspaceHarness.cleanupWorkspaces();
   });
@@ -149,6 +169,55 @@ describe("handleCommands /plugins install", () => {
     });
   });
 
+  it("installs from an explicit git: spec", async () => {
+    installPluginFromGitSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "git-demo",
+      targetDir: "/tmp/git-demo",
+      version: "1.2.3",
+      extensions: ["index.js"],
+      git: {
+        url: "https://github.com/acme/git-demo.git",
+        ref: "v1.2.3",
+        commit: "abc123",
+        resolvedAt: "2026-04-30T12:00:00.000Z",
+      },
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams(
+        "/plugins install git:github.com/acme/git-demo@v1.2.3",
+        workspaceDir,
+      );
+      const result = await handlePluginsCommand(params, true);
+      if (result === null) {
+        throw new Error("expected plugin install result");
+      }
+      expect(result.reply?.text).toContain('Installed plugin "git-demo"');
+      expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spec: "git:github.com/acme/git-demo@v1.2.3",
+        }),
+      );
+      expect(persistPluginInstallMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: "git-demo",
+          install: expect.objectContaining({
+            source: "git",
+            spec: "git:github.com/acme/git-demo@v1.2.3",
+            installPath: "/tmp/git-demo",
+            version: "1.2.3",
+            gitUrl: "https://github.com/acme/git-demo.git",
+            gitRef: "v1.2.3",
+            gitCommit: "abc123",
+          }),
+        }),
+      );
+    });
+  });
+
   it("treats /plugin add as an install alias", async () => {
     installPluginFromClawHubMock.mockResolvedValue({
       ok: true,
@@ -184,6 +253,62 @@ describe("handleCommands /plugins install", () => {
       expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
         expect.objectContaining({
           spec: "clawhub:@openclaw/alias-demo@1.0.0",
+        }),
+      );
+    });
+  });
+
+  it("trusts catalog npm package installs with alternate selectors", async () => {
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "wecom-openclaw-plugin",
+      targetDir: "/tmp/wecom-openclaw-plugin",
+      version: "2026.4.23",
+      extensions: ["index.js"],
+      npmResolution: {
+        name: "@wecom/wecom-openclaw-plugin",
+        version: "2026.4.23",
+        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+        integrity: "sha512-wecom",
+        resolvedAt: "2026-05-04T20:00:00.000Z",
+      },
+    });
+    persistPluginInstallMock.mockResolvedValue({});
+
+    await withTempHome("openclaw-command-plugins-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      const params = buildPluginsParams(
+        "/plugins install @wecom/wecom-openclaw-plugin@latest",
+        workspaceDir,
+      );
+      const result = await handlePluginsCommand(params, true);
+      if (result === null) {
+        throw new Error("expected plugin install result");
+      }
+      expect(result.reply?.text).toContain('Installed plugin "wecom-openclaw-plugin"');
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          spec: "@wecom/wecom-openclaw-plugin@latest",
+          expectedPluginId: "wecom-openclaw-plugin",
+          trustedSourceLinkedOfficialInstall: true,
+        }),
+      );
+      expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+        expect.not.objectContaining({
+          expectedIntegrity: expect.any(String),
+        }),
+      );
+      expect(persistPluginInstallMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pluginId: "wecom-openclaw-plugin",
+          install: expect.objectContaining({
+            source: "npm",
+            spec: "@wecom/wecom-openclaw-plugin@latest",
+            installPath: "/tmp/wecom-openclaw-plugin",
+            version: "2026.4.23",
+            resolvedName: "@wecom/wecom-openclaw-plugin",
+            resolvedVersion: "2026.4.23",
+          }),
         }),
       );
     });

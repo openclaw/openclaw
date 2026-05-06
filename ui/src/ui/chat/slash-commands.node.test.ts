@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseSlashCommand,
@@ -77,6 +78,10 @@ describe("parseSlashCommand", () => {
     expect(parseSlashCommand("/export-session")).toMatchObject({
       command: { key: "export-session" },
       args: "",
+    });
+    expect(parseSlashCommand("/side what changed?")).toMatchObject({
+      command: { key: "btw", name: "btw", aliases: expect.arrayContaining(["side"]) },
+      args: "what changed?",
     });
   });
 

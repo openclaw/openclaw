@@ -49,11 +49,14 @@ const probeGateway = vi.fn<
     configSnapshot: unknown;
   }>
 >();
+const callGatewayCli = vi.fn();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
+const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
 
 vi.mock("../../config/config.js", () => ({
+  getRuntimeConfig: () => loadConfig(),
   loadConfig: () => loadConfig(),
   readBestEffortConfig: async () => loadConfig(),
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
@@ -75,6 +78,10 @@ vi.mock("../../gateway/probe.js", () => ({
   }) => probeGateway(opts),
 }));
 
+vi.mock("../../gateway/call.js", () => ({
+  callGatewayCli: (opts: unknown) => callGatewayCli(opts),
+}));
+
 vi.mock("../../config/commands.js", () => ({
   isRestartEnabled: (config?: { commands?: unknown }) => isRestartEnabled(config),
 }));
@@ -86,6 +93,10 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
+}));
+
+vi.mock("./start-repair.js", () => ({
+  repairLoadedGatewayServiceForStart: (args: unknown) => repairLoadedGatewayServiceForStart(args),
 }));
 
 vi.mock("./restart-health.js", () => ({
@@ -107,7 +118,11 @@ vi.mock("./lifecycle-core.js", () => ({
 
 describe("runDaemonRestart health checks", () => {
   let runDaemonStart: (opts?: { json?: boolean }) => Promise<void>;
-  let runDaemonRestart: (opts?: { json?: boolean }) => Promise<boolean>;
+  let runDaemonRestart: (opts?: {
+    json?: boolean;
+    safe?: boolean;
+    force?: boolean;
+  }) => Promise<boolean>;
   let runDaemonStop: (opts?: { json?: boolean }) => Promise<void>;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -156,9 +171,11 @@ describe("runDaemonRestart health checks", () => {
     signalVerifiedGatewayPidSync.mockReset();
     formatGatewayPidList.mockReset();
     probeGateway.mockReset();
+    callGatewayCli.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
     recoverInstalledLaunchAgent.mockReset();
+    repairLoadedGatewayServiceForStart.mockReset();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -197,6 +214,31 @@ describe("runDaemonRestart health checks", () => {
       ok: true,
       configSnapshot: { commands: { restart: true } },
     });
+    callGatewayCli.mockResolvedValue({
+      ok: true,
+      status: "deferred",
+      preflight: {
+        safe: false,
+        counts: {
+          queueSize: 1,
+          pendingReplies: 0,
+          embeddedRuns: 0,
+          activeTasks: 0,
+          totalActive: 1,
+        },
+        blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],
+        summary: "restart deferred: 1 queued or active operation(s)",
+      },
+      restart: {
+        ok: true,
+        pid: 123,
+        signal: "SIGUSR1",
+        delayMs: 0,
+        mode: "emit",
+        coalesced: false,
+        cooldownMsApplied: 0,
+      },
+    });
     isRestartEnabled.mockReturnValue(true);
     signalVerifiedGatewayPidSync.mockImplementation(() => {});
     formatGatewayPidList.mockImplementation((pids) => pids.join(", "));
@@ -221,6 +263,64 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonStart({ json: true });
 
     expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "started" });
+  });
+
+  it("requests a safe gateway restart over RPC without touching the service manager", async () => {
+    await runDaemonRestart({ json: true, safe: true });
+
+    expect(callGatewayCli).toHaveBeenCalledWith({
+      method: "gateway.restart.request",
+      params: { reason: "gateway.restart.safe" },
+      timeoutMs: 10_000,
+    });
+    expect(runServiceRestart).not.toHaveBeenCalled();
+  });
+
+  it("keeps force restart on the existing non-safe path", async () => {
+    await runDaemonRestart({ json: true, force: true });
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+    expect(runServiceRestart).toHaveBeenCalled();
+  });
+
+  it("repairs stale loaded service definitions from gateway start", async () => {
+    repairLoadedGatewayServiceForStart.mockResolvedValue({
+      result: "started",
+      message: "Gateway service definition repaired and started.",
+      loaded: true,
+    });
+    runServiceStart.mockImplementation(
+      async (params: {
+        repairLoadedService?: (args: {
+          json: boolean;
+          stdout: NodeJS.WritableStream;
+          state: unknown;
+          issues: unknown[];
+        }) => Promise<unknown>;
+      }) => {
+        await params.repairLoadedService?.({
+          json: true,
+          stdout: process.stdout,
+          state: { command: { environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" } } },
+          issues: [{ code: "version-mismatch", message: "old service" }],
+        });
+      },
+    );
+
+    await runDaemonStart({ json: true });
+
+    expect(repairLoadedGatewayServiceForStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        service,
+        json: true,
+        state: expect.objectContaining({
+          command: expect.objectContaining({
+            environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+          }),
+        }),
+        issues: [expect.objectContaining({ code: "version-mismatch" })],
+      }),
+    );
   });
 
   it("kills stale gateway pids and retries restart", async () => {
@@ -370,17 +470,22 @@ describe("runDaemonRestart health checks", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it("prefers unmanaged restart over launchd repair when a gateway listener is present", async () => {
+  it("prefers launchd repair over unmanaged restart when an installed LaunchAgent is unloaded", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    recoverInstalledLaunchAgent.mockResolvedValue({
+      result: "restarted",
+      loaded: true,
+      message: "Gateway LaunchAgent was installed but not loaded; re-bootstrapped launchd service.",
+    });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
     await runDaemonRestart({ json: true });
 
-    expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4200, "SIGUSR1");
-    expect(recoverInstalledLaunchAgent).not.toHaveBeenCalled();
-    expect(waitForGatewayHealthyListener).toHaveBeenCalledTimes(1);
-    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(recoverInstalledLaunchAgent).toHaveBeenCalledWith({ result: "restarted" });
+    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyListener).not.toHaveBeenCalled();
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledTimes(1);
   });
 
   it("re-bootstraps an installed LaunchAgent on restart when no unmanaged listener exists", async () => {

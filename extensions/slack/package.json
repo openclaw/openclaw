@@ -1,13 +1,13 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.4.20",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw Slack channel plugin",
   "type": "module",
   "dependencies": {
-    "@sinclair/typebox": "0.34.49",
-    "@slack/bolt": "^4.7.0",
-    "@slack/web-api": "^7.15.1",
+    "@slack/bolt": "^4.7.2",
+    "@slack/types": "^2.21.0",
+    "@slack/web-api": "^7.15.2",
     "https-proxy-agent": "^9.0.0"
   },
   "devDependencies": {
@@ -28,13 +28,21 @@
       "blurb": "supported (Socket Mode).",
       "systemImage": "number",
       "markdownCapable": true,
+      "commands": {
+        "nativeCommandsAutoEnabled": false,
+        "nativeSkillsAutoEnabled": false
+      },
       "configuredState": {
+        "env": {
+          "anyOf": [
+            "SLACK_APP_TOKEN",
+            "SLACK_BOT_TOKEN",
+            "SLACK_USER_TOKEN"
+          ]
+        },
         "specifier": "./configured-state",
         "exportName": "hasSlackConfiguredState"
       }
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
     }
   }
 }

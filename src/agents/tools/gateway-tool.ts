@@ -1,12 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { parseConfigJson5, resolveConfigSnapshotHash } from "../../config/io.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
+  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -24,57 +26,41 @@ const log = createSubsystemLogger("gateway-tool");
 const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
 // Security: the agent-facing `gateway` tool is owner-only, but per SECURITY.md the model/agent
 // itself is not a trusted principal. `assertGatewayConfigMutationAllowed` is the explicit
-// model -> operator trust-boundary control on `config.apply`/`config.patch`. Any operator-trusted
-// path listed here must not be changed by agent-driven mutations, including descendant keys
-// reached via deep merge or `mergeObjectArraysById` in-place edits.
-const PROTECTED_GATEWAY_CONFIG_PATHS = [
-  // Exec consent / allowlist.
-  "tools.exec.ask",
-  "tools.exec.security",
-  "tools.exec.safeBins",
-  "tools.exec.safeBinProfiles",
-  "tools.exec.safeBinTrustedDirs",
-  "tools.exec.strictInlineEval",
-  // Filesystem boundary.
-  "tools.fs",
-  // Sandbox isolation and per-agent sandbox overrides.
-  "agents.defaults.sandbox",
-  "agents.sandbox",
-  "sandbox",
-  "agents.list[].sandbox",
-  // Per-agent tool/runtime execution policy.
-  "agents.list[].tools",
-  "agents.list[].embeddedPi",
-  "tools.subagents",
-  // Plugin trust boundary.
-  "plugins.enabled",
-  "plugins.allow",
-  "plugins.deny",
-  "plugins.entries",
-  "plugins.installs",
-  "plugins.load",
-  "plugins.slots",
-  // Gateway auth / TLS / HTTP tool exposure.
-  "gateway.auth",
-  "gateway.tls",
-  "gateway.tools.allow",
-  "gateway.tools.deny",
-  // Hook auth/routing and extra trusted code loading.
-  "hooks.token",
-  "hooks.allowRequestSessionKey",
-  "hooks.defaultSessionKey",
-  "hooks.allowedSessionKeyPrefixes",
-  "hooks.internal.load.extraDirs",
-  "hooks.transformsDir",
-  "hooks.mappings",
-  // SSRF and MCP transport reach.
-  "browser.ssrfPolicy",
-  "tools.web.fetch.ssrfPolicy",
-  "mcp.servers",
+// model -> operator trust-boundary control on `config.apply`/`config.patch`, so the runtime
+// tool must fail closed and allow only a narrow set of agent-tunable paths.
+const ALLOWED_GATEWAY_CONFIG_PATHS = [
+  // Agent prompt/model tuning.
+  "agents.defaults.systemPromptOverride",
+  "agents.defaults.promptOverlays",
+  "agents.defaults.model",
+  "agents.defaults.thinkingDefault",
+  "agents.defaults.subagents.thinking",
+  "agents.defaults.reasoningDefault",
+  "agents.defaults.fastModeDefault",
+  "agents.list[].id",
+  "agents.list[].systemPromptOverride",
+  "agents.list[].model",
+  "agents.list[].thinkingDefault",
+  "agents.list[].subagents.thinking",
+  "agents.list[].reasoningDefault",
+  "agents.list[].fastModeDefault",
+  // Mention gating is an agent-facing scope knob across channel adapters.
+  // Depths here must cover the deepest `requireMention` path the channel
+  // adapters use today — Telegram topic overrides live at
+  // `channels.telegram.groups.<group>.topics.<topic>.requireMention`.
+  "channels.*.requireMention",
+  "channels.*.*.requireMention",
+  "channels.*.*.*.requireMention",
+  "channels.*.*.*.*.requireMention",
+  "channels.*.*.*.*.*.requireMention",
+  // Visible reply delivery mode is a bounded message UX setting, not a secret
+  // or privilege boundary. Let agents repair silent group/channel rooms.
+  "messages.visibleReplies",
+  "messages.groupChat.visibleReplies",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
-export const PROTECTED_GATEWAY_CONFIG_PATHS_FOR_TEST = PROTECTED_GATEWAY_CONFIG_PATHS;
+export const ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST = ALLOWED_GATEWAY_CONFIG_PATHS;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
 export function assertGatewayConfigMutationAllowedForTest(params: {
@@ -109,6 +95,17 @@ function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
   return config as Record<string, unknown>;
 }
 
+// Direct RPC callers need the validated config echoed after writes; the
+// agent-facing gateway tool does not, and replaying it bloats transcripts.
+function stripConfigWriteResultPayload(result: unknown): unknown {
+  if (!isPlainObject(result) || !Object.hasOwn(result, "config")) {
+    return result;
+  }
+  const stripped = { ...result };
+  delete stripped.config;
+  return stripped;
+}
+
 function parseGatewayConfigMutationRaw(
   raw: string,
   action: "config.apply" | "config.patch",
@@ -127,114 +124,171 @@ function parseGatewayConfigMutationRaw(
   return parsedRes.parsed;
 }
 
-function getValueAtCanonicalPath(config: Record<string, unknown>, path: string): unknown {
-  let current: unknown = config;
-  for (const part of path.split(".")) {
-    if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return undefined;
-    }
-    current = (current as Record<string, unknown>)[part];
-  }
-  return current;
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function getValueAtPath(config: Record<string, unknown>, path: string): unknown {
-  const direct = getValueAtCanonicalPath(config, path);
-  if (direct !== undefined) {
-    return direct;
-  }
-  if (!path.startsWith("tools.exec.")) {
-    return undefined;
-  }
-  return getValueAtCanonicalPath(config, path.replace(/^tools\.exec\./, "tools.bash."));
+function normalizeGatewayConfigPath(path: string): string {
+  return path.startsWith("tools.bash.") ? path.replace(/^tools\.bash\./, "tools.exec.") : path;
 }
 
-function isProtectedPathEqual(
-  currentConfig: Record<string, unknown>,
-  nextConfig: Record<string, unknown>,
-  path: string,
-): boolean {
-  const bracketIdx = path.indexOf("[]");
-  if (bracketIdx === -1) {
-    return isDeepStrictEqual(getValueAtPath(currentConfig, path), getValueAtPath(nextConfig, path));
+function readKeyedArrayEntries(list: unknown): {
+  duplicateIds: boolean;
+  entries: Map<string, unknown>;
+  hasUnkeyedEntries: boolean;
+} | null {
+  if (!Array.isArray(list)) {
+    return null;
   }
 
-  const arrayPath = path.slice(0, bracketIdx);
-  const subPath = path.slice(bracketIdx + "[]".length).replace(/^\./, "");
-  const currentList = getValueAtCanonicalPath(currentConfig, arrayPath);
-  const nextList = getValueAtCanonicalPath(nextConfig, arrayPath);
-  if (!Array.isArray(currentList) && !Array.isArray(nextList)) {
-    return true;
-  }
-
-  const readProjectedEntries = (
-    list: unknown,
-  ): {
-    duplicateIds: boolean;
-    hasUnkeyedProtectedValue: boolean;
-    keyedValues: Map<string, unknown>;
-  } => {
-    if (!Array.isArray(list)) {
-      return {
-        duplicateIds: false,
-        hasUnkeyedProtectedValue: false,
-        keyedValues: new Map<string, unknown>(),
-      };
-    }
-    let duplicateIds = false;
-    let hasUnkeyedProtectedValue = false;
-    const keyedValues = new Map<string, unknown>();
-    for (const entry of list) {
-      const id =
-        entry &&
-        typeof entry === "object" &&
-        !Array.isArray(entry) &&
-        typeof (entry as { id?: unknown }).id === "string" &&
-        (entry as { id: string }).id.length > 0
-          ? (entry as { id: string }).id
-          : undefined;
-      const value =
-        !subPath || !entry || typeof entry !== "object" || Array.isArray(entry)
-          ? entry
-          : getValueAtCanonicalPath(entry as Record<string, unknown>, subPath);
-      if (!id) {
-        hasUnkeyedProtectedValue ||= value !== undefined;
-        continue;
-      }
-      if (keyedValues.has(id)) {
-        duplicateIds = true;
-        continue;
-      }
-      keyedValues.set(id, value);
-    }
-    return { duplicateIds, hasUnkeyedProtectedValue, keyedValues };
-  };
-
-  const currentProjected = readProjectedEntries(currentList);
-  const nextProjected = readProjectedEntries(nextList);
-  if (nextProjected.duplicateIds || nextProjected.hasUnkeyedProtectedValue) {
-    return false;
-  }
-  for (const [id, currentValue] of currentProjected.keyedValues) {
-    if (!nextProjected.keyedValues.has(id)) {
-      // Dropping an entry that currently carries an operator-set protected
-      // subfield value strips that operator state — treat as a protected
-      // change so per-agent overrides cannot be removed via config.apply.
-      if (currentValue !== undefined) {
-        return false;
-      }
+  let duplicateIds = false;
+  let hasUnkeyedEntries = false;
+  const entries = new Map<string, unknown>();
+  for (const entry of list) {
+    if (!isPlainObject(entry) || typeof entry.id !== "string" || entry.id.length === 0) {
+      hasUnkeyedEntries = true;
       continue;
     }
-    if (!isDeepStrictEqual(currentValue, nextProjected.keyedValues.get(id))) {
+    if (entries.has(entry.id)) {
+      duplicateIds = true;
+      continue;
+    }
+    entries.set(entry.id, entry);
+  }
+  return { duplicateIds, entries, hasUnkeyedEntries };
+}
+
+function collectConfigLeafPaths(value: unknown, basePath: string, out: Set<string>): void {
+  const canonicalPath = normalizeGatewayConfigPath(basePath);
+  if (value === undefined) {
+    if (canonicalPath) {
+      out.add(canonicalPath);
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    const keyedEntries = readKeyedArrayEntries(value);
+    if (
+      keyedEntries &&
+      !keyedEntries.duplicateIds &&
+      !keyedEntries.hasUnkeyedEntries &&
+      keyedEntries.entries.size > 0
+    ) {
+      for (const entryValue of keyedEntries.entries.values()) {
+        collectConfigLeafPaths(entryValue, `${basePath}[]`, out);
+      }
+      return;
+    }
+    if (canonicalPath) {
+      out.add(canonicalPath);
+    }
+    return;
+  }
+
+  if (!isPlainObject(value)) {
+    if (canonicalPath) {
+      out.add(canonicalPath);
+    }
+    return;
+  }
+
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    if (canonicalPath) {
+      out.add(canonicalPath);
+    }
+    return;
+  }
+
+  for (const [key, child] of entries) {
+    collectConfigLeafPaths(child, basePath ? `${basePath}.${key}` : key, out);
+  }
+}
+
+function collectChangedConfigPaths(
+  currentValue: unknown,
+  nextValue: unknown,
+  basePath = "",
+  out = new Set<string>(),
+): Set<string> {
+  if (isDeepStrictEqual(currentValue, nextValue)) {
+    return out;
+  }
+
+  if (currentValue === undefined || nextValue === undefined) {
+    collectConfigLeafPaths(currentValue ?? nextValue, basePath, out);
+    return out;
+  }
+
+  if (Array.isArray(currentValue) || Array.isArray(nextValue)) {
+    if (!Array.isArray(currentValue) || !Array.isArray(nextValue)) {
+      collectConfigLeafPaths(currentValue, basePath, out);
+      collectConfigLeafPaths(nextValue, basePath, out);
+      return out;
+    }
+
+    const currentEntries = readKeyedArrayEntries(currentValue);
+    const nextEntries = readKeyedArrayEntries(nextValue);
+    if (
+      !currentEntries ||
+      !nextEntries ||
+      currentEntries.duplicateIds ||
+      nextEntries.duplicateIds ||
+      currentEntries.hasUnkeyedEntries ||
+      nextEntries.hasUnkeyedEntries
+    ) {
+      out.add(normalizeGatewayConfigPath(basePath));
+      return out;
+    }
+
+    const ids = new Set([...currentEntries.entries.keys(), ...nextEntries.entries.keys()]);
+    for (const id of ids) {
+      collectChangedConfigPaths(
+        currentEntries.entries.get(id),
+        nextEntries.entries.get(id),
+        `${basePath}[]`,
+        out,
+      );
+    }
+    return out;
+  }
+
+  if (isPlainObject(currentValue) && isPlainObject(nextValue)) {
+    const keys = new Set([...Object.keys(currentValue), ...Object.keys(nextValue)]);
+    for (const key of keys) {
+      collectChangedConfigPaths(
+        currentValue[key],
+        nextValue[key],
+        basePath ? `${basePath}.${key}` : key,
+        out,
+      );
+    }
+    return out;
+  }
+
+  out.add(normalizeGatewayConfigPath(basePath));
+  return out;
+}
+
+function pathSegmentMatches(patternSegment: string, pathSegment: string): boolean {
+  return patternSegment === "*" || patternSegment === pathSegment;
+}
+
+function isAllowedGatewayConfigPath(path: string): boolean {
+  const pathSegments = path.split(".");
+  return ALLOWED_GATEWAY_CONFIG_PATHS.some((pattern) => {
+    const patternSegments = pattern.split(".");
+    if (patternSegments.length > pathSegments.length) {
       return false;
     }
-  }
-  for (const [id, nextValue] of nextProjected.keyedValues) {
-    if (!currentProjected.keyedValues.has(id) && nextValue !== undefined) {
-      return false;
+    for (let i = 0; i < patternSegments.length; i += 1) {
+      if (!pathSegmentMatches(patternSegments[i], pathSegments[i])) {
+        return false;
+      }
     }
-  }
-  return true;
+    return true;
+  });
 }
 
 function assertGatewayConfigMutationAllowed(params: {
@@ -249,12 +303,11 @@ function assertGatewayConfigMutationAllowed(params: {
       : (applyMergePatch(params.currentConfig, parsed, {
           mergeObjectArraysById: true,
         }) as Record<string, unknown>);
-  const changedProtectedPaths = PROTECTED_GATEWAY_CONFIG_PATHS.filter(
-    (path) => !isProtectedPathEqual(params.currentConfig, nextConfig, path),
-  );
-  if (changedProtectedPaths.length > 0) {
+  const changedPaths = [...collectChangedConfigPaths(params.currentConfig, nextConfig)].toSorted();
+  const disallowedPaths = changedPaths.filter((path) => !isAllowedGatewayConfigPath(path));
+  if (disallowedPaths.length > 0) {
     throw new Error(
-      `gateway ${params.action} cannot change protected config paths: ${changedProtectedPaths.join(", ")}`,
+      `gateway ${params.action} cannot change protected config paths: ${disallowedPaths.join(", ")}`,
     );
   }
 
@@ -289,6 +342,7 @@ const GatewayToolSchema = Type.Object({
   // restart
   delayMs: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
+  continuationMessage: Type.Optional(Type.String()),
   // config.get, config.schema.lookup, config.apply, update.run
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
@@ -317,7 +371,7 @@ export function createGatewayTool(opts?: {
     name: "gateway",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("gateway"),
     description:
-      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart.",
+      "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
     parameters: GatewayToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -335,6 +389,7 @@ export function createGatewayTool(opts?: {
             : undefined;
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         // Extract channel + threadId for routing after restart.
         // Uses generic :thread: parsing plus plugin-owned session grammars.
         const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey);
@@ -346,23 +401,31 @@ export function createGatewayTool(opts?: {
           deliveryContext,
           threadId,
           message: note ?? reason ?? null,
+          continuation: buildRestartSuccessContinuation({
+            sessionKey,
+            continuationMessage,
+          }),
           doctorHint: formatDoctorNonInteractiveHint(),
           stats: {
             mode: "gateway.restart",
             reason,
           },
         };
-        try {
-          await writeRestartSentinel(payload);
-        } catch {
-          // ignore: sentinel is best-effort
-        }
         log.info(
           `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
         );
+        let sentinelPath: string | null = null;
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,
+          emitHooks: {
+            beforeEmit: async () => {
+              sentinelPath = await writeRestartSentinel(payload);
+            },
+            afterEmitRejected: async () => {
+              await removeRestartSentinelFile(sentinelPath);
+            },
+          },
         });
         return jsonResult(scheduled);
       }
@@ -435,7 +498,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "config.patch") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
@@ -452,10 +515,11 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();
+        const continuationMessage = normalizeOptionalString(params.continuationMessage);
         const updateTimeoutMs = gatewayOpts.timeoutMs ?? DEFAULT_UPDATE_TIMEOUT_MS;
         const updateGatewayOpts = {
           ...gatewayOpts,
@@ -464,6 +528,7 @@ export function createGatewayTool(opts?: {
         const result = await callGatewayTool("update.run", updateGatewayOpts, {
           sessionKey,
           note,
+          continuationMessage,
           restartDelayMs,
           timeoutMs: updateTimeoutMs,
         });

@@ -1,11 +1,9 @@
 ---
-title: Sandbox vs Tool Policy vs Elevated
 summary: "Why a tool is blocked: sandbox runtime, tool allow/deny policy, and elevated exec gates"
+title: Sandbox vs tool policy vs elevated
 read_when: "You hit 'sandbox jail' or see a tool/elevated refusal and want the exact config key to change."
 status: active
 ---
-
-# Sandbox vs Tool Policy vs Elevated
 
 OpenClaw has three related (but different) controls:
 
@@ -94,11 +92,11 @@ Available groups:
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `x_search`, `web_fetch`
 - `group:ui`: `browser`, `canvas`
-- `group:automation`: `cron`, `gateway`
+- `group:automation`: `heartbeat_respond`, `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:agents`: `agents_list`
-- `group:media`: `image`, `image_generate`, `video_generate`, `tts`
+- `group:agents`: `agents_list`, `update_plan`
+- `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 
 ## Elevated: exec-only "run on host"
@@ -134,7 +132,7 @@ Fix-it keys (pick one):
 
 In `"non-main"` mode, group/channel keys are _not_ main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.
 
-## See also
+## Related
 
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence

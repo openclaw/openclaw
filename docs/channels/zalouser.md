@@ -3,14 +3,14 @@ summary: "Zalo personal account support via native zca-js (QR login), capabiliti
 read_when:
   - Setting up Zalo Personal for OpenClaw
   - Debugging Zalo Personal login or message flow
-title: "Zalo Personal"
+title: "Zalo personal"
 ---
-
-# Zalo Personal (unofficial)
 
 Status: experimental. This integration automates a **personal Zalo account** via native `zca-js` inside OpenClaw.
 
-> **Warning:** This is an unofficial integration and may result in account suspension/ban. Use at your own risk.
+<Warning>
+This is an unofficial integration and may result in account suspension or ban. Use at your own risk.
+</Warning>
 
 ## Bundled plugin
 
@@ -18,9 +18,10 @@ Zalo Personal ships as a bundled plugin in current OpenClaw releases, so normal
 packaged builds do not need a separate install.
 
 If you are on an older build or a custom install that excludes Zalo Personal,
-install it manually:
+install the npm package directly:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
+- Pinned version: `openclaw plugins install @openclaw/zalouser@2026.5.2`
 - Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 
@@ -80,7 +81,9 @@ openclaw directory groups list --channel zalouser --query "work"
 
 `channels.zalouser.dmPolicy` supports: `pairing | allowlist | open | disabled` (default: `pairing`).
 
-`channels.zalouser.allowFrom` accepts user IDs or names. During setup, names are resolved to IDs using the plugin's in-process contact lookup.
+`channels.zalouser.allowFrom` should use stable Zalo user IDs. During interactive setup, entered names can be resolved to IDs using the plugin's in-process contact lookup.
+
+If a raw name remains in config, startup resolves it only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled. Without that opt-in, runtime sender checks are ID-only and raw names are ignored for authorization.
 
 Approve via:
 
@@ -92,13 +95,13 @@ Approve via:
 - Default: `channels.zalouser.groupPolicy = "open"` (groups allowed). Use `channels.defaults.groupPolicy` to override the default when unset.
 - Restrict to an allowlist with:
   - `channels.zalouser.groupPolicy = "allowlist"`
-  - `channels.zalouser.groups` (keys should be stable group IDs; names are resolved to IDs on startup when possible)
+  - `channels.zalouser.groups` (keys should be stable group IDs; names are resolved to IDs on startup only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled)
   - `channels.zalouser.groupAllowFrom` (controls which senders in allowed groups can trigger the bot)
 - Block all groups: `channels.zalouser.groupPolicy = "disabled"`.
 - The configure wizard can prompt for group allowlists.
-- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping.
+- On startup, OpenClaw resolves group/user names in allowlists to IDs and logs the mapping only when `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
 - Group allowlist matching is ID-only by default. Unresolved names are ignored for auth unless `channels.zalouser.dangerouslyAllowNameMatching: true` is enabled.
-- `channels.zalouser.dangerouslyAllowNameMatching: true` is a break-glass compatibility mode that re-enables mutable group-name matching.
+- `channels.zalouser.dangerouslyAllowNameMatching: true` is a break-glass compatibility mode that re-enables mutable startup name resolution and runtime group-name matching.
 - If `groupAllowFrom` is unset, runtime falls back to `allowFrom` for group sender checks.
 - Sender checks apply to both normal group messages and control commands (for example `/new`, `/reset`).
 
@@ -180,7 +183,7 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 
 **Allowlist/group name didn't resolve:**
 
-- Use numeric IDs in `allowFrom`/`groupAllowFrom`/`groups`, or exact friend/group names.
+- Use numeric IDs in `allowFrom`/`groupAllowFrom` and stable group IDs in `groups`. If you intentionally need exact friend/group names, enable `channels.zalouser.dangerouslyAllowNameMatching: true`.
 
 **Upgraded from old CLI-based setup:**
 

@@ -94,6 +94,17 @@ describe("GatewayClient", () => {
         connectChallengeTimeoutMs: 5_000,
       }),
     ).toBe(5_000);
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        preauthHandshakeTimeoutMs: 30_000,
+      }),
+    ).toBe(30_000);
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        connectChallengeTimeoutMs: 45_000,
+        preauthHandshakeTimeoutMs: 30_000,
+      }),
+    ).toBe(30_000);
   });
 
   test("closes on missing ticks", async () => {
@@ -144,6 +155,52 @@ describe("GatewayClient", () => {
       expect(res.reason).toContain("tick timeout");
     }
   }, 4000);
+
+  test("lets pending requests own their timeout when ticks are missing", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({
+        requestTimeoutMs: 10_000,
+        tickWatchMinIntervalMs: 5,
+      });
+      const close = vi.fn();
+      const pending = (client as unknown as { pending: Map<string, unknown> }).pending;
+      Object.assign(
+        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+        {
+          ws: {
+            readyState: WebSocket.OPEN,
+            send: vi.fn(),
+            close,
+          },
+          tickIntervalMs: 5,
+          lastTick: Date.now(),
+        },
+      );
+      pending.set("long-rpc", {
+        resolve: vi.fn(),
+        reject: vi.fn(),
+        expectFinal: false,
+        timeout: null,
+      });
+
+      (
+        client as unknown as {
+          startTickWatch: () => void;
+        }
+      ).startTickWatch();
+      await vi.advanceTimersByTimeAsync(20);
+
+      expect(close).not.toHaveBeenCalled();
+
+      pending.clear();
+      await vi.advanceTimersByTimeAsync(5);
+
+      expect(close).toHaveBeenCalledWith(4000, "tick timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   test("times out unresolved requests and clears pending state", async () => {
     vi.useFakeTimers();

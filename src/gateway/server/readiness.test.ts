@@ -32,7 +32,10 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
   };
 }
 
-function createHealthyDiscordManager(startedAt: number, lastEventAt: number): ChannelManager {
+function createHealthyDiscordManager(
+  startedAt: number,
+  lastTransportActivityAt: number,
+): ChannelManager {
   return createManager(
     snapshotWith({
       discord: {
@@ -41,7 +44,7 @@ function createHealthyDiscordManager(startedAt: number, lastEventAt: number): Ch
         enabled: true,
         configured: true,
         lastStartAt: startedAt,
-        lastEventAt,
+        lastTransportActivityAt,
       },
     }),
   );
@@ -61,6 +64,11 @@ function createReadinessHarness(params: {
   startedAgoMs: number;
   accounts: Record<string, Partial<ChannelAccountSnapshot>>;
   getStartupPending?: () => boolean;
+  getStartupPendingReason?: Parameters<typeof createReadinessChecker>[0]["getStartupPendingReason"];
+  getEventLoopHealth?: Parameters<typeof createReadinessChecker>[0]["getEventLoopHealth"];
+  shouldSkipChannelReadiness?: Parameters<
+    typeof createReadinessChecker
+  >[0]["shouldSkipChannelReadiness"];
   cacheTtlMs?: number;
 }) {
   const startedAt = Date.now() - params.startedAgoMs;
@@ -71,6 +79,9 @@ function createReadinessHarness(params: {
       channelManager: manager,
       startedAt,
       getStartupPending: params.getStartupPending,
+      getStartupPendingReason: params.getStartupPendingReason,
+      getEventLoopHealth: params.getEventLoopHealth,
+      shouldSkipChannelReadiness: params.shouldSkipChannelReadiness,
       cacheTtlMs: params.cacheTtlMs,
     }),
   };
@@ -93,6 +104,22 @@ describe("createReadinessChecker", () => {
         startedAgoMs: 5 * 60_000,
         accounts: {},
         getStartupPending: () => true,
+      });
+      expect(readiness()).toEqual({
+        ready: false,
+        failing: ["startup-sidecars"],
+        uptimeMs: 300_000,
+      });
+    });
+  });
+
+  it("reports the current startup pending reason", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getStartupPending: () => true,
+        getStartupPendingReason: () => "startup-sidecars",
       });
       expect(readiness()).toEqual({
         ready: false,
@@ -183,6 +210,32 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("treats intentionally skipped channels as ready", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {
+          discord: {
+            running: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: Date.now() - 5 * 60_000,
+          },
+          telegram: {
+            running: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: Date.now() - 5 * 60_000,
+          },
+        },
+        shouldSkipChannelReadiness: () => true,
+      });
+
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+      expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
+    });
+  });
+
   it("keeps restart-pending channels ready during reconnect backoff", () => {
     withReadinessClock(() => {
       const startedAt = Date.now() - 5 * 60_000;
@@ -216,7 +269,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: Date.now() - 31 * 60_000,
+            lastTransportActivityAt: Date.now() - 31 * 60_000,
           },
         },
       });
@@ -236,7 +289,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: startedAt,
-            lastEventAt: null,
+            lastTransportActivityAt: null,
           },
         },
       });
@@ -255,7 +308,7 @@ describe("createReadinessChecker", () => {
             enabled: true,
             configured: true,
             lastStartAt: Date.now() - 5 * 60_000,
-            lastEventAt: Date.now() - 1_000,
+            lastTransportActivityAt: Date.now() - 1_000,
           },
         },
         cacheTtlMs: 1_000,
@@ -268,6 +321,39 @@ describe("createReadinessChecker", () => {
       vi.advanceTimersByTime(600);
       expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 301_100 });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("adds event-loop health to detailed readiness without changing readiness state", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {},
+        getEventLoopHealth: () => ({
+          degraded: true,
+          reasons: ["cpu", "event_loop_utilization"],
+          intervalMs: 2_000,
+          delayP99Ms: 42.1,
+          delayMaxMs: 88.7,
+          utilization: 0.991,
+          cpuCoreRatio: 0.973,
+        }),
+      });
+
+      expect(readiness()).toEqual({
+        ready: true,
+        failing: [],
+        uptimeMs: 300_000,
+        eventLoop: {
+          degraded: true,
+          reasons: ["cpu", "event_loop_utilization"],
+          intervalMs: 2_000,
+          delayP99Ms: 42.1,
+          delayMaxMs: 88.7,
+          utilization: 0.991,
+          cpuCoreRatio: 0.973,
+        },
+      });
     });
   });
 });

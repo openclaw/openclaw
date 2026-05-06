@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayChatClient } from "./gateway-chat.js";
+import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
+import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import type { TuiStateAccess } from "./tui-types.js";
 
 describe("tui session actions", () => {
@@ -36,7 +37,7 @@ describe("tui session actions", () => {
     overrides: Partial<Parameters<typeof createSessionActions>[0]>,
   ) =>
     createSessionActions({
-      client: { listSessions: vi.fn() } as unknown as GatewayChatClient,
+      client: { listSessions: vi.fn() } as unknown as TuiBackend,
       chatLog: {
         addSystem: vi.fn(),
         clearAll: vi.fn(),
@@ -82,7 +83,7 @@ describe("tui session actions", () => {
     const requestRender = vi.fn();
 
     const { refreshSessionInfo } = createTestSessionActions({
-      client: { listSessions } as unknown as GatewayChatClient,
+      client: { listSessions } as unknown as TuiBackend,
       chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
       tui: { requestRender } as unknown as import("@mariozechner/pi-tui").TUI,
@@ -96,6 +97,13 @@ describe("tui session actions", () => {
 
     await Promise.resolve();
     expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(listSessions).toHaveBeenNthCalledWith(1, {
+      limit: TUI_SESSION_LOOKUP_LIMIT,
+      search: "agent:main:main",
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "main",
+    });
 
     resolveFirst?.({
       ts: Date.now(),
@@ -163,7 +171,7 @@ describe("tui session actions", () => {
     });
 
     const { applySessionInfoFromPatch, refreshSessionInfo } = createTestSessionActions({
-      client: { listSessions } as unknown as GatewayChatClient,
+      client: { listSessions } as unknown as TuiBackend,
       state,
     });
 
@@ -224,7 +232,7 @@ describe("tui session actions", () => {
       client: {
         listSessions,
         loadHistory,
-      } as unknown as GatewayChatClient,
+      } as unknown as TuiBackend,
       btw,
       state,
       setActivityStatus,
@@ -242,6 +250,65 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.modelProvider).toBe("openai");
     expect(state.sessionInfo.updatedAt).toBe(50);
     expect(btw.clear).toHaveBeenCalled();
+  });
+
+  it("applies default model info when the current session has no persisted entry yet", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: {
+        model: "gpt-5.4",
+        modelProvider: "openai",
+        contextTokens: 272000,
+      },
+      sessions: [],
+    });
+
+    const state: TuiStateAccess = {
+      agentDefaultId: "main",
+      sessionMainKey: "agent:main:main",
+      sessionScope: "global",
+      agents: [],
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:brand-new",
+      currentSessionId: null,
+      activeChatRunId: null,
+      historyLoaded: false,
+      sessionInfo: {},
+      initialSessionApplied: true,
+      isConnected: true,
+      autoMessageSent: false,
+      toolsExpanded: false,
+      showThinking: false,
+      connectionStatus: "connected",
+      activityStatus: "idle",
+      statusTimeout: null,
+      lastCtrlCAt: 0,
+    };
+
+    const { refreshSessionInfo } = createSessionActions({
+      client: { listSessions } as unknown as TuiBackend,
+      chatLog: { addSystem: vi.fn() } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn(),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus: vi.fn(),
+    });
+
+    await refreshSessionInfo();
+
+    expect(state.sessionInfo.model).toBe("gpt-5.4");
+    expect(state.sessionInfo.modelProvider).toBe("openai");
+    expect(state.sessionInfo.contextTokens).toBe(272000);
   });
 
   it("resets activity status to idle when switching sessions after streaming", async () => {
@@ -268,7 +335,7 @@ describe("tui session actions", () => {
       client: {
         listSessions,
         loadHistory,
-      } as unknown as GatewayChatClient,
+      } as unknown as TuiBackend,
       state,
       setActivityStatus,
     });
@@ -277,5 +344,75 @@ describe("tui session actions", () => {
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
+  });
+
+  it("aborts the in-flight runId when only pendingChatRunId is set", async () => {
+    const abortChat = vi.fn().mockResolvedValue({ ok: true, aborted: true });
+    const addSystem = vi.fn();
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      activeChatRunId: null,
+      pendingChatRunId: "run-pending",
+    });
+
+    const { abortActive } = createSessionActions({
+      client: { listSessions: vi.fn(), abortChat } as unknown as TuiBackend,
+      chatLog: {
+        addSystem,
+        clearAll: vi.fn(),
+      } as unknown as import("./components/chat-log.js").ChatLog,
+      btw: createBtwPresenter(),
+      tui: { requestRender: vi.fn() } as unknown as import("@mariozechner/pi-tui").TUI,
+      opts: {},
+      state,
+      agentNames: new Map(),
+      initialSessionInput: "",
+      initialSessionAgentId: null,
+      resolveSessionKey: vi.fn((raw?: string) => raw ?? "agent:main:main"),
+      updateHeader: vi.fn(),
+      updateFooter: vi.fn(),
+      updateAutocompleteProvider: vi.fn(),
+      setActivityStatus,
+    });
+
+    await abortActive();
+
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: "agent:main:main",
+      runId: "run-pending",
+    });
+    expect(addSystem).not.toHaveBeenCalledWith("no active run");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenCalledWith("aborted");
+  });
+
+  it("remembers the selected session after history loads", async () => {
+    const listSessions = vi.fn().mockResolvedValue({
+      ts: Date.now(),
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: {},
+      sessions: [{ key: "agent:main:main", sessionId: "session-main" }],
+    });
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionId: "session-main",
+      messages: [],
+    });
+    const rememberSessionKey = vi.fn();
+    const state = createBaseState();
+
+    const { loadHistory: runLoadHistory } = createTestSessionActions({
+      client: {
+        listSessions,
+        loadHistory,
+      } as unknown as TuiBackend,
+      state,
+      rememberSessionKey,
+    });
+
+    await runLoadHistory();
+
+    expect(state.currentSessionId).toBe("session-main");
+    expect(rememberSessionKey).toHaveBeenCalledWith("agent:main:main");
   });
 });

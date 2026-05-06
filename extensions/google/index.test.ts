@@ -3,13 +3,16 @@ import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it } from "vitest";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
+import { describe, expect, it } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import googlePlugin from "./index.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
@@ -180,6 +183,40 @@ describe("google provider plugin hooks", () => {
     runCase(cliProvider, "google-gemini-cli");
   });
 
+  it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+    expect(provider.resolveThinkingProfile).toBeDefined();
+    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const gemini3Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    } as never);
+    const gemini25Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    } as never);
+
+    expect(gemini3Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "low" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+    expect(gemini25Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "minimal" },
+      { id: "low" },
+      { id: "medium" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+  });
+
   it("shares Gemini replay and stream hooks across Google provider variants", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -191,5 +228,27 @@ describe("google provider plugin hooks", () => {
 
     expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
     expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
+  });
+
+  it("buffers early realtime audio while the lazy Google bridge loads", () => {
+    let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
+    googlePlugin.register(
+      createTestPluginApi({
+        registerRealtimeVoiceProvider(provider) {
+          realtimeProvider = provider;
+        },
+      }),
+    );
+
+    const bridge = realtimeProvider?.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio() {},
+      onClearAudio() {},
+    });
+
+    expect(bridge).toBeDefined();
+    expect(() => bridge?.sendAudio(Buffer.alloc(160))).not.toThrow();
+    expect(() => bridge?.setMediaTimestamp(20)).not.toThrow();
+    expect(() => bridge?.sendUserMessage?.("hello")).not.toThrow();
   });
 });

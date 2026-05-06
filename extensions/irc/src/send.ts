@@ -1,4 +1,9 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceipt,
+} from "openclaw/plugin-sdk/channel-message";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIrcAccount } from "./accounts.js";
 import type { IrcClient } from "./client.js";
@@ -10,16 +15,17 @@ import { getIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
 type SendIrcOptions = {
-  cfg?: CoreConfig;
+  cfg: CoreConfig;
   accountId?: string;
   replyTo?: string;
   target?: string;
   client?: IrcClient;
 };
 
-export type SendIrcResult = {
+type SendIrcResult = {
   messageId: string;
   target: string;
+  receipt: MessageReceipt;
 };
 
 function recordIrcOutboundActivity(accountId: string): void {
@@ -51,10 +57,9 @@ function resolveTarget(to: string, opts?: SendIrcOptions): string {
 export async function sendMessageIrc(
   to: string,
   text: string,
-  opts: SendIrcOptions = {},
+  opts: SendIrcOptions,
 ): Promise<SendIrcResult> {
-  const runtime = getIrcRuntime();
-  const cfg = (opts.cfg ?? runtime.config.loadConfig()) as CoreConfig;
+  const cfg = requireRuntimeConfig(opts.cfg, "IRC send") as CoreConfig;
   const account = resolveIrcAccount({
     cfg,
     accountId: opts.accountId,
@@ -94,8 +99,20 @@ export async function sendMessageIrc(
 
   recordIrcOutboundActivity(account.accountId);
 
+  const messageId = makeIrcMessageId();
   return {
-    messageId: makeIrcMessageId(),
+    messageId,
     target,
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [
+        {
+          channel: "irc",
+          messageId,
+          conversationId: target,
+        },
+      ],
+      kind: "text",
+      ...(opts.replyTo ? { replyToId: opts.replyTo } : {}),
+    }),
   };
 }

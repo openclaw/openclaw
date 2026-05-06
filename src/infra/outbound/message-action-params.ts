@@ -3,7 +3,7 @@ import { readStringParam } from "../../agents/tools/common.js";
 import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createRootScopedReadFile } from "../../infra/fs-safe.js";
+import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import {
@@ -22,7 +22,7 @@ import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 
 export const readBooleanParam = readBooleanParamShared;
 
-export const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
+const BASE_ACTION_MEDIA_SOURCE_PARAM_KEYS = [
   "media",
   "path",
   "filePath",
@@ -215,9 +215,12 @@ function buildAttachmentMediaLoadOptions(params: {
       hostReadCapability?: boolean;
     } {
   if (params.policy.mode === "sandbox") {
-    const readSandboxFile = createRootScopedReadFile({
-      rootDir: params.policy.sandboxRoot.trim(),
-    });
+    const sandboxRoot = params.policy.sandboxRoot.trim();
+    let sandboxFsPromise: ReturnType<typeof root> | undefined;
+    const readSandboxFile = async (filePath: string): Promise<Buffer> => {
+      sandboxFsPromise ??= root(sandboxRoot);
+      return await (await sandboxFsPromise).readBytes(filePath);
+    };
     return {
       maxBytes: params.maxBytes,
       sandboxValidated: true,
@@ -399,54 +402,20 @@ export async function hydrateAttachmentParamsForAction(params: {
   });
 }
 
-export function parseButtonsParam(params: Record<string, unknown>): void {
-  const raw = params.buttons;
+export function parseJsonMessageParam(params: Record<string, unknown>, key: string): void {
+  const raw = params[key];
   if (typeof raw !== "string") {
     return;
   }
   const trimmed = raw.trim();
   if (!trimmed) {
-    delete params.buttons;
+    delete params[key];
     return;
   }
   try {
-    params.buttons = JSON.parse(trimmed) as unknown;
+    params[key] = JSON.parse(trimmed) as unknown;
   } catch {
-    throw new Error("--buttons must be valid JSON");
-  }
-}
-
-export function parseCardParam(params: Record<string, unknown>): void {
-  const raw = params.card;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.card;
-    return;
-  }
-  try {
-    params.card = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--card must be valid JSON");
-  }
-}
-
-export function parseComponentsParam(params: Record<string, unknown>): void {
-  const raw = params.components;
-  if (typeof raw !== "string") {
-    return;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    delete params.components;
-    return;
-  }
-  try {
-    params.components = JSON.parse(trimmed) as unknown;
-  } catch {
-    throw new Error("--components must be valid JSON");
+    throw new Error(`--${key} must be valid JSON`);
   }
 }
 

@@ -6,11 +6,9 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildConfiguredModelCatalog,
   buildAllowedModelSet,
-  type ModelAliasIndex,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-  resolveModelRefFromString,
   resolvePersistedOverrideModelRef,
   resolveReasoningDefault,
   resolveThinkingDefault,
@@ -18,16 +16,13 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ThinkLevel } from "./directives.js";
+export {
+  resolveModelDirectiveSelection,
+  type ModelDirectiveSelection,
+} from "./model-selection-directive.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
-
-export type ModelDirectiveSelection = {
-  provider: string;
-  model: string;
-  isDefault: boolean;
-  alias?: string;
-};
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -37,6 +32,8 @@ type ModelSelectionState = {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
+  resetModelOverrideRef?: string;
+  resolveThinkingCatalog: () => Promise<ModelCatalog | undefined>;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: () => Promise<"on" | "off">;
@@ -54,6 +51,8 @@ export function createFastTestModelSelectionState(params: {
     allowedModelKeys: new Set<string>(),
     allowedModelCatalog: [],
     resetModelOverride: false,
+    resetModelOverrideRef: undefined,
+    resolveThinkingCatalog: async () => [],
     resolveDefaultThinkingLevel: async () => params.agentCfg?.thinkingDefault as ThinkLevel,
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
@@ -64,186 +63,19 @@ function shouldLogModelSelectionTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
-let modelCatalogRuntimePromise:
-  | Promise<typeof import("../../agents/model-catalog.runtime.js")>
-  | undefined;
-let sessionStoreRuntimePromise:
-  | Promise<typeof import("../../config/sessions/store.runtime.js")>
-  | undefined;
+const modelCatalogRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/model-catalog.runtime.js"),
+);
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
 
 function loadModelCatalogRuntime() {
-  modelCatalogRuntimePromise ??= import("../../agents/model-catalog.runtime.js");
-  return modelCatalogRuntimePromise;
+  return modelCatalogRuntimeLoader.load();
 }
 
 function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
-}
-
-const FUZZY_VARIANT_TOKENS = [
-  "lightning",
-  "preview",
-  "mini",
-  "fast",
-  "turbo",
-  "lite",
-  "beta",
-  "small",
-  "nano",
-];
-
-function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
-  if (a === b) {
-    return 0;
-  }
-  if (!a || !b) {
-    return null;
-  }
-  const aLen = a.length;
-  const bLen = b.length;
-  if (Math.abs(aLen - bLen) > maxDistance) {
-    return null;
-  }
-
-  // Standard DP with early exit. O(maxDistance * minLen) in common cases.
-  const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
-  const curr = Array.from({ length: bLen + 1 }, () => 0);
-
-  for (let i = 1; i <= aLen; i++) {
-    curr[0] = i;
-    let rowMin = curr[0];
-
-    const aChar = a.charCodeAt(i - 1);
-    for (let j = 1; j <= bLen; j++) {
-      const cost = aChar === b.charCodeAt(j - 1) ? 0 : 1;
-      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
-      if (curr[j] < rowMin) {
-        rowMin = curr[j];
-      }
-    }
-
-    if (rowMin > maxDistance) {
-      return null;
-    }
-
-    for (let j = 0; j <= bLen; j++) {
-      prev[j] = curr[j] ?? 0;
-    }
-  }
-
-  const dist = prev[bLen] ?? null;
-  if (dist == null || dist > maxDistance) {
-    return null;
-  }
-  return dist;
-}
-
-function scoreFuzzyMatch(params: {
-  provider: string;
-  model: string;
-  fragment: string;
-  aliasIndex: ModelAliasIndex;
-  defaultProvider: string;
-  defaultModel: string;
-}): {
-  score: number;
-  isDefault: boolean;
-  variantCount: number;
-  variantMatchCount: number;
-  modelLength: number;
-  key: string;
-} {
-  const provider = normalizeProviderId(params.provider);
-  const model = params.model;
-  const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
-  const providerLower = normalizeLowercaseStringOrEmpty(provider);
-  const modelLower = normalizeLowercaseStringOrEmpty(model);
-  const haystack = `${providerLower}/${modelLower}`;
-  const key = modelKey(provider, model);
-
-  const scoreFragment = (
-    value: string,
-    weights: { exact: number; starts: number; includes: number },
-  ) => {
-    if (!fragment) {
-      return 0;
-    }
-    let score = 0;
-    if (value === fragment) {
-      score = Math.max(score, weights.exact);
-    }
-    if (value.startsWith(fragment)) {
-      score = Math.max(score, weights.starts);
-    }
-    if (value.includes(fragment)) {
-      score = Math.max(score, weights.includes);
-    }
-    return score;
-  };
-
-  let score = 0;
-  score += scoreFragment(haystack, { exact: 220, starts: 140, includes: 110 });
-  score += scoreFragment(providerLower, {
-    exact: 180,
-    starts: 120,
-    includes: 90,
-  });
-  score += scoreFragment(modelLower, {
-    exact: 160,
-    starts: 110,
-    includes: 80,
-  });
-
-  // Best-effort typo tolerance for common near-misses like "claud" vs "claude".
-  // Bounded to keep this cheap across large model sets.
-  const distModel = boundedLevenshteinDistance(fragment, modelLower, 3);
-  if (distModel != null) {
-    score += (3 - distModel) * 70;
-  }
-
-  const aliases = params.aliasIndex.byKey.get(key) ?? [];
-  for (const alias of aliases) {
-    score += scoreFragment(normalizeLowercaseStringOrEmpty(alias), {
-      exact: 140,
-      starts: 90,
-      includes: 60,
-    });
-  }
-
-  if (modelLower.startsWith(providerLower)) {
-    score += 30;
-  }
-
-  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) => fragment.includes(token));
-  const modelVariants = FUZZY_VARIANT_TOKENS.filter((token) => modelLower.includes(token));
-  const variantMatchCount = fragmentVariants.filter((token) => modelLower.includes(token)).length;
-  const variantCount = modelVariants.length;
-  if (fragmentVariants.length === 0 && variantCount > 0) {
-    score -= variantCount * 30;
-  } else if (fragmentVariants.length > 0) {
-    if (variantMatchCount > 0) {
-      score += variantMatchCount * 40;
-    }
-    if (variantMatchCount === 0) {
-      score -= 20;
-    }
-  }
-
-  const defaultProvider = normalizeProviderId(params.defaultProvider);
-  const isDefault = provider === defaultProvider && model === params.defaultModel;
-  if (isDefault) {
-    score += 20;
-  }
-
-  return {
-    score,
-    isDefault,
-    variantCount,
-    variantMatchCount,
-    modelLength: modelLower.length,
-    key,
-  };
+  return sessionStoreRuntimeLoader.load();
 }
 
 export async function createModelSelectionState(params: {
@@ -298,14 +130,13 @@ export async function createModelSelectionState(params: {
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
+  let resetModelOverrideRef: string | undefined;
   const agentEntry = params.agentId ? resolveAgentConfig(cfg, params.agentId) : undefined;
   const directStoredOverride = resolvePersistedOverrideModelRef({
     defaultProvider,
     overrideProvider: sessionEntry?.providerOverride,
     overrideModel: sessionEntry?.modelOverride,
   });
-  const hadDirectAutoSessionOverride =
-    sessionEntry?.modelOverrideSource === "auto" && Boolean(directStoredOverride);
 
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
@@ -341,42 +172,7 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  // Auto-failover overrides are transient: on this turn, retry the configured
-  // primary so the session self-heals when the primary recovers. The fallback loop
-  // in runWithModelFallback will re-set the override if the primary is still down.
-  // User-selected overrides (/model command) are preserved across turns.
-  //
-  // Clear this before allowlist validation so an old fallback outside the current
-  // agent allowlist does not emit the unrelated "Model override not allowed" event.
-  if (hadDirectAutoSessionOverride && sessionEntry && sessionStore && sessionKey) {
-    const { updated } = applyModelOverrideToSessionEntry({
-      entry: sessionEntry,
-      selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
-    });
-    if (updated) {
-      sessionStore[sessionKey] = sessionEntry;
-      if (storePath) {
-        await (
-          await loadSessionStoreRuntime()
-        ).updateSessionStore(storePath, (store) => {
-          store[sessionKey] = sessionEntry;
-        });
-      }
-      // Reset in-memory selection to the configured primary. The caller-provided
-      // provider/model may already be set to the fallback by stored-override preload
-      // in get-reply.ts; updating them here ensures this turn retries the primary.
-      provider = defaultProvider;
-      model = defaultModel;
-    }
-  }
-
-  if (
-    sessionEntry &&
-    sessionStore &&
-    sessionKey &&
-    directStoredOverride &&
-    !hadDirectAutoSessionOverride
-  ) {
+  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
     const normalizedOverride = normalizeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
@@ -398,18 +194,19 @@ export async function createModelSelectionState(params: {
         }
       }
       resetModelOverride = updated;
+      if (updated) {
+        resetModelOverrideRef = key;
+      }
     }
   }
 
-  const storedOverride = hadDirectAutoSessionOverride
-    ? undefined
-    : resolveStoredModelOverride({
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        parentSessionKey,
-        defaultProvider,
-      });
+  const storedOverride = resolveStoredModelOverride({
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    parentSessionKey,
+    defaultProvider,
+  });
   // Skip stored session model override only when an explicit heartbeat.model
   // was resolved. Heartbeat runs without heartbeat.model should still inherit
   // the regular session/parent model override behavior.
@@ -445,29 +242,55 @@ export async function createModelSelectionState(params: {
     }
   }
 
+  let thinkingCatalog: ModelCatalog | undefined;
+  const resolveThinkingCatalog = async () => {
+    if (thinkingCatalog) {
+      return thinkingCatalog;
+    }
+    let catalogForThinking =
+      modelCatalog && modelCatalog.length > 0 ? modelCatalog : allowedModelCatalog;
+    const selectedCatalogEntry = catalogForThinking?.find(
+      (entry) => entry.provider === provider && entry.id === model,
+    );
+    const shouldHydrateRuntimeCatalog =
+      !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
+    if (shouldHydrateRuntimeCatalog) {
+      modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
+      logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
+      const runtimeSelectedEntry = modelCatalog.find(
+        (entry) => entry.provider === provider && entry.id === model,
+      );
+      catalogForThinking =
+        runtimeSelectedEntry || !catalogForThinking || catalogForThinking.length === 0
+          ? modelCatalog.length > 0
+            ? modelCatalog
+            : allowedModelCatalog
+          : allowedModelCatalog;
+    }
+    thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
+    return thinkingCatalog;
+  };
+
   let defaultThinkingLevel: ThinkLevel | undefined;
   const resolveDefaultThinkingLevel = async () => {
     if (defaultThinkingLevel) {
       return defaultThinkingLevel;
     }
-    let catalogForThinking = modelCatalog ?? allowedModelCatalog;
-    if (!catalogForThinking || catalogForThinking.length === 0) {
-      modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
-      logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
-      catalogForThinking = modelCatalog;
+    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
+    const configuredThinkingDefault = agentCfg?.thinkingDefault as ThinkLevel | undefined;
+    const explicitThinkingDefault = agentThinkingDefault ?? configuredThinkingDefault;
+    if (explicitThinkingDefault) {
+      defaultThinkingLevel = explicitThinkingDefault;
+      return defaultThinkingLevel;
     }
+    const catalogForThinking = await resolveThinkingCatalog();
     const resolved = resolveThinkingDefault({
       cfg,
       provider,
       model,
       catalog: catalogForThinking,
     });
-    const agentThinkingDefault = agentEntry?.thinkingDefault as ThinkLevel | undefined;
-    defaultThinkingLevel =
-      agentThinkingDefault ??
-      resolved ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-      "off";
+    defaultThinkingLevel = resolved ?? "off";
     return defaultThinkingLevel;
   };
 
@@ -491,182 +314,11 @@ export async function createModelSelectionState(params: {
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
+    resetModelOverrideRef,
+    resolveThinkingCatalog,
     resolveDefaultThinkingLevel,
     resolveDefaultReasoningLevel,
     needsModelCatalog,
-  };
-}
-
-export function resolveModelDirectiveSelection(params: {
-  raw: string;
-  defaultProvider: string;
-  defaultModel: string;
-  aliasIndex: ModelAliasIndex;
-  allowedModelKeys: Set<string>;
-}): { selection?: ModelDirectiveSelection; error?: string } {
-  const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
-
-  const rawTrimmed = raw.trim();
-  const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
-
-  const pickAliasForKey = (provider: string, model: string): string | undefined =>
-    aliasIndex.byKey.get(modelKey(provider, model))?.[0];
-
-  const buildSelection = (provider: string, model: string): ModelDirectiveSelection => {
-    const alias = pickAliasForKey(provider, model);
-    return {
-      provider,
-      model,
-      isDefault: provider === defaultProvider && model === defaultModel,
-      ...(alias ? { alias } : undefined),
-    };
-  };
-
-  const resolveFuzzy = (params: {
-    provider?: string;
-    fragment: string;
-  }): { selection?: ModelDirectiveSelection; error?: string } => {
-    const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
-    if (!fragment) {
-      return {};
-    }
-
-    const providerFilter = params.provider ? normalizeProviderId(params.provider) : undefined;
-
-    const candidates: Array<{ provider: string; model: string }> = [];
-    for (const key of allowedModelKeys) {
-      const slash = key.indexOf("/");
-      if (slash <= 0) {
-        continue;
-      }
-      const provider = normalizeProviderId(key.slice(0, slash));
-      const model = key.slice(slash + 1);
-      if (providerFilter && provider !== providerFilter) {
-        continue;
-      }
-      candidates.push({ provider, model });
-    }
-
-    // Also allow partial alias matches when the user didn't specify a provider.
-    if (!params.provider) {
-      const aliasMatches: Array<{ provider: string; model: string }> = [];
-      for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
-        if (!aliasKey.includes(fragment)) {
-          continue;
-        }
-        aliasMatches.push({
-          provider: entry.ref.provider,
-          model: entry.ref.model,
-        });
-      }
-      for (const match of aliasMatches) {
-        const key = modelKey(match.provider, match.model);
-        if (!allowedModelKeys.has(key)) {
-          continue;
-        }
-        if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
-          candidates.push(match);
-        }
-      }
-    }
-
-    if (candidates.length === 0) {
-      return {};
-    }
-
-    const scored = candidates
-      .map((candidate) => {
-        const details = scoreFuzzyMatch({
-          provider: candidate.provider,
-          model: candidate.model,
-          fragment,
-          aliasIndex,
-          defaultProvider,
-          defaultModel,
-        });
-        return Object.assign({ candidate }, details);
-      })
-      .toSorted((a, b) => {
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        if (a.isDefault !== b.isDefault) {
-          return a.isDefault ? -1 : 1;
-        }
-        if (a.variantMatchCount !== b.variantMatchCount) {
-          return b.variantMatchCount - a.variantMatchCount;
-        }
-        if (a.variantCount !== b.variantCount) {
-          return a.variantCount - b.variantCount;
-        }
-        if (a.modelLength !== b.modelLength) {
-          return a.modelLength - b.modelLength;
-        }
-        return a.key.localeCompare(b.key);
-      });
-
-    const bestScored = scored[0];
-    const best = bestScored?.candidate;
-    if (!best || !bestScored) {
-      return {};
-    }
-
-    const minScore = providerFilter ? 90 : 120;
-    if (bestScored.score < minScore) {
-      return {};
-    }
-
-    return { selection: buildSelection(best.provider, best.model) };
-  };
-
-  const resolved = resolveModelRefFromString({
-    raw: rawTrimmed,
-    defaultProvider,
-    aliasIndex,
-  });
-
-  if (!resolved) {
-    const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-    if (fuzzy.selection || fuzzy.error) {
-      return fuzzy;
-    }
-    return {
-      error: `Unrecognized model "${rawTrimmed}". Use /models to list providers, or /models <provider> to list models.`,
-    };
-  }
-
-  const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowedModelKeys.size === 0 || allowedModelKeys.has(resolvedKey)) {
-    return {
-      selection: {
-        provider: resolved.ref.provider,
-        model: resolved.ref.model,
-        isDefault: resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel,
-        alias: resolved.alias,
-      },
-    };
-  }
-
-  // If the user specified a provider/model but the exact model isn't allowed,
-  // attempt a fuzzy match within that provider.
-  if (rawLower.includes("/")) {
-    const slash = rawTrimmed.indexOf("/");
-    const provider = normalizeProviderId(rawTrimmed.slice(0, slash).trim());
-    const fragment = rawTrimmed.slice(slash + 1).trim();
-    const fuzzy = resolveFuzzy({ provider, fragment });
-    if (fuzzy.selection || fuzzy.error) {
-      return fuzzy;
-    }
-  }
-
-  // Otherwise, try fuzzy matching across allowlisted models.
-  const fuzzy = resolveFuzzy({ fragment: rawTrimmed });
-  if (fuzzy.selection || fuzzy.error) {
-    return fuzzy;
-  }
-
-  return {
-    error: `Model "${resolved.ref.provider}/${resolved.ref.model}" is not allowed. Use /models to list providers, or /models <provider> to list models.`,
   };
 }
 

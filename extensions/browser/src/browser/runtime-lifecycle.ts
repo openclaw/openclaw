@@ -3,6 +3,8 @@ import { getPwAiModule } from "./pw-ai-module.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import type { BrowserServerState } from "./server-context.js";
 import { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } from "./server-lifecycle.js";
+import { startTrackedBrowserTabCleanupTimer } from "./session-tab-cleanup.js";
+import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
 export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
@@ -16,11 +18,15 @@ export async function createBrowserRuntimeState(params: {
     resolved: params.resolved,
     profiles: new Map(),
   };
+  state.stopTrackedTabCleanup = startTrackedBrowserTabCleanupTimer({
+    onWarn: params.onWarn,
+  });
 
   await ensureExtensionRelayForProfiles({
     resolved: params.resolved,
     onWarn: params.onWarn,
   });
+  state.stopUnhandledRejectionHandler = registerBrowserUnhandledRejectionHandler();
 
   return state;
 }
@@ -35,27 +41,32 @@ export async function stopBrowserRuntime(params: {
   if (!params.current) {
     return;
   }
-
-  await stopKnownBrowserProfiles({
-    getState: params.getState,
-    onWarn: params.onWarn,
-  });
-
-  if (params.closeServer && params.current.server) {
-    await new Promise<void>((resolve) => {
-      params.current?.server?.close(() => resolve());
-    });
-  }
-
-  params.clearState();
-
-  if (!isPwAiLoaded()) {
-    return;
-  }
   try {
-    const mod = await getPwAiModule({ mode: "soft" });
-    await mod?.closePlaywrightBrowserConnection();
-  } catch {
-    // ignore
+    params.current.stopTrackedTabCleanup?.();
+
+    await stopKnownBrowserProfiles({
+      getState: params.getState,
+      onWarn: params.onWarn,
+    });
+
+    if (params.closeServer && params.current.server) {
+      await new Promise<void>((resolve) => {
+        params.current?.server?.close(() => resolve());
+      });
+    }
+
+    params.clearState();
+
+    if (!isPwAiLoaded()) {
+      return;
+    }
+    try {
+      const mod = await getPwAiModule({ mode: "soft" });
+      await mod?.closePlaywrightBrowserConnection();
+    } catch {
+      // ignore
+    }
+  } finally {
+    params.current.stopUnhandledRejectionHandler?.();
   }
 }

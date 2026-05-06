@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { readConnectPairingRequiredMessage } from "../../gateway/protocol/connect-error-details.js";
@@ -138,7 +138,7 @@ export function createNodesTool(options?: {
     name: "nodes",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("nodes"),
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke). For file retrieval, use the dedicated file_fetch tool.",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

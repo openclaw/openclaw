@@ -10,6 +10,7 @@ import {
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
   normalizeClaudeBackendConfig,
+  resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
 export function buildAnthropicCliBackend(): CliBackendPlugin {
@@ -26,6 +27,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
+    nativeToolMode: "always-on",
     config: {
       command: "claude",
       args: [
@@ -36,8 +38,8 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "--verbose",
         "--setting-sources",
         "user",
-        "--permission-mode",
-        "bypassPermissions",
+        "--allowedTools",
+        "mcp__openclaw__*",
       ],
       resumeArgs: [
         "-p",
@@ -47,19 +49,22 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "--verbose",
         "--setting-sources",
         "user",
-        "--permission-mode",
-        "bypassPermissions",
+        "--allowedTools",
+        "mcp__openclaw__*",
         "--resume",
         "{sessionId}",
       ],
       output: "jsonl",
+      liveSession: "claude-stdio",
       input: "stdin",
       modelArg: "--model",
       modelAliases: CLAUDE_CLI_MODEL_ALIASES,
+      imageArg: "@",
+      imagePathScope: "workspace",
       sessionArg: "--session-id",
       sessionMode: "always",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
-      systemPromptArg: "--append-system-prompt",
+      systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
       systemPromptWhen: "first",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
@@ -72,5 +77,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

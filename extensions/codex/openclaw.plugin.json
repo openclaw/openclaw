@@ -3,7 +3,23 @@
   "name": "Codex",
   "description": "Codex app-server harness and Codex-managed GPT model catalog.",
   "providers": ["codex"],
+  "contracts": {
+    "mediaUnderstandingProviders": ["codex"],
+    "migrationProviders": ["codex"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "codex": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5.5"
+      }
+    }
+  },
+  "providerDiscoveryEntry": "./provider-discovery.ts",
+  "syntheticAuthRefs": ["codex"],
+  "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
+    "onStartup": false,
     "onAgentHarnesses": ["codex"]
   },
   "commandAliases": [
@@ -17,6 +33,16 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "codexDynamicToolsProfile": {
+        "type": "string",
+        "enum": ["native-first", "openclaw-compat"],
+        "default": "native-first"
+      },
+      "codexDynamicToolsExclude": {
+        "type": "array",
+        "items": { "type": "string" },
+        "default": []
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -29,19 +55,57 @@
           }
         }
       },
+      "computerUse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "autoInstall": {
+            "type": "boolean",
+            "default": false
+          },
+          "marketplaceDiscoveryTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "marketplaceSource": {
+            "type": "string"
+          },
+          "marketplacePath": {
+            "type": "string"
+          },
+          "marketplaceName": {
+            "type": "string"
+          },
+          "pluginName": {
+            "type": "string",
+            "default": "computer-use"
+          },
+          "mcpServerName": {
+            "type": "string",
+            "default": "computer-use"
+          }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
+          "mode": {
+            "type": "string",
+            "enum": ["yolo", "guardian"],
+            "default": "yolo"
+          },
           "transport": {
             "type": "string",
             "enum": ["stdio", "websocket"],
             "default": "stdio"
           },
-          "command": {
-            "type": "string",
-            "default": "codex"
-          },
+          "command": { "type": "string" },
           "args": {
             "oneOf": [
               {
@@ -57,6 +121,10 @@
             "type": "object",
             "additionalProperties": { "type": "string" }
           },
+          "clearEnv": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -64,25 +132,35 @@
           },
           "approvalPolicy": {
             "type": "string",
-            "enum": ["never", "on-request", "on-failure", "untrusted"],
-            "default": "on-request"
+            "enum": ["never", "on-request", "on-failure", "untrusted"]
           },
           "sandbox": {
             "type": "string",
-            "enum": ["read-only", "workspace-write", "danger-full-access"],
-            "default": "workspace-write"
+            "enum": ["read-only", "workspace-write", "danger-full-access"]
           },
           "approvalsReviewer": {
             "type": "string",
-            "enum": ["user", "guardian_subagent"],
-            "default": "user"
+            "enum": ["user", "auto_review", "guardian_subagent"]
           },
-          "serviceTier": { "type": "string" }
+          "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
+          "defaultWorkspaceDir": {
+            "type": "string"
+          }
         }
       }
     }
   },
   "uiHints": {
+    "codexDynamicToolsProfile": {
+      "label": "Dynamic Tools Profile",
+      "help": "Select which OpenClaw dynamic tools are exposed to Codex app-server. native-first omits tools Codex already owns.",
+      "advanced": true
+    },
+    "codexDynamicToolsExclude": {
+      "label": "Dynamic Tool Excludes",
+      "help": "Additional OpenClaw dynamic tool names to omit from Codex app-server turns.",
+      "advanced": true
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for discovering Codex app-server models."
@@ -96,9 +174,59 @@
       "help": "Maximum time to wait for Codex app-server model discovery before falling back to the bundled model list.",
       "advanced": true
     },
+    "computerUse": {
+      "label": "Computer Use",
+      "help": "Controls Codex app-server setup for the Computer Use plugin.",
+      "advanced": true
+    },
+    "computerUse.enabled": {
+      "label": "Enable Computer Use",
+      "help": "When true, Codex-mode turns require the configured Computer Use MCP server to be available.",
+      "advanced": true
+    },
+    "computerUse.autoInstall": {
+      "label": "Auto Install",
+      "help": "Install the configured Computer Use plugin when Codex-mode turns start.",
+      "advanced": true
+    },
+    "computerUse.marketplaceDiscoveryTimeoutMs": {
+      "label": "Marketplace Discovery Timeout",
+      "help": "Maximum time to wait for Codex app-server to finish loading marketplaces during Computer Use install.",
+      "advanced": true
+    },
+    "computerUse.marketplaceSource": {
+      "label": "Marketplace Source",
+      "help": "Optional Codex marketplace source to add before installing Computer Use.",
+      "advanced": true
+    },
+    "computerUse.marketplacePath": {
+      "label": "Marketplace Path",
+      "help": "Optional local Codex marketplace file path containing the Computer Use plugin.",
+      "advanced": true
+    },
+    "computerUse.marketplaceName": {
+      "label": "Marketplace Name",
+      "help": "Optional registered Codex marketplace name containing the Computer Use plugin.",
+      "advanced": true
+    },
+    "computerUse.pluginName": {
+      "label": "Plugin Name",
+      "help": "Codex marketplace plugin name for Computer Use.",
+      "advanced": true
+    },
+    "computerUse.mcpServerName": {
+      "label": "MCP Server Name",
+      "help": "MCP server name exposed by the Computer Use plugin.",
+      "advanced": true
+    },
     "appServer": {
       "label": "App Server",
       "help": "Runtime controls for connecting to Codex app-server.",
+      "advanced": true
+    },
+    "appServer.mode": {
+      "label": "Execution Mode",
+      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -108,7 +236,7 @@
     },
     "appServer.command": {
       "label": "Command",
-      "help": "Executable used for stdio transport.",
+      "help": "Executable used for stdio transport. Leave unset to use OpenClaw's managed Codex binary.",
       "advanced": true
     },
     "appServer.args": {
@@ -132,6 +260,11 @@
       "help": "Additional headers sent to the WebSocket app-server.",
       "advanced": true
     },
+    "appServer.clearEnv": {
+      "label": "Clear Environment",
+      "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
@@ -149,12 +282,17 @@
     },
     "appServer.approvalsReviewer": {
       "label": "Approvals Reviewer",
-      "help": "Use user approvals or the Codex guardian subagent for native app-server approvals.",
+      "help": "Use user approvals or Codex auto_review for native app-server approvals. guardian_subagent remains accepted for compatibility.",
       "advanced": true
     },
     "appServer.serviceTier": {
       "label": "Service Tier",
-      "help": "Optional Codex service tier passed when starting or resuming threads.",
+      "help": "Optional Codex app-server service tier. Use fast, flex, or null.",
+      "advanced": true
+    },
+    "appServer.defaultWorkspaceDir": {
+      "label": "Default Workspace",
+      "help": "Workspace used by /codex bind when --cwd is omitted.",
       "advanced": true
     }
   }

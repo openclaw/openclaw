@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -13,6 +14,7 @@ const waitForGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
   vi.fn(async () => ({
     programArguments: [],
@@ -86,7 +88,7 @@ vi.mock("../commands/health-format.js", () => ({
 }));
 
 vi.mock("../commands/health.js", () => ({
-  healthCommand: vi.fn(async () => {}),
+  healthCommand,
 }));
 
 vi.mock("../commands/onboard-search.js", () => ({
@@ -243,6 +245,8 @@ describe("finalizeSetupWizard", () => {
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
     setupWizardShellCompletion.mockClear();
+    healthCommand.mockReset();
+    healthCommand.mockResolvedValue(undefined);
     buildGatewayInstallPlan.mockClear();
     gatewayServiceInstall.mockClear();
     gatewayServiceIsLoaded.mockReset();
@@ -339,16 +343,57 @@ describe("finalizeSetupWizard", () => {
         password: "resolved-gateway-password", // pragma: allowlist secret
       }),
     );
-    expect(launchTuiCli).toHaveBeenCalledWith(
-      {
-        deliver: false,
-        message: undefined,
+    expect(launchTuiCli).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+      message: undefined,
+      timeoutMs: 300_000,
+    });
+  });
+
+  it("bounds the bootstrap hatch TUI run timeout", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "How do you want to hatch your bot?") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: false,
       },
-      {
-        authSource: "config",
-        gatewayUrl: "ws://127.0.0.1:18789",
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
       },
-    );
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(launchTuiCli).toHaveBeenCalledWith({
+      local: true,
+      deliver: false,
+      message: "Wake up, my friend!",
+      timeoutMs: 300_000,
+    });
   });
 
   it("restores terminal state after failed TUI hatch", async () => {
@@ -560,6 +605,124 @@ describe("finalizeSetupWizard", () => {
         "Web search is enabled, so your agent can look things up online when needed.",
       ),
       "Web search",
+    );
+  });
+
+  it("uses the setup token for health checks to avoid local env token drift", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "env-token");
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "config-token",
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: "session-token",
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: false,
+        timeoutMs: 10_000,
+        token: "session-token",
+        config: expect.objectContaining({
+          gateway: expect.objectContaining({
+            auth: expect.objectContaining({
+              mode: "token",
+              token: "session-token",
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("uses the resolved setup password for health checks", async () => {
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "env-password");
+    resolveSetupSecretInputString.mockResolvedValueOnce("session-password");
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: false,
+        skipUi: true,
+      },
+      baseConfig: {},
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: {
+              source: "env",
+              provider: "default",
+              id: "OPENCLAW_GATEWAY_PASSWORD",
+            },
+          },
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "password",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:18789",
+        token: undefined,
+        password: "session-password",
+      }),
+    );
+    expect(healthCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: false,
+        timeoutMs: 10_000,
+        token: undefined,
+        password: "session-password",
+        config: expect.objectContaining({
+          gateway: expect.objectContaining({
+            auth: expect.objectContaining({
+              mode: "password",
+            }),
+          }),
+        }),
+      }),
+      expect.any(Object),
     );
   });
 

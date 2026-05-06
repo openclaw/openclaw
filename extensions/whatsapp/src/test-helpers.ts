@@ -1,9 +1,9 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { vi } from "vitest";
-import { formatEnvelopeTimestamp } from "../../../test/helpers/envelope-timestamp.js";
 import type { MockBaileysSocket } from "../../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../../test/mocks/baileys.js";
 
@@ -223,7 +223,7 @@ function formatInboundEnvelopeMock(params: TestInboundEnvelopeParams) {
   return `[${parts.join(" ")}] ${body}`;
 }
 
-function createChannelReplyPipelineMock() {
+function createChannelMessageReplyPipelineMock() {
   return {
     onModelSelected: undefined,
     responsePrefix: undefined,
@@ -250,6 +250,31 @@ function resolveSendableOutboundReplyPartsMock(payload: Record<string, unknown>)
       typeof payload.mediaPath === "string" ||
       typeof payload.fileUrl === "string",
   };
+}
+
+function resolveChannelMessageSourceReplyDeliveryModeMock(params: {
+  cfg: {
+    messages?: {
+      visibleReplies?: "automatic" | "message_tool";
+      groupChat?: { visibleReplies?: "automatic" | "message_tool" };
+    };
+  };
+  ctx: { ChatType?: string; CommandSource?: "text" | "native" };
+  requested?: "automatic" | "message_tool_only";
+}) {
+  if (params.requested) {
+    return params.requested;
+  }
+  if (params.ctx.CommandSource === "native") {
+    return "automatic";
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(params.ctx.ChatType);
+  if (chatType === "group" || chatType === "channel") {
+    return params.cfg.messages?.groupChat?.visibleReplies === "automatic"
+      ? "automatic"
+      : "message_tool_only";
+  }
+  return params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
 }
 
 function toLocationContextMock(location: unknown) {
@@ -405,6 +430,7 @@ function resolveChannelGroupRequireMentionMock(params: {
 }
 
 vi.mock("./auto-reply/config.runtime.js", () => ({
+  getRuntimeConfig: loadConfigMock,
   getRuntimeConfigSourceSnapshot: loadRuntimeConfigSourceSnapshotMock,
   loadConfig: loadConfigMock,
   updateLastRoute: updateLastRouteMock,
@@ -438,12 +464,13 @@ vi.mock("./inbound/runtime-api.js", () => ({
 }));
 
 vi.mock("./auto-reply/monitor/inbound-dispatch.runtime.js", () => ({
-  createChannelReplyPipeline: createChannelReplyPipelineMock,
+  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   getAgentScopedMediaLocalRoots: () => [] as string[],
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
+  resolveChannelMessageSourceReplyDeliveryMode: resolveChannelMessageSourceReplyDeliveryModeMock,
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
   resolveInboundLastRouteSessionKey: (params: { sessionKey: string }) => params.sessionKey,
@@ -467,7 +494,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
       ? `Chat messages since your last reply:\n${rendered}\n\n${params.currentMessage}`
       : params.currentMessage;
   },
-  createChannelReplyPipeline: createChannelReplyPipelineMock,
+  createChannelMessageReplyPipeline: createChannelMessageReplyPipelineMock,
   dispatchReplyWithBufferedBlockDispatcher: createBufferedDispatchReplyMock(),
   finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: formatInboundEnvelopeMock,
@@ -477,6 +504,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   normalizeE164: normalizePhoneLikeToE164,
   readStoreAllowFromForDmPolicy: async () => [] as string[],
   recordSessionMetaFromInbound: async () => undefined,
+  resolveChannelMessageSourceReplyDeliveryMode: resolveChannelMessageSourceReplyDeliveryModeMock,
   resolveChannelContextVisibilityMode: resolveChannelContextVisibilityModeMock,
   resolveChunkMode: () => undefined,
   resolveIdentityNamePrefix: resolveIdentityNamePrefixMock,
@@ -610,9 +638,8 @@ vi.mock("./session.runtime.js", () => {
   };
 });
 
-vi.mock("qrcode-terminal", () => ({
-  default: { generate: vi.fn() },
-  generate: vi.fn(),
+vi.mock("./qr-terminal.js", () => ({
+  renderQrTerminal: vi.fn(async () => "ASCII-QR"),
 }));
 
 export const baileys = await import("./session.runtime.js");

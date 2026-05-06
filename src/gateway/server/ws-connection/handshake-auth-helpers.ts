@@ -77,15 +77,39 @@ export function shouldAllowSilentLocalPairing(params: {
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
+  isNativeAppUi?: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
-  return (
-    params.locality !== "remote" &&
-    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
-    (params.reason === "not-paired" ||
-      params.reason === "scope-upgrade" ||
-      params.reason === "role-upgrade")
-  );
+  if (params.locality === "remote") {
+    return false;
+  }
+  if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
+    return false;
+  }
+  if (
+    params.reason === "not-paired" ||
+    params.reason === "scope-upgrade" ||
+    params.reason === "role-upgrade"
+  ) {
+    return true;
+  }
+  // metadata-upgrade auto-approves only for non-browser local reconnects that
+  // already proved possession of local/shared credentials. Direct-local
+  // metadata refresh is limited to first-party native app UI clients, covering
+  // same-host app reconnects after OS version metadata changes while keeping
+  // node-host, Browser, and Control-UI metadata pinning on the explicit approval path.
+  if (
+    params.reason === "metadata-upgrade" &&
+    !params.hasBrowserOriginHeader &&
+    !params.isControlUi &&
+    !params.isWebchat &&
+    ((params.locality === "direct_local" && params.isNativeAppUi === true) ||
+      params.locality === "cli_container_local" ||
+      params.locality === "shared_secret_loopback_local")
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isCliContainerLocalEquivalent(params: {
@@ -120,8 +144,7 @@ function isSharedSecretLoopbackLocalEquivalent(params: {
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
-  const usesSharedSecretAuth =
-    params.authMethod === "token" || params.authMethod === "password";
+  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     params.sharedAuthOk &&
     usesSharedSecretAuth &&
@@ -242,7 +265,7 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
   return (
-    params.locality === "direct_local" &&
+    (params.locality === "direct_local" || params.locality === "shared_secret_loopback_local") &&
     !params.hasBrowserOriginHeader &&
     ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
   );
@@ -313,7 +336,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   return null;
 }
 
-export function resolveAuthProvidedKind(
+function resolveAuthProvidedKind(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): AuthProvidedKind {
   return connectAuth?.password

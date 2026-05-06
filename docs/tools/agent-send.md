@@ -3,10 +3,8 @@ summary: "Run agent turns from the CLI and optionally deliver replies to channel
 read_when:
   - You want to trigger agent runs from scripts or the command line
   - You need to deliver agent replies to a chat channel programmatically
-title: "Agent Send"
+title: "Agent send"
 ---
-
-# Agent Send
 
 `openclaw agent` runs a single agent turn from the command line without needing
 an inbound chat message. Use it for scripted workflows, testing, and
@@ -95,6 +93,17 @@ openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram 
 
 ## Related
 
-- [Agent CLI reference](/cli/agent)
-- [Sub-agents](/tools/subagents) — background sub-agent spawning
-- [Sessions](/concepts/session) — how session keys work
+<CardGroup cols={2}>
+  <Card title="Agent CLI reference" href="/cli/agent" icon="terminal">
+    Full `openclaw agent` flag and option reference.
+  </Card>
+  <Card title="Sub-agents" href="/tools/subagents" icon="users">
+    Background sub-agent spawning.
+  </Card>
+  <Card title="Sessions" href="/concepts/session" icon="comments">
+    How session keys work and how `--to`, `--agent`, and `--session-id` resolve them.
+  </Card>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="slash">
+    Native command catalog used inside agent sessions.
+  </Card>
+</CardGroup>

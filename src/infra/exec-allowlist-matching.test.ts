@@ -11,6 +11,7 @@ describe("exec allowlist matching", () => {
   it("handles wildcard and path matching semantics", () => {
     const cases: Array<{ entries: ExecAllowlistEntry[]; expectedPattern: string | null }> = [
       { entries: [{ pattern: "RG" }], expectedPattern: null },
+      { entries: [{ pattern: "not-rg" }], expectedPattern: null },
       { entries: [{ pattern: "/opt/**/rg" }], expectedPattern: "/opt/**/rg" },
       { entries: [{ pattern: "/opt/*/rg" }], expectedPattern: null },
     ];
@@ -19,6 +20,40 @@ describe("exec allowlist matching", () => {
       expect(match?.pattern ?? null).toBe(expectedPattern);
     }
   });
+
+  it("matches bare command-name patterns against PATH-resolved executable basenames", () => {
+    expect(matchAllowlist([{ pattern: "rg" }], baseResolution)?.pattern).toBe("rg");
+    expect(matchAllowlist([{ pattern: "r?" }], baseResolution)?.pattern).toBe("r?");
+    expect(matchAllowlist([{ pattern: "homebrew" }], baseResolution)).toBeNull();
+  });
+
+  it("does not let bare command-name patterns match path-selected executables", () => {
+    const relativeResolution = {
+      rawExecutable: "./rg",
+      resolvedPath: "/tmp/openclaw-workspace/rg",
+      executableName: "rg",
+    };
+    const absoluteResolution = {
+      rawExecutable: "/tmp/openclaw-workspace/rg",
+      resolvedPath: "/tmp/openclaw-workspace/rg",
+      executableName: "rg",
+    };
+
+    expect(matchAllowlist([{ pattern: "rg" }], relativeResolution)).toBeNull();
+    expect(matchAllowlist([{ pattern: "rg" }], absoluteResolution)).toBeNull();
+  });
+
+  it.each(["linux", "darwin", "win32"])(
+    "honors argPattern checks for bare command-name matches on %s",
+    (platform) => {
+      const entries = [{ pattern: "rg", argPattern: "^--json$" }];
+
+      expect(matchAllowlist(entries, baseResolution, ["rg", "--json"], platform)?.pattern).toBe(
+        "rg",
+      );
+      expect(matchAllowlist(entries, baseResolution, ["rg", "--files"], platform)).toBeNull();
+    },
+  );
 
   it("matches bare wildcard patterns against arbitrary resolved executables", () => {
     const cases = [

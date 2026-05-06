@@ -18,6 +18,10 @@ const MAX_TOOLCALL_REPAIR_LEADING_CHARS = 96;
 const MAX_TOOLCALL_REPAIR_TRAILING_CHARS = 3;
 const TOOLCALL_REPAIR_ALLOWED_LEADING_RE = /^[a-z0-9\s"'`.:/_\\-]+$/i;
 const TOOLCALL_REPAIR_ALLOWED_TRAILING_RE = /^[^\s{}[\]":,\\]{1,3}$/;
+const TOOLCALL_REPAIR_RESPONSES_APIS = new Set([
+  "azure-openai-responses",
+  "openai-codex-responses",
+]);
 
 function shouldAttemptMalformedToolCallRepair(partialJson: string, delta: string): boolean {
   if (/[}\]]/.test(delta)) {
@@ -240,7 +244,7 @@ function wrapStreamRepairMalformedToolCallArguments(
           if (!loggedRepairIndices.has(event.contentIndex) && repair.kind === "repaired") {
             loggedRepairIndices.add(event.contentIndex);
             log.warn(
-              `repairing Kimi tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
+              `repairing malformed tool call arguments with ${repair.leadingPrefix.length} leading chars and ${repair.trailingSuffix.length} trailing chars`,
             );
           }
         } else {
@@ -294,8 +298,16 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
-export function shouldRepairMalformedAnthropicToolCallArguments(provider?: string): boolean {
-  return normalizeProviderId(provider ?? "") === "kimi";
+export function shouldRepairMalformedToolCallArguments(params: {
+  provider?: string;
+  modelApi?: string | null;
+}): boolean {
+  const modelApi = params.modelApi ?? "";
+  return (
+    (normalizeProviderId(params.provider ?? "") === "kimi" && modelApi === "anthropic-messages") ||
+    modelApi === "openai-completions" ||
+    TOOLCALL_REPAIR_RESPONSES_APIS.has(modelApi)
+  );
 }
 
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {

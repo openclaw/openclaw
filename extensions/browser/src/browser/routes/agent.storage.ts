@@ -1,4 +1,3 @@
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -8,6 +7,14 @@ import {
 } from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
+
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return readStringValue(value)?.trim() || undefined;
+}
 
 type StorageKind = "local" | "session";
 
@@ -78,6 +85,7 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "cookies",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw }) => {
           const result = await pw.cookiesGetViaPlaywright({
             cdpUrl,
@@ -102,6 +110,7 @@ export function registerBrowserAgentStorageRoutes(
         return jsonError(res, 400, "cookie is required");
       }
 
+      // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
         req,
         res,
@@ -141,6 +150,7 @@ export function registerBrowserAgentStorageRoutes(
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
 
+      // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
         req,
         res,
@@ -174,6 +184,7 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "storage get",
+        enforceCurrentUrlAllowed: true,
         run: async ({ cdpUrl, tab, pw }) => {
           const result = await pw.storageGetViaPlaywright({
             cdpUrl,
@@ -200,6 +211,7 @@ export function registerBrowserAgentStorageRoutes(
       }
       const value = typeof mutation.body.value === "string" ? mutation.body.value : "";
 
+      // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
         req,
         res,
@@ -228,6 +240,7 @@ export function registerBrowserAgentStorageRoutes(
         return;
       }
 
+      // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
         req,
         res,
@@ -256,6 +269,7 @@ export function registerBrowserAgentStorageRoutes(
         return jsonError(res, 400, "offline is required");
       }
 
+      // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
         req,
         res,
@@ -294,6 +308,7 @@ export function registerBrowserAgentStorageRoutes(
         }
       }
 
+      // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
         req,
         res,

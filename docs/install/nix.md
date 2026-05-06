@@ -7,22 +7,20 @@ read_when:
 title: "Nix"
 ---
 
-# Nix Installation
-
-Install OpenClaw declaratively with **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** -- a batteries-included Home Manager module.
+Install OpenClaw declaratively with **[nix-openclaw](https://github.com/openclaw/nix-openclaw)** - a batteries-included Home Manager module.
 
 <Info>
 The [nix-openclaw](https://github.com/openclaw/nix-openclaw) repo is the source of truth for Nix installation. This page is a quick overview.
 </Info>
 
-## What You Get
+## What you get
 
 - Gateway + macOS app + tools (whisper, spotify, cameras) -- all pinned
 - Launchd service that survives reboots
 - Plugin system with declarative config
 - Instant rollback: `home-manager switch --rollback`
 
-## Quick Start
+## Quick start
 
 <Steps>
   <Step title="Install Determinate Nix">
@@ -50,7 +48,7 @@ The [nix-openclaw](https://github.com/openclaw/nix-openclaw) repo is the source 
 
 See the [nix-openclaw README](https://github.com/openclaw/nix-openclaw) for full module options and examples.
 
-## Nix Mode Runtime Behavior
+## Nix-mode runtime behavior
 
 When `OPENCLAW_NIX_MODE=1` is set (automatic with nix-openclaw), OpenClaw enters a deterministic mode that disables auto-install flows.
 
@@ -82,8 +80,31 @@ OpenClaw reads JSON5 config from `OPENCLAW_CONFIG_PATH` and stores mutable data 
 | `OPENCLAW_STATE_DIR`   | `~/.openclaw`                           |
 | `OPENCLAW_CONFIG_PATH` | `$OPENCLAW_STATE_DIR/openclaw.json`     |
 
+### Service PATH discovery
+
+The launchd/systemd gateway service auto-discovers Nix-profile binaries so
+plugins and tools that shell out to `nix`-installed executables work without
+manual PATH setup:
+
+- When `NIX_PROFILES` is set, every entry is added to the service PATH in
+  right-to-left precedence (matches Nix shell precedence - rightmost wins).
+- When `NIX_PROFILES` is unset, `~/.nix-profile/bin` is added as a fallback.
+
+This applies to both macOS launchd and Linux systemd service environments.
+
 ## Related
 
-- [nix-openclaw](https://github.com/openclaw/nix-openclaw) -- full setup guide
-- [Wizard](/start/wizard) -- non-Nix CLI setup
-- [Docker](/install/docker) -- containerized setup
+<CardGroup cols={2}>
+  <Card title="nix-openclaw" href="https://github.com/openclaw/nix-openclaw" icon="arrow-up-right-from-square">
+    Source-of-truth Home Manager module and full setup guide.
+  </Card>
+  <Card title="Setup wizard" href="/start/wizard" icon="wand-magic-sparkles">
+    Non-Nix CLI setup walkthrough.
+  </Card>
+  <Card title="Docker" href="/install/docker" icon="docker">
+    Containerized setup as a non-Nix alternative.
+  </Card>
+  <Card title="Updating" href="/install/updating" icon="arrow-up-right-from-square">
+    Updating Home Manager-managed installs alongside the package.
+  </Card>
+</CardGroup>

@@ -7,10 +7,6 @@ read_when:
 title: "GCP"
 ---
 
-# OpenClaw on GCP Compute Engine (Docker, Production VPS Guide)
-
-## Goal
-
 Run a persistent OpenClaw Gateway on a GCP Compute Engine VM using Docker, with durable state, baked-in binaries, and safe restart behavior.
 
 If you want "OpenClaw 24/7 for ~$5-12/mo", this is a reliable setup on Google Cloud.
@@ -413,3 +409,9 @@ See [https://cloud.google.com/iam/docs/understanding-roles](https://cloud.google
 - Set up messaging channels: [Channels](/channels)
 - Pair local devices as nodes: [Nodes](/nodes)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
+
+## Related
+
+- [Install overview](/install)
+- [Azure](/install/azure)
+- [VPS hosting](/vps)

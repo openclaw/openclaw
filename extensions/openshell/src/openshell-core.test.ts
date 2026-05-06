@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSandboxTestContext } from "../../../src/agents/sandbox/test-fixtures.js";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
   buildExecRemoteCommand,
@@ -245,6 +245,167 @@ describe("openshell fs bridges", () => {
     expect(backend.syncLocalPathToRemote).toHaveBeenCalledWith(
       path.join(workspaceDir, "nested", "file.txt"),
       "/sandbox/nested/file.txt",
+    );
+  });
+
+  it("rejects symlink-parent writes instead of escaping the local mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.symlink(outsideDir, path.join(workspaceDir, "alias"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({
+        filePath: "alias/escape.txt",
+        data: "owned",
+        mkdir: true,
+      }),
+    ).rejects.toThrow();
+    await expect(fs.stat(path.join(outsideDir, "escape.txt"))).rejects.toThrow();
+    await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+  });
+
+  it("rejects writes whose final target is a symlink inside the local mount root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const linkedTarget = path.join(workspaceDir, "existing.txt");
+    await fs.writeFile(linkedTarget, "keep", "utf8");
+    await fs.symlink("existing.txt", path.join(workspaceDir, "link.txt"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(
+      bridge.writeFile({
+        filePath: "link.txt",
+        data: "owned",
+        mkdir: true,
+      }),
+    ).rejects.toThrow();
+    await expect(fs.readlink(path.join(workspaceDir, "link.txt"))).resolves.toBe("existing.txt");
+    await expect(fs.readFile(linkedTarget, "utf8")).resolves.toBe("keep");
+    expect(backend.syncLocalPathToRemote).not.toHaveBeenCalled();
+  });
+
+  it("rejects a parent symlink that lands outside the sandbox root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    await fs.symlink(outsideDir, path.join(workspaceDir, "subdir"));
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+      "Sandbox boundary checks failed",
+    );
+  });
+
+  it("reads regular files through the shared safe fs root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "subdir", "secret.txt"), "inside", "utf8");
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).resolves.toEqual(
+      Buffer.from("inside"),
+    );
+  });
+
+  it("rejects reads of a symlinked leaf", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    await fs.symlink(
+      path.join(outsideDir, "secret.txt"),
+      path.join(workspaceDir, "subdir", "secret.txt"),
+    );
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+      "Sandbox boundary checks failed",
+    );
+  });
+
+  it("rejects hardlinked files inside the sandbox root", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-fs-");
+    const outsideDir = await makeTempDir("openclaw-openshell-outside-");
+    await fs.mkdir(path.join(workspaceDir, "subdir"), { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside", "utf8");
+    await fs.link(
+      path.join(outsideDir, "secret.txt"),
+      path.join(workspaceDir, "subdir", "secret.txt"),
+    );
+
+    const backend = createMirrorBackendMock();
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+        containerWorkdir: "/sandbox",
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+
+    await expect(bridge.readFile({ filePath: "subdir/secret.txt" })).rejects.toThrow(
+      "Sandbox boundary checks failed",
     );
   });
 

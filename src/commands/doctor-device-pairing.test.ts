@@ -104,6 +104,34 @@ describe("noteDevicePairingHealth", () => {
     });
   });
 
+  it("warns when local pairing state is corrupt instead of treating it as empty", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const pairedPath = path.join(stateDir, "devices", "paired.json");
+          await fs.mkdir(path.dirname(pairedPath), { recursive: true });
+          await fs.writeFile(pairedPath, "{not-json}", "utf8");
+
+          await noteDevicePairingHealth({
+            cfg: { gateway: { mode: "local" } },
+            healthOk: false,
+          });
+
+          expect(noteMock).toHaveBeenCalledTimes(1);
+          const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+          expect(noteMock.mock.calls[0]?.[1]).toBe("Device pairing");
+          expect(message).toContain("paired.json");
+          expect(message).toContain("refused to treat it as empty");
+          expect(await fs.readFile(pairedPath, "utf8")).toBe("{not-json}");
+        },
+      );
+    });
+  });
+
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ stateDir, identity }) => {
       storeDeviceAuthToken({
@@ -139,6 +167,29 @@ describe("noteDevicePairingHealth", () => {
       const message = String(noteMock.mock.calls[0]?.[0] ?? "");
       expect(message).toContain("stale device-token pattern");
       expect(message).toContain("openclaw devices rotate");
+    });
+  });
+
+  it("does not suggest rotating local auth for a role that is no longer approved", async () => {
+    await withApprovedOperatorPairing(async ({ identity }) => {
+      storeDeviceAuthToken({
+        deviceId: identity.deviceId,
+        role: "node",
+        token: "stale-node-token",
+        scopes: [],
+      });
+
+      await noteDevicePairingHealth({
+        cfg: { gateway: { mode: "local" } },
+        healthOk: false,
+      });
+
+      expect(noteMock).toHaveBeenCalledTimes(1);
+      const message = String(noteMock.mock.calls[0]?.[0] ?? "");
+      expect(message).toContain("Local cached node device auth");
+      expect(message).toContain("role is no longer approved");
+      expect(message).toContain("remove the stale cached node auth entry");
+      expect(message).not.toContain("--role node");
     });
   });
 

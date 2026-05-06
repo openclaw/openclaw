@@ -9,13 +9,20 @@ export async function main(argv = process.argv.slice(2)) {
 
   const tailChecks = [
     { name: "webhook body guard", args: ["lint:webhook:no-low-level-body-read"] },
+    { name: "runtime action config guard", args: ["check:no-runtime-action-load-config"] },
+    !includeArchitecture
+      ? {
+          name: "deprecated internal config API guard",
+          args: ["check:deprecated-internal-config-api"],
+        }
+      : null,
     { name: "temp path guard", args: ["check:temp-path-guardrails"] },
     { name: "pairing store guard", args: ["lint:auth:no-pairing-store-group"] },
     { name: "pairing account guard", args: ["lint:auth:pairing-account-scope"] },
     includeArchitecture
       ? { name: "architecture import cycles", args: ["check:architecture"] }
       : { name: "runtime import cycles", args: ["check:import-cycles"] },
-  ];
+  ].filter(Boolean);
 
   const stages = [
     {
@@ -23,8 +30,20 @@ export async function main(argv = process.argv.slice(2)) {
       parallel: true,
       commands: [
         { name: "conflict markers", args: ["check:no-conflict-markers"] },
+        { name: "changelog attributions", args: ["check:changelog-attributions"] },
+        {
+          name: "guarded extension wildcard re-exports",
+          args: ["lint:extensions:no-guarded-wildcard-reexports"],
+        },
+        {
+          name: "plugin-sdk wildcard re-exports",
+          args: ["lint:extensions:no-plugin-sdk-wildcard-reexports"],
+        },
+        { name: "runtime sidecar loader guard", args: ["check:runtime-sidecar-loaders"] },
         { name: "tool display", args: ["tool-display:check"] },
         { name: "host env policy", args: ["check:host-env-policy:swift"] },
+        { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
+        { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
       ],
     },
     {

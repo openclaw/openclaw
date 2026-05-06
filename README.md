@@ -96,7 +96,7 @@ Model note: while many providers and models are supported, prefer a current flag
 
 ## Install (recommended)
 
-Runtime: **Node 24 (recommended) or Node 22.16+**.
+Runtime: **Node 24 (recommended) or Node 22.14+**.
 
 ```bash
 npm install -g openclaw@latest
@@ -109,7 +109,7 @@ OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so i
 
 ## Quick start (TL;DR)
 
-Runtime: **Node 24 (recommended) or Node 22.16+**.
+Runtime: **Node 24 (recommended) or Node 22.14+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
@@ -119,7 +119,7 @@ openclaw onboard --install-daemon
 openclaw gateway --port 18789 --verbose
 
 # Send a message
-openclaw message send --to +1234567890 --message "Hello from OpenClaw"
+openclaw message send --target +1234567890 --message "Hello from OpenClaw"
 
 # Talk to the assistant (optionally deliver back to any connected channel: WhatsApp/Telegram/Slack/Discord/Google Chat/Signal/iMessage/BlueBubbles/IRC/Microsoft Teams/Matrix/Feishu/LINE/Mattermost/Nextcloud Talk/Nostr/Synology Chat/Tlon/Twitch/Zalo/Zalo Personal/WeChat/QQ/WebChat)
 openclaw agent --message "Ship checklist" --thinking high
@@ -165,7 +165,7 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 - Chat commands: `/status`, `/new`, `/reset`, `/compact`, `/think <level>`, `/verbose on|off`, `/trace on|off`, `/usage off|tokens|full`, `/restart`, `/activation mention|always`
 - Session tools: `sessions_list`, `sessions_history`, `sessions_send`
-- Skills registry: [ClawHub](https://clawhub.com)
+- Skills registry: [ClawHub](https://clawhub.ai)
 - Architecture overview: [Architecture](https://docs.openclaw.ai/concepts/architecture)
 
 ## Docs by goal
@@ -210,7 +210,10 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 
 ## From source (development)
 
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+Use `pnpm` for source checkouts. The repository is a pnpm workspace, and bundled
+plugins load from `extensions/*` during development so their package-local
+dependencies and your edits are used directly. Plain `npm install` at the repo
+root is not a supported source setup.
 
 For the dev loop:
 

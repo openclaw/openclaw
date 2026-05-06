@@ -1,19 +1,29 @@
-import fs from "node:fs";
-import path from "node:path";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../../shared/string-coerce.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
 
 const DEFAULT_SESSION_PRUNE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
 const DEFAULT_SESSION_MAX_ENTRIES = 500;
-const DEFAULT_SESSION_ROTATE_BYTES = 10_485_760; // 10 MB
 const DEFAULT_SESSION_MAINTENANCE_MODE: SessionMaintenanceMode = "enforce";
 const DEFAULT_SESSION_DISK_BUDGET_HIGH_WATER_RATIO = 0.8;
+const STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES = 49;
+const MIN_BATCHED_ENTRY_MAINTENANCE_SLACK = 25;
+const BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO = 0.1;
 
 export type SessionMaintenanceWarning = {
   activeSessionKey: string;
@@ -29,7 +39,6 @@ export type ResolvedSessionMaintenanceConfig = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
-  rotateBytes: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -45,19 +54,6 @@ function resolvePruneAfterMs(maintenance?: SessionMaintenanceConfig): number {
     return parseDurationMs(normalized, { defaultUnit: "d" });
   } catch {
     return DEFAULT_SESSION_PRUNE_AFTER_MS;
-  }
-}
-
-function resolveRotateBytes(maintenance?: SessionMaintenanceConfig): number {
-  const raw = maintenance?.rotateBytes;
-  const normalized = normalizeStringifiedOptionalString(raw);
-  if (!normalized) {
-    return DEFAULT_SESSION_ROTATE_BYTES;
-  }
-  try {
-    return parseByteSize(normalized, { defaultUnit: "b" });
-  } catch {
-    return DEFAULT_SESSION_ROTATE_BYTES;
   }
 }
 
@@ -141,11 +137,35 @@ export function resolveMaintenanceConfigFromInput(
     mode: maintenance?.mode ?? DEFAULT_SESSION_MAINTENANCE_MODE,
     pruneAfterMs,
     maxEntries: maintenance?.maxEntries ?? DEFAULT_SESSION_MAX_ENTRIES,
-    rotateBytes: resolveRotateBytes(maintenance),
     resetArchiveRetentionMs: resolveResetArchiveRetentionMs(maintenance, pruneAfterMs),
     maxDiskBytes,
     highWaterBytes: resolveHighWaterBytes(maintenance, maxDiskBytes),
   };
+}
+
+export function resolveSessionEntryMaintenanceHighWater(maxEntries: number): number {
+  if (!Number.isSafeInteger(maxEntries) || maxEntries <= 0) {
+    return 1;
+  }
+  if (maxEntries <= STRICT_ENTRY_MAINTENANCE_MAX_ENTRIES) {
+    return maxEntries + 1;
+  }
+  const slack = Math.max(
+    MIN_BATCHED_ENTRY_MAINTENANCE_SLACK,
+    Math.ceil(maxEntries * BATCHED_ENTRY_MAINTENANCE_SLACK_RATIO),
+  );
+  return maxEntries + slack;
+}
+
+export function shouldRunSessionEntryMaintenance(params: {
+  entryCount: number;
+  maxEntries: number;
+  force?: boolean;
+}): boolean {
+  if (params.force) {
+    return true;
+  }
+  return params.entryCount >= resolveSessionEntryMaintenanceHighWater(params.maxEntries);
 }
 
 /**
@@ -156,12 +176,19 @@ export function resolveMaintenanceConfigFromInput(
 export function pruneStaleEntries(
   store: Record<string, SessionEntry>,
   overrideMaxAgeMs?: number,
-  opts: { log?: boolean; onPruned?: (params: { key: string; entry: SessionEntry }) => void } = {},
+  opts: {
+    log?: boolean;
+    onPruned?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
+  } = {},
 ): number {
   const maxAgeMs = overrideMaxAgeMs ?? resolveMaintenanceConfigFromInput().pruneAfterMs;
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys })) {
+      continue;
+    }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
       opts.onPruned?.({ key, entry });
       delete store[key];
@@ -178,6 +205,64 @@ function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
 }
 
+function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return (
+    isSubagentSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    rest.startsWith("hook:") ||
+    rest.startsWith("node:") ||
+    rest === "heartbeat" ||
+    rest.endsWith(":heartbeat") ||
+    rest.includes(":heartbeat:")
+  );
+}
+
+function isTelegramTopicSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^telegram:(?:group|channel|direct|dm):.+:topic:[^:]+$/.test(rest);
+}
+
+function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^[^:]+:(?:group|channel):.+$/.test(rest);
+}
+
+export function isProtectedSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
+  }
+  if (parseSessionThreadInfoFast(sessionKey).threadId) {
+    return true;
+  }
+  if (isTelegramTopicSessionKey(sessionKey)) {
+    return true;
+  }
+  if (isExternalGroupOrChannelSessionKey(sessionKey)) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  return chatType === "group" || chatType === "channel" || chatType === "thread";
+}
+
+function shouldPreserveMaintenanceEntry(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+  preserveKeys?: ReadonlySet<string>;
+}): boolean {
+  return (
+    params.preserveKeys?.has(params.key) === true ||
+    isProtectedSessionMaintenanceEntry(params.key, params.entry)
+  );
+}
+
 export function getActiveSessionMaintenanceWarning(params: {
   store: Record<string, SessionEntry>;
   activeSessionKey: string;
@@ -191,6 +276,9 @@ export function getActiveSessionMaintenanceWarning(params: {
   }
   const activeEntry = params.store[activeSessionKey];
   if (!activeEntry) {
+    return null;
+  }
+  if (isProtectedSessionMaintenanceEntry(activeSessionKey, activeEntry)) {
     return null;
   }
   const now = params.nowMs ?? Date.now();
@@ -234,6 +322,15 @@ function wouldCapActiveSession(params: {
     return true;
   }
 
+  const protectedCount = params.keys.filter(
+    (key) =>
+      key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
+  ).length;
+  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
+  if (maxRemovableEntries <= 0) {
+    return true;
+  }
+
   const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
   let newerOrTieBeforeActive = 0;
   let seenActive = false;
@@ -242,10 +339,13 @@ function wouldCapActiveSession(params: {
       seenActive = true;
       continue;
     }
+    if (isProtectedSessionMaintenanceEntry(key, params.store[key])) {
+      continue;
+    }
     const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
     if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
       newerOrTieBeforeActive++;
-      if (newerOrTieBeforeActive >= params.maxEntries) {
+      if (newerOrTieBeforeActive >= maxRemovableEntries) {
         return true;
       }
     }
@@ -265,11 +365,23 @@ export function capEntryCount(
   opts: {
     log?: boolean;
     onCapped?: (params: { key: string; entry: SessionEntry }) => void;
+    preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
   const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
-  const keys = Object.keys(store);
-  if (keys.length <= maxEntries) {
+  const preservedCount = Object.entries(store).filter(([key, entry]) =>
+    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
+  ).length;
+  const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
+  const keys = Object.keys(store).filter(
+    (key) =>
+      !shouldPreserveMaintenanceEntry({
+        key,
+        entry: store[key],
+        preserveKeys: opts.preserveKeys,
+      }),
+  );
+  if (keys.length <= maxRemovableEntries) {
     return 0;
   }
 
@@ -280,7 +392,7 @@ export function capEntryCount(
     return bTime - aTime;
   });
 
-  const toRemove = sorted.slice(maxEntries);
+  const toRemove = sorted.slice(maxRemovableEntries);
   for (const key of toRemove) {
     const entry = store[key];
     if (entry) {
@@ -292,72 +404,4 @@ export function capEntryCount(
     log.info("capped session entry count", { removed: toRemove.length, maxEntries });
   }
   return toRemove.length;
-}
-
-async function getSessionFileSize(storePath: string): Promise<number | null> {
-  try {
-    const stat = await fs.promises.stat(storePath);
-    return stat.size;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Rotate the sessions file if it exceeds the configured size threshold.
- * Renames the current file to `sessions.json.bak.{timestamp}` and cleans up
- * old rotation backups, keeping only the 3 most recent `.bak.*` files.
- */
-export async function rotateSessionFile(
-  storePath: string,
-  overrideBytes?: number,
-): Promise<boolean> {
-  const maxBytes = overrideBytes ?? resolveMaintenanceConfigFromInput().rotateBytes;
-
-  // Check current file size (file may not exist yet).
-  const fileSize = await getSessionFileSize(storePath);
-  if (fileSize == null) {
-    return false;
-  }
-
-  if (fileSize <= maxBytes) {
-    return false;
-  }
-
-  // Rotate: rename current file to .bak.{timestamp}
-  const backupPath = `${storePath}.bak.${Date.now()}`;
-  try {
-    await fs.promises.rename(storePath, backupPath);
-    log.info("rotated session store file", {
-      backupPath: path.basename(backupPath),
-      sizeBytes: fileSize,
-    });
-  } catch {
-    // If rename fails (e.g. file disappeared), skip rotation.
-    return false;
-  }
-
-  // Clean up old backups — keep only the 3 most recent .bak.* files.
-  try {
-    const dir = path.dirname(storePath);
-    const baseName = path.basename(storePath);
-    const files = await fs.promises.readdir(dir);
-    const backups = files
-      .filter((f) => f.startsWith(`${baseName}.bak.`))
-      .toSorted()
-      .toReversed();
-
-    const maxBackups = 3;
-    if (backups.length > maxBackups) {
-      const toDelete = backups.slice(maxBackups);
-      for (const old of toDelete) {
-        await fs.promises.unlink(path.join(dir, old)).catch(() => undefined);
-      }
-      log.info("cleaned up old session store backups", { deleted: toDelete.length });
-    }
-  } catch {
-    // Best-effort cleanup; don't fail the write.
-  }
-
-  return true;
 }

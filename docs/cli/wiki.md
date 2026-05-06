@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw wiki` (memory-wiki vault status, search, c
 read_when:
   - You want to use the memory-wiki CLI
   - You are documenting or changing `openclaw wiki`
-title: "wiki"
+title: "Wiki"
 ---
 
 # `openclaw wiki`
@@ -38,6 +38,7 @@ openclaw wiki ingest ./notes/alpha.md
 openclaw wiki compile
 openclaw wiki lint
 openclaw wiki search "alpha"
+openclaw wiki search "who should I ask about Teams?" --mode route-question
 openclaw wiki get entity.alpha --from 1 --lines 80
 
 openclaw wiki apply synthesis "Alpha Summary" \
@@ -68,9 +69,17 @@ Inspect current vault mode, health, and Obsidian CLI availability.
 Use this first when you are unsure whether the vault is initialized, bridge mode
 is healthy, or Obsidian integration is available.
 
+When bridge mode is active and configured to read memory artifacts, this command
+queries the running Gateway so it sees the same active memory plugin context as
+agent/runtime memory.
+
 ### `wiki doctor`
 
 Run wiki health checks and surface configuration or vault problems.
+
+When bridge mode is active and configured to read memory artifacts, this command
+queries the running Gateway before building the report. Disabled bridge imports
+and bridge configs that do not read memory artifacts remain local/offline.
 
 Typical issues include:
 
@@ -127,10 +136,33 @@ Behavior depends on config:
 
 - `search.backend`: `shared` or `local`
 - `search.corpus`: `wiki`, `memory`, or `all`
+- `--mode`: `auto`, `find-person`, `route-question`, `source-evidence`, or
+  `raw-claim`
 
 Use `wiki search` when you want wiki-specific ranking or provenance details.
 For one broad shared recall pass, prefer `openclaw memory search` when the
 active memory plugin exposes shared search.
+
+Search modes help the agent choose the right surface:
+
+- `find-person`: aliases, handles, socials, canonical IDs, and person pages
+- `route-question`: ask-for/best-used-for hints and relationship context
+- `source-evidence`: source pages and structured evidence fields
+- `raw-claim`: structured claim text with claim/evidence metadata
+
+Examples:
+
+```bash
+openclaw wiki search "bgroux" --mode find-person
+openclaw wiki search "who knows Teams rollout?" --mode route-question
+openclaw wiki search "maintainer-whois" --mode source-evidence
+openclaw wiki search "strong route Teams" --mode raw-claim --json
+```
+
+Text output includes `Claim:` and `Evidence:` lines when a result matches a
+structured claim. JSON output additionally exposes `matchedClaimId`,
+`matchedClaimStatus`, `matchedClaimConfidence`, `evidenceKinds`, and
+`evidenceSourceIds` for agent-side drilldown.
 
 ### `wiki get <lookup>`
 
@@ -167,6 +199,11 @@ source pages.
 
 Use this in `bridge` mode when you want the latest exported memory artifacts
 pulled into the wiki vault.
+
+For active bridge artifact reads, the CLI routes the import through Gateway RPC
+so the import uses the runtime memory plugin context. If bridge imports are
+disabled or artifact reads are turned off, the command keeps the local/offline
+zero-import behavior.
 
 ### `wiki unsafe-local import`
 
@@ -212,3 +249,8 @@ These require the official `obsidian` CLI on `PATH` when
 - `plugins.entries.memory-wiki.config.context.includeCompiledDigestPrompt`
 
 See [Memory Wiki plugin](/plugins/memory-wiki) for the full config model.
+
+## Related
+
+- [CLI reference](/cli)
+- [Memory wiki](/plugins/memory-wiki)

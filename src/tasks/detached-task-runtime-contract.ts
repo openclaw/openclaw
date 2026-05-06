@@ -78,11 +78,25 @@ export type DetachedTaskFailParams = {
   terminalSummary?: string | null;
 };
 
+export type DetachedTaskFinalizeParams = {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  endedAt: number;
+  lastEventAt?: number;
+  error?: string;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
+  terminalOutcome?: TaskTerminalOutcome | null;
+};
+
 export type DetachedTaskDeliveryStatusParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
   deliveryStatus: TaskDeliveryStatus;
+  error?: string;
 };
 
 export type DetachedTaskCancelParams = {
@@ -113,6 +127,7 @@ export type DetachedTaskLifecycleRuntime = {
   createRunningTaskRun: (params: DetachedRunningTaskCreateParams) => TaskRecord;
   startTaskRunByRunId: (params: DetachedTaskStartParams) => TaskRecord[];
   recordTaskRunProgressByRunId: (params: DetachedTaskProgressParams) => TaskRecord[];
+  finalizeTaskRunByRunId?: (params: DetachedTaskFinalizeParams) => TaskRecord[];
   completeTaskRunByRunId: (params: DetachedTaskCompleteParams) => TaskRecord[];
   failTaskRunByRunId: (params: DetachedTaskFailParams) => TaskRecord[];
   setDetachedTaskDeliveryStatusByRunId: (params: DetachedTaskDeliveryStatusParams) => TaskRecord[];

@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
-import { fileExists, resolveArchiveKind } from "./archive.js";
+import { resolveArchiveKind } from "./archive.js";
+import { pathExists } from "./fs-safe.js";
+import { withTempWorkspace } from "./private-temp-workspace.js";
 
 export type NpmSpecResolution = {
   name?: string;
@@ -34,6 +36,68 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
   };
 }
 
+function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const rec = value as Record<string, unknown>;
+  const name = toOptionalString(rec.name);
+  const version = toOptionalString(rec.version);
+  const resolvedSpec = name && version ? `${name}@${version}` : undefined;
+  const dist =
+    rec.dist && typeof rec.dist === "object" ? (rec.dist as Record<string, unknown>) : {};
+  return {
+    name,
+    version,
+    resolvedSpec,
+    integrity: toOptionalString(rec["dist.integrity"]) ?? toOptionalString(dist.integrity),
+    shasum: toOptionalString(rec["dist.shasum"]) ?? toOptionalString(dist.shasum),
+  };
+}
+
+export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
+  | {
+      ok: true;
+      metadata: NpmSpecResolution;
+    }
+  | {
+      ok: false;
+      error: string;
+    }
+> {
+  const res = await runCommandWithTimeout(
+    ["npm", "view", params.spec, "name", "version", "dist.integrity", "dist.shasum", "--json"],
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      env: {
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+      },
+    },
+  );
+  if (res.code !== 0) {
+    const raw = res.stderr.trim() || res.stdout.trim();
+    if (/E404|is not in this registry/i.test(raw)) {
+      return {
+        ok: false,
+        error: `Package not found on npm: ${params.spec}. See https://docs.openclaw.ai/tools/plugin for installable plugins.`,
+      };
+    }
+    return { ok: false, error: `npm view failed: ${raw}` };
+  }
+
+  try {
+    const parsed = JSON.parse(res.stdout.trim()) as unknown;
+    const metadata = normalizeNpmViewMetadata(parsed);
+    if (!metadata?.name || !metadata.version) {
+      return { ok: false, error: "npm view produced incomplete package metadata" };
+    }
+    return { ok: true, metadata };
+  } catch (err) {
+    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+  }
+}
+
 export type NpmIntegrityDrift = {
   expectedIntegrity: string;
   actualIntegrity: string;
@@ -43,12 +107,7 @@ export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
 ): Promise<T> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    return await fn(tmpDir);
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => undefined);
-  }
+  return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
 }
 
 export async function resolveArchiveSourcePath(archivePath: string): Promise<
@@ -62,7 +121,7 @@ export async function resolveArchiveSourcePath(archivePath: string): Promise<
     }
 > {
   const resolved = resolveUserPath(archivePath);
-  if (!(await fileExists(resolved))) {
+  if (!(await pathExists(resolved))) {
     return { ok: false, error: `archive not found: ${resolved}` };
   }
 
@@ -248,7 +307,7 @@ export async function packNpmSpecToArchive(params: {
   }
 
   let archivePath = path.isAbsolute(packed) ? packed : path.join(params.cwd, packed);
-  if (!(await fileExists(archivePath))) {
+  if (!(await pathExists(archivePath))) {
     const fallbackPacked = await findPackedArchiveInDir(params.cwd);
     if (!fallbackPacked) {
       return { ok: false, error: "npm pack produced no archive" };

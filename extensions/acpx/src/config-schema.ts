@@ -1,11 +1,9 @@
-import { buildPluginConfigSchema } from "openclaw/plugin-sdk/core";
 import { z } from "openclaw/plugin-sdk/zod";
-import type { OpenClawPluginConfigSchema } from "../runtime-api.js";
 
-export const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
+const ACPX_PERMISSION_MODES = ["approve-all", "approve-reads", "deny-all"] as const;
 export type AcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
 
-export const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
+const ACPX_NON_INTERACTIVE_POLICIES = ["deny", "fail"] as const;
 export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_POLICIES)[number];
 
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
@@ -30,6 +28,7 @@ export type AcpxPluginConfig = {
   permissionMode?: AcpxPermissionMode;
   nonInteractivePermissions?: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge?: boolean;
+  openClawToolsMcpBridge?: boolean;
   strictWindowsCmdWrapper?: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds?: number;
@@ -44,6 +43,7 @@ export type ResolvedAcpxPluginConfig = {
   permissionMode: AcpxPermissionMode;
   nonInteractivePermissions: AcpxNonInteractivePermissionPolicy;
   pluginToolsMcpBridge: boolean;
+  openClawToolsMcpBridge: boolean;
   strictWindowsCmdWrapper: boolean;
   timeoutSeconds?: number;
   queueOwnerTtlSeconds: number;
@@ -91,6 +91,9 @@ export const AcpxPluginConfigSchema = z.strictObject({
     })
     .optional(),
   pluginToolsMcpBridge: z.boolean({ error: "pluginToolsMcpBridge must be a boolean" }).optional(),
+  openClawToolsMcpBridge: z
+    .boolean({ error: "openClawToolsMcpBridge must be a boolean" })
+    .optional(),
   strictWindowsCmdWrapper: z
     .boolean({ error: "strictWindowsCmdWrapper must be a boolean" })
     .optional(),
@@ -112,7 +115,3 @@ export const AcpxPluginConfigSchema = z.strictObject({
     )
     .optional(),
 });
-
-export function createAcpxPluginConfigSchema(): OpenClawPluginConfigSchema {
-  return buildPluginConfigSchema(AcpxPluginConfigSchema);
-}

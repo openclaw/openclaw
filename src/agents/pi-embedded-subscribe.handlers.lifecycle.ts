@@ -6,6 +6,7 @@ import {
   sanitizeForConsole,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "./pi-embedded-runner/delivery-evidence.js";
 import { isIncompleteTerminalAssistantTurn } from "./pi-embedded-runner/run/incomplete-turn.js";
 import {
   consumePendingToolMediaReply,
@@ -45,8 +46,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     ctx.state.assistantTexts.some((text) => hasAssistantVisibleReply({ text }));
   const hadDeterministicSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
-    (ctx.state.messagingToolSentTexts?.length ?? 0) > 0 ||
-    (ctx.state.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
+    hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
@@ -54,9 +54,15 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   });
   const replayInvalid =
     ctx.state.replayState.replayInvalid || incompleteTerminalAssistant ? true : undefined;
+  // Tool-use terminal guard: when the last assistant message ended with a
+  // tool-call stop reason, the turn is incomplete even when pre-tool text
+  // exists — mark as abandoned so lifecycle consumers do not see a working
+  // end state for an interrupted tool chain. (#76477)
   const derivedWorkingTerminalState = isError
     ? "blocked"
-    : replayInvalid && !hasAssistantVisibleText && !hadDeterministicSideEffect
+    : replayInvalid &&
+        !hadDeterministicSideEffect &&
+        (!hasAssistantVisibleText || incompleteTerminalAssistant)
       ? "abandoned"
       : ctx.state.livenessState;
   const livenessState =
@@ -86,7 +92,14 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const rawErrorConsoleSuffix = safeRawErrorPreview ? ` rawError=${safeRawErrorPreview}` : "";
+    const shouldSuppressRawErrorConsoleSuffix =
+      observedError.providerRuntimeFailureKind === "auth_html_403" ||
+      observedError.providerRuntimeFailureKind === "auth_scope" ||
+      observedError.providerRuntimeFailureKind === "auth_refresh";
+    const rawErrorConsoleSuffix =
+      safeRawErrorPreview && !shouldSuppressRawErrorConsoleSuffix
+        ? ` rawError=${safeRawErrorPreview}`
+        : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
@@ -104,6 +117,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   }
 
   const emitLifecycleTerminal = () => {
+    const terminalMeta = {
+      ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
+      ...(ctx.state.yielded === true ? { yielded: true } : {}),
+    };
     if (isError) {
       emitAgentEvent({
         runId: ctx.params.runId,
@@ -111,6 +128,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
           endedAt: Date.now(),
@@ -121,6 +139,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
         data: {
           phase: "error",
           error: lifecycleErrorText ?? "LLM request failed.",
+          ...terminalMeta,
           ...(livenessState ? { livenessState } : {}),
           ...(replayInvalid ? { replayInvalid } : {}),
         },
@@ -132,6 +151,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
         endedAt: Date.now(),
@@ -141,6 +161,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       stream: "lifecycle",
       data: {
         phase: "end",
+        ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
       },
@@ -160,9 +181,11 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   };
 
   const flushPendingMediaAndChannel = () => {
-    const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
-    if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
-      ctx.emitBlockReply(pendingToolMediaReply);
+    if (ctx.params.onBlockReply) {
+      const pendingToolMediaReply = consumePendingToolMediaReply(ctx.state);
+      if (pendingToolMediaReply && hasAssistantVisibleReply(pendingToolMediaReply)) {
+        ctx.emitBlockReply(pendingToolMediaReply);
+      }
     }
 
     const postMediaFlushResult = ctx.flushBlockReplyBuffer();
@@ -184,11 +207,26 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   };
 
   let lifecycleTerminalEmitted = false;
-  const emitLifecycleTerminalOnce = () => {
+  const emitLifecycleTerminalOnce = (): void | Promise<void> => {
     if (lifecycleTerminalEmitted) {
       return;
     }
     lifecycleTerminalEmitted = true;
+    let beforeLifecycleTerminal: void | Promise<void> = undefined;
+    try {
+      beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
+    } catch (err) {
+      ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
+    }
+    if (isPromiseLike<void>(beforeLifecycleTerminal)) {
+      return Promise.resolve(beforeLifecycleTerminal)
+        .catch((err) => {
+          ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
+        })
+        .then(() => {
+          emitLifecycleTerminal();
+        });
+    }
     emitLifecycleTerminal();
   };
 
@@ -200,15 +238,28 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       : flushPendingMediaAndChannel();
 
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
-      return Promise.resolve(flushPendingMediaAndChannelResult).finally(() => {
-        emitLifecycleTerminalOnce();
-      });
+      return Promise.resolve(flushPendingMediaAndChannelResult).then(
+        () => emitLifecycleTerminalOnce(),
+        (error) => {
+          const emitted = emitLifecycleTerminalOnce();
+          if (isPromiseLike<void>(emitted)) {
+            return Promise.resolve(emitted).then(() => {
+              throw error;
+            });
+          }
+          throw error;
+        },
+      );
     }
   } catch (error) {
-    emitLifecycleTerminalOnce();
+    const emitted = emitLifecycleTerminalOnce();
+    if (isPromiseLike<void>(emitted)) {
+      return Promise.resolve(emitted).then(() => {
+        throw error;
+      });
+    }
     throw error;
   }
 
-  emitLifecycleTerminalOnce();
-  return undefined;
+  return emitLifecycleTerminalOnce();
 }

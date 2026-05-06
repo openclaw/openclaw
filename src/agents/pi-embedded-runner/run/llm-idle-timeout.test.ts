@@ -11,94 +11,198 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs()).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("returns default when llm config is missing", () => {
+  it("returns default when agent defaults are missing", () => {
     const cfg = { agents: {} } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("returns default when idleTimeoutSeconds is not set", () => {
-    const cfg = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
+  it("caps agents.defaults.timeoutSeconds fallback at the default idle watchdog", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("returns 0 when idleTimeoutSeconds is 0 (disabled)", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 0 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(0);
-  });
-
-  it("returns configured value in milliseconds", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 30 } } } } as OpenClawConfig;
+  it("uses agents.defaults.timeoutSeconds when it is shorter than the default idle watchdog", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(30_000);
   });
 
-  it("caps at max safe timeout", () => {
-    const cfg = {
-      agents: { defaults: { llm: { idleTimeoutSeconds: 10_000_000 } } },
-    } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(2_147_000_000);
+  it("caps an explicit run timeout override at the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("ignores negative values", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: -10 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  it("uses an explicit run timeout override when shorter than the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
-  it("ignores non-finite values", () => {
-    const cfg = {
-      agents: { defaults: { llm: { idleTimeoutSeconds: Infinity } } },
-    } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
-  });
-
-  it("falls back to agents.defaults.timeoutSeconds when llm.idleTimeoutSeconds is not set", () => {
-    const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(300_000);
-  });
-
-  it("uses an explicit run timeout override when llm.idleTimeoutSeconds is not set", () => {
-    expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 900_000 })).toBe(900_000);
+  it("honors explicit cron run timeouts as the idle watchdog ceiling", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
   });
 
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 2_147_000_000 })).toBe(0);
   });
 
-  it("prefers llm.idleTimeoutSeconds over agents.defaults.timeoutSeconds", () => {
-    const cfg = {
-      agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 120 } } },
-    } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(120_000);
+  it("uses the provider request timeout as the model idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: 300_000 })).toBe(300_000);
   });
 
-  it("prefers llm.idleTimeoutSeconds over an explicit run timeout override", () => {
-    const cfg = {
-      agents: { defaults: { llm: { idleTimeoutSeconds: 120 } } },
-    } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, runTimeoutMs: 900_000 })).toBe(120_000);
+  it("caps provider request timeout at the max safe timeout", () => {
+    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: 10_000_000_000 })).toBe(2_147_000_000);
   });
 
-  it("keeps idleTimeoutSeconds=0 disabled even when timeoutSeconds is set", () => {
+  it("ignores invalid provider request timeout values", () => {
+    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: -1 })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: Infinity })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("bounds provider request timeout by agents.defaults.timeoutSeconds when shorter", () => {
     const cfg = {
-      agents: { defaults: { timeoutSeconds: 300, llm: { idleTimeoutSeconds: 0 } } },
+      agents: { defaults: { timeoutSeconds: 45 } },
     } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg })).toBe(0);
+    expect(resolveLlmIdleTimeoutMs({ cfg, modelRequestTimeoutMs: 300_000 })).toBe(45_000);
+  });
+
+  it("bounds provider request timeout by explicit run timeout when shorter", () => {
+    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: 300_000, runTimeoutMs: 45_000 })).toBe(
+      45_000,
+    );
+  });
+
+  it("uses provider request timeout for cron model calls", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", modelRequestTimeoutMs: 300_000 })).toBe(
+      300_000,
+    );
   });
 
   it("disables the default idle timeout for cron when no timeout is configured", () => {
     expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(0);
 
-    const cfg = { agents: { defaults: { llm: {} } } } as OpenClawConfig;
+    const cfg = { agents: { defaults: {} } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
   });
 
-  it("uses agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
+  it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(300_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
-  it("keeps an explicit cron idle timeout when configured", () => {
-    const cfg = { agents: { defaults: { llm: { idleTimeoutSeconds: 45 } } } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(45_000);
+  it.each([
+    "http://localhost:11434",
+    "http://127.0.0.1:11434",
+    "http://127.0.0.2:11434",
+    "http://127.255.255.254:11434",
+    "http://0.0.0.0:11434",
+    "http://[::1]:11434",
+    "http://my-rig.local:11434",
+    "http://10.0.0.5:11434",
+    "http://172.16.5.10:11434",
+    "http://172.31.99.1:11434",
+    "http://192.168.1.20:11434",
+    "http://100.64.0.5:11434",
+    "http://100.127.255.254:11434",
+    // RFC 4193 IPv6 unique local (Tailscale IPv6 mesh fd7a:115c:a1e0::/48
+    // falls inside fc00::/7).
+    "http://[fc00::1]:11434",
+    "http://[fd00::1]:11434",
+    "http://[fd7a:115c:a1e0::dead:beef]:11434",
+    "http://[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]:11434",
+    // RFC 4291 IPv6 link-local.
+    "http://[fe80::1]:11434",
+    "http://[fe9a::1]:11434",
+    "http://[feab:cd::1]:11434",
+    "http://[febf::1]:11434",
+  ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
+  it.each([
+    "http://172.32.0.1:11434",
+    "http://192.169.1.1:11434",
+    "http://100.63.255.254:11434",
+    "http://100.128.0.1:11434",
+  ])("keeps the default idle watchdog for non-private IPv4 baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  // Node's URL parser normalizes every IPv4-mapped loopback form
+  // (`::ffff:127.0.0.1`, `::ffff:7F00:1`, mixed case, …) to the canonical
+  // `::ffff:7f00:1`. Exercise the user-facing input shapes here so the full
+  // parse → lowercase → bracket-strip → exact-match chain is regression-tested
+  // against future URL parser behavior, not just the canonical literal.
+  it.each([
+    "http://[::ffff:127.0.0.1]:11434",
+    "http://[::ffff:7f00:1]:11434",
+    "http://[::FFFF:127.0.0.1]:11434",
+  ])("disables the default idle watchdog for IPv4-mapped loopback baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
+  it.each([
+    // Just outside fc00::/7 (fe.. and 00fc::/16 are not unique-local).
+    "http://[fec0::1]:11434",
+    "http://[fbff::1]:11434",
+    // Just outside fe80::/10 (fec0:: was deprecated site-local, fe7f:: not LL).
+    "http://[fe7f::1]:11434",
+    // Public IPv6.
+    "http://[2001:db8::1]:11434",
+    // Abbreviated `fc::1` expands to 00fc:0:0:...:1, first byte is 0x00, not
+    // 0xfc — outside fc00::/7. Strict first-hextet match keeps this remote.
+    "http://[fc::1]:11434",
+    // IPv4-mapped IPv6 outside loopback (private RFC 1918 in mapped form is
+    // intentionally not matched, mirroring the SSRF policy helper).
+    "http://[::ffff:10.0.0.5]:11434",
+    "http://[::ffff:192.168.1.20]:11434",
+  ])("keeps the default idle watchdog for non-private IPv6 baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it.each([
+    "http://10.0.0.5evil:11434",
+    "http://127.0.0.1foo:11434",
+    "http://192.168.1.20attacker.com:11434",
+    "http://10.0.0.5.evil.com:11434",
+    "http://1.2.3.4.5:11434",
+  ])(
+    "keeps the default idle watchdog for numeric-looking hostnames that are not IPv4 literals (%s)",
+    (baseUrl) => {
+      expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    },
+  );
+
+  it("keeps the default idle watchdog for remote provider baseUrls", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://api.openai.com/v1" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://ollama.com" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("ignores malformed baseUrl and keeps the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "not-a-url" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "" } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("still honors an explicit provider request timeout for local providers", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        modelRequestTimeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("still applies agents.defaults.timeoutSeconds cap for local providers", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
+      30_000,
+    );
   });
 });
 

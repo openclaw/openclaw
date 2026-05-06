@@ -3,6 +3,15 @@ export type PluginEntryConfig = {
   hooks?: {
     /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
     allowPromptInjection?: boolean;
+    /**
+     * Controls access to raw conversation content from llm_input/llm_output/agent_end hooks.
+     * Non-bundled plugins must opt in explicitly; bundled plugins stay allowed unless disabled.
+     */
+    allowConversationAccess?: boolean;
+    /** Default timeout in milliseconds for this plugin's typed hooks. */
+    timeoutMs?: number;
+    /** Per typed-hook timeout overrides in milliseconds. */
+    timeouts?: Record<string, number>;
   };
   subagent?: {
     /** Explicitly allow this plugin to request per-run provider/model overrides for subagent runs. */
@@ -42,9 +51,24 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
+  /**
+   * Controls how bundled plugins participate in runtime provider discovery when
+   * `allow` is configured.
+   *
+   * - `"allowlist"` (default): bundled provider plugins are gated by `allow`
+   *   and `entries.<id>.enabled` like third-party plugins.
+   * - `"compat"`: legacy mode for migrated configs; bundled provider plugins
+   *   can be force-loaded regardless of the allowlist.
+   */
+  bundledDiscovery?: "compat" | "allowlist";
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
+  /**
+   * Internal transient carrier for plugin install records during command flows.
+   * This is intentionally omitted from the config schema and must not be
+   * persisted to openclaw.json.
+   */
   installs?: Record<string, PluginInstallRecord>;
 };
 import type { InstallRecordBase } from "./types.installs.js";

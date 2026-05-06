@@ -1,28 +1,31 @@
-import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
-import type {
-  OpenClawConfig,
-  ConfigFileSnapshot,
-  ConfigWriteNotification,
-  GatewayReloadMode,
-} from "../config/config.js";
+import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { isPlainObject } from "../utils.js";
-import { buildGatewayReloadPlan, type GatewayReloadPlan } from "./config-reload-plan.js";
+import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  loadInstalledPluginIndexInstallRecordsSync,
+} from "../plugins/installed-plugin-index-records.js";
+import { diffConfigPaths } from "./config-diff.js";
+import {
+  buildGatewayReloadPlan,
+  listPluginInstallTimestampMetadataPaths,
+  listPluginInstallWholeRecordPaths,
+  type GatewayReloadPlan,
+} from "./config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 
-export { buildGatewayReloadPlan };
+export {
+  buildGatewayReloadPlan,
+  diffConfigPaths,
+  listPluginInstallTimestampMetadataPaths,
+  listPluginInstallWholeRecordPaths,
+  resolveGatewayReloadSettings,
+};
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
-
-export type GatewayReloadSettings = {
-  mode: GatewayReloadMode;
-  debounceMs: number;
-};
-
-const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
-  mode: "hybrid",
-  debounceMs: 300,
-};
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
@@ -49,68 +52,45 @@ export function shouldInvalidateSkillsSnapshotForPaths(changedPaths: string[]): 
   return firstSkillsChangedPath(changedPaths) !== undefined;
 }
 
-export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): string[] {
-  if (prev === next) {
-    return [];
-  }
-  if (isPlainObject(prev) && isPlainObject(next)) {
-    const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-    const paths: string[] = [];
-    for (const key of keys) {
-      const prevValue = prev[key];
-      const nextValue = next[key];
-      if (prevValue === undefined && nextValue === undefined) {
-        continue;
-      }
-      const childPrefix = prefix ? `${prefix}.${key}` : key;
-      const childPaths = diffConfigPaths(prevValue, nextValue, childPrefix);
-      if (childPaths.length > 0) {
-        paths.push(...childPaths);
-      }
-    }
-    return paths;
-  }
-  if (Array.isArray(prev) && Array.isArray(next)) {
-    // Arrays can contain object entries (for example memory.qmd.paths/scope.rules);
-    // compare structurally so identical values are not reported as changed.
-    if (isDeepStrictEqual(prev, next)) {
-      return [];
-    }
-  }
-  return [prefix || "<root>"];
+function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0
+  );
 }
 
-export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReloadSettings {
-  const rawMode = cfg.gateway?.reload?.mode;
-  const mode =
-    rawMode === "off" || rawMode === "restart" || rawMode === "hot" || rawMode === "hybrid"
-      ? rawMode
-      : DEFAULT_RELOAD_SETTINGS.mode;
-  const debounceRaw = cfg.gateway?.reload?.debounceMs;
-  const debounceMs =
-    typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
-      ? Math.max(0, Math.floor(debounceRaw))
-      : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
-}
-
-export type GatewayConfigReloader = {
+type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };
 
+type PluginInstallRecords = Record<string, PluginInstallRecord>;
+
+function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
+  return {
+    plugins: {
+      installs: records,
+    },
+  };
+}
+
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
+  initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
-  recoverSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
-  onRecovered?: (params: {
-    reason: string;
-    snapshot: ConfigFileSnapshot;
-    recoveredSnapshot: ConfigFileSnapshot;
-  }) => void | Promise<void>;
+  initialPluginInstallRecords?: PluginInstallRecords;
+  readPluginInstallRecords?: () => Promise<PluginInstallRecords>;
   subscribeToWrites?: (listener: (event: ConfigWriteNotification) => void) => () => void;
   log: {
     info: (msg: string) => void;
@@ -120,6 +100,7 @@ export function startGatewayConfigReloader(opts: {
   watchPath: string;
 }): GatewayConfigReloader {
   let currentConfig = opts.initialConfig;
+  let currentCompareConfig = opts.initialCompareConfig ?? opts.initialConfig;
   let settings = resolveGatewayReloadSettings(currentConfig);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let pending = false;
@@ -127,8 +108,17 @@ export function startGatewayConfigReloader(opts: {
   let stopped = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
-  let pendingInProcessConfig: { config: OpenClawConfig; persistedHash: string } | null = null;
+  let pendingInProcessConfig: {
+    config: OpenClawConfig;
+    compareConfig: OpenClawConfig;
+    persistedHash: string;
+    afterWrite?: ConfigWriteNotification["afterWrite"];
+  } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let currentPluginInstallRecords =
+    opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
+  const readPluginInstallRecords =
+    opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -187,35 +177,52 @@ export function startGatewayConfigReloader(opts: {
     return true;
   };
 
-  const recoverAndReadSnapshot = async (
-    snapshot: ConfigFileSnapshot,
-    reason: string,
-  ): Promise<ConfigFileSnapshot | null> => {
-    if (!opts.recoverSnapshot) {
-      return null;
-    }
-    const recovered = await opts.recoverSnapshot(snapshot, reason);
-    if (!recovered) {
-      return null;
-    }
-    opts.log.warn(`config reload restored last-known-good config after ${reason}`);
-    const nextSnapshot = await opts.readSnapshot();
-    if (!nextSnapshot.valid) {
-      const issues = formatConfigIssueLines(nextSnapshot.issues, "").join(", ");
-      opts.log.warn(`config reload recovery snapshot is invalid: ${issues}`);
-      return null;
-    }
+  const applySnapshot = async (
+    nextConfig: OpenClawConfig,
+    nextCompareConfig: OpenClawConfig,
+    afterWrite?: ConfigWriteNotification["afterWrite"],
+  ) => {
+    const configChangedPaths = diffConfigPaths(currentCompareConfig, nextCompareConfig);
+    const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      currentCompareConfig,
+      nextCompareConfig,
+    );
+    const configPluginInstallWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      currentCompareConfig,
+      nextCompareConfig,
+    );
+    let nextPluginInstallRecords = currentPluginInstallRecords;
     try {
-      await opts.onRecovered?.({ reason, snapshot, recoveredSnapshot: nextSnapshot });
+      nextPluginInstallRecords = await readPluginInstallRecords();
     } catch (err) {
-      opts.log.warn(`config reload recovery notice failed: ${String(err)}`);
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
     }
-    return nextSnapshot;
-  };
-
-  const applySnapshot = async (nextConfig: OpenClawConfig) => {
-    const changedPaths = diffConfigPaths(currentConfig, nextConfig);
+    const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);
+    const nextPluginInstallConfig = asPluginInstallConfig(nextPluginInstallRecords);
+    const pluginInstallRecordChangedPaths = diffConfigPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const pluginInstallRecordWholeRecordPaths = listPluginInstallWholeRecordPaths(
+      previousPluginInstallConfig,
+      nextPluginInstallConfig,
+    );
+    const changedPaths = [...configChangedPaths, ...pluginInstallRecordChangedPaths];
+    const pluginInstallTimestampNoopPaths = [
+      ...configPluginInstallTimestampNoopPaths,
+      ...pluginInstallRecordTimestampNoopPaths,
+    ];
+    const pluginInstallWholeRecordPaths = [
+      ...configPluginInstallWholeRecordPaths,
+      ...pluginInstallRecordWholeRecordPaths,
+    ];
     currentConfig = nextConfig;
+    currentCompareConfig = nextCompareConfig;
+    currentPluginInstallRecords = nextPluginInstallRecords;
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
       return;
@@ -231,10 +238,32 @@ export function startGatewayConfigReloader(opts: {
       opts.log.info(`skills snapshot invalidated by config change (${skillsChangedPath})`);
     }
 
+    const followUp = resolveConfigWriteFollowUp(afterWrite);
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
-    const plan = buildGatewayReloadPlan(changedPaths);
+    if (followUp.mode === "none") {
+      opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
+      return;
+    }
+    const plan = buildGatewayReloadPlan(changedPaths, {
+      noopPaths: pluginInstallTimestampNoopPaths,
+      forceChangedPaths: pluginInstallWholeRecordPaths,
+    });
+    if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
+      return;
+    }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
+      return;
+    }
+    if (followUp.requiresRestart) {
+      queueRestart(
+        {
+          ...plan,
+          restartGateway: true,
+          restartReasons: [...plan.restartReasons, followUp.reason],
+        },
+        nextConfig,
+      );
       return;
     }
     if (settings.mode === "restart") {
@@ -301,7 +330,11 @@ export function startGatewayConfigReloader(opts: {
         const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
         missingConfigRetries = 0;
-        await applySnapshot(pendingWrite.config);
+        await applySnapshot(
+          pendingWrite.config,
+          pendingWrite.compareConfig,
+          pendingWrite.afterWrite,
+        );
         await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
         return;
       }
@@ -316,14 +349,10 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       if (!snapshot.valid) {
-        const recoveredSnapshot = await recoverAndReadSnapshot(snapshot, "invalid-config");
-        if (!recoveredSnapshot) {
-          handleInvalidSnapshot(snapshot);
-          return;
-        }
-        snapshot = recoveredSnapshot;
+        handleInvalidSnapshot(snapshot);
+        return;
       }
-      await applySnapshot(snapshot.config);
+      await applySnapshot(snapshot.config, snapshot.sourceConfig);
       await promoteAcceptedSnapshot(snapshot, "valid-config");
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
@@ -353,7 +382,9 @@ export function startGatewayConfigReloader(opts: {
       }
       pendingInProcessConfig = {
         config: event.runtimeConfig,
+        compareConfig: event.sourceConfig,
         persistedHash: event.persistedHash,
+        afterWrite: event.afterWrite,
       };
       lastAppliedWriteHash = event.persistedHash;
       scheduleAfter(0);

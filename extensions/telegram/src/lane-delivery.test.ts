@@ -1,7 +1,11 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { createTestDraftStream } from "./draft-stream.test-helpers.js";
 import {
+  createSequencedTestDraftStream,
+  createTestDraftStream,
+} from "./draft-stream.test-helpers.js";
+import {
+  type ArchivedPreview,
   createLaneTextDeliverer,
   type DraftLaneState,
   type LaneDeliveryResult,
@@ -17,9 +21,16 @@ function createHarness(params?: {
   answerStream?: DraftLaneState["stream"];
   answerHasStreamedMessage?: boolean;
   answerLastPartialText?: string;
+  answerPreviewVisibleSinceMs?: number;
+  splitFinalTextForPreview?: (text: string) => readonly string[];
+  nowMs?: number;
 }) {
   const answer =
-    params?.answerStream ?? createTestDraftStream({ messageId: params?.answerMessageId });
+    params?.answerStream ??
+    createTestDraftStream({
+      messageId: params?.answerMessageId,
+      visibleSinceMs: params?.answerPreviewVisibleSinceMs,
+    });
   const reasoning = createTestDraftStream();
   const lanes: Record<LaneName, DraftLaneState> = {
     answer: {
@@ -51,11 +62,7 @@ function createHarness(params?: {
   const markDelivered = vi.fn();
   const activePreviewLifecycleByLane = { answer: "transient", reasoning: "transient" } as const;
   const retainPreviewOnCleanupByLane = { answer: false, reasoning: false } as const;
-  const archivedAnswerPreviews: Array<{
-    messageId: number;
-    textSnapshot: string;
-    deleteIfUnused?: boolean;
-  }> = [];
+  const archivedAnswerPreviews: ArchivedPreview[] = [];
 
   const deliverLaneText = createLaneTextDeliverer({
     lanes,
@@ -64,6 +71,7 @@ function createHarness(params?: {
     retainPreviewOnCleanupByLane: { ...retainPreviewOnCleanupByLane },
     draftMaxChars: params?.draftMaxChars ?? 4_096,
     applyTextToPayload: (payload: ReplyPayload, text: string) => ({ ...payload, text }),
+    splitFinalTextForPreview: params?.splitFinalTextForPreview,
     sendPayload,
     flushDraftLane,
     stopDraftLane,
@@ -71,6 +79,7 @@ function createHarness(params?: {
     deletePreviewMessage,
     log,
     markDelivered,
+    now: params?.nowMs != null ? () => params.nowMs! : undefined,
   });
 
   return {
@@ -131,22 +140,43 @@ async function expectFinalEditFallbackToSend(params: {
   const result = await deliverFinalAnswer(params.harness, params.text);
   expect(result.kind).toBe("sent");
   expect(params.harness.editPreview).toHaveBeenCalledTimes(1);
-  expect(params.harness.sendPayload).toHaveBeenCalledWith(
-    expect.objectContaining({ text: params.text }),
-  );
+  expectSendPayloadWith(params.harness, { text: params.text });
   expect(params.harness.log).toHaveBeenCalledWith(
     expect.stringContaining(params.expectedLogSnippet),
   );
 }
 
-function expectPreviewFinalized(
-  result: LaneDeliveryResult,
-): Extract<LaneDeliveryResult, { kind: "preview-finalized" }>["delivery"] {
+function expectSendPayloadWith(
+  harness: ReturnType<typeof createHarness>,
+  expected: Partial<ReplyPayload>,
+) {
+  expect(
+    harness.sendPayload.mock.calls.some(([payload]) =>
+      Object.entries(expected).every(([key, value]) => {
+        return (payload as Record<string, unknown>)[key] === value;
+      }),
+    ),
+  ).toBe(true);
+}
+
+function expectPreviewFinalized(result: LaneDeliveryResult): {
+  content: string;
+  messageId: number;
+} {
   expect(result.kind).toBe("preview-finalized");
   if (result.kind !== "preview-finalized") {
     throw new Error(`expected preview-finalized, got ${result.kind}`);
   }
-  return result.delivery;
+  expect(result.delivery.receipt).toEqual(
+    expect.objectContaining({
+      primaryPlatformMessageId: String(result.delivery.messageId),
+      platformMessageIds: [String(result.delivery.messageId)],
+    }),
+  );
+  return {
+    content: result.delivery.content,
+    messageId: result.delivery.messageId,
+  };
 }
 
 describe("createLaneTextDeliverer", () => {
@@ -169,7 +199,10 @@ describe("createLaneTextDeliverer", () => {
   });
 
   it("primes stop-created previews with final text before editing", async () => {
-    const harness = createHarness({ answerMessageIdAfterStop: 777 });
+    const harness = createHarness({
+      answerMessageIdAfterStop: 777,
+      answerHasStreamedMessage: true,
+    });
     harness.lanes.answer.lastPartialText = "no";
 
     const result = await harness.deliverLaneText({
@@ -192,7 +225,10 @@ describe("createLaneTextDeliverer", () => {
   });
 
   it("keeps stop-created preview when follow-up final edit fails", async () => {
-    const harness = createHarness({ answerMessageIdAfterStop: 777 });
+    const harness = createHarness({
+      answerMessageIdAfterStop: 777,
+      answerHasStreamedMessage: true,
+    });
     harness.editPreview.mockRejectedValue(new Error("500: edit failed after stop flush"));
 
     const result = await harness.deliverLaneText({
@@ -231,7 +267,8 @@ describe("createLaneTextDeliverer", () => {
 
   it("retains preview when an existing preview final edit fails with ambiguous error", async () => {
     const harness = createHarness({ answerMessageId: 999 });
-    // Plain Error with no error_code → ambiguous, prefer incomplete over duplicate
+    // Plain Error with no error_code → ambiguous. Retain unless the preview is
+    // known to be an incomplete prefix of the final text.
     harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
 
     await expectFinalPreviewRetained({
@@ -239,6 +276,20 @@ describe("createLaneTextDeliverer", () => {
       expectedLogSnippet: "ambiguous error; keeping existing preview to avoid duplicate",
     });
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back when an ambiguous final edit failure would leave an incomplete preview", async () => {
+    const harness = createHarness({
+      answerMessageId: 999,
+      answerLastPartialText: "Hello fi",
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
+
+    await expectFinalEditFallbackToSend({
+      harness,
+      text: HELLO_FINAL,
+      expectedLogSnippet: "preview is an incomplete prefix; falling back",
+    });
   });
 
   it("falls back when Telegram reports the current final edit target missing", async () => {
@@ -260,9 +311,7 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result.kind).toBe("sent");
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: HELLO_FINAL }),
-    );
+    expectSendPayloadWith(harness, { text: HELLO_FINAL });
     expect(harness.log).toHaveBeenCalledWith(
       expect.stringContaining("failed before reaching Telegram; falling back"),
     );
@@ -290,9 +339,28 @@ describe("createLaneTextDeliverer", () => {
 
     expect(result.kind).toBe("sent");
     expect(harness.editPreview).not.toHaveBeenCalled();
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Short final" }),
-    );
+    expectSendPayloadWith(harness, { text: "Short final" });
+  });
+
+  it("does not create a synthetic preview for final-only text", async () => {
+    const answerStream = createSequencedTestDraftStream(777);
+    const harness = createHarness({
+      answerStream: answerStream as DraftLaneState["stream"],
+      answerHasStreamedMessage: false,
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Final only",
+      payload: { text: "Final only" },
+      infoKind: "final",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(answerStream.update).not.toHaveBeenCalled();
+    expect(answerStream.materialize).not.toHaveBeenCalled();
+    expect(harness.editPreview).not.toHaveBeenCalled();
+    expectSendPayloadWith(harness, { text: "Final only" });
   });
 
   it("keeps existing preview when final text regresses", async () => {
@@ -328,126 +396,144 @@ describe("createLaneTextDeliverer", () => {
 
     expect(result.kind).toBe("sent");
     expect(harness.editPreview).not.toHaveBeenCalled();
-    expect(harness.sendPayload).toHaveBeenCalledWith(expect.objectContaining({ text: longText }));
+    expectSendPayloadWith(harness, { text: longText });
     expect(harness.log).toHaveBeenCalledWith(expect.stringContaining("preview final too long"));
   });
 
-  it("materializes DM draft streaming final even when text is unchanged", async () => {
-    const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 321 });
-    answerStream.materialize.mockResolvedValue(321);
-    answerStream.update.mockImplementation(() => {});
+  it("forces a long final preview back to the first chunk before sending the rest", async () => {
+    const firstChunk = "First chunk boundary.";
+    const remainingText = " Follow-up body after the boundary.";
+    const finalText = `${firstChunk}${remainingText}`;
     const harness = createHarness({
-      answerStream: answerStream as DraftLaneState["stream"],
+      answerMessageId: 999,
       answerHasStreamedMessage: true,
-      answerLastPartialText: "Hello final",
+      answerLastPartialText: `${firstChunk} overlap already visible`,
+      draftMaxChars: 24,
+      splitFinalTextForPreview: () => [firstChunk, remainingText],
     });
 
-    const result = await harness.deliverLaneText({
-      laneName: "answer",
-      text: "Hello final",
-      payload: { text: "Hello final" },
-      infoKind: "final",
-    });
+    const result = await deliverFinalAnswer(harness, finalText);
 
-    expect(expectPreviewFinalized(result)).toEqual({ content: "Hello final", messageId: 321 });
-    expect(harness.flushDraftLane).toHaveBeenCalled();
-    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: finalText,
+      messageId: 999,
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 999,
+        text: firstChunk,
+      }),
+    );
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({ text: remainingText }),
+    );
+    expect(harness.lanes.answer.lastPartialText).toBe(firstChunk);
   });
 
-  it("materializes DM draft streaming final when revision changes", async () => {
-    let previewRevision = 3;
-    const answerStream = createTestDraftStream({ previewMode: "draft", messageId: 654 });
-    answerStream.materialize.mockResolvedValue(654);
-    answerStream.previewRevision.mockImplementation(() => previewRevision);
-    answerStream.update.mockImplementation(() => {});
-    answerStream.flush.mockImplementation(async () => {
-      previewRevision += 1;
-    });
+  it("sends a fresh final when a message preview is long lived", async () => {
+    const visibleSinceMs = 10_000;
     const harness = createHarness({
-      answerStream: answerStream as DraftLaneState["stream"],
+      answerMessageId: 999,
       answerHasStreamedMessage: true,
-      answerLastPartialText: "Final answer",
-    });
-
-    const result = await harness.deliverLaneText({
-      laneName: "answer",
-      text: "Final answer",
-      payload: { text: "Final answer" },
-      infoKind: "final",
-    });
-
-    expect(expectPreviewFinalized(result)).toEqual({ content: "Final answer", messageId: 654 });
-    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).not.toHaveBeenCalled();
-    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
-  });
-
-  it("falls back to normal send when draft materialize returns no message id", async () => {
-    const answerStream = createTestDraftStream({ previewMode: "draft" });
-    answerStream.materialize.mockResolvedValue(undefined);
-    const harness = createHarness({
-      answerStream: answerStream as DraftLaneState["stream"],
-      answerHasStreamedMessage: true,
-      answerLastPartialText: "Hello final",
+      answerLastPartialText: "Working...",
+      answerPreviewVisibleSinceMs: visibleSinceMs,
+      nowMs: visibleSinceMs + 60_000,
     });
 
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result.kind).toBe("sent");
-    expect(answerStream.materialize).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: HELLO_FINAL }),
-    );
-    expect(harness.log).toHaveBeenCalledWith(
-      expect.stringContaining("draft preview materialize produced no message id"),
-    );
-  });
-
-  it("does not use DM draft final shortcut for media payloads", async () => {
-    const answerStream = createTestDraftStream({ previewMode: "draft" });
-    const harness = createHarness({
-      answerStream: answerStream as DraftLaneState["stream"],
-      answerHasStreamedMessage: true,
-      answerLastPartialText: "Image incoming",
-    });
-
-    const result = await harness.deliverLaneText({
-      laneName: "answer",
-      text: "Image incoming",
-      payload: { text: "Image incoming", mediaUrl: "file:///tmp/example.png" },
-      infoKind: "final",
-    });
-
-    expect(result.kind).toBe("sent");
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Image incoming", mediaUrl: "file:///tmp/example.png" }),
-    );
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+    expectSendPayloadWith(harness, { text: HELLO_FINAL });
+    expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.answer.stream?.clear).toHaveBeenCalledTimes(1);
+    expect(harness.answer.stream?.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(harness.lanes.answer.hasStreamedMessage).toBe(false);
+    expect(harness.lanes.answer.lastPartialText).toBe("");
     expect(harness.markDelivered).not.toHaveBeenCalled();
   });
 
-  it("does not use DM draft final shortcut when inline buttons are present", async () => {
-    const answerStream = createTestDraftStream({ previewMode: "draft" });
+  it("falls back to editing a long-lived preview when fresh final send returns false", async () => {
+    const visibleSinceMs = 10_000;
     const harness = createHarness({
-      answerStream: answerStream as DraftLaneState["stream"],
+      answerMessageId: 999,
       answerHasStreamedMessage: true,
-      answerLastPartialText: "Choose one",
+      answerLastPartialText: "Working...",
+      answerPreviewVisibleSinceMs: visibleSinceMs,
+      nowMs: visibleSinceMs + 60_000,
+    });
+    harness.sendPayload.mockResolvedValueOnce(false);
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: HELLO_FINAL,
+      messageId: 999,
+    });
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 999,
+        text: HELLO_FINAL,
+      }),
+    );
+    expect(harness.answer.stream?.clear).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a fresh final for stale archived previews", async () => {
+    const visibleSinceMs = 10_000;
+    const harness = createHarness({
+      answerMessageId: 1001,
+      answerPreviewVisibleSinceMs: visibleSinceMs,
+      nowMs: visibleSinceMs + 60_000,
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 222,
+      textSnapshot: "Working...",
+      visibleSinceMs,
+      deleteIfUnused: true,
     });
 
-    const result = await harness.deliverLaneText({
-      laneName: "answer",
-      text: "Choose one",
-      payload: { text: "Choose one" },
-      previewButtons: [[{ text: "OK", callback_data: "ok" }]],
-      infoKind: "final",
-    });
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result.kind).toBe("sent");
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Choose one" }),
+    expectSendPayloadWith(harness, { text: HELLO_FINAL });
+    expect(harness.editPreview).not.toHaveBeenCalled();
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(222);
+  });
+
+  it("falls back to editing a stale archived preview when fresh final send returns false", async () => {
+    const visibleSinceMs = 10_000;
+    const harness = createHarness({
+      answerMessageId: 1001,
+      answerPreviewVisibleSinceMs: visibleSinceMs,
+      nowMs: visibleSinceMs + 60_000,
+    });
+    harness.archivedAnswerPreviews.push({
+      messageId: 222,
+      textSnapshot: "Working...",
+      visibleSinceMs,
+      deleteIfUnused: true,
+    });
+    harness.sendPayload.mockResolvedValueOnce(false);
+
+    const result = await deliverFinalAnswer(harness, HELLO_FINAL);
+
+    expect(expectPreviewFinalized(result)).toEqual({
+      content: HELLO_FINAL,
+      messageId: 222,
+    });
+    expect(harness.sendPayload).toHaveBeenCalledTimes(1);
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 222,
+        text: HELLO_FINAL,
+      }),
     );
-    expect(harness.markDelivered).not.toHaveBeenCalled();
+    expect(harness.deletePreviewMessage).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
   // ── Duplicate message regression tests ──────────────────────────────────
@@ -471,10 +557,31 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, "Complete final answer");
 
     expect(harness.editPreview).toHaveBeenCalledTimes(1);
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Complete final answer" }),
-    );
+    expectSendPayloadWith(harness, { text: "Complete final answer" });
     expect(result.kind).toBe("sent");
+    expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
+  });
+
+  it("falls back when an archived preview ambiguous final edit would leave an incomplete prefix", async () => {
+    const harness = createHarness();
+    harness.archivedAnswerPreviews.push({
+      messageId: 5555,
+      textSnapshot: "Hello fi",
+      deleteIfUnused: true,
+    });
+    harness.editPreview.mockRejectedValue(new Error("500: preview edit failed"));
+
+    await expectFinalEditFallbackToSend({
+      harness,
+      text: HELLO_FINAL,
+      expectedLogSnippet: "preview is an incomplete prefix; falling back",
+    });
+    expect(harness.editPreview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: 5555,
+        text: HELLO_FINAL,
+      }),
+    );
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(5555);
   });
 
@@ -542,9 +649,7 @@ describe("createLaneTextDeliverer", () => {
     const result = await deliverFinalAnswer(harness, HELLO_FINAL);
 
     expect(result.kind).toBe("sent");
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: HELLO_FINAL }),
-    );
+    expectSendPayloadWith(harness, { text: HELLO_FINAL });
   });
 
   it("retains when sendMayHaveLanded is true and a prior preview was visible", async () => {
@@ -583,9 +688,10 @@ describe("createLaneTextDeliverer", () => {
     });
 
     expect(result.kind).toBe("sent");
-    expect(harness.sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Final with media", mediaUrl: "file:///tmp/example.png" }),
-    );
+    expectSendPayloadWith(harness, {
+      text: "Final with media",
+      mediaUrl: "file:///tmp/example.png",
+    });
     expect(harness.deletePreviewMessage).toHaveBeenCalledWith(4444);
   });
 });

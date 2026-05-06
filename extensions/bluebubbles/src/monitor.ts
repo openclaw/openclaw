@@ -1,9 +1,8 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { safeEqualSecret } from "openclaw/plugin-sdk/browser-security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBlueBubblesEffectiveAllowPrivateNetwork } from "./accounts.js";
-import { runBlueBubblesCatchup } from "./catchup.js";
 import { createBlueBubblesDebounceRegistry } from "./monitor-debounce.js";
 import {
   asRecord,
@@ -24,6 +23,7 @@ import {
 } from "./monitor-shared.js";
 import { fetchBlueBubblesServerInfo } from "./probe.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
+import { normalizeSecretInputString } from "./secret-input.js";
 import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   createFixedWindowRateLimiter,
@@ -194,7 +194,7 @@ export async function handleBlueBubblesWebhookRequest(
         targets,
         res,
         isMatch: (target) => {
-          const token = target.account.config.password?.trim() ?? "";
+          const token = normalizeSecretInputString(target.account.config.password) ?? "";
           return safeEqualAuthToken(guid, token);
         },
       });
@@ -385,11 +385,13 @@ export async function monitorBlueBubblesProvider(
     // same processMessage path webhooks use, and #66230's inbound dedupe
     // drops any GUID that was already handled, so this is safe even if a
     // live webhook raced the startup replay. See #66721.
-    runBlueBubblesCatchup(target).catch((err) => {
-      runtime.error?.(
-        `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
-      );
-    });
+    import("./catchup.js")
+      .then(({ runBlueBubblesCatchup }) => runBlueBubblesCatchup(target))
+      .catch((err) => {
+        runtime.error?.(
+          `[${account.accountId}] BlueBubbles catchup: unexpected failure: ${String(err)}`,
+        );
+      });
   });
 }
 

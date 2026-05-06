@@ -29,6 +29,8 @@ export type ReplyThreadingPolicy = {
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
 
+export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
+
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
@@ -55,6 +57,17 @@ export type GetReplyOptions = {
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
   suppressToolErrorWarnings?: boolean;
+  /** If true, run the model without OpenClaw tools for this turn. */
+  disableTools?: boolean;
+  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** If true, keep the heartbeat response tool available even under narrow tool profiles. */
+  forceHeartbeatTool?: boolean;
+  /**
+   * If true, dispatch skips default tool/progress text messages and expects the
+   * channel to surface progress via its own streaming/edit UX.
+   */
+  suppressDefaultToolProgressMessages?: boolean;
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
@@ -68,7 +81,12 @@ export type GetReplyOptions = {
   onBlockReply?: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
-  onToolStart?: (payload: { name?: string; phase?: string }) => Promise<void> | void;
+  onToolStart?: (payload: {
+    name?: string;
+    phase?: string;
+    args?: Record<string, unknown>;
+    detailMode?: "explain" | "raw";
+  }) => Promise<void> | void;
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
@@ -79,6 +97,7 @@ export type GetReplyOptions = {
     status?: string;
     summary?: string;
     progressText?: string;
+    meta?: string;
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
@@ -103,6 +122,7 @@ export type GetReplyOptions = {
     command?: string;
     host?: string;
     reason?: string;
+    scope?: "turn" | "session";
     message?: string;
   }) => Promise<void> | void;
   /** Called when command output streams or completes. */
@@ -137,6 +157,12 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /**
+   * Controls whether normal assistant replies are automatically delivered to
+   * the source conversation. `message_tool_only` keeps final/block/preview
+   * output private; visible channel output must come from the message tool.
+   */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

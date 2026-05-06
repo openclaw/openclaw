@@ -4,14 +4,16 @@ import {
   retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 500,
-  maxDelayMs: 30_000,
+  maxDelayMs: 5 * 60_000,
   jitter: 0.1,
 };
+const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -50,7 +52,14 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
     return undefined;
   }
   const parsed = Number(header);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  if (Number.isFinite(parsed) && parsed >= 0) {
+    return parsed;
+  }
+  const retryAt = Date.parse(header);
+  if (!Number.isFinite(retryAt)) {
+    return undefined;
+  }
+  return Math.max(0, (retryAt - Date.now()) / 1000);
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {
@@ -61,7 +70,7 @@ function formatRetryAfterSeconds(value: number | undefined): string | undefined 
   return `${rounded}s`;
 }
 
-function formatDiscordApiErrorText(text: string): string | undefined {
+function formatDiscordApiErrorText(text: string, response: Response): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) {
     return undefined;
@@ -69,7 +78,17 @@ function formatDiscordApiErrorText(text: string): string | undefined {
   const payload = parseDiscordApiErrorPayload(trimmed);
   if (!payload) {
     const looksJson = trimmed.startsWith("{") && trimmed.endsWith("}");
-    return looksJson ? "unknown error" : trimmed;
+    if (looksJson) {
+      return "unknown error";
+    }
+    const summary = summarizeDiscordResponseBody(trimmed);
+    if (isDiscordHtmlResponseBody(trimmed, response.headers.get("content-type"))) {
+      if (!summary) {
+        return response.status === 429 ? "rate limited by Discord upstream" : undefined;
+      }
+      return response.status === 429 ? `rate limited by Discord upstream: ${summary}` : summary;
+    }
+    return summary;
   }
   const message =
     typeof payload.message === "string" && payload.message.trim()
@@ -92,18 +111,60 @@ export class DiscordApiError extends Error {
   }
 }
 
-export type DiscordFetchOptions = {
+function getDiscordApiRetryAfterMs(
+  err: unknown,
+  retryConfig: Required<RetryConfig>,
+): number | undefined {
+  if (!(err instanceof DiscordApiError) || typeof err.retryAfter !== "number") {
+    return undefined;
+  }
+  return Math.min(Math.max(0, err.retryAfter * 1000), retryConfig.maxDelayMs);
+}
+
+type DiscordFetchOptions = {
   retry?: RetryConfig;
   label?: string;
 };
 
-export async function fetchDiscord<T>(
+type DiscordApiRequestOptions = DiscordFetchOptions & {
+  body?: unknown;
+  fetcher?: typeof fetch;
+  headers?: Record<string, string>;
+  method?: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+function normalizeDiscordRequestBody(body: unknown, headers: Headers): BodyInit | null | undefined {
+  if (body === undefined) {
+    return undefined;
+  }
+  if (
+    typeof body === "string" ||
+    body instanceof Blob ||
+    body instanceof FormData ||
+    body instanceof URLSearchParams ||
+    body instanceof ArrayBuffer
+  ) {
+    return body;
+  }
+  headers.set("Content-Type", headers.get("Content-Type") ?? "application/json");
+  return JSON.stringify(body);
+}
+
+function resolveDiscordRequestSignal(options: DiscordApiRequestOptions) {
+  if (options.signal || typeof options.timeoutMs !== "number") {
+    return options.signal;
+  }
+  return AbortSignal.timeout(options.timeoutMs);
+}
+
+export async function requestDiscord<T>(
   path: string,
   token: string,
-  fetcher: typeof fetch = fetch,
-  options?: DiscordFetchOptions,
+  options?: DiscordApiRequestOptions,
 ): Promise<T> {
-  const fetchImpl = resolveFetch(fetcher);
+  const fetchImpl = resolveFetch(options?.fetcher ?? fetch);
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
@@ -111,30 +172,48 @@ export async function fetchDiscord<T>(
   const retryConfig = resolveRetryConfig(DISCORD_API_RETRY_DEFAULTS, options?.retry);
   return retryAsync(
     async () => {
+      const headers = new Headers(options?.headers);
+      headers.set("Authorization", `Bot ${token}`);
+      const body = normalizeDiscordRequestBody(options?.body, headers);
       const res = await fetchImpl(`${DISCORD_API_BASE}${path}`, {
-        headers: { Authorization: `Bot ${token}` },
+        method: options?.method ?? (body === undefined ? "GET" : "POST"),
+        headers,
+        body,
+        signal: resolveDiscordRequestSignal(options ?? {}),
       });
+      const text = await res.text().catch(() => "");
       if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        const detail = formatDiscordApiErrorText(text);
+        const detail = formatDiscordApiErrorText(text, res);
         const suffix = detail ? `: ${detail}` : "";
-        const retryAfter = res.status === 429 ? parseRetryAfterSeconds(text, res) : undefined;
+        const retryAfter =
+          res.status === 429
+            ? (parseRetryAfterSeconds(text, res) ?? DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS)
+            : undefined;
         throw new DiscordApiError(
           `Discord API ${path} failed (${res.status})${suffix}`,
           res.status,
           retryAfter,
         );
       }
-      return (await res.json()) as T;
+      if (!text.trim()) {
+        return undefined as T;
+      }
+      return JSON.parse(text) as T;
     },
     {
       ...retryConfig,
       label: options?.label ?? path,
       shouldRetry: (err) => err instanceof DiscordApiError && err.status === 429,
-      retryAfterMs: (err) =>
-        err instanceof DiscordApiError && typeof err.retryAfter === "number"
-          ? err.retryAfter * 1000
-          : undefined,
+      retryAfterMs: (err) => getDiscordApiRetryAfterMs(err, retryConfig),
     },
   );
+}
+
+export async function fetchDiscord<T>(
+  path: string,
+  token: string,
+  fetcher: typeof fetch = fetch,
+  options?: DiscordFetchOptions,
+): Promise<T> {
+  return await requestDiscord<T>(path, token, { ...options, fetcher, method: "GET" });
 }

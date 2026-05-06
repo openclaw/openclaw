@@ -22,7 +22,7 @@ function normalizeActKind(raw: unknown): ActKind {
   return kind;
 }
 
-export function countBatchActions(actions: BrowserActRequest[]): number {
+function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
   for (const action of actions) {
     count += 1;
@@ -110,6 +110,36 @@ export function normalizeActRequest(
         ...(doubleClick !== undefined ? { doubleClick } : {}),
         ...(button ? { button } : {}),
         ...(parsedModifiers.modifiers ? { modifiers: parsedModifiers.modifiers } : {}),
+        ...(delayMs !== undefined ? { delayMs } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      };
+    }
+    case "clickCoords": {
+      const x = toNumber(body.x);
+      const y = toNumber(body.y);
+      if (x === undefined || y === undefined || x < 0 || y < 0) {
+        throw new Error("clickCoords requires non-negative x and y");
+      }
+      const buttonRaw = toStringOrEmpty(body.button);
+      const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
+      if (buttonRaw && !button) {
+        throw new Error("clickCoords button must be left|right|middle");
+      }
+      const doubleClick = toBoolean(body.doubleClick);
+      const delayMs = normalizeActBoundedNonNegativeMs(
+        toNumber(body.delayMs),
+        "clickCoords delayMs",
+        ACT_MAX_CLICK_DELAY_MS,
+      );
+      const timeoutMs = toNumber(body.timeoutMs);
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
+      return {
+        kind,
+        x,
+        y,
+        ...(targetId ? { targetId } : {}),
+        ...(doubleClick !== undefined ? { doubleClick } : {}),
+        ...(button ? { button } : {}),
         ...(delayMs !== undefined ? { delayMs } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };

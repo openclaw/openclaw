@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  createStubSessionHarness,
+  emitAssistantTextDelta,
+} from "../agents/pi-embedded-subscribe.e2e-harness.js";
+import { subscribeEmbeddedPiSession } from "../agents/pi-embedded-subscribe.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -184,33 +189,27 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
-      {
-        await expectAgentSessionKeyMatch({
-          body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
-          headers: { "x-openclaw-agent-id": "beta" },
-          matcher: /^agent:beta:/,
-        });
-      }
+      await expectAgentSessionKeyMatch({
+        body: { model: "openclaw", messages: [{ role: "user", content: "hi" }] },
+        headers: { "x-openclaw-agent-id": "beta" },
+        matcher: /^agent:beta:/,
+      });
 
-      {
-        await expectAgentSessionKeyMatch({
-          body: {
-            model: "openclaw/beta",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          matcher: /^agent:beta:/,
-        });
-      }
+      await expectAgentSessionKeyMatch({
+        body: {
+          model: "openclaw/beta",
+          messages: [{ role: "user", content: "hi" }],
+        },
+        matcher: /^agent:beta:/,
+      });
 
-      {
-        await expectAgentSessionKeyMatch({
-          body: {
-            model: "openclaw/default",
-            messages: [{ role: "user", content: "hi" }],
-          },
-          matcher: /^agent:main:/,
-        });
-      }
+      await expectAgentSessionKeyMatch({
+        body: {
+          model: "openclaw/default",
+          messages: [{ role: "user", content: "hi" }],
+        },
+        matcher: /^agent:main:/,
+      });
 
       {
         mockAgentOnce([{ text: "hello" }]);
@@ -417,19 +416,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
-      {
-        await expectInvalidRequestNoDispatch([
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: { url: "https://example.com/image.png" },
-              },
-            ],
-          },
-        ]);
-      }
+      await expectInvalidRequestNoDispatch([
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: "https://example.com/image.png" },
+            },
+          ],
+        },
+      ]);
 
       {
         mockAgentOnce([{ text: "I can see the image" }]);
@@ -522,19 +519,17 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         await res.text();
       }
 
-      {
-        await expectInvalidRequestNoDispatch([
-          {
-            role: "user",
-            content: [
-              {
-                type: "image_url",
-                image_url: { url: "data:application/pdf;base64,QUJDRA==" },
-              },
-            ],
-          },
-        ]);
-      }
+      await expectInvalidRequestNoDispatch([
+        {
+          role: "user",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: "data:application/pdf;base64,QUJDRA==" },
+            },
+          ],
+        },
+      ]);
 
       {
         const manyImageParts = Array.from({ length: 9 }).map(() => ({
@@ -663,6 +658,40 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const msg = (choice0.message as Record<string, unknown> | undefined) ?? {};
         expect(msg.role).toBe("assistant");
         expect(msg.content).toBe("hello");
+      }
+
+      {
+        agentCommand.mockClear();
+        agentCommand.mockImplementationOnce((async (opts: unknown) => {
+          const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+          const { session, emit } = createStubSessionHarness();
+          subscribeEmbeddedPiSession({ session, runId });
+          emit({ type: "message_start", message: { role: "assistant" } });
+          for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
+            emitAssistantTextDelta({ emit, delta });
+          }
+          return { payloads: [{ text: "Title\nLine one\nLine two" }] };
+        }) as never);
+
+        const splitFinalRes = await postChatCompletions(port, {
+          stream: true,
+          model: "openclaw",
+          messages: [{ role: "user", content: "hi" }],
+        });
+        expect(splitFinalRes.status).toBe(200);
+        const splitFinalText = await splitFinalRes.text();
+        const splitFinalData = parseSseDataLines(splitFinalText);
+        const splitFinalChunks = splitFinalData
+          .filter((d) => d !== "[DONE]")
+          .map((d) => JSON.parse(d) as Record<string, unknown>);
+        const splitFinalContent = splitFinalChunks
+          .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
+          .map((choice) => (choice.delta as Record<string, unknown> | undefined)?.content)
+          .filter((v): v is string => typeof v === "string")
+          .join("");
+        expect(splitFinalContent).toBe("Title\nLine one\nLine two");
+        expect(splitFinalContent).not.toContain("<");
+        expect(splitFinalContent).not.toContain("final>");
       }
 
       {
@@ -998,6 +1027,85 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       // shared server
     }
   });
+
+  it(
+    "sends an initial SSE chunk before a streaming agent run settles",
+    { timeout: 15_000 },
+    async () => {
+      const port = enabledPort;
+      let serverAbortSignal: AbortSignal | undefined;
+
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce(
+        (opts: unknown) =>
+          new Promise<undefined>((resolve) => {
+            const signal = (opts as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+            serverAbortSignal = signal;
+            if (signal?.aborted) {
+              resolve(undefined);
+              return;
+            }
+            signal?.addEventListener("abort", () => resolve(undefined), { once: true });
+          }),
+      );
+
+      let settled = false;
+      const firstChunk = new Promise<string>((resolve, reject) => {
+        const clientReq = http.request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: "/v1/chat/completions",
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: "Bearer secret",
+            },
+          },
+          (res) => {
+            expect(res.statusCode).toBe(200);
+            expect(res.headers["content-type"] ?? "").toContain("text/event-stream");
+            res.setEncoding("utf8");
+            res.once("data", (chunk) => {
+              settled = true;
+              resolve(String(chunk));
+              clientReq.destroy();
+            });
+          },
+        );
+        clientReq.on("error", (err) => {
+          if (!settled) {
+            reject(err);
+          }
+        });
+        clientReq.setTimeout(2_000, () => {
+          if (!settled) {
+            settled = true;
+            clientReq.destroy(new Error("timed out waiting for first SSE chunk"));
+          }
+        });
+        clientReq.end(
+          JSON.stringify({
+            stream: true,
+            model: "openclaw",
+            messages: [{ role: "user", content: "hi" }],
+          }),
+        );
+      });
+
+      await expect(firstChunk).resolves.toContain('"role":"assistant"');
+      await vi.waitFor(() => {
+        expect(agentCommand).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(serverAbortSignal?.aborted).toBe(true);
+        },
+        { timeout: 5_000, interval: 50 },
+      );
+    },
+  );
 
   it("includes usage in final stream chunk when stream_options.include_usage=true", async () => {
     const port = enabledPort;

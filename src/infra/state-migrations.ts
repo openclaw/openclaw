@@ -219,9 +219,8 @@ function canonicalizeSessionKeyForAgent(params: {
     return normalizeLowercaseStringOrEmpty(`agent:${agentId}:subagent:${rest}`);
   }
   // Channel-owned legacy shapes must win before the generic group/channel
-  // fallback. WhatsApp shipped channel-qualified group sessions, so
-  // `group:123@g.us` must canonicalize to `...:whatsapp:group:...`, not the
-  // generic `...:unknown:group:...` bucket.
+  // fallback so plugin-specific legacy group keys can canonicalize to their
+  // owning channel instead of the generic `...:unknown:group:...` bucket.
   for (const surface of getLegacySessionSurfaces()) {
     const canonicalized = surface.canonicalizeLegacySessionKey?.({
       key: raw,
@@ -670,7 +669,7 @@ async function collectChannelLegacyStateMigrationPlans(params: {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
   // Legacy state detection belongs on a narrow setup-entry surface so doctor
   // does not cold-load unrelated runtime channel code.
-  const detectors = listBundledChannelLegacyStateMigrationDetectors();
+  const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
   for (const detectLegacyStateMigrations of detectors) {
     const detected = await detectLegacyStateMigrations({
       cfg: params.cfg,

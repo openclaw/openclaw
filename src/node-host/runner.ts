@@ -1,7 +1,9 @@
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
-import { GatewayClient } from "../gateway/client.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
+import { GatewayClient, type GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
+import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
@@ -36,6 +38,47 @@ const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sb
 
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
+  ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+  ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+  ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+  ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+]);
+
+type NodeHostReconnectPausedDeps = {
+  writeLine?: (message: string) => void;
+  exit?: (code: number) => never;
+};
+
+export function shouldExitNodeHostOnReconnectPaused(detailCode: string | null): boolean {
+  return detailCode !== null && NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES.has(detailCode);
+}
+
+function formatNodeHostReconnectPausedMessage(
+  info: GatewayReconnectPausedInfo,
+  params?: { exiting?: boolean },
+): string {
+  const detail = info.detailCode ? ` detail=${info.detailCode}` : "";
+  const reason = info.reason.trim() || "no close reason";
+  const action = params?.exiting ? "exiting for supervisor restart" : "waiting for operator action";
+  return `node host gateway reconnect paused after close (${info.code}): ${reason}${detail}; ${action}`;
+}
+
+export function handleNodeHostReconnectPaused(
+  info: GatewayReconnectPausedInfo,
+  deps: NodeHostReconnectPausedDeps = {},
+): void {
+  const shouldExit = shouldExitNodeHostOnReconnectPaused(info.detailCode);
+  const writeLine = deps.writeLine ?? writeStderrLine;
+  writeLine(formatNodeHostReconnectPausedMessage(info, { exiting: shouldExit }));
+  if (!shouldExit) {
+    return;
+  }
+  const exit = deps.exit ?? ((code: number): never => process.exit(code));
+  exit(1);
 }
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
@@ -156,13 +199,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const gateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
-    tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
+    tls: opts.gatewayTls ?? getRuntimeConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
   };
   config.gateway = gateway;
   await saveNodeHostConfig(config);
 
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   await ensureNodeHostPluginRegistry({ config: cfg, env: process.env });
   const pluginNodeHost = listRegisteredNodeHostCapsAndCommands();
   const { token, password } = await resolveNodeHostGatewayCredentials({
@@ -180,6 +223,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     url,
     token: token || undefined,
     password: password || undefined,
+    preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs,
     instanceId: nodeId,
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: displayName,
@@ -212,6 +256,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       // keep retrying (handled by GatewayClient)
       writeStderrLine(`node host gateway connect failed: ${err.message}`);
     },
+    onReconnectPaused: (info) => {
+      handleNodeHostReconnectPaused(info);
+    },
     onClose: (code, reason) => {
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
@@ -223,6 +270,11 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     return bins;
   }, pathEnv);
 
-  client.start();
+  const readiness = await startGatewayClientWhenEventLoopReady(client, {
+    clientOptions: { preauthHandshakeTimeoutMs: cfg.gateway?.handshakeTimeoutMs },
+  });
+  if (!readiness.ready) {
+    throw new Error("node host gateway event loop readiness timeout");
+  }
   await new Promise(() => {});
 }

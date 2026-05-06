@@ -14,7 +14,7 @@ import {
   describeWhatsAppMessageActions,
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
-import { whatsappChannelOutbound } from "./channel-outbound.js";
+import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import {
@@ -25,15 +25,17 @@ import {
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
-import { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
 import {
   isWhatsAppGroupJid,
+  isWhatsAppNewsletterJid,
   looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntry,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize.js";
 import { getWhatsAppRuntime } from "./runtime.js";
+import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
 import { whatsappSetupAdapter } from "./setup-core.js";
 import {
@@ -56,7 +58,11 @@ function parseWhatsAppExplicitTarget(raw: string) {
   }
   return {
     to: normalized,
-    chatType: isWhatsAppGroupJid(normalized) ? ("group" as const) : ("direct" as const),
+    chatType: isWhatsAppGroupJid(normalized)
+      ? ("group" as const)
+      : isWhatsAppNewsletterJid(normalized)
+        ? ("channel" as const)
+        : ("direct" as const),
   };
 }
 
@@ -64,8 +70,15 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
       idLabel: "whatsappSenderId",
+      normalizeAllowEntry: (entry) => normalizeWhatsAppAllowFromEntry(entry) ?? "",
     },
     outbound: whatsappChannelOutbound,
+    threading: {
+      scopedAccountReplyToMode: {
+        resolveAccount: (cfg, accountId) => resolveWhatsAppAccount({ cfg, accountId }),
+        resolveReplyToMode: (account) => account.replyToMode,
+      },
+    },
     base: {
       ...createWhatsAppPluginBase({
         groups: {
@@ -104,15 +117,17 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       },
       messaging: {
+        targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveWhatsAppOutboundSessionRoute(params),
         parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
         inferTargetChatType: ({ to }) => parseWhatsAppExplicitTarget(to)?.chatType,
         targetResolver: {
           looksLikeId: looksLikeWhatsAppTargetId,
-          hint: "<E.164|group JID>",
+          hint: "<E.164|group JID|newsletter JID>",
         },
       },
+      message: whatsappMessageAdapter,
       directory: {
         self: async ({ cfg, accountId }) => {
           const account = resolveWhatsAppAccount({ cfg, accountId });
@@ -169,7 +184,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       heartbeat: {
         checkReady: async ({ cfg, accountId, deps }) =>
           await checkWhatsAppHeartbeatReady({ cfg, accountId: accountId ?? undefined, deps }),
-        resolveRecipients: ({ cfg, opts }) => resolveWhatsAppHeartbeatRecipients(cfg, opts),
+        sendTyping: async ({ cfg, to, accountId }) => {
+          await sendTypingWhatsApp(to, {
+            cfg,
+            ...(accountId ? { accountId } : {}),
+          });
+        },
       },
       status: createAsyncComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
@@ -303,8 +323,10 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             timeoutMs,
             verbose,
           }),
-        loginWithQrWait: async ({ accountId, timeoutMs }) =>
-          await (await loadWhatsAppChannelRuntime()).waitForWebLogin({ accountId, timeoutMs }),
+        loginWithQrWait: async ({ accountId, timeoutMs, currentQrDataUrl }) =>
+          await (
+            await loadWhatsAppChannelRuntime()
+          ).waitForWebLogin({ accountId, timeoutMs, currentQrDataUrl }),
         logoutAccount: async ({ account, runtime }) => {
           const cleared = await (
             await loadWhatsAppChannelRuntime()

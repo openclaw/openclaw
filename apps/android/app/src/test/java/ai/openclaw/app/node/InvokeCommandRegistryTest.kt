@@ -1,8 +1,8 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.protocol.OpenClawCalendarCommand
-import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
+import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
 import ai.openclaw.app.protocol.OpenClawContactsCommand
 import ai.openclaw.app.protocol.OpenClawDeviceCommand
@@ -12,10 +12,11 @@ import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
+import ai.openclaw.app.protocol.OpenClawTalkCommand
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -26,6 +27,7 @@ class InvokeCommandRegistryTest {
       OpenClawCapability.Device.rawValue,
       OpenClawCapability.Notifications.rawValue,
       OpenClawCapability.System.rawValue,
+      OpenClawCapability.Talk.rawValue,
       OpenClawCapability.Photos.rawValue,
       OpenClawCapability.Contacts.rawValue,
       OpenClawCapability.Calendar.rawValue,
@@ -50,6 +52,10 @@ class InvokeCommandRegistryTest {
       OpenClawNotificationsCommand.List.rawValue,
       OpenClawNotificationsCommand.Actions.rawValue,
       OpenClawSystemCommand.Notify.rawValue,
+      OpenClawTalkCommand.PttStart.rawValue,
+      OpenClawTalkCommand.PttStop.rawValue,
+      OpenClawTalkCommand.PttCancel.rawValue,
+      OpenClawTalkCommand.PttOnce.rawValue,
       OpenClawPhotosCommand.Latest.rawValue,
       OpenClawContactsCommand.Search.rawValue,
       OpenClawContactsCommand.Add.rawValue,
@@ -256,11 +262,17 @@ class InvokeCommandRegistryTest {
       debugBuild = debugBuild,
     )
 
-  private fun assertContainsAll(actual: List<String>, expected: Set<String>) {
+  private fun assertContainsAll(
+    actual: List<String>,
+    expected: Set<String>,
+  ) {
     expected.forEach { value -> assertTrue(actual.contains(value)) }
   }
 
-  private fun assertMissingAll(actual: List<String>, forbidden: Set<String>) {
+  private fun assertMissingAll(
+    actual: List<String>,
+    forbidden: Set<String>,
+  ) {
     forbidden.forEach { value -> assertFalse(actual.contains(value)) }
   }
 }

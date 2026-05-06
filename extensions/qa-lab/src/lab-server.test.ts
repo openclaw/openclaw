@@ -4,9 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { startQaLabServer } from "./lab-server.js";
+import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
 
-vi.mock("openclaw/plugin-sdk/qa-channel", async () => await import("../../qa-channel/api.js"));
+vi.mock("@openclaw/qa-channel/api.js", async () => await import("../../qa-channel/api.js"));
 
 const captureMock = vi.hoisted(() => {
   const sessions: Array<Record<string, unknown>> = [];
@@ -85,6 +85,7 @@ const captureMock = vi.hoisted(() => {
     readBlob() {
       return null;
     },
+    close: vi.fn(),
     deleteSessions(sessionIds: string[]) {
       const ids = new Set(sessionIds);
       for (let index = sessions.length - 1; index >= 0; index -= 1) {
@@ -106,11 +107,16 @@ const captureMock = vi.hoisted(() => {
     reset() {
       sessions.splice(0);
       events.splice(0);
+      store.close.mockClear();
     },
   };
 });
 
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
+  acquireDebugProxyCaptureStore: () => ({
+    store: captureMock.store,
+    release: captureMock.store.close,
+  }),
   getDebugProxyCaptureStore: () => captureMock.store,
   resolveDebugProxySettings: () => ({
     dbPath: process.env.OPENCLAW_DEBUG_PROXY_DB_PATH ?? "",
@@ -121,6 +127,13 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+
+async function startQaLabServerForTest(params?: QaLabServerStartParams) {
+  return await startQaLabServer({
+    embeddedGateway: "disabled",
+    ...params,
+  });
+}
 
 afterEach(async () => {
   captureMock.reset();
@@ -179,19 +192,22 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
   throw new Error("runner catalog stayed loading");
 }
 
-async function waitForFile(filePath: string, timeoutMs = 5_000) {
+async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      return await readFile(filePath, "utf8");
+      const content = await readFile(filePath, "utf8");
+      if (content === expected) {
+        return content;
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;
       }
-      await sleep(10);
     }
+    await sleep(10);
   }
-  throw new Error(`file did not appear: ${filePath}`);
+  throw new Error(`file did not reach expected content: ${filePath}`);
 }
 
 async function createQaLabRepoRootFixture(params?: {
@@ -232,7 +248,7 @@ async function createQaLabRepoRootFixture(params?: {
 }
 
 describe("qa-lab server", () => {
-  it("serves bootstrap state and writes a self-check report", async () => {
+  it("serves bootstrap state and message state", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "qa-lab-test-"));
     cleanups.push(async () => {
       await rm(tempDir, { recursive: true, force: true });
@@ -240,13 +256,14 @@ describe("qa-lab server", () => {
     const outputPath = path.join(tempDir, "self-check.md");
     const repoRoot = await createQaLabRepoRootFixture();
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       outputPath,
       repoRoot,
       controlUiUrl: "http://127.0.0.1:18789/",
       controlUiToken: "qa-token",
+      embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -294,11 +311,7 @@ describe("qa-lab server", () => {
     };
     expect(snapshot.messages.some((message) => message.text === "hello from test")).toBe(true);
 
-    const result = await lab.runSelfCheck();
-    expect(result.scenarioResult.status).toBe("pass");
-    const markdown = await readFile(outputPath, "utf8");
-    expect(markdown).toContain("Synthetic Slack-class roundtrip");
-    expect(markdown).toContain("- Status: pass");
+    await expect(readFile(outputPath, "utf8")).rejects.toThrow();
   });
 
   it("anchors direct self-check runs under the explicit repo root by default", async () => {
@@ -307,10 +320,12 @@ describe("qa-lab server", () => {
       await rm(repoRoot, { recursive: true, force: true });
     });
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
+      embeddedGateway: "disabled",
+      selfCheckWaitTimeoutMs: 1,
     });
     cleanups.push(async () => {
       await lab.stop();
@@ -322,9 +337,10 @@ describe("qa-lab server", () => {
   });
 
   it("injects the kickoff task on demand and on startup", async () => {
-    const autoKickoffLab = await startQaLabServer({
+    const autoKickoffLab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
+      embeddedGateway: "disabled",
       sendKickoffOnStart: true,
     });
     cleanups.push(async () => {
@@ -340,9 +356,10 @@ describe("qa-lab server", () => {
       true,
     );
 
-    const manualLab = await startQaLabServer({
+    const manualLab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
+      embeddedGateway: "disabled",
     });
     cleanups.push(async () => {
       await manualLab.stop();
@@ -393,7 +410,7 @@ describe("qa-lab server", () => {
       throw new Error("expected upstream address");
     }
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       advertiseHost: "127.0.0.1",
@@ -436,7 +453,7 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       uiDistDir,
@@ -464,7 +481,7 @@ describe("qa-lab server", () => {
         "<!doctype html><html><head><title>Temp QA Lab UI</title></head><body>repo-root-ui</body></html>",
     });
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
@@ -505,9 +522,9 @@ describe("qa-lab server", () => {
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.argv.slice(2).join(" "), "utf8");`,
         "process.stdout.write(JSON.stringify({",
         "  models: [{",
-        '    key: "openai/gpt-5.4",',
-        '    name: "GPT-5.4",',
-        '    input: "openai/gpt-5.4",',
+        '    key: "openai/gpt-5.5",',
+        '    name: "GPT-5.5",',
+        '    input: "openai/gpt-5.5",',
         "    available: true,",
         "    missing: false,",
         "  }],",
@@ -521,7 +538,7 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
@@ -555,11 +572,11 @@ describe("qa-lab server", () => {
       path.join(repoRoot, "dist/index.js"),
       [
         'const fs = require("node:fs");',
-        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
         "process.on('SIGTERM', () => {",
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
+        `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",
@@ -570,7 +587,7 @@ describe("qa-lab server", () => {
       "utf8",
     );
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       repoRoot,
@@ -584,15 +601,17 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFile(markerPath)).toBe("0");
+    expect(await waitForFileContent(markerPath, "0")).toBe("0");
 
     await lab.stop();
     stopped = true;
-    expect(await waitForFile(stoppedPath)).toBe("terminated");
+    if (process.platform !== "win32") {
+      expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+    }
   });
 
   it("can disable the embedded echo gateway for real-suite runs", async () => {
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       embeddedGateway: "disabled",
@@ -621,7 +640,7 @@ describe("qa-lab server", () => {
   });
 
   it("exposes structured outcomes and can attach control-ui after startup", async () => {
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
       embeddedGateway: "disabled",
@@ -723,7 +742,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -744,7 +763,7 @@ describe("qa-lab server", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.4",
+        model: "gpt-5.5",
         captureOrigin: "shared-fetch",
       }),
     });
@@ -767,7 +786,7 @@ describe("qa-lab server", () => {
       }),
     });
 
-    const lab = await startQaLabServer({
+    const lab = await startQaLabServerForTest({
       host: "127.0.0.1",
       port: 0,
     });
@@ -793,7 +812,7 @@ describe("qa-lab server", () => {
         expect.objectContaining({
           flowId: "flow-1",
           provider: "openai",
-          model: "gpt-5.4",
+          model: "gpt-5.5",
           captureOrigin: "shared-fetch",
         }),
         expect.objectContaining({
@@ -825,7 +844,7 @@ describe("qa-lab server", () => {
     );
     expect(coverage.coverage.models).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ value: "gpt-5.4", count: 2 }),
+        expect.objectContaining({ value: "gpt-5.5", count: 2 }),
         expect.objectContaining({ value: "kimi-k2.5:cloud", count: 1 }),
       ]),
     );

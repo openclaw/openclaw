@@ -11,13 +11,13 @@
 //   - #60715 BB health check fails on LAN/private serverUrl
 //   - #66869 move `?password=` → header auth (future-proofed via AuthStrategy)
 
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isBlockedHostnameOrIp, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { extractAttachments } from "./monitor-normalize.js";
 import { postMultipartFormData } from "./multipart.js";
 import { resolveRequestUrl } from "./request-url.js";
-import { DEFAULT_ACCOUNT_ID } from "./runtime-api.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 import { getBlueBubblesRuntime } from "./runtime.js";
 import {
@@ -41,7 +41,7 @@ const DEFAULT_MULTIPART_TIMEOUT_MS = 60_000;
  *   - `blueBubblesHeaderAuth` — header-based auth; flip the default here when
  *     BB Server ships the header-auth change for #66869.
  */
-export interface BlueBubblesAuthStrategy {
+interface BlueBubblesAuthStrategy {
   /**
    * Stable identifier for this strategy. Used by the client cache fingerprint
    * so two clients for the same account + credential that differ only in auth
@@ -149,7 +149,7 @@ export function resolveBlueBubblesClientSsrfPolicy(params: {
 
 // --- Client ----------------------------------------------------------------
 
-export type BlueBubblesClientOptions = {
+type BlueBubblesClientOptions = {
   cfg?: OpenClawConfig;
   accountId?: string;
   serverUrl?: string;

@@ -3,16 +3,16 @@ import path from "node:path";
 import {
   resolveAgentContextLimits,
   resolveAgentWorkspaceDir,
-} from "../../../../src/agents/agent-scope.js";
-import { resolveMemorySearchConfig } from "../../../../src/agents/memory-search.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+  resolveMemorySearchConfig,
+  type OpenClawConfig,
+} from "./config-utils.js";
+import { isFileMissingError, isPathInside, readRegularFile, statRegularFile } from "./fs-utils.js";
+import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
 import {
   buildMemoryReadResult,
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
-} from "../../../../src/memory-host-sdk/host/read-file-shared.js";
-import { isFileMissingError, statRegularFile } from "./fs-utils.js";
-import { isMemoryPath, normalizeExtraMemoryPaths } from "./internal.js";
+} from "./read-file-shared.js";
 
 export async function readMemoryFile(params: {
   workspaceDir: string;
@@ -43,7 +43,11 @@ export async function readMemoryFile(params: {
           continue;
         }
         if (stat.isDirectory()) {
-          if (absPath === additionalPath || absPath.startsWith(`${additionalPath}${path.sep}`)) {
+          if (isPathInside(additionalPath, absPath)) {
+            const candidateStat = await fs.lstat(absPath).catch(() => null);
+            if (candidateStat?.isSymbolicLink()) {
+              continue;
+            }
             allowedAdditional = true;
             break;
           }
@@ -68,7 +72,7 @@ export async function readMemoryFile(params: {
   }
   let content: string;
   try {
-    content = await fs.readFile(absPath, "utf-8");
+    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
   } catch (err) {
     if (isFileMissingError(err)) {
       return { text: "", path: relPath };

@@ -1,6 +1,6 @@
-import { loadAuthProfileStore } from "../../agents/auth-profiles.js";
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
@@ -61,6 +61,7 @@ function formatAccountLine(params: {
     channel: channel.id,
     accountId: snapshot.accountId,
     name: snapshot.name,
+    channelLabel: channel.meta.label ?? channel.id,
     channelStyle: theme.accent,
     accountStyle: theme.heading,
   });
@@ -90,14 +91,17 @@ function formatAccountLine(params: {
 }
 async function loadUsageWithProgress(
   runtime: RuntimeEnv,
+  progress = true,
 ): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
   try {
     return await withProgress(
-      { label: "Fetching usage snapshot…", indeterminate: true, enabled: true },
-      async () => await loadProviderUsageSummary(),
+      { label: "Fetching usage snapshot…", indeterminate: true, enabled: progress },
+      async () => await loadProviderUsageSummary({ skipPluginAuthWithoutCredentialSource: true }),
     );
   } catch (err) {
-    runtime.error(String(err));
+    if (progress) {
+      runtime.error(String(err));
+    }
     return null;
   }
 }
@@ -112,9 +116,11 @@ export async function channelsListCommand(
   }
   const includeUsage = opts.usage !== false;
 
-  const plugins = listChannelPlugins();
+  const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
+    includeSetupFallbackPlugins: true,
+  });
 
-  const authStore = loadAuthProfileStore();
+  const authStore = loadAuthProfileStoreWithoutExternalProfiles();
   const authProfiles = Object.entries(authStore.profiles).map(([profileId, profile]) => ({
     id: profileId,
     provider: profile.provider,
@@ -122,7 +128,7 @@ export async function channelsListCommand(
     isExternal: false,
   }));
   if (opts.json) {
-    const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
+    const usage = includeUsage ? await loadUsageWithProgress(runtime, false) : undefined;
     const chat: Record<string, string[]> = {};
     for (const plugin of plugins) {
       chat[plugin.id] = plugin.config.listAccountIds(cfg);

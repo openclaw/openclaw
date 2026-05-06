@@ -1,19 +1,18 @@
 {
   "name": "@openclaw/amazon-bedrock-mantle-provider",
-  "version": "2026.4.20",
+  "version": "2026.5.4",
   "private": true,
   "description": "OpenClaw Amazon Bedrock Mantle (OpenAI-compatible) provider plugin",
   "type": "module",
   "dependencies": {
-    "@aws/bedrock-token-generator": "^1.1.0"
+    "@anthropic-ai/sdk": "0.93.0",
+    "@aws/bedrock-token-generator": "^1.1.0",
+    "@mariozechner/pi-ai": "0.73.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
     ]

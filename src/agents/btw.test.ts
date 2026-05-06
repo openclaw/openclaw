@@ -2,10 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
 const streamSimpleMock = vi.fn();
+const readFileMock = vi.fn();
+const parseSessionEntriesMock = vi.fn();
+const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
-const getLeafEntryMock = vi.fn();
-const branchMock = vi.fn();
-const resetLeafMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
@@ -17,6 +17,7 @@ const getActiveEmbeddedRunSnapshotMock = vi.fn();
 const resolveSessionAgentIdMock = vi.fn();
 const resolveAgentWorkspaceDirMock = vi.fn();
 const prepareProviderRuntimeAuthMock = vi.fn();
+const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
 
 vi.mock("@mariozechner/pi-ai", async () => {
@@ -28,16 +29,18 @@ vi.mock("@mariozechner/pi-ai", async () => {
   };
 });
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
-  generateSummary: vi.fn(async () => "summary"),
-  SessionManager: {
-    open: () => ({
-      getLeafEntry: getLeafEntryMock,
-      branch: branchMock,
-      resetLeaf: resetLeafMock,
-      buildSessionContext: buildSessionContextMock,
-    }),
+vi.mock("node:fs/promises", () => ({
+  default: {
+    readFile: (...args: unknown[]) => readFileMock(...args),
   },
+  readFile: (...args: unknown[]) => readFileMock(...args),
+}));
+
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
+  generateSummary: vi.fn(async () => "summary"),
+  migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
+  parseSessionEntries: (...args: unknown[]) => parseSessionEntriesMock(...args),
 }));
 
 vi.mock("./models-config.js", () => ({
@@ -69,6 +72,11 @@ vi.mock("./agent-scope.js", () => ({
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   prepareProviderRuntimeAuth: (...args: unknown[]) => prepareProviderRuntimeAuthMock(...args),
+}));
+
+vi.mock("./provider-stream.js", () => ({
+  registerProviderStreamForModel: (...args: unknown[]) =>
+    registerProviderStreamForModelMock(...args),
 }));
 
 vi.mock("./auth-profiles/session-override.js", () => ({
@@ -210,6 +218,19 @@ function createAssistantTranscriptMessage(
   };
 }
 
+function createTranscriptEntry(params: { id: string; parentId?: string | null; message: unknown }) {
+  return {
+    type: "message",
+    id: params.id,
+    parentId: params.parentId ?? null,
+    message: params.message,
+  };
+}
+
+function mockTranscriptEntries(entries: unknown[]) {
+  parseSessionEntriesMock.mockReturnValue(entries);
+}
+
 function mockActiveTranscript(messages: unknown[]) {
   getActiveEmbeddedRunSnapshotMock.mockReturnValue({
     transcriptLeafId: "assistant-1",
@@ -260,10 +281,10 @@ function expectSeedOnlyUserContext(context: unknown) {
 describe("runBtwSideQuestion", () => {
   beforeEach(() => {
     streamSimpleMock.mockReset();
+    readFileMock.mockReset();
+    parseSessionEntriesMock.mockReset();
+    migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
-    getLeafEntryMock.mockReset();
-    branchMock.mockReset();
-    resetLeafMock.mockReset();
     ensureOpenClawModelsJsonMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
@@ -275,12 +296,28 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     prepareProviderRuntimeAuthMock.mockReset();
+    registerProviderStreamForModelMock.mockReset();
     diagDebugMock.mockReset();
 
-    buildSessionContextMock.mockReturnValue({
-      messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
+    readFileMock.mockResolvedValue("mock transcript");
+    parseSessionEntriesMock.mockReturnValue([
+      createTranscriptEntry({
+        id: "user-1",
+        message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      }),
+      createTranscriptEntry({
+        id: "assistant-1",
+        parentId: "user-1",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 2,
+        },
+      }),
+    ]);
+    buildSessionContextMock.mockImplementation((entries: Array<{ message?: unknown }> = []) => {
+      return { messages: entries.flatMap((entry) => (entry.message ? [entry.message] : [])) };
     });
-    getLeafEntryMock.mockReturnValue(null);
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "anthropic",
       id: "claude-sonnet-4-6",
@@ -293,6 +330,7 @@ describe("runBtwSideQuestion", () => {
     resolveSessionAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     prepareProviderRuntimeAuthMock.mockResolvedValue(undefined);
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
   });
 
   it("streams blocks without persisting BTW data to disk", async () => {
@@ -379,6 +417,13 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      DEFAULT_AGENT_DIR,
+      {
+        workspaceDir: "/tmp/workspace",
+      },
+    );
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
@@ -430,6 +475,49 @@ describe("runBtwSideQuestion", () => {
       expect.anything(),
       expect.objectContaining({ apiKey: "copilot-runtime-token" }),
     );
+  });
+
+  it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {
+    // Regression: before this fix, /btw called streamSimple directly and
+    // bypassed the provider's createStreamFn/wrapStreamFn hooks. That caused
+    // Ollama Cloud (api: "openai-completions", baseUrl: "https://ollama.com/")
+    // to hit the marketing site instead of /v1/chat/completions.
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "ollama",
+      id: "glm-5.1",
+      api: "openai-completions",
+      baseUrl: "https://ollama.com/",
+    });
+    const providerStreamFn = vi
+      .fn()
+      .mockReturnValue(makeAsyncEvents([createDoneEvent("Ollama Cloud answer.")]));
+    registerProviderStreamForModelMock.mockReturnValue(providerStreamFn);
+
+    const result = await runSideQuestion({ provider: "ollama", model: "glm-5.1" });
+
+    expect(result).toEqual({ text: "Ollama Cloud answer." });
+    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({
+          provider: "ollama",
+          api: "openai-completions",
+          baseUrl: "https://ollama.com/",
+        }),
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(providerStreamFn).toHaveBeenCalledTimes(1);
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to streamSimple when no provider stream fn is registered", async () => {
+    registerProviderStreamForModelMock.mockReturnValue(undefined);
+    mockDoneAnswer("Fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
   it("strips injected empty tools arrays from BTW payloads before sending", async () => {
@@ -611,22 +699,40 @@ describe("runBtwSideQuestion", () => {
   });
 
   it("branches away from an unresolved trailing user turn before building BTW context", async () => {
-    getLeafEntryMock.mockReturnValue({
-      type: "message",
-      parentId: "assistant-1",
-      message: { role: "user" },
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-1",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
     });
+    const trailingUserEntry = createTranscriptEntry({
+      id: "user-2",
+      parentId: "assistant-1",
+      message: createUserTranscriptMessage([{ type: "text", text: "unfinished task" }]),
+    });
+    mockTranscriptEntries([assistantEntry, trailingUserEntry]);
     mockDoneAnswer(MATH_ANSWER);
 
     const result = await runMathSideQuestion();
 
-    expect(branchMock).toHaveBeenCalledWith("assistant-1");
-    expect(resetLeafMock).not.toHaveBeenCalled();
-    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
   });
 
   it("branches to the active run snapshot leaf when the session is busy", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    const newerEntry = createTranscriptEntry({
+      id: "newer-user",
+      parentId: "assistant-seed",
+      message: createUserTranscriptMessage([{ type: "text", text: "newer unfinished task" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry, newerEntry]);
     getActiveEmbeddedRunSnapshotMock.mockReturnValue({
       transcriptLeafId: "assistant-seed",
     });
@@ -634,24 +740,29 @@ describe("runBtwSideQuestion", () => {
 
     const result = await runMathSideQuestion();
 
-    expect(branchMock).toHaveBeenCalledWith("assistant-seed");
-    expect(getLeafEntryMock).not.toHaveBeenCalled();
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
   });
 
   it("falls back when the active run snapshot leaf no longer exists", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    mockTranscriptEntries([userEntry, assistantEntry]);
     getActiveEmbeddedRunSnapshotMock.mockReturnValue({
       transcriptLeafId: "assistant-gone",
-    });
-    branchMock.mockImplementationOnce(() => {
-      throw new Error("Entry 3235c7c4 not found");
     });
     mockDoneAnswer(MATH_ANSWER);
 
     const result = await runMathSideQuestion();
 
-    expect(branchMock).toHaveBeenCalledWith("assistant-gone");
-    expect(resetLeafMock).toHaveBeenCalled();
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
     expect(diagDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("btw snapshot leaf unavailable: sessionId=session-1"),

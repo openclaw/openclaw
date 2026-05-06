@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
@@ -20,6 +21,7 @@ const sentinelError = new Error("stop-after-preflight");
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveReplyToModeMock = vi.fn();
 const createReplyToModeFilterForChannelMock = vi.fn();
+const createReplyMediaContextMock = vi.fn();
 const createReplyMediaPathNormalizerMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
@@ -37,6 +39,12 @@ vi.mock("./reply-threading.js", () => ({
 }));
 
 vi.mock("./reply-media-paths.js", () => ({
+  createReplyMediaContext: (...args: unknown[]) => {
+    createReplyMediaContextMock(...args);
+    return {
+      normalizePayload: createReplyMediaPathNormalizerMock(...args),
+    };
+  },
   createReplyMediaPathNormalizer: (...args: unknown[]) =>
     createReplyMediaPathNormalizerMock(...args),
 }));
@@ -112,6 +120,7 @@ describe("runReplyAgent runtime config", () => {
     resolveQueuedReplyExecutionConfigMock.mockReset();
     resolveReplyToModeMock.mockReset();
     createReplyToModeFilterForChannelMock.mockReset();
+    createReplyMediaContextMock.mockReset();
     createReplyMediaPathNormalizerMock.mockReset();
     runPreflightCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
@@ -142,7 +151,7 @@ describe("runReplyAgent runtime config", () => {
       }),
     );
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
-    expect(createReplyMediaPathNormalizerMock).toHaveBeenCalledWith({
+    expect(createReplyMediaContextMock).toHaveBeenCalledWith({
       cfg: freshCfg,
       sessionKey: undefined,
       workspaceDir: "/tmp",
@@ -162,6 +171,55 @@ describe("runReplyAgent runtime config", () => {
         followupRun,
       }),
     );
+  });
+
+  it("passes the derived runtime-policy key to pre-run maintenance", async () => {
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const runtimePolicySessionKey = "agent:main:telegram:default:direct:test";
+    followupRun.run.sessionKey = "agent:main:main";
+    followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
+    replyParams.sessionKey = "agent:main:main";
+    replyParams.runtimePolicySessionKey = runtimePolicySessionKey;
+    runPreflightCompactionIfNeededMock.mockResolvedValue(undefined);
+    runMemoryFlushIfNeededMock.mockRejectedValue(sentinelError);
+
+    await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
+
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
+      }),
+    );
+    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        runtimePolicySessionKey,
+      }),
+    );
+  });
+
+  it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
+    runPreflightCompactionIfNeededMock.mockRejectedValue(new Error(codexMessage));
+    runMemoryFlushIfNeededMock.mockResolvedValue(undefined);
+
+    const result = await runReplyAgent(replyParams);
+
+    expect(result).toMatchObject({
+      text: `⚠️ ${codexMessage}`,
+    });
+    expect(result ? getReplyPayloadMetadata(result) : undefined).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
   });
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {
