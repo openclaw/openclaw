@@ -1,7 +1,11 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+import {
+  __couldStillBePlainTextToolCallForTest,
+  __resetLmstudioPreloadCooldownForTest,
+  wrapLmstudioInferencePreload,
+} from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -551,5 +555,141 @@ describe("lmstudio stream wrapper", () => {
     expect(events.find((event) => event.type === "text_delta")).toMatchObject({
       delta: rawToolText,
     });
+  });
+
+  it("holds harmony-format text in the prefix buffer instead of leaking it to the visible stream", async () => {
+    // Real-world capture: gpt-oss-120b on LM Studio emitting an OpenAI Harmony
+    // tool-call as plain text.  Without prefix-buffer recognition of harmony
+    // prefixes, the text events flush before `done` and the user sees the raw
+    // harmony content.  With recognition, the text is held back and replaced
+    // by promoted toolcall events.
+    const rawHarmonyText =
+      'commentary to=read code {"path":"/Users/kain/qa-experiment-sandbox/workdir/tests/services/refreshTokenService.test.ts","line_start":1,"line_end":400}';
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawHarmonyText },
+      { type: "text_end", contentIndex: 0, content: rawHarmonyText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawHarmonyText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    expect(events.some((event) => event.type === "text_delta")).toBe(false);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: {
+        path: "/Users/kain/qa-experiment-sandbox/workdir/tests/services/refreshTokenService.test.ts",
+        line_start: 1,
+        line_end: 400,
+      },
+    });
+  });
+
+  it("holds delimited harmony text (<|channel|>commentary…<|message|>) in the prefix buffer", async () => {
+    const rawHarmonyText = '<|channel|>commentary to=exec code<|message|>{"command":"ls"}<|end|>';
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawHarmonyText },
+      { type: "text_end", contentIndex: 0, content: rawHarmonyText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawHarmonyText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "exec", description: "Exec", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.some((event) => event.type === "text_delta")).toBe(false);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>> };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "exec",
+      arguments: { command: "ls" },
+    });
+  });
+
+  it("flushes ordinary prose immediately (does not falsely buffer non-tool-call text)", async () => {
+    const text = "Sure, here is the answer to your question. The total is 42.";
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: text },
+      { type: "text_end", contentIndex: 0, content: text },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {}, undefined, {
+        tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+      }),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events.find((event) => event.type === "text_delta")).toMatchObject({ delta: text });
+  });
+});
+
+describe("couldStillBePlainTextToolCall (LM Studio prefix buffer)", () => {
+  it("buffers bracket-style and harmony prefixes, flushes ordinary prose", () => {
+    expect(__couldStillBePlainTextToolCallForTest("")).toBe(true);
+    expect(__couldStillBePlainTextToolCallForTest("[")).toBe(true);
+    expect(__couldStillBePlainTextToolCallForTest("commentary")).toBe(true);
+    expect(__couldStillBePlainTextToolCallForTest("commentary to=exec code {")).toBe(true);
+    expect(__couldStillBePlainTextToolCallForTest("<|channel|>commentary to=read")).toBe(true);
+    expect(__couldStillBePlainTextToolCallForTest("Hello, world.")).toBe(false);
+    expect(__couldStillBePlainTextToolCallForTest("Final answer: 42")).toBe(false);
   });
 });
