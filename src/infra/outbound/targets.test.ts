@@ -79,6 +79,20 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     expect(res).toEqual({ ok: true, to: "default-room" });
   });
 
+  it("does not bootstrap channel plugins when no target or channel config exists", () => {
+    setActivePluginRegistry(createTargetsTestRegistry([]), "missing-config-target-test");
+
+    const res = resolveOutboundTarget({
+      channel: "imessage",
+      to: "",
+      cfg: {},
+      mode: "implicit",
+    });
+
+    expect(mocks.resolveOutboundChannelPlugin).not.toHaveBeenCalled();
+    expect(res.ok).toBe(false);
+  });
+
   it("explicit --reply-to overrides defaultTo", () => {
     const res = resolveOutboundTarget({
       channel: "alpha",

@@ -1,5 +1,6 @@
 import {
   createAccountListHelpers,
+  DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
   resolveMergedAccountConfig,
   type OpenClawConfig,
@@ -68,4 +69,37 @@ export function listEnabledIMessageAccounts(cfg: OpenClawConfig): ResolvedIMessa
   return listIMessageAccountIds(cfg)
     .map((accountId) => resolveIMessageAccount({ cfg, accountId }))
     .filter((account) => account.enabled);
+}
+
+function normalizeIMessageWatcherKeyPart(value: string | undefined, fallback = ""): string {
+  return normalizeOptionalString(value) ?? fallback;
+}
+
+function resolveIMessageWatcherKey(account: ResolvedIMessageAccount): string {
+  return JSON.stringify({
+    cliPath: normalizeIMessageWatcherKeyPart(account.config.cliPath, "imsg"),
+    dbPath: normalizeIMessageWatcherKeyPart(account.config.dbPath),
+  });
+}
+
+export function shouldStartIMessageAccount(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedIMessageAccount;
+}): boolean {
+  if (!params.account.enabled) {
+    return false;
+  }
+  if (normalizeAccountId(params.account.accountId) !== DEFAULT_ACCOUNT_ID) {
+    return true;
+  }
+  const defaultWatcherKey = resolveIMessageWatcherKey(params.account);
+  return !listIMessageAccountIds(params.cfg)
+    .filter((accountId) => normalizeAccountId(accountId) !== DEFAULT_ACCOUNT_ID)
+    .map((accountId) => resolveIMessageAccount({ cfg: params.cfg, accountId }))
+    .some(
+      (account) =>
+        account.enabled &&
+        account.configured &&
+        resolveIMessageWatcherKey(account) === defaultWatcherKey,
+    );
 }
