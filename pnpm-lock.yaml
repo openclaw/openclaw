@@ -98,6 +98,12 @@ importers:
       '@mariozechner/pi-tui':
         specifier: 0.73.0
         version: 0.73.0
+      '@matrix-org/matrix-sdk-crypto-nodejs':
+        specifier: ^0.5.1
+        version: 0.5.1
+      '@matrix-org/matrix-sdk-crypto-wasm':
+        specifier: 18.2.0
+        version: 18.2.0
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -137,6 +143,9 @@ importers:
       express:
         specifier: 5.2.1
         version: 5.2.1
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
       file-type:
         specifier: 22.0.1
         version: 22.0.1
@@ -167,9 +176,15 @@ importers:
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1
+      matrix-js-sdk:
+        specifier: 41.4.0
+        version: 41.4.0
       minimatch:
         specifier: 10.2.5
         version: 10.2.5
+      music-metadata:
+        specifier: ^11.12.3
+        version: 11.12.3
       node-edge-tts:
         specifier: ^1.2.10
         version: 1.2.10

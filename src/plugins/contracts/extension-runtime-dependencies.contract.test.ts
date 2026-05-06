@@ -277,3 +277,56 @@ describe("extension runtime dependency manifests", () => {
     });
   }
 });
+
+const ROOT_PACKAGE_JSON_PATH = "package.json";
+
+// Bundled extension runtime deps that are intentionally not hoisted into the
+// root package because the bundled dist does not statically import them
+// (typically dynamic `import(name)` calls behind an optional fallback).
+const BUNDLED_DEP_HOIST_EXEMPTIONS = new Map<string, Set<string>>([
+  [
+    "extensions/media-understanding-core",
+    // Loaded via dynamic import in image-ops.ts with a graceful fallback when missing.
+    new Set(["sharp"]),
+  ],
+]);
+
+type RootPackageManifest = PackageManifest & { files?: string[] };
+
+function bundledExtensionDirs(rootManifest: RootPackageManifest): string[] {
+  const excluded = new Set<string>();
+  for (const entry of rootManifest.files ?? []) {
+    const match = entry.match(/^!dist\/extensions\/([^/*]+)\/\*\*$/);
+    if (match) {
+      excluded.add(match[1]);
+    }
+  }
+  return listPackageManifests(EXTENSION_ROOT)
+    .map((manifestPath) => toPosixPath(path.dirname(manifestPath)))
+    .filter((dir) => !excluded.has(path.basename(dir)));
+}
+
+describe("bundled extension runtime dependencies in root package", () => {
+  const rootManifest = JSON.parse(
+    fs.readFileSync(ROOT_PACKAGE_JSON_PATH, "utf8"),
+  ) as RootPackageManifest;
+  const rootDeps = new Set(Object.keys(rootManifest.dependencies ?? {}));
+
+  for (const extensionDir of bundledExtensionDirs(rootManifest)) {
+    const manifestPath = path.join(extensionDir, "package.json");
+
+    it(`${extensionDir} hoists every runtime dependency into root`, () => {
+      const manifest = readPackageManifest(manifestPath);
+      const exemptions = BUNDLED_DEP_HOIST_EXEMPTIONS.get(extensionDir) ?? new Set<string>();
+      const missing = Object.keys(manifest.dependencies ?? {}).filter(
+        (dep) =>
+          !rootDeps.has(dep) &&
+          !dep.startsWith("@openclaw/") &&
+          dep !== "openclaw" &&
+          !exemptions.has(dep),
+      );
+
+      expect(missing).toEqual([]);
+    });
+  }
+});

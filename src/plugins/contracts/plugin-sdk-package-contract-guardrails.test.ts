@@ -648,21 +648,24 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(failures).toEqual([]);
   });
 
-  it("keeps Matrix dependencies local to the Matrix plugin", () => {
+  it("keeps the package contract testing helper out of the root manifest", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
-    const matrixPackageJson = readMatrixPackageJson();
-    const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
+    expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
+  });
+
+  it("keeps Matrix runtime deps hoisted to root since the plugin is bundled", () => {
+    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
+    const matrixRuntimeDeps = collectRuntimeDependencySpecs(readMatrixPackageJson());
 
     for (const dep of [
-      "@matrix-org/matrix-sdk-crypto-wasm",
       "@matrix-org/matrix-sdk-crypto-nodejs",
+      "@matrix-org/matrix-sdk-crypto-wasm",
       "fake-indexeddb",
       "matrix-js-sdk",
     ]) {
       expect(matrixRuntimeDeps.get(dep)).toBeDefined();
-      expect(rootRuntimeDeps.has(dep)).toBe(false);
+      expect(rootRuntimeDeps.has(dep)).toBe(true);
     }
-    expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {
