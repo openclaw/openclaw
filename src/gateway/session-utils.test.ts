@@ -1450,13 +1450,19 @@ describe("listSessionsFromStore selected model display", () => {
   test("uses qualified selected defaults for rows without runtime model metadata", () => {
     const cfg = {
       agents: {
-        defaults: { model: { primary: "openai/gpt-5.4" } },
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
         list: [
           { id: "main", model: { primary: "anthropic/claude-sonnet-4-6" } },
           {
             id: "review",
             model: { primary: "vercel-ai-gateway/anthropic/claude-haiku-4-5" },
           },
+          { id: "alias", model: { primary: "anthropic/sonnet-4.6" } },
         ],
       },
     } as OpenClawConfig;
@@ -1473,6 +1479,10 @@ describe("listSessionsFromStore selected model display", () => {
           sessionId: "sess-review",
           updatedAt: 1,
         } as SessionEntry,
+        "agent:alias:alias": {
+          sessionId: "sess-alias",
+          updatedAt: 0,
+        } as SessionEntry,
       },
       opts: {},
     });
@@ -1482,6 +1492,7 @@ describe("listSessionsFromStore selected model display", () => {
     ).toEqual([
       ["agent:main:main", "anthropic", "claude-sonnet-4-6"],
       ["agent:review:review", "vercel-ai-gateway", "anthropic/claude-haiku-4-5"],
+      ["agent:alias:alias", "anthropic", "claude-sonnet-4-6"],
     ]);
   });
 
