@@ -1178,6 +1178,18 @@ describe("callGateway error details", () => {
     await expect(promise).resolves.toEqual({ ok: true });
   });
 
+  it("disposes SIGTERM/SIGINT listeners after gateway request settles", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const initialSigtermCount = process.listenerCount("SIGTERM");
+    const initialSigintCount = process.listenerCount("SIGINT");
+
+    await callGateway({ method: "health" });
+
+    expect(process.listenerCount("SIGTERM")).toBe(initialSigtermCount);
+    expect(process.listenerCount("SIGINT")).toBe(initialSigintCount);
+  });
+
   it("fails fast when remote mode is missing remote url", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },

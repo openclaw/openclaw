@@ -4,6 +4,10 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
+### Fixes
+
+- CLI/message: add `--timeout <ms>` to `openclaw message send` (default 30000) so delivery requests can no longer hang indefinitely. SIGTERM/SIGINT handlers in `executeGatewayRequestWithScopes` properly clean up listeners after request settles, allowing external supervisors like `timeout(1)` to interrupt stuck requests without leaking signal handlers. Fixes #75895. Thanks @EronFan.
+
 ### Changes
 
 - Plugins/install: add `npm-pack:<path.tgz>` installs so local npm pack artifacts run through the same managed npm-root install, lockfile verification, dependency scan, and install-record path as registry npm plugins.

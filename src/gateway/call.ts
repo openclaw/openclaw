@@ -625,6 +625,8 @@ async function executeGatewayRequestWithScopes<T>(params: {
         return;
       }
       settled = true;
+      process.off("SIGTERM", abortHandler);
+      process.off("SIGINT", abortHandler);
       startAbort.abort();
       clearTimeout(timer);
       void stopGatewayClient(client).finally(() => {
@@ -698,6 +700,14 @@ async function executeGatewayRequestWithScopes<T>(params: {
         }),
       );
     }, safeTimerTimeoutMs);
+
+    // Honor SIGTERM so external supervisors (e.g. GNU timeout(1)) can interrupt cleanly.
+    const abortHandler = () => {
+      ignoreClose = true;
+      stop(new Error("SIGTERM received, gateway request aborted"));
+    };
+    process.on("SIGTERM", abortHandler);
+    process.on("SIGINT", abortHandler);
 
     void startGatewayClientWhenEventLoopReady(client, {
       timeoutMs: safeTimerTimeoutMs,
