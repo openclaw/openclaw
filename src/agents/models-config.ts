@@ -16,7 +16,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
-import { MODELS_JSON_STATE } from "./models-config-state.js";
+import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
@@ -83,6 +83,17 @@ const DANGEROUS_PROTO_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Outcome of a bounded streaming read.  See `ContentHashOutcome` in
+ * `models-config-state.ts` for the cache-side contract; this variant
+ * additionally carries the raw bytes when the read succeeded so callers
+ * (e.g. JSON parsers) can avoid re-reading the file.
+ */
+type FileReadOutcome =
+  | { kind: "absent" }
+  | { kind: "hashed"; hash: string; raw: Buffer }
+  | { kind: "uncacheable" };
+
+/**
  * Stream-hash a regular file with bounded memory.  Closes a family of
  * issues raised on PR #73260:
  *  - Codex P1 "Enforce size limit when hashing oversized auth-profiles":
@@ -95,34 +106,49 @@ const DANGEROUS_PROTO_KEYS: ReadonlySet<string> = new Set([
  *    where supported so a symlink swap-in between lstat and open also
  *    fails closed.
  *  - Aisle medium / Codex P2 followup on #73260: oversized files now
- *    return null (fail closed, CWE-345).  The previous size-only
- *    sentinel `oversize:${size}` let an attacker swap the contents of
- *    an oversized file without changing its byte length and still hit
- *    the cache; returning null forces the caller's re-plan path so the
- *    cache cannot be evaded by a same-size content swap.  This is
- *    consistent with the "return null forces re-plan" contract used
- *    everywhere else in this helper.
+ *    return `{ kind: "uncacheable" }` (fail closed, CWE-345).  The
+ *    previous size-only sentinel `oversize:${size}` let an attacker swap
+ *    the contents of an oversized file without changing its byte length
+ *    and still hit the cache; the round-3 follow-up collapsed that to
+ *    `null`, which then merged with the legitimate "file absent" state
+ *    (round-4 / Codex P1+P2): a `null === null` compare let unhashable
+ *    files (oversize, symlink, I/O error) keep granting cache hits, AND
+ *    let oversize auth-profiles edits keep hitting the readyCache as
+ *    long as the file stayed oversize.
+ *
+ *    The discriminated-union outcome closes both: `uncacheable` is a
+ *    distinct, sticky-miss state that does NOT compare equal to itself
+ *    or to anything else.  Callers (cache-hit predicate, fingerprint
+ *    builder) treat it as drift / cache bypass.
  *
  * The streaming reader is destroyed if accumulated bytes exceed maxBytes,
  * so an attacker cannot grow the file between lstat and read past the
  * cap.
  */
-async function safeHashRegularFile(
-  pathname: string,
-  maxBytes: number,
-): Promise<{ hash: string; raw: Buffer } | null> {
+async function safeReadFileOutcome(pathname: string, maxBytes: number): Promise<FileReadOutcome> {
   // lstat + isFile() + isSymbolicLink() rejects symlinks and any
-  // non-regular file (directory, socket, FIFO, device).
-  const lst = await fs.lstat(pathname).catch(() => null);
-  if (!lst || lst.isSymbolicLink() || !lst.isFile()) {
-    return null;
+  // non-regular file (directory, socket, FIFO, device).  ENOENT is the
+  // ONLY lstat error we treat as `absent`; every other error is
+  // `uncacheable` so e.g. EACCES does not silently masquerade as a
+  // legitimate "file does not exist" steady state.
+  let lst: Awaited<ReturnType<typeof fs.lstat>>;
+  try {
+    lst = await fs.lstat(pathname);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+      return { kind: "absent" };
+    }
+    return { kind: "uncacheable" };
+  }
+  if (lst.isSymbolicLink() || !lst.isFile()) {
+    return { kind: "uncacheable" };
   }
   if (lst.size > maxBytes) {
-    // Oversize at lstat time — fail closed.  Returning null forces the
-    // caller to treat this file as unhashable, so the readyCache cannot
-    // grant a cache hit based on a size-derived sentinel that ignores
-    // content.  See the JSDoc above for the threat model.
-    return null;
+    // Oversize at lstat time — fail closed.  See the JSDoc above for
+    // the threat model.  An attacker who keeps the file oversize gets
+    // a sticky-miss; they cannot collide their content with the cached
+    // entry by matching byte length.
+    return { kind: "uncacheable" };
   }
   // Open with O_NOFOLLOW (where the platform supports it) to close a
   // narrow TOCTOU window between lstat and open: if a symlink is
@@ -140,19 +166,21 @@ async function safeHashRegularFile(
     // refer to a regular file.
     const fst = await fh.stat();
     if (!fst.isFile() || fst.size > maxBytes) {
-      return null;
+      return { kind: "uncacheable" };
     }
     const stream = createReadStream("", { fd: fh.fd, autoClose: false, highWaterMark: 64 * 1024 });
     const hash = createHash("sha256");
     let seen = 0;
+    let truncated = false;
     const chunks: Buffer[] = [];
     await new Promise<void>((resolve, reject) => {
       stream.on("data", (chunk: Buffer) => {
         seen += chunk.length;
         if (seen > maxBytes) {
-          // File grew past the cap mid-read.  Destroy with an error so
-          // the surrounding try/catch returns null (fail closed) —
-          // matching the lstat-time oversize check above.
+          // File grew past the cap mid-read.  Destroy and surface as
+          // `uncacheable` — matching the lstat-time oversize check
+          // above.
+          truncated = true;
           stream.destroy(new Error("file grew past cap during read"));
           return;
         }
@@ -162,39 +190,48 @@ async function safeHashRegularFile(
       stream.on("error", reject);
       stream.on("end", () => resolve());
     });
-    return { hash: hash.digest("hex"), raw: Buffer.concat(chunks) };
+    if (truncated) {
+      return { kind: "uncacheable" };
+    }
+    return { kind: "hashed", hash: hash.digest("hex"), raw: Buffer.concat(chunks) };
   } catch {
-    return null;
+    return { kind: "uncacheable" };
   } finally {
     await fh?.close().catch(() => undefined);
   }
 }
 
 /**
- * Compute a content-based fingerprint for auth-profiles.json that is
- * stable across OAuth token rotations.  Returns null if the file does
- * not exist or fails the safe-read checks (symlink, non-regular,
- * oversize, or any I/O error).  Oversize files fail closed (return
- * null) rather than producing a size-derived sentinel — see the
- * `safeHashRegularFile` JSDoc for the threat model.  Falls back to a
- * raw-content hash if JSON parsing fails (so structural changes still
- * register, just without canonicalization).
+ * Compute a content-based outcome for auth-profiles.json that is
+ * stable across OAuth token rotations.  Returns:
+ *  - `{ kind: "absent" }` when the file does not exist.
+ *  - `{ kind: "hashed", hash }` for a successfully-read profile file.
+ *    JSON parse failures fall back to the raw-content hash so structural
+ *    changes still register, just without canonicalization.
+ *  - `{ kind: "uncacheable" }` for symlinks, non-regular files,
+ *    oversize, or any I/O error.  The caller MUST bypass the readyCache
+ *    in this state — otherwise oversize same-size variants would all
+ *    collapse to a single fingerprint contribution and let credential
+ *    edits keep hitting a stale entry.  See `ensureOpenClawModelsJson`
+ *    for the bypass logic and Codex P2 follow-up on PR #73260 for the
+ *    threat model.
  */
-async function readAuthProfilesStableHash(pathname: string): Promise<string | null> {
-  const safe = await safeHashRegularFile(pathname, MAX_AUTH_PROFILES_BYTES);
-  if (!safe) {
-    return null;
+async function readAuthProfilesStableOutcome(pathname: string): Promise<ContentHashOutcome> {
+  const outcome = await safeReadFileOutcome(pathname, MAX_AUTH_PROFILES_BYTES);
+  if (outcome.kind !== "hashed") {
+    return outcome;
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(safe.raw.toString("utf8"));
+    parsed = JSON.parse(outcome.raw.toString("utf8"));
   } catch {
     // File exists but is unparseable; the raw-content hash already
     // reflects this.  Return it as-is so structural changes register.
-    return safe.hash;
+    return { kind: "hashed", hash: outcome.hash };
   }
   const stable = stripAuthProfilesVolatileFields(parsed, 0);
-  return createHash("sha256").update(stableStringify(stable)).digest("hex");
+  const stableHash = createHash("sha256").update(stableStringify(stable)).digest("hex");
+  return { kind: "hashed", hash: stableHash };
 }
 
 function stripAuthProfilesVolatileFields(value: unknown, depth: number): unknown {
@@ -232,23 +269,58 @@ function stripAuthProfilesVolatileFields(value: unknown, depth: number): unknown
  * corruption / manual tampering invalidate the readyCache.  The
  * fingerprint alone cannot catch external edits because it does not
  * include models.json state (its contents are the OUTPUT, not an
- * input).  Instead we capture a content hash AT WRITE TIME and verify
- * it on every cache hit.
+ * input).  Instead we capture a content outcome AT WRITE TIME and
+ * verify it on every cache hit via `modelsContentOutcomesMatch`.
  *
- * Returns null when the file is absent OR fails the safe-read checks
- * (symlink, non-regular, oversize, or any I/O error).  Two consecutive
- * absent reads (write-time and check-time) compare equal as `null ===
- * null`, which is a valid steady-state cache hit (file legitimately
- * does not exist).  Any disagreement — including a captured non-null
- * hash followed by a null read, or a string hash followed by a different
- * string — forces re-plan.  This is the intended skip-and-noop
- * semantics: stable absence means stable result, drift means re-plan.
- * (Greptile P2 on PR #73260 noted the previous JSDoc was the opposite
- * of this behaviour.)
+ * Returns:
+ *  - `{ kind: "absent" }` when the file legitimately does not exist.
+ *    Two consecutive absent reads (write-time and check-time) compare
+ *    equal, which is a valid steady-state cache hit (file legitimately
+ *    does not exist — `plan.action === "skip"` no-op case).
+ *  - `{ kind: "hashed", hash }` for a successfully-read file.  Two
+ *    `hashed` outcomes match iff their hashes are identical.
+ *  - `{ kind: "uncacheable" }` for symlinks, non-regular files,
+ *    oversize, or any I/O error.  This NEVER matches anything (Codex P1
+ *    follow-up on PR #73260): an unhashable models.json — typically
+ *    >1 MiB or replaced by a symlink mid-flight — must force re-plan
+ *    instead of letting `null === null` grant a stale cache hit.  This
+ *    is the fail-closed contract that mirrors the auth-profiles
+ *    sticky-miss path.
  */
-async function readModelsJsonContentHash(pathname: string): Promise<string | null> {
-  const safe = await safeHashRegularFile(pathname, MAX_MODELS_JSON_BYTES);
-  return safe ? safe.hash : null;
+async function readModelsJsonContentOutcome(pathname: string): Promise<ContentHashOutcome> {
+  const outcome = await safeReadFileOutcome(pathname, MAX_MODELS_JSON_BYTES);
+  if (outcome.kind === "absent") {
+    return { kind: "absent" };
+  }
+  if (outcome.kind === "hashed") {
+    return { kind: "hashed", hash: outcome.hash };
+  }
+  return { kind: "uncacheable" };
+}
+
+/**
+ * Cache-hit predicate for `modelsJsonOutcome`.  Implements the
+ * fail-closed contract documented on `ContentHashOutcome`:
+ *
+ *  - `absent === absent` is a valid hit (stable absence).
+ *  - `hashed === hashed` is a valid hit iff the hashes are identical.
+ *  - `uncacheable` on EITHER side is always a miss.  Even an
+ *    `uncacheable === uncacheable` compare must miss because both
+ *    sides could correspond to different attacker-controlled content
+ *    (e.g. two different >1 MiB models.json variants that trip the cap).
+ *    The only safe response is to re-plan.
+ */
+function modelsContentOutcomesMatch(a: ContentHashOutcome, b: ContentHashOutcome): boolean {
+  if (a.kind === "uncacheable" || b.kind === "uncacheable") {
+    return false;
+  }
+  if (a.kind === "absent" && b.kind === "absent") {
+    return true;
+  }
+  if (a.kind === "hashed" && b.kind === "hashed") {
+    return a.hash === b.hash;
+  }
+  return false;
 }
 
 function stableStringify(value: unknown): string {
@@ -266,25 +338,38 @@ function stableStringify(value: unknown): string {
     .join(",")}}`;
 }
 
-async function buildModelsJsonFingerprint(params: {
+function buildModelsJsonFingerprint(params: {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
   agentDir: string;
+  authProfilesOutcome: ContentHashOutcome;
   workspaceDir?: string;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
-}): Promise<string> {
+}): string {
   // Use a content-based hash for auth-profiles instead of mtime so OAuth
   // token rotation doesn't invalidate the cache.  models.json drift is
-  // tracked separately via modelsJsonHash on the readyCache entry (the
+  // tracked separately via modelsJsonOutcome on the readyCache entry (the
   // file is the output of this function, not an input — including its
   // state in the fingerprint would cause every run to invalidate its
   // own cache).
-  const authProfilesHash = await readAuthProfilesStableHash(
-    path.join(params.agentDir, "auth-profiles.json"),
-  );
+  //
+  // Auth-profiles outcome MUST be `absent` or `hashed` here (the caller
+  // bypasses the readyCache entirely when the outcome is `uncacheable`,
+  // so we never compute a fingerprint that includes an oversize file).
+  // We assert the invariant defensively to prevent a future caller from
+  // accidentally feeding `uncacheable` in and producing a fingerprint
+  // that collides across all oversize variants (Codex P2 follow-up on
+  // PR #73260).
+  const { authProfilesOutcome } = params;
+  if (authProfilesOutcome.kind === "uncacheable") {
+    throw new Error(
+      "buildModelsJsonFingerprint: refusing to fingerprint with an uncacheable auth-profiles outcome",
+    );
+  }
+  const authProfilesHash = authProfilesOutcome.kind === "hashed" ? authProfilesOutcome.hash : null;
   const envShape = createConfigRuntimeEnv(params.config, {});
   const pluginMetadataSnapshotIndexFingerprint = params.pluginMetadataSnapshot
     ? resolveInstalledManifestRegistryIndexFingerprint(params.pluginMetadataSnapshot.index)
@@ -628,10 +713,15 @@ async function readExistingProviderMatchesConfig(
   }
   // Reuse the fingerprint-cache safe-read primitive (#73260):
   // O_NOFOLLOW open, lstat/fstat regular-file check, MAX_MODELS_JSON_BYTES
-  // size cap, fail-closed on grow-past-cap.  Returns null on any of
-  // those conditions (which all map to "refuse short-circuit").
-  const safe = await safeHashRegularFile(targetPath, MAX_MODELS_JSON_BYTES);
-  if (!safe) {
+  // size cap, fail-closed on grow-past-cap.  After the round-4
+  // fail-closed refactor (#73260), the primitive returns a
+  // discriminated outcome.  Anything other than `hashed` (i.e.
+  // `absent` or `uncacheable`) maps to "refuse short-circuit" — a
+  // missing models.json must be regenerated by the planner, and an
+  // unhashable models.json (oversize, symlink, I/O error) must NEVER
+  // bypass full planning (CWE-345).
+  const safe = await safeReadFileOutcome(targetPath, MAX_MODELS_JSON_BYTES);
+  if (safe.kind !== "hashed") {
     return false;
   }
   let parsed: unknown;
@@ -698,6 +788,26 @@ async function readExistingProviderMatchesConfig(
     return false;
   }
 
+  // Provider-level `api` drift check (Codex P1 round-5 on PR #73261).
+  // The runtime consumes a provider-level `api` field at the same
+  // priority as `baseUrl`/`headers`/`auth` (see
+  // pi-embedded-runner/model.ts and src/agents/models-json/plan.ts):
+  // it is part of the transport surface that determines which
+  // upstream the gateway will hit.  Without this comparison, an
+  // attacker who can write models.json could swap a provider's `api`
+  // (e.g. `"openai" -> "anthropic"`) and the short-circuit would
+  // re-bless it because the per-model loop only flags `api` set on
+  // disk-side MODEL rows, not on the provider itself.  Symmetric
+  // depth-bounded compare — any difference between configured and
+  // disk `api` (including config-undefined vs disk-string) falls
+  // through to full planning, which re-applies provider/plugin
+  // defaults and rewrites the file.  Bounded depth keeps an exotic
+  // disk shape from stack-overflowing the gateway.
+  if (
+    !stableEqualBounded(configuredProvider.api, diskProvider.api, SHORT_CIRCUIT_COMPARE_MAX_DEPTH)
+  ) {
+    return false;
+  }
   if (
     !stableEqualBounded(
       configuredProvider.headers,
@@ -778,11 +888,107 @@ export async function ensureOpenClawModelsJson(
     });
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
   const targetPath = path.join(agentDir, "models.json");
+  // Read auth-profiles.json BEFORE deciding whether to read or write to
+  // the readyCache.  When the file is `uncacheable` (oversize, symlink,
+  // I/O error) we must bypass the cache entirely — otherwise all
+  // oversize variants would collapse to a single fingerprint contribution
+  // and a credential edit that keeps the file oversize would keep hitting
+  // a stale entry (Codex P2 follow-up on PR #73260).  Bypassing the cache
+  // also avoids writing dead entries that an attacker who keeps the file
+  // oversize could never evict.
+  const authProfilesPath = path.join(agentDir, "auth-profiles.json");
+  const authProfilesOutcome = await readAuthProfilesStableOutcome(authProfilesPath);
+  const cacheable = authProfilesOutcome.kind !== "uncacheable";
 
-  const fingerprint = await buildModelsJsonFingerprint({
+  const planAndWrite = (
+    fingerprintForEntry: string,
+  ): Promise<{
+    fingerprint: string;
+    modelsJsonOutcome: ContentHashOutcome;
+    result: { agentDir: string; wrote: boolean };
+  }> =>
+    withModelsJsonWriteLock(targetPath, async () => {
+      // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
+      // are available to provider discovery without mutating process.env.
+      const env = createConfigRuntimeEnv(cfg);
+      const existingModelsFile = await readExistingModelsFile(targetPath);
+      const plan = await planOpenClawModelsJson({
+        cfg,
+        sourceConfigForSecrets: resolved.sourceConfigForSecrets,
+        agentDir,
+        env,
+        ...(workspaceDir ? { workspaceDir } : {}),
+        existingRaw: existingModelsFile.raw,
+        existingParsed: existingModelsFile.parsed,
+        ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
+        ...(options.providerDiscoveryProviderIds
+          ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
+          : {}),
+        ...(options.providerDiscoveryTimeoutMs !== undefined
+          ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+          : {}),
+        ...(options.providerDiscoveryEntriesOnly === true
+          ? { providerDiscoveryEntriesOnly: true }
+          : {}),
+      });
+
+      if (plan.action === "skip") {
+        // No write performed; capture whatever's currently on disk so the
+        // cache can detect external edits between now and the next call.
+        const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+        return {
+          fingerprint: fingerprintForEntry,
+          modelsJsonOutcome,
+          result: { agentDir, wrote: false },
+        };
+      }
+
+      if (plan.action === "noop") {
+        await ensureModelsFileModeForModelsJson(targetPath);
+        const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+        return {
+          fingerprint: fingerprintForEntry,
+          modelsJsonOutcome,
+          result: { agentDir, wrote: false },
+        };
+      }
+
+      await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
+      await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
+      await ensureModelsFileModeForModelsJson(targetPath);
+      // Capture the post-write outcome so subsequent cache checks can
+      // detect any external edit / corruption that happens after this
+      // point.
+      const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+      return {
+        fingerprint: fingerprintForEntry,
+        modelsJsonOutcome,
+        result: { agentDir, wrote: true },
+      };
+    });
+
+  if (!cacheable) {
+    // Cache-bypass mode: auth-profiles is `uncacheable`, so we re-plan
+    // unconditionally and never touch the readyCache.  The sentinel
+    // fingerprint passed below is informational only — we deliberately
+    // do not READ from or WRITE to the readyCache in this mode, so the
+    // entry never lands in the global map and cannot collide with a
+    // legitimate cached entry.  This also covers the targetProvider
+    // short-circuit: it is gated on `cacheable`, so an `uncacheable`
+    // auth-profiles state forces a full re-plan even when the caller
+    // hinted a provider, instead of letting the short-circuit ride on a
+    // stale or oversized credential file.
+    const sentinelFingerprint = `uncacheable:${createHash("sha256")
+      .update(`${process.pid}\0${Date.now()}\0${Math.random()}\0${targetPath}`)
+      .digest("hex")}`;
+    return (await planAndWrite(sentinelFingerprint)).result;
+  }
+
+  const fingerprint = buildModelsJsonFingerprint({
     config: cfg,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
+    authProfilesOutcome,
     ...(workspaceDir ? { workspaceDir } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     ...(options.providerDiscoveryProviderIds
@@ -803,13 +1009,15 @@ export async function ensureOpenClawModelsJson(
     const settled = await cached;
     // Two-factor cache hit: the cache key already includes the
     // fingerprint (so different fingerprints get different entries),
-    // but we ALSO verify that the on-disk models.json hash still
-    // matches what we captured at write time.  File-hash mismatch →
-    // someone edited models.json out from under us (manual edit,
-    // partial corruption, sibling process), and we must re-plan to
-    // restore intended state.
-    const currentModelsJsonHash = await readModelsJsonContentHash(targetPath);
-    if (currentModelsJsonHash === settled.modelsJsonHash) {
+    // but we ALSO verify that the on-disk models.json outcome still
+    // matches what we captured at write time via
+    // `modelsContentOutcomesMatch` — a fail-closed predicate that
+    // treats `uncacheable` outcomes as never-equal so unhashable files
+    // (oversize, symlink, I/O error) force re-plan instead of riding a
+    // `null === null` compare to a stale hit (Codex P1 follow-up on
+    // PR #73260).
+    const currentModelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+    if (modelsContentOutcomesMatch(currentModelsJsonOutcome, settled.modelsJsonOutcome)) {
       await ensureModelsFileModeForModelsJson(targetPath);
       return settled.result;
     }
@@ -819,11 +1027,11 @@ export async function ensureOpenClawModelsJson(
   // The fingerprint cache missed (cold start, gateway restart, or
   // input drift), but the caller hinted which provider it intends to
   // use.  If the on-disk provider entry STRUCTURALLY matches the
-  // current config (apiKey env-var name, baseUrl, headers, auth, and
-  // per-model transport surface all clean), skip the heavy implicit-
-  // discovery pipeline.  Any drift (rotated key, attacker-tampered
-  // baseUrl/headers/auth, per-model transport overrides, missing
-  // fields) falls through to full plan + write.
+  // current config (apiKey env-var name, baseUrl, api, headers, auth,
+  // and per-model transport surface all clean), skip the heavy
+  // implicit-discovery pipeline.  Any drift (rotated key,
+  // attacker-tampered baseUrl/api/headers/auth, per-model transport
+  // overrides, missing fields) falls through to full plan + write.
   //
   // Order matters: we run AFTER the readyCache check so warm callers
   // skip the disk read entirely.  Successful short-circuits are cached
@@ -831,6 +1039,16 @@ export async function ensureOpenClawModelsJson(
   // poison the global readyCache — only the validated provider can
   // reuse the entry, and a later non-targeted call still runs a full
   // plan to validate every other provider (Codex P1 on PR #73261).
+  //
+  // The scoped cache hit uses the same fail-closed `ContentHashOutcome`
+  // contract as the global cache hit above (Codex P2 round-4 follow-up
+  // on PR #73261): an `uncacheable` models.json outcome — typically a
+  // >1 MiB or symlinked file — never compares equal so the scoped
+  // entry cannot ride a `null === null` compare to a stale hit.  When
+  // the on-disk file is unhashable we drop the scoped entry and fall
+  // through to a fresh structural check (which itself uses the
+  // bounded-memory `safeReadFileOutcome` and refuses to short-circuit
+  // on `uncacheable`).
   const targetProvider = options?.targetProvider?.trim();
   if (targetProvider) {
     const scopedKey = modelsJsonScopedShortCircuitCacheKey(targetPath, fingerprint, targetProvider);
@@ -839,11 +1057,12 @@ export async function ensureOpenClawModelsJson(
       const settled = await scopedCached;
       // Same two-factor verification as the global cache hit above:
       // fingerprint identity is necessary but not sufficient — also
-      // verify the on-disk models.json hash hasn't drifted since the
-      // short-circuit blessed it.  Any drift invalidates the scoped
-      // entry and falls through to a fresh check.
-      const currentModelsJsonHash = await readModelsJsonContentHash(targetPath);
-      if (currentModelsJsonHash === settled.modelsJsonHash) {
+      // verify the on-disk models.json outcome hasn't drifted since
+      // the short-circuit blessed it.  Uncacheable outcomes never
+      // match (fail-closed contract), so any drift invalidates the
+      // scoped entry and falls through to a fresh check.
+      const currentModelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+      if (modelsContentOutcomesMatch(currentModelsJsonOutcome, settled.modelsJsonOutcome)) {
         await ensureModelsFileModeForModelsJson(targetPath);
         return settled.result;
       }
@@ -865,71 +1084,45 @@ export async function ensureOpenClawModelsJson(
       if (matches) {
         await ensureModelsFileModeForModelsJson(targetPath);
         const result = { agentDir, wrote: false };
-        // Capture the post-validation models.json hash so the scoped
-        // cache hit above can detect external edits between calls.
-        const modelsJsonHash = await readModelsJsonContentHash(targetPath);
-        MODELS_JSON_STATE.readyCache.set(
-          scopedKey,
-          Promise.resolve({ fingerprint, modelsJsonHash, result }),
-        );
+        // Capture the post-validation models.json outcome so the
+        // scoped cache hit above can detect external edits between
+        // calls.  If the file is uncacheable here (e.g. it just grew
+        // past the cap), refuse to cache — the next call will
+        // re-validate from scratch instead of riding a fail-closed
+        // miss.
+        const modelsJsonOutcome = await readModelsJsonContentOutcome(targetPath);
+        if (modelsJsonOutcome.kind !== "uncacheable") {
+          MODELS_JSON_STATE.readyCache.set(
+            scopedKey,
+            Promise.resolve({ fingerprint, modelsJsonOutcome, result }),
+          );
+        }
         return result;
       }
     }
   }
 
-  const pending = withModelsJsonWriteLock(targetPath, async () => {
-    // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
-    // are available to provider discovery without mutating process.env.
-    const env = createConfigRuntimeEnv(cfg);
-    const existingModelsFile = await readExistingModelsFile(targetPath);
-    const plan = await planOpenClawModelsJson({
-      cfg,
-      sourceConfigForSecrets: resolved.sourceConfigForSecrets,
-      agentDir,
-      env,
-      ...(workspaceDir ? { workspaceDir } : {}),
-      existingRaw: existingModelsFile.raw,
-      existingParsed: existingModelsFile.parsed,
-      ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
-      ...(options.providerDiscoveryProviderIds
-        ? { providerDiscoveryProviderIds: options.providerDiscoveryProviderIds }
-        : {}),
-      ...(options.providerDiscoveryTimeoutMs !== undefined
-        ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
-        : {}),
-      ...(options.providerDiscoveryEntriesOnly === true
-        ? { providerDiscoveryEntriesOnly: true }
-        : {}),
-    });
-
-    if (plan.action === "skip") {
-      // No write performed; capture whatever's currently on disk so the
-      // cache can detect external edits between now and the next call.
-      const modelsJsonHash = await readModelsJsonContentHash(targetPath);
-      return { fingerprint, modelsJsonHash, result: { agentDir, wrote: false } };
-    }
-
-    if (plan.action === "noop") {
-      await ensureModelsFileModeForModelsJson(targetPath);
-      const modelsJsonHash = await readModelsJsonContentHash(targetPath);
-      return { fingerprint, modelsJsonHash, result: { agentDir, wrote: false } };
-    }
-
-    await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-    await writeModelsFileAtomicForModelsJson(targetPath, plan.contents);
-    await ensureModelsFileModeForModelsJson(targetPath);
-    // Capture the post-write hash so subsequent cache checks can detect
-    // any external edit / corruption that happens after this point.
-    const modelsJsonHash = await readModelsJsonContentHash(targetPath);
-    return { fingerprint, modelsJsonHash, result: { agentDir, wrote: true } };
-  });
+  const pending = planAndWrite(fingerprint);
   MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
   try {
     const settled = await pending;
-    const refreshedFingerprint = await buildModelsJsonFingerprint({
+    // Re-read auth-profiles after the write to pick up any plan-driven
+    // mutation.  If the post-write outcome is uncacheable, drop the cache
+    // entry instead of carrying it forward — the next call would bypass
+    // anyway, but evicting now keeps the readyCache from accumulating
+    // dead entries.
+    const refreshedAuthOutcome = await readAuthProfilesStableOutcome(authProfilesPath);
+    if (refreshedAuthOutcome.kind === "uncacheable") {
+      if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
+        MODELS_JSON_STATE.readyCache.delete(cacheKey);
+      }
+      return settled.result;
+    }
+    const refreshedFingerprint = buildModelsJsonFingerprint({
       config: cfg,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
       agentDir,
+      authProfilesOutcome: refreshedAuthOutcome,
       ...(workspaceDir ? { workspaceDir } : {}),
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
       ...(options.providerDiscoveryProviderIds
@@ -949,7 +1142,7 @@ export async function ensureOpenClawModelsJson(
         refreshedCacheKey,
         Promise.resolve({
           fingerprint: refreshedFingerprint,
-          modelsJsonHash: settled.modelsJsonHash,
+          modelsJsonOutcome: settled.modelsJsonOutcome,
           result: settled.result,
         }),
       );
