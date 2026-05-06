@@ -16,7 +16,7 @@ import type {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import {
   createTalkSessionController,
-  recordTalkDiagnosticEvent,
+  recordTalkObservabilityEvent,
   type TalkEvent,
   type TalkEventInput,
   type TalkSessionController,
@@ -794,7 +794,7 @@ export class MediaStreamHandler {
         provider: this.config.transcriptionProvider.id,
         turnIdPrefix: `${streamSid}:turn`,
       },
-      { onEvent: recordTalkDiagnosticEvent },
+      { onEvent: recordTalkObservabilityEvent },
     );
   }
 
