@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
@@ -16,6 +17,12 @@ type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
   typeof import("./manifest-registry.js").loadPluginManifestRegistry;
+type ClearCurrentPluginMetadataSnapshot =
+  typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+type GetCurrentPluginMetadataSnapshot =
+  typeof import("./current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot;
+type SetCurrentPluginMetadataSnapshot =
+  typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").applyPluginAutoEnable;
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
@@ -36,6 +43,9 @@ let resolveExternalAuthProfileProviderPluginIds: typeof import("./providers.js")
 let resolveDiscoveredProviderPluginIds: typeof import("./providers.js").resolveDiscoveredProviderPluginIds;
 let resolveDiscoverableProviderOwnerPluginIds: typeof import("./providers.js").resolveDiscoverableProviderOwnerPluginIds;
 let resolvePluginProviders: typeof import("./providers.runtime.js").resolvePluginProviders;
+let clearCurrentPluginMetadataSnapshot: ClearCurrentPluginMetadataSnapshot;
+let getCurrentPluginMetadataSnapshot: GetCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: SetCurrentPluginMetadataSnapshot;
 let setActivePluginRegistry: SetActivePluginRegistry;
 
 function createManifestProviderPlugin(params: {
@@ -171,6 +181,43 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
     installRecords: {},
     plugins,
     diagnostics: [],
+  };
+}
+
+function createCurrentMetadataSnapshotFixture(params: {
+  index: PluginRegistrySnapshot;
+  plugins: PluginManifestRecord[];
+  workspaceDir?: string;
+}): PluginMetadataSnapshot {
+  const manifestRegistry = { plugins: params.plugins, diagnostics: [] };
+  return {
+    policyHash: params.index.policyHash,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    index: params.index,
+    registryDiagnostics: [],
+    manifestRegistry,
+    plugins: params.plugins,
+    diagnostics: [],
+    byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: params.index.plugins.length,
+      manifestPluginCount: params.plugins.length,
+    },
   };
 }
 
@@ -424,6 +471,11 @@ describe("resolvePluginProviders", () => {
       resolveDiscoverableProviderOwnerPluginIds,
     } = await import("./providers.js"));
     ({ resolvePluginProviders } = await import("./providers.runtime.js"));
+    ({
+      clearCurrentPluginMetadataSnapshot,
+      getCurrentPluginMetadataSnapshot,
+      setCurrentPluginMetadataSnapshot,
+    } = await import("./current-plugin-metadata-snapshot.js"));
     ({ setActivePluginRegistry } = await import("./runtime.js"));
   });
 
@@ -453,7 +505,31 @@ describe("resolvePluginProviders", () => {
     expectOwningPluginIds("dynamic-provider", ["second-owner"]);
   });
 
+  it("reuses the current metadata snapshot while planning runtime provider loads", () => {
+    const workspaceDir = "/workspace/current-metadata";
+    const plugins = [
+      createManifestProviderPlugin({
+        id: "openai",
+        providerIds: ["openai", "openai-codex"],
+        enabledByDefault: true,
+      }),
+    ];
+    setManifestPlugins(plugins);
+    const index = createProviderRegistrySnapshotFixture();
+    const snapshot = createCurrentMetadataSnapshotFixture({ index, plugins, workspaceDir });
+    setCurrentPluginMetadataSnapshot(snapshot, { workspaceDir });
+    expect(getCurrentPluginMetadataSnapshot({ workspaceDir })).toBe(snapshot);
+    loadPluginManifestRegistryMock.mockClear();
+
+    resolvePluginProviders({ providerRefs: ["openai"], workspaceDir });
+
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    expectLastRuntimeRegistryLoad({ onlyPluginIds: ["openai"] });
+    expect(getLastRuntimeRegistryCall().manifestRegistry).toBe(snapshot.manifestRegistry);
+  });
+
   beforeEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
     getRuntimePluginRegistryForLoadOptionsMock.mockReset();
