@@ -2188,3 +2188,166 @@ describe("resolvePlanningOnlyRetryInstruction single-action loophole", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("resolvePlanningOnlyRetryInstruction actionable-prompt and active-narration gates", () => {
+  const openaiParams = {
+    provider: "openai",
+    modelId: "gpt-5.4",
+  } as const;
+
+  it("treats imperative user prompts using common verbs (do, put, polish) as actionable", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "do another pass then put this draft through the opus polish",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll do this in two steps: rewrite, then polish."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each([
+    "draft a quick summary",
+    "finish the implementation",
+    "send the report to the team",
+    "build the docker image",
+    "create a follow-up issue",
+    "rewrite this paragraph",
+    "pass this through the opus polish",
+  ])('treats "%s" as an actionable directive', (prompt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the surface and take the first step."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it.each(["pass on this one", "pass this is fine"])(
+    'does not treat declination prompt "%s" as actionable',
+    (prompt) => {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: ["I'll inspect the surface and take the first step."],
+        }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    },
+  );
+
+  it.each([
+    "i do not want you to do anything",
+    "I start to think this might already be fine",
+    "let's continue this conversation tomorrow",
+    "the build was already successful, no need to redo it",
+  ])('does not treat non-directive prompt "%s" as actionable', (prompt) => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll inspect the surface and take the first step."],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("retries short confident narration that asserts ongoing action without a tool call", () => {
+    for (const text of [
+      "On it.",
+      "Got it.",
+      "Doing that now.",
+      "Running that now.",
+      "I'm polishing the draft.",
+      "I'm working on it now.",
+    ]) {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "go ahead",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({ assistantTexts: [text] }),
+      });
+
+      expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+    }
+  });
+
+  it("retries present-continuous narration after an ack prompt (Repro B)", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "go ahead",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["Great. I'm running it now."],
+      }),
+    });
+
+    expect(retryInstruction).toBe(PLANNING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry casual chitchat that lacks a planning promise or active narration", () => {
+    for (const text of ["Sounds good.", "Looks fine to me.", "Cool, thanks for the heads up."]) {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "go ahead",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({ assistantTexts: [text] }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    }
+  });
+
+  it("does not retry long answer prose that incidentally contains an active-narration phrase", () => {
+    for (const text of [
+      "Here are my thoughts on it: the migration looks safe so long as the new column is nullable for the rollout window. Once you confirm that, we can flip the schema.",
+      "You got it backwards: the failing case is when the cache is warm, not cold. If you re-run with --no-cache the second invocation should reproduce.",
+      "I'm running through the list now to find the failing item, but the previous answer was already complete and there is no further work to do here.",
+    ]) {
+      const retryInstruction = resolvePlanningOnlyRetryInstruction({
+        ...openaiParams,
+        prompt: "go ahead",
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({ assistantTexts: [text] }),
+      });
+
+      expect(retryInstruction).toBeNull();
+    }
+  });
+
+  it("does not retry when the narration reports a completed result", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      ...openaiParams,
+      prompt: "go ahead",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({ assistantTexts: ["Done. I'm running the final check."] }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
+  it("retry instruction frames blockers narrowly enough to refuse self-referential excuses", () => {
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION).toContain("external technical obstacle");
+    expect(PLANNING_ONLY_RETRY_INSTRUCTION).toContain("NOT a blocker");
+  });
+});
