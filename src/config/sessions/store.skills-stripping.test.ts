@@ -86,7 +86,7 @@ describe("session store strips resolvedSkills from persistence", () => {
     }
   });
 
-  it("does not write resolvedSkills to disk", async () => {
+  it("does not write resolvedSkills or prompt to disk", async () => {
     const store = {
       "agent:main:test:1": makeEntry("session-1", makeSnapshot(5)),
     };
@@ -96,11 +96,13 @@ describe("session store strips resolvedSkills from persistence", () => {
     const raw = await fs.readFile(storePath, "utf-8");
     expect(raw).not.toContain("resolvedSkills");
     expect(raw).not.toContain("xxxxx"); // none of the skill source bodies leaked
+    expect(raw).not.toContain("available_skills"); // prompt is stripped
     const parsed = JSON.parse(raw) as Record<string, SessionEntry>;
     expect(parsed["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
+    expect(parsed["agent:main:test:1"]?.skillsSnapshot?.prompt).toBeUndefined();
   });
 
-  it("preserves prompt, skills, skillFilter, and version on roundtrip", async () => {
+  it("strips prompt and resolvedSkills but preserves skills, skillFilter, and version on roundtrip", async () => {
     const snapshot = makeSnapshot(3);
     snapshot.skillFilter = ["skill-0"];
     const store = {
@@ -112,33 +114,33 @@ describe("session store strips resolvedSkills from persistence", () => {
 
     const persistedSnapshot = loaded["agent:main:test:1"]?.skillsSnapshot;
     expect(persistedSnapshot).toBeDefined();
-    expect(persistedSnapshot?.prompt).toBe(snapshot.prompt);
+    expect(persistedSnapshot?.prompt).toBeUndefined();
     expect(persistedSnapshot?.skills).toEqual(snapshot.skills);
     expect(persistedSnapshot?.skillFilter).toEqual(["skill-0"]);
     expect(persistedSnapshot?.version).toBe(1);
     expect(persistedSnapshot?.resolvedSkills).toBeUndefined();
   });
 
-  it("strips resolvedSkills from a legacy sessions.json on load", async () => {
-    // Hand-craft a pre-fix file with embedded resolvedSkills.
+  it("strips resolvedSkills and prompt from a legacy sessions.json on load", async () => {
+    // Hand-craft a pre-fix file with embedded resolvedSkills and prompt.
     const legacy = {
       "agent:main:test:1": makeEntry("session-1", makeSnapshot(4)),
     };
     await fs.mkdir(path.dirname(storePath), { recursive: true });
     const rawLegacy = JSON.stringify(legacy, null, 2);
     expect(rawLegacy).toContain("resolvedSkills");
+    expect(rawLegacy).toContain("prompt");
     await fs.writeFile(storePath, rawLegacy, "utf-8");
 
     const loaded = loadSessionStore(storePath, { skipCache: true });
     expect(loaded["agent:main:test:1"]?.skillsSnapshot?.resolvedSkills).toBeUndefined();
-    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.prompt).toBe(
-      legacy["agent:main:test:1"].skillsSnapshot?.prompt,
-    );
+    expect(loaded["agent:main:test:1"]?.skillsSnapshot?.prompt).toBeUndefined();
 
     // Saving the loaded record should rewrite the file in stripped form.
     await saveSessionStore(storePath, loaded, { skipMaintenance: true });
     const rawAfter = await fs.readFile(storePath, "utf-8");
     expect(rawAfter).not.toContain("resolvedSkills");
+    expect(rawAfter).not.toContain("prompt");
   });
 
   it("strips resolvedSkills written via updateSessionStore mutator", async () => {
@@ -227,11 +229,13 @@ describe("hydrateResolvedSkills", () => {
 
   it("rebuilds resolvedSkills only when missing and preserves persisted fields", () => {
     // Simulates a cold session resume: the on-disk snapshot has no
-    // resolvedSkills, but consumers like prepareClaudeCliSkillsPlugin still
-    // need them. Hydration must not change prompt/skills/version, so the
-    // model's prompt-cache key stays stable across resume.
+    // resolvedSkills or prompt (both stripped), but consumers like
+    // prepareClaudeCliSkillsPlugin still need them. Hydration must not
+    // change skills/version, so the model's prompt-cache key stays stable
+    // across resume. The prompt field will be undefined on disk but can be
+    // rebuilt from the skills array.
     const stripped: SessionSkillSnapshot = {
-      prompt: "original-prompt",
+      // prompt intentionally omitted — stripped on persist
       skills: [{ name: "x" }],
       skillFilter: ["x"],
       version: 7,
@@ -248,7 +252,7 @@ describe("hydrateResolvedSkills", () => {
       };
     });
     expect(buildCalls).toBe(1);
-    expect(result.prompt).toBe("original-prompt");
+    expect(result.prompt).toBeUndefined();
     expect(result.skills).toEqual([{ name: "x" }]);
     expect(result.skillFilter).toEqual(["x"]);
     expect(result.version).toBe(7);
@@ -275,7 +279,7 @@ describe("hydrateResolvedSkills", () => {
 
   it("supports async runtime hydration for CLI resume paths", async () => {
     const stripped: SessionSkillSnapshot = {
-      prompt: "cached-prompt",
+      // prompt intentionally omitted — stripped on persist
       skills: [{ name: "x" }],
       version: 2,
     };
@@ -286,7 +290,7 @@ describe("hydrateResolvedSkills", () => {
       resolvedSkills: rebuiltSkills,
       version: 3,
     }));
-    expect(result.prompt).toBe("cached-prompt");
+    expect(result.prompt).toBeUndefined();
     expect(result.skills).toEqual([{ name: "x" }]);
     expect(result.version).toBe(2);
     expect(result.resolvedSkills).toBe(rebuiltSkills);
