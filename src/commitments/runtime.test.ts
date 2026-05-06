@@ -202,6 +202,12 @@ describe("commitment extraction runtime", () => {
         disableTools: true,
       }),
     );
+    // Regression for #78451: commitment extraction must NOT hardcode fastMode,
+    // so MiniMax (and similar) stream wrappers do not flip the configured
+    // base model id to a -highspeed variant the operator's plan does not own.
+    const callArgs = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+    expect(callArgs).toBeDefined();
+    expect(callArgs).not.toHaveProperty("fastMode");
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {

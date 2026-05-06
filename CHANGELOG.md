@@ -113,6 +113,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Commitments/extraction: stop hardcoding `fastMode: true` in commitment extraction so MiniMax Coding Plan operators no longer hit `HTTP 500: your current token plan not support model, MiniMax-M2.7-highspeed (2061)` when their plan owns the base model but not the highspeed variant. Fixes #78451.
 - Web fetch: bound guarded dispatcher cleanup after request timeouts so timed-out fetches return tool errors instead of leaving Gateway tool lanes active. (#78439) Thanks @obviyus.
 - Gate Slack startup user allowlist resolution [AI]. (#77898) Thanks @pgondhi987.
 - OpenAI/Codex: suppress stale `openai-codex` GPT-5.1/5.2/5.3 model refs that ChatGPT/Codex OAuth accounts now reject, keeping model lists, config validation, and forward-compat resolution on current 5.4/5.5 routes. Fixes #67158. Thanks @drpau.

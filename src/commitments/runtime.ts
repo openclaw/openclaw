@@ -239,7 +239,11 @@ async function defaultExtractBatch(params: {
     thinkLevel: "off",
     verboseLevel: "off",
     reasoningLevel: "off",
-    fastMode: true,
+    // Do not hardcode fastMode here: leaving the field undefined lets the
+    // commitments extraction inherit the configured fast-mode state (which
+    // defaults to false). Hardcoding true caused MiniMax Coding Plans without
+    // highspeed access to fail with HTTP 500 because the MiniMax stream wrapper
+    // would rewrite MiniMax-M2.7 -> MiniMax-M2.7-highspeed (#78451).
     timeoutMs: resolved.extraction.timeoutSeconds * 1000,
     runId,
     bootstrapContextMode: "lightweight",
