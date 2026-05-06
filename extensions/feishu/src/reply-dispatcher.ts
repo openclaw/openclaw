@@ -127,6 +127,16 @@ type CreateFeishuReplyDispatcherParams = {
   mentionTargets?: MentionTarget[];
   accountId?: string;
   identity?: OutboundIdentity;
+  /**
+   * Override the source-reply delivery mode the auto-reply pipeline
+   * resolves for this dispatch when the user has not configured an
+   * explicit `messages.{groupChat,}.visibleReplies`. Used by the bot
+   * dispatcher to keep Feishu group mentions automatic-reply by default
+   * (#78204): the cross-platform default for groups is
+   * `message_tool_only`, which silently drops replies in Feishu group
+   * chats because the agent rarely calls the message tool there.
+   */
+  defaultSourceReplyDeliveryMode?: "automatic";
   /** Epoch ms when the inbound message was created. Used to suppress typing
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
@@ -667,6 +677,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     dispatcher,
     replyOptions: {
       ...replyOptions,
+      ...(params.defaultSourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.defaultSourceReplyDeliveryMode }
+        : {}),
       onModelSelected: prefixContext.onModelSelected,
       disableBlockStreaming:
         typeof account.config?.blockStreaming === "boolean" ? !account.config.blockStreaming : true,

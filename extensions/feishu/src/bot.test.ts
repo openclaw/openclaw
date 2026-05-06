@@ -1156,6 +1156,57 @@ describe("handleFeishuMessage command authorization", () => {
       }),
     );
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    // #78204: when no visibleReplies preference is configured, Feishu
+    // group dispatch must default to automatic source replies. The
+    // cross-platform default of `message_tool_only` for groups would
+    // otherwise drop replies silently.
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        defaultSourceReplyDeliveryMode: "automatic",
+      }),
+    );
+  });
+
+  it("does not force automatic Feishu group replies when visibleReplies is explicitly configured (#78204)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      messages: { groupChat: { visibleReplies: "message_tool" } },
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-explicit-message-tool-#78204",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockCreateFeishuReplyDispatcher).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        defaultSourceReplyDeliveryMode: "automatic",
+      }),
+    );
   });
 
   it("blocks group sender when global groupSenderAllowFrom excludes sender", async () => {
