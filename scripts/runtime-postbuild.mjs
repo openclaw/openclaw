@@ -6,6 +6,7 @@ import { copyBundledPluginMetadata } from "./copy-bundled-plugin-metadata.mjs";
 import { copyPluginSdkRootAlias } from "./copy-plugin-sdk-root-alias.mjs";
 import {
   copyStaticExtensionAssets,
+  copyStaticExtensionAssetsToRuntimeOverlay,
   listStaticExtensionAssetOutputs,
 } from "./lib/static-extension-assets.mjs";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
@@ -459,13 +460,15 @@ export function runRuntimePostBuild(params = {}) {
   runPhase("plugin SDK root alias", () => copyPluginSdkRootAlias(params));
   runPhase("bundled plugin metadata", () => copyBundledPluginMetadata(params));
   runPhase("official channel catalog", () => writeOfficialChannelCatalog(params));
-  runPhase("static extension assets", () =>
-    copyStaticExtensionAssets({
+  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
+  runPhase("static extension assets", () => {
+    const staticAssetParams = {
       rootDir: ROOT,
       ...params,
-    }),
-  );
-  runPhase("bundled plugin runtime overlay", () => stageBundledPluginRuntime(params));
+    };
+    copyStaticExtensionAssets(staticAssetParams);
+    copyStaticExtensionAssetsToRuntimeOverlay(staticAssetParams);
+  });
   runPhase("stable root runtime imports", () => rewriteRootRuntimeImportsToStableAliases(params));
   runPhase("stable root runtime aliases", () => writeStableRootRuntimeAliases(params));
   runPhase("legacy root runtime compat aliases", () => writeLegacyRootRuntimeCompatAliases(params));

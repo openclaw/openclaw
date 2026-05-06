@@ -96,6 +96,31 @@ export function copyStaticExtensionAssets(params = {}) {
   }
 }
 
+export function copyStaticExtensionAssetsToRuntimeOverlay(params = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const assets = params.assets ?? discoverStaticExtensionAssets({ rootDir, fs: fsImpl });
+  const runtimeExtensionsRoot = path.join(rootDir, "dist-runtime", "extensions");
+  if (!fsImpl.existsSync(runtimeExtensionsRoot)) {
+    return;
+  }
+  const warn = params.warn ?? console.warn;
+  for (const { src, dest } of assets) {
+    const normalizedDest = toPosixPath(dest);
+    if (!normalizedDest.startsWith("dist/extensions/")) {
+      continue;
+    }
+    const srcPath = path.join(rootDir, src);
+    const destPath = path.join(rootDir, "dist-runtime", normalizedDest.slice("dist/".length));
+    if (fsImpl.existsSync(srcPath)) {
+      fsImpl.mkdirSync(path.dirname(destPath), { recursive: true });
+      fsImpl.copyFileSync(srcPath, destPath);
+    } else {
+      warn(`[runtime-postbuild] static asset not found, skipping: ${src}`);
+    }
+  }
+}
+
 export function copyStaticExtensionAssetsForPackage(params) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;

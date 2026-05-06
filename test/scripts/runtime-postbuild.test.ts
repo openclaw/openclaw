@@ -87,7 +87,7 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
   });
 
-  it("stages copied static assets into the runtime overlay during the same postbuild run", async () => {
+  it("stages copied static assets byte-for-byte during the same postbuild run", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const source = "extensions/diffs/assets/viewer-runtime.js";
     const output = "assets/viewer-runtime.js";
@@ -131,8 +131,8 @@ describe("runtime postbuild static assets", () => {
     await expect(fs.readFile(path.join(rootDir, distAsset), "utf8")).resolves.toBe(
       "export const viewer = true;\n",
     );
-    await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toContain(
-      "dist/extensions/diffs/assets/viewer-runtime.js",
+    await expect(fs.readFile(path.join(rootDir, runtimeAsset), "utf8")).resolves.toBe(
+      "export const viewer = true;\n",
     );
   });
 
