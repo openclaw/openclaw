@@ -435,10 +435,13 @@ export function tailscaleFunnelStatusCoversPort(
 
 function tailscaleProxyMatchesLoopbackPort(proxy: string, port: number): boolean {
   // Tailscale stores the Proxy field as a full URL string (e.g.
-  // "http://127.0.0.1:18789", "http://127.0.0.1:18789/"), or as the bare
-  // forms accepted by `tailscale funnel/serve` ("localhost:18789", "18789").
-  // Strip the optional scheme and any trailing path before host/port match.
-  const stripped = proxy.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+  // "http://127.0.0.1:18789", "http://127.0.0.1:18789/",
+  // "https+insecure://localhost:18789/api"), or as the bare forms accepted
+  // by `tailscale funnel/serve` ("localhost:18789", "18789"). Strip any
+  // RFC 3986 scheme (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) "://") and
+  // any trailing path before host/port match — covers documented Tailscale
+  // target schemes such as `http`, `https`, and `https+insecure`.
+  const stripped = proxy.replace(/^[a-z][a-z0-9+\-.]*:\/\//i, "").replace(/\/.*$/, "");
   if (stripped === String(port)) {
     return true;
   }

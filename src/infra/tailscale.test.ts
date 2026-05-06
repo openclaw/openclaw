@@ -274,6 +274,27 @@ describe("tailscaleFunnelStatusCoversPort", () => {
     expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
   });
 
+  it("matches the documented https+insecure target scheme", () => {
+    const status = buildFunnelStatus({
+      "/": { Proxy: "https+insecure://localhost:18789" },
+    });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("matches https+insecure with a trailing path", () => {
+    const status = buildFunnelStatus({
+      "/api": { Proxy: "https+insecure://127.0.0.1:18789/api" },
+    });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
+  });
+
+  it("does not match https+insecure on a non-loopback host", () => {
+    const status = buildFunnelStatus({
+      "/": { Proxy: "https+insecure://10.0.0.5:18789" },
+    });
+    expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(false);
+  });
+
   it("matches a bare port form", () => {
     const status = buildFunnelStatus({ "/": { Proxy: "18789" } });
     expect(tailscaleFunnelStatusCoversPort(status, 18789)).toBe(true);
