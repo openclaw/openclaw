@@ -79,7 +79,7 @@ function useLightweightCodexRuntimePlan(params: EmbeddedRunAttemptParams): void 
       resolvedRef: `${params.provider}/${params.modelId}`,
       harnessId: "codex",
     },
-  } as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+  } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
 }
 
 function threadStartResult(threadId = "thread-1") {
