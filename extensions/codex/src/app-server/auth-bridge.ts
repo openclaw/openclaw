@@ -23,6 +23,7 @@ const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
+const REAL_HOME_ENV_VAR = "REAL_HOME";
 const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
 const CODEX_APP_SERVER_NATIVE_HOME_DIRNAME = "home";
 const CODEX_API_KEY_ENV_VAR = "CODEX_API_KEY";
@@ -109,12 +110,28 @@ async function withAgentCodexHomeEnvironment(
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
     : path.join(codexHome, CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
+
+  // Capture the operator's real home directory before it is overridden by the
+  // harness sandbox, so that operator-authored scripts and runbooks can still
+  // reference user-scoped assets (e.g. ~/.env, ~/.ssh, ~/.aws) via REAL_HOME.
+  const realHome =
+    startOptions.env?.[REAL_HOME_ENV_VAR]?.trim() ||
+    startOptions.env?.[HOME_ENV_VAR]?.trim() ||
+    process.env.HOME?.trim() ||
+    "";
   await fs.mkdir(codexHome, { recursive: true });
   await fs.mkdir(nativeHome, { recursive: true });
   const nextStartOptions: CodexAppServerStartOptions = {
     ...startOptions,
     env: {
       ...startOptions.env,
+      // REAL_HOME preserves the operator's real home directory path before
+      // HOME is remapped to a per-agent sandbox. This is an opt-in escape
+      // hatch for operator-authored scripts and runbooks that need to
+      // reference user-scoped assets (e.g. ~/.env, ~/.ssh, ~/.aws).
+      // First-party Codex workflows do not depend on REAL_HOME. See docs
+      // at docs/plugins/codex-harness.md#real-home for the full contract.
+      ...(realHome ? { [REAL_HOME_ENV_VAR]: realHome } : {}),
       [CODEX_HOME_ENV_VAR]: codexHome,
       [HOME_ENV_VAR]: nativeHome,
     },

@@ -558,6 +558,29 @@ launches. That keeps Codex-native skills, plugins, config, accounts, and thread
 state scoped to the OpenClaw agent instead of leaking in from the operator's
 personal Codex CLI home.
 
+####  — operator home escape hatch {#real-home}
+
+When an operator-authored script or runbook needs to reference user-scoped assets
+(for example, , , , or ), the sandboxed 
+value — which points to a per-agent directory — makes those paths unreachable.
+
+The  environment variable preserves the operator's real home directory
+path before  is remapped. It is set in the following priority order:
+
+1. An explicit  value in the app-server  override.
+2. An explicit  override in  (before remapping).
+3.  from the OpenClaw daemon's own environment.
+4. An empty string (no  is injected) when none of the above resolve.
+
+**Security boundary:**  is an operator-opt-in escape hatch. It is
+not set by default for any first-party Codex harness workflow. Installing skills,
+plugins, or agents that rely on  should document this dependency in
+their own README. If your deployment requires strict isolation (for example,
+multi-tenant or CI runners), explicitly unset  via  or
+avoid depending on the variable.
+
+
+
 OpenClaw plugins and OpenClaw skill snapshots still flow through OpenClaw's own
 plugin registry and skill loader. Personal Codex CLI assets do not. If you have
 useful Codex CLI skills or plugins that should become part of an OpenClaw agent,
