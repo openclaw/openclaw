@@ -351,6 +351,14 @@ function areAnyFeishuReactionActionsEnabled(cfg: ClawdbotConfig): boolean {
   return false;
 }
 
+function isFeishuGroupTopicSessionKey(sessionKey: string | null | undefined): boolean {
+  if (typeof sessionKey !== "string" || !sessionKey) {
+    return false;
+  }
+  const parsed = parseFeishuConversationId({ conversationId: sessionKey });
+  return parsed?.scope === "group_topic" || parsed?.scope === "group_topic_sender";
+}
+
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
   const trimmed = conversationId.trim();
   if (!trimmed || trimmed.includes(":")) {
@@ -754,11 +762,25 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             if (!to) {
               throw new Error(`Feishu ${ctx.action} requires a target (to).`);
             }
+            // group_topic sessions: auto-thread `send` against the inbound trigger so
+            // visible replies stay in the topic instead of falling out to the chat root.
+            const inboundMessageId = ctx.toolContext?.currentMessageId;
+            const groupTopicAutoThreadId =
+              ctx.action === "send" &&
+              isFeishuGroupTopicSessionKey(ctx.sessionKey) &&
+              typeof inboundMessageId === "string" &&
+              inboundMessageId.length > 0
+                ? inboundMessageId
+                : undefined;
             const replyToMessageId =
-              ctx.action === "thread-reply" ? resolveFeishuMessageId(ctx.params) : undefined;
+              ctx.action === "thread-reply"
+                ? resolveFeishuMessageId(ctx.params)
+                : groupTopicAutoThreadId;
             if (ctx.action === "thread-reply" && !replyToMessageId) {
               throw new Error("Feishu thread-reply requires messageId.");
             }
+            const replyInThread =
+              ctx.action === "thread-reply" || groupTopicAutoThreadId !== undefined;
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
             const text = readFirstString(ctx.params, ["text", "message"]);
             const mediaUrl = readFeishuMediaParam(ctx.params);
@@ -791,7 +813,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 card,
                 accountId: ctx.accountId ?? undefined,
                 replyToMessageId,
-                replyInThread: ctx.action === "thread-reply",
+                replyInThread,
               });
             } else if (mediaUrl) {
               result = await sendMedia!({
@@ -811,7 +833,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 text: text!,
                 accountId: ctx.accountId ?? undefined,
                 replyToMessageId,
-                replyInThread: ctx.action === "thread-reply",
+                replyInThread,
               });
             }
             return jsonActionResult({
