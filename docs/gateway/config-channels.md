@@ -575,7 +575,7 @@ When Mattermost native commands are enabled:
 
 ### BlueBubbles
 
-BlueBubbles is the recommended iMessage path (plugin-backed, configured under `channels.bluebubbles`).
+BlueBubbles is the legacy iMessage bridge (plugin-backed, configured under `channels.bluebubbles`). Existing setups remain supported, but new OpenClaw iMessage deployments should prefer `channels.imessage` when `imsg` can run on the Messages host.
 
 ```json5
 {
@@ -593,11 +593,11 @@ BlueBubbles is the recommended iMessage path (plugin-backed, configured under `c
 - Core key paths covered here: `channels.bluebubbles`, `channels.bluebubbles.dmPolicy`.
 - Optional `channels.bluebubbles.defaultAccount` overrides default account selection when it matches a configured account id.
 - Top-level `bindings[]` entries with `type: "acp"` can bind BlueBubbles conversations to persistent ACP sessions. Use a BlueBubbles handle or target string (`chat_id:*`, `chat_guid:*`, `chat_identifier:*`) in `match.peer.id`. Shared field semantics: [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
-- Full BlueBubbles channel configuration is documented in [BlueBubbles](/channels/bluebubbles).
+- Full BlueBubbles channel configuration and deprecation rationale are documented in [BlueBubbles](/channels/bluebubbles).
 
 ### iMessage
 
-OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+OpenClaw spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required. This is the preferred path for new OpenClaw iMessage setups when the host can grant Messages database and Automation permissions.
 
 ```json5
 {
