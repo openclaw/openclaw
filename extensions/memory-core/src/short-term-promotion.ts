@@ -33,6 +33,7 @@ const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+const PROMOTION_COMPARISON_MIN_HEADING_BODY_CHARS = 8;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
@@ -1403,7 +1404,54 @@ function compareCandidateWindow(
   if (targetSnippet.includes(windowSnippet)) {
     return { matched: true, quality: 1 };
   }
+  const targetVariants = normalizeCandidateWindowComparisonVariants(targetSnippet);
+  const windowVariants = normalizeCandidateWindowComparisonVariants(windowSnippet);
+  for (const targetVariant of targetVariants) {
+    for (const windowVariant of windowVariants) {
+      if (!targetVariant || !windowVariant) {
+        continue;
+      }
+      if (windowVariant === targetVariant) {
+        return { matched: true, quality: 0.75 };
+      }
+      if (windowVariant.includes(targetVariant) || targetVariant.includes(windowVariant)) {
+        return { matched: true, quality: 0.5 };
+      }
+    }
+  }
   return { matched: false, quality: 0 };
+}
+
+function normalizeCandidateWindowComparisonValue(snippet: string): string {
+  return snippet
+    .replace(/`+/g, "")
+    .replace(/(?:^|\s)(?:[-*+]|\d+\.)\s+/g, " ")
+    .replace(/[.;,]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function stripDailyHeadingPrefixForComparison(snippet: string): string | null {
+  const match = snippet.match(/^[^\d:][^:]{0,80}:\s+(.+)$/);
+  const body = match?.[1]?.trim();
+  return body && body.length >= PROMOTION_COMPARISON_MIN_HEADING_BODY_CHARS ? body : null;
+}
+
+function normalizeCandidateWindowComparisonVariants(snippet: string): string[] {
+  const variants = new Set<string>();
+  const normalized = normalizeCandidateWindowComparisonValue(snippet);
+  if (normalized) {
+    variants.add(normalized);
+  }
+  const withoutHeading = stripDailyHeadingPrefixForComparison(snippet);
+  if (withoutHeading) {
+    const normalizedWithoutHeading = normalizeCandidateWindowComparisonValue(withoutHeading);
+    if (normalizedWithoutHeading) {
+      variants.add(normalizedWithoutHeading);
+    }
+  }
+  return [...variants];
 }
 
 function relocateCandidateRange(

@@ -933,6 +933,65 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("rehydrates heading-prefixed daily list chunks before applying promotions", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
+        "# Operations",
+        "- Restarted gateway service after tunnel test.",
+        "- Rotated access token for SSH dashboard.",
+      ]);
+
+      const queryDays = ["2026-04-03", "2026-04-04", "2026-04-05"];
+      for (const day of queryDays) {
+        await recordShortTermRecalls({
+          workspaceDir,
+          query: `__dreaming_daily__:${day}`,
+          signalType: "daily",
+          dedupeByQueryPerDay: true,
+          dayBucket: day,
+          nowMs: Date.parse(`${day}T10:00:00.000Z`),
+          results: [
+            {
+              path: "memory/2026-04-03.md",
+              startLine: 2,
+              endLine: 3,
+              score: 0.96,
+              snippet:
+                "Operations: Restarted gateway service after tunnel test.; Rotated access token for SSH dashboard.",
+              source: "memory",
+            },
+          ],
+        });
+      }
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+      expect(ranked).toHaveLength(1);
+
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+      });
+
+      expect(applied.applied).toBe(1);
+      expect(applied.appended).toBe(1);
+      expect(applied.appliedCandidates[0]).toMatchObject({
+        startLine: 2,
+        endLine: 3,
+        snippet:
+          "- Restarted gateway service after tunnel test. - Rotated access token for SSH dashboard.",
+      });
+      const memoryText = await fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8");
+      expect(memoryText).toContain("Restarted gateway service after tunnel test");
+      expect(memoryText).toContain("Rotated access token for SSH dashboard");
+    });
+  });
+
   it("filters out candidates older than maxAgeDays during ranking", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
