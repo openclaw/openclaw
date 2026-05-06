@@ -61,7 +61,15 @@ export async function collectTestTempCleanupFindings(root = repoRoot) {
   const findings = [];
   for (const relativePath of listTrackedTestFiles(root)) {
     const absolutePath = path.join(root, relativePath);
-    const source = await fs.readFile(absolutePath, "utf8");
+    let source;
+    try {
+      source = await fs.readFile(absolutePath, "utf8");
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
     const risk = classifyCleanupRisk(source);
     if (!risk) {
       continue;
