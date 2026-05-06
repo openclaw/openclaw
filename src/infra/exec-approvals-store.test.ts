@@ -26,6 +26,7 @@ let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSoc
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
+let setExecApprovalsTestHooksForTest: ExecApprovalsModule["setExecApprovalsTestHooksForTest"];
 
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
@@ -45,6 +46,7 @@ beforeAll(async () => {
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
     saveExecApprovals,
+    setExecApprovalsTestHooksForTest,
   } = await import("./exec-approvals.js"));
 });
 
@@ -53,6 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setExecApprovalsTestHooksForTest(null);
   vi.restoreAllMocks();
   if (originalOpenClawHome === undefined) {
     delete process.env.OPENCLAW_HOME;
@@ -235,12 +238,17 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).agents?.worker?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  it("persists durable command approvals without storing plaintext command text", () => {
+  it("persists durable command approvals without storing plaintext command text", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(321_000);
 
     const approvals = ensureExecApprovals();
-    addDurableCommandApproval(approvals, "worker", 'printenv API_KEY="secret-value"');
+    await addDurableCommandApproval(
+      approvals,
+      "worker",
+      'printenv API_KEY="secret-value"',
+      readExecApprovalsSnapshot().hash,
+    );
 
     expect(readApprovalsFile(dir).agents?.worker?.allowlist).toEqual([
       expect.objectContaining({
@@ -328,7 +336,7 @@ describe("exec approvals store helpers", () => {
     ]);
   });
 
-  it("records allowlist usage on the matching entry and backfills missing ids", () => {
+  it("records allowlist usage on the matching entry and backfills missing ids", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(999_000);
 
@@ -343,11 +351,12 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(approvals, null, 2), "utf8");
 
-    recordAllowlistUse(
+    await recordAllowlistUse(
       approvals,
       undefined,
       { pattern: "/usr/bin/rg" },
       "rg needle",
+      readExecApprovalsSnapshot().hash,
       "/opt/homebrew/bin/rg",
     );
 
@@ -363,7 +372,7 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).agents?.main?.allowlist?.[0]?.id).toMatch(/^[0-9a-f-]{36}$/i);
   });
 
-  it("does not restore revoked allowlist entries from stale usage writeback", () => {
+  it("does not restore revoked allowlist entries from stale usage writeback", async () => {
     const dir = createHomeDir();
 
     const staleApprovals: ExecApprovalsFile = {
@@ -390,11 +399,12 @@ describe("exec approvals store helpers", () => {
       },
     });
 
-    recordAllowlistMatchesUse({
+    await recordAllowlistMatchesUse({
       approvals: staleApprovals,
       agentId: undefined,
       matches: [{ pattern: "/usr/bin/rg" }],
       command: "rg needle",
+      baseHash: readExecApprovalsSnapshot().hash,
       resolvedPath: "/opt/homebrew/bin/rg",
     });
 
@@ -409,7 +419,59 @@ describe("exec approvals store helpers", () => {
     });
   });
 
-  it("dedupes allowlist usage by pattern and argPattern", () => {
+  it("does not restore revoked allowlist entries when revocation lands after reload", async () => {
+    const dir = createHomeDir();
+
+    const staleApprovals: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        main: {
+          allowlist: [
+            { pattern: "/usr/bin/rg", id: "rg-id" },
+            { pattern: "/usr/bin/jq", id: "jq-id" },
+          ],
+        },
+      },
+    };
+    fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
+    fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(staleApprovals, null, 2), "utf8");
+    const baseHash = readExecApprovalsSnapshot().hash;
+
+    setExecApprovalsTestHooksForTest({
+      beforeExecutionWrite: () => {
+        saveExecApprovals({
+          version: 1,
+          defaults: { security: "allowlist" },
+          agents: {
+            main: {
+              allowlist: [{ pattern: "/usr/bin/jq", id: "jq-id" }],
+            },
+          },
+        });
+      },
+    });
+
+    await recordAllowlistMatchesUse({
+      approvals: staleApprovals,
+      agentId: undefined,
+      matches: [{ pattern: "/usr/bin/rg" }],
+      command: "rg needle",
+      baseHash,
+      resolvedPath: "/opt/homebrew/bin/rg",
+    });
+
+    expect(readApprovalsFile(dir)).toEqual({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {
+        main: {
+          allowlist: [{ pattern: "/usr/bin/jq", id: "jq-id" }],
+        },
+      },
+    });
+  });
+
+  it("dedupes allowlist usage by pattern and argPattern", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(777_000);
 
@@ -427,7 +489,7 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), JSON.stringify(approvals, null, 2), "utf8");
 
-    recordAllowlistMatchesUse({
+    await recordAllowlistMatchesUse({
       approvals,
       agentId: undefined,
       matches: [
@@ -436,6 +498,7 @@ describe("exec approvals store helpers", () => {
         { pattern: "/usr/bin/python3", argPattern: "^b\\.py\x00$" },
       ],
       command: "python3 a.py",
+      baseHash: readExecApprovalsSnapshot().hash,
       resolvedPath: "/usr/bin/python3",
     });
 
@@ -453,15 +516,16 @@ describe("exec approvals store helpers", () => {
     ]);
   });
 
-  it("persists allow-always patterns with shared helper", () => {
+  it("persists allow-always patterns with shared helper", async () => {
     const dir = createHomeDir();
     vi.spyOn(Date, "now").mockReturnValue(654_321);
 
     const approvals = ensureExecApprovals();
-    const patterns = persistAllowAlwaysPatterns({
+    const patterns = await persistAllowAlwaysPatterns({
       approvals,
       agentId: "worker",
       platform: "win32",
+      baseHash: readExecApprovalsSnapshot().hash,
       segments: [
         {
           raw: "/usr/bin/custom-tool.exe a.py",

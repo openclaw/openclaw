@@ -9,7 +9,7 @@ import {
 } from "../infra/exec-approvals-effective.js";
 import {
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  saveExecApprovalsLocked,
   type ExecApprovalsAgent,
   type ExecApprovalsFile,
 } from "../infra/exec-approvals.js";
@@ -93,8 +93,8 @@ function loadSnapshotLocal(): ExecApprovalsSnapshot {
   };
 }
 
-function saveSnapshotLocal(file: ExecApprovalsFile): ExecApprovalsSnapshot {
-  saveExecApprovals(file);
+async function saveSnapshotLocal(file: ExecApprovalsFile): Promise<ExecApprovalsSnapshot> {
+  await saveExecApprovalsLocked(file);
   return loadSnapshotLocal();
 }
 
@@ -154,7 +154,7 @@ async function saveSnapshotTargeted(params: {
 }): Promise<void> {
   const next =
     params.source === "local"
-      ? saveSnapshotLocal(params.file)
+      ? await saveSnapshotLocal(params.file)
       : await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   if (params.opts.json) {
     defaultRuntime.writeJson(next, 0);

@@ -3,7 +3,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  saveExecApprovalsLocked,
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
@@ -104,7 +104,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     const snapshot = readExecApprovalsSnapshot();
     respond(true, toExecApprovalsPayload(snapshot), undefined);
   },
-  "exec.approvals.set": ({ params, respond }) => {
+  "exec.approvals.set": async ({ params, respond }) => {
     if (!assertValidParams(params, validateExecApprovalsSetParams, "exec.approvals.set", respond)) {
       return;
     }
@@ -124,7 +124,7 @@ export const execApprovalsHandlers: GatewayRequestHandlers = {
     }
     const normalized = normalizeExecApprovals(incoming as ExecApprovalsFile);
     const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-    saveExecApprovals(next);
+    await saveExecApprovalsLocked(next);
     const nextSnapshot = readExecApprovalsSnapshot();
     respond(true, toExecApprovalsPayload(nextSnapshot), undefined);
   },

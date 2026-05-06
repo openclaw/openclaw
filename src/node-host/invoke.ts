@@ -7,7 +7,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
-  saveExecApprovals,
+  saveExecApprovalsLocked,
   type ExecAsk,
   type ExecApprovalsFile,
   type ExecApprovalsResolved,
@@ -397,7 +397,7 @@ export async function handleInvoke(
       requireExecApprovalsBaseHash(params, snapshot);
       const normalized = normalizeExecApprovals(params.file);
       const next = mergeExecApprovalsSocketDefaults({ normalized, current: snapshot.file });
-      saveExecApprovals(next);
+      await saveExecApprovalsLocked(next);
       const nextSnapshot = readExecApprovalsSnapshot();
       const payload: ExecApprovalsSnapshot = {
         path: nextSnapshot.path,

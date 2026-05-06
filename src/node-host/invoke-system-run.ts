@@ -619,7 +619,7 @@ async function executeSystemRunPhase(
 
   if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
     const patterns = phase.policy.analysisOk
-      ? persistAllowAlwaysPatterns({
+      ? await persistAllowAlwaysPatterns({
           approvals: phase.approvals.file,
           agentId: phase.agentId,
           segments: phase.segments,
@@ -627,18 +627,25 @@ async function executeSystemRunPhase(
           env: phase.env,
           platform: process.platform,
           strictInlineEval: phase.strictInlineEval,
+          baseHash: phase.approvals.hash,
         })
       : [];
     if (patterns.length === 0) {
-      addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
+      await addDurableCommandApproval(
+        phase.approvals.file,
+        phase.agentId,
+        phase.commandText,
+        phase.approvals.hash,
+      );
     }
   }
 
-  recordAllowlistMatchesUse({
+  await recordAllowlistMatchesUse({
     approvals: phase.approvals.file,
     agentId: phase.agentId,
     matches: phase.allowlistMatches,
     command: phase.commandText,
+    baseHash: phase.approvals.hash,
     resolvedPath: resolveApprovalAuditCandidatePath(
       phase.segments[0]?.resolution ?? null,
       phase.cwd,

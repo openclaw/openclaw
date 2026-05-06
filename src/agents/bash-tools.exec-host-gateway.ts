@@ -318,6 +318,7 @@ export async function processGatewayAllowlist(
       agentId: params.agentId,
       matches: allowlistMatches,
       command: params.command,
+      baseHash: approvals.hash,
       resolvedPath,
     });
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
@@ -425,7 +426,7 @@ export async function processGatewayAllowlist(
         );
       }
 
-      recordMatchedAllowlistUse(
+      await recordMatchedAllowlistUse(
         resolveApprovalAuditCandidatePath(
           allowlistEval.segments[0]?.resolution ?? null,
           params.workdir,
@@ -488,7 +489,7 @@ export async function processGatewayAllowlist(
       } else if (decision === "allow-always") {
         approvedByAsk = true;
         if (!requiresInlineEvalApproval) {
-          const patterns = persistAllowAlwaysPatterns({
+          const patterns = await persistAllowAlwaysPatterns({
             approvals: approvals.file,
             agentId: params.agentId,
             segments: allowlistEval.segments,
@@ -496,9 +497,15 @@ export async function processGatewayAllowlist(
             env: params.env,
             platform: process.platform,
             strictInlineEval: params.strictInlineEval === true,
+            baseHash: approvals.hash,
           });
           if (patterns.length === 0) {
-            addDurableCommandApproval(approvals.file, params.agentId, params.command);
+            await addDurableCommandApproval(
+              approvals.file,
+              params.agentId,
+              params.command,
+              approvals.hash,
+            );
           }
         }
       }
@@ -530,7 +537,7 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      await recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
@@ -611,7 +618,7 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  recordMatchedAllowlistUse(
+  await recordMatchedAllowlistUse(
     resolveApprovalAuditCandidatePath(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,

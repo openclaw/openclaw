@@ -13,7 +13,7 @@ import {
   normalizeExecTarget,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
-  saveExecApprovals,
+  saveExecApprovalsLocked,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -345,7 +345,7 @@ async function applyLocalExecPolicy(policy: ExecPolicyResolved): Promise<ExecPol
   const approvalsSnapshot = readExecApprovalsSnapshot();
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
   const writtenApprovalsHash = hashExecApprovalsFile(nextApprovals);
-  saveExecApprovals(nextApprovals);
+  await saveExecApprovalsLocked(nextApprovals);
   try {
     await replaceConfigFile({
       baseHash: configSnapshot.hash,
