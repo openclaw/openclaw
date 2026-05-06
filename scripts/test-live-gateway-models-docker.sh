@@ -15,7 +15,7 @@ IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 LIVE_IMAGE_NAME="${OPENCLAW_LIVE_IMAGE:-${IMAGE_NAME}-live}"
 CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
-PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
+PROFILE_FILE="$(openclaw_live_default_profile_file)"
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 TEMP_DIRS=()
 DOCKER_HOME_MOUNT=()
@@ -30,14 +30,14 @@ cleanup_temp_dirs() {
 trap cleanup_temp_dirs EXIT
 if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
   CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+elif openclaw_live_is_ci; then
   CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
   TEMP_DIRS+=("$CACHE_HOME_DIR")
 else
   CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
 fi
 mkdir -p "$CACHE_HOME_DIR"
-if [[ "${CI:-}" == "true" || "${GITHUB_ACTIONS:-}" == "true" ]]; then
+if openclaw_live_is_ci; then
   DOCKER_USER="$(id -u):$(id -g)"
   DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
   TEMP_DIRS+=("$DOCKER_HOME_DIR")
