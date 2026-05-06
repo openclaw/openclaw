@@ -84,6 +84,32 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     ).resolves.toEqual({ messageId: "legacy-id", receipt });
   });
 
+  it("preserves outbound delivery projection", async () => {
+    const adapter = createChannelMessageAdapterFromOutbound({
+      outbound: {
+        deliveryCapabilities: { durableFinal: { text: true } },
+        sendText: vi.fn(async () => ({
+          channel: "demo",
+          messageId: "msg-1",
+          delivery: { providerAccepted: true },
+        })),
+      },
+    });
+
+    await expect(
+      adapter.send?.text?.({
+        cfg,
+        to: "room-1",
+        text: "hello",
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        messageId: "msg-1",
+        delivery: { providerAccepted: true },
+      }),
+    );
+  });
+
   it("wraps rich payload sends and infers the receipt part kind", async () => {
     const sendPayload = vi.fn(async () => ({ channel: "demo", messageId: "card-1" }));
     const adapter = createChannelMessageAdapterFromOutbound({

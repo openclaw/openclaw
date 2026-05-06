@@ -1,4 +1,5 @@
 import { createMessageReceiptFromOutboundResults } from "./receipt.js";
+import type { OutboundDeliveryProjection } from "../../infra/outbound/delivery-projection.js";
 import type {
   ChannelMessageAdapterShape,
   ChannelMessageLiveAdapterShape,
@@ -21,6 +22,7 @@ const defaultManualReceiveAdapter = {
 export type ChannelMessageOutboundBridgeResult = MessageReceiptSourceResult & {
   receipt?: MessageReceipt;
   messageId?: string;
+  delivery?: OutboundDeliveryProjection;
 };
 
 export type ChannelMessageOutboundBridgeAdapter<TConfig = unknown> = {
@@ -78,6 +80,7 @@ function toMessageSendResult(
     });
   return {
     receipt,
+    ...(result.delivery ? { delivery: result.delivery } : {}),
     ...(resolveResultMessageId({ ...result, receipt })
       ? {
           messageId: resolveResultMessageId({ ...result, receipt }),
