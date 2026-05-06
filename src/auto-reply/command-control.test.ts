@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
-import { hasControlCommand, hasInlineCommandTokens } from "./command-detection.js";
+import {
+  hasControlCommand,
+  hasInlineCommandTokens,
+  isControlCommandMessage,
+} from "./command-detection.js";
 import { listChatCommands } from "./commands-registry.js";
 import { parseActivationCommand } from "./group-activation.js";
 import { parseSendPolicyCommand } from "./send-policy.js";
@@ -1056,6 +1060,18 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/status please")).toBe(false);
     expect(hasControlCommand("prefix /send on")).toBe(false);
     expect(hasControlCommand("/send on")).toBe(true);
+  });
+
+  it("detects mention-prefixed control command messages", () => {
+    expect(isControlCommandMessage('<at user_id="ou_bot"></at> /status')).toBe(true);
+    expect(isControlCommandMessage('<at user_id="ou_bot">OpenClaw</at> /status')).toBe(true);
+    expect(isControlCommandMessage("@OpenClaw /status")).toBe(true);
+    expect(isControlCommandMessage("@OpenClaw/status")).toBe(true);
+  });
+
+  it("does not treat path-like slash text as a control command message", () => {
+    expect(isControlCommandMessage("/tmp/openclaw.log")).toBe(false);
+    expect(isControlCommandMessage("@OpenClaw /tmp/openclaw.log")).toBe(false);
   });
 
   it("detects inline command tokens", () => {
