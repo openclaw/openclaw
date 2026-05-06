@@ -20,6 +20,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -92,6 +93,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
+
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -1183,15 +1185,16 @@ export const dispatchTelegramMessage = async ({
                           })
                       : undefined,
                   onReasoningStream: reasoningLane.stream
-                    ? (payload) =>
-                        enqueueDraftLaneEvent(async () => {
+                    ? (payload) => {
+                        void enqueueDraftLaneEvent(async () => {
                           if (splitReasoningOnNextStream) {
                             reasoningLane.stream?.forceNewMessage();
                             resetDraftLaneState(reasoningLane);
                             splitReasoningOnNextStream = false;
                           }
                           await ingestDraftLaneSegments(payload.text);
-                        })
+                        });
+                      }
                     : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
@@ -1205,12 +1208,13 @@ export const dispatchTelegramMessage = async ({
                         })
                     : undefined,
                   onReasoningEnd: reasoningLane.stream
-                    ? () =>
-                        enqueueDraftLaneEvent(async () => {
+                    ? () => {
+                        void enqueueDraftLaneEvent(async () => {
                           splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-                          streamToolProgressSuppressed = false;
-                          streamToolProgressLines = [];
-                        })
+                          previewToolProgressSuppressed = false;
+                          previewToolProgressLines = [];
+                        });
+                      }
                     : undefined,
                   suppressDefaultToolProgressMessages:
                     !streamDeliveryEnabled || Boolean(answerLane.stream),

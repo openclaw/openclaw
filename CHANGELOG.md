@@ -552,6 +552,7 @@ Docs: https://docs.openclaw.ai
 
 ### Highlights
 
+- Core/events: add channel-agnostic agent event sink (`agentEventSink` config) that streams thinking and reply deltas to an external HTTPS webhook via the core `AgentEventStream` bus — works for all channels (Telegram, Discord, CLI, etc.) without per-channel wiring. (#75587)
 - Plugins/file-transfer: add bundled file-transfer plugin with `file_fetch`, `dir_list`, `dir_fetch`, and `file_write` agent tools for binary file ops on paired nodes; default-deny per-node path policy under `plugins.entries.file-transfer.config.nodes` with operator approval, symlink traversal refused by default (opt-in `followSymlinks`), and a 16 MB byte ceiling per round-trip. (#74742) Thanks @omarshahine.
 - Plugins/install: harden official plugin install, uninstall, update, onboarding, ClawHub fallback, npm dependency-state reporting, and beta-channel update paths so externalized plugins behave like first-class package installs.
 - Gateway/performance: trim startup and Control UI hot paths by lazy-loading plugin/runtime discovery, cron, schema, shutdown, sessions, and model metadata work only when needed.
