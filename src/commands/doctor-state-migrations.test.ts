@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSqliteSessionStore } from "../config/sessions/store-backend.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
@@ -219,6 +221,7 @@ async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenCl
 }
 
 afterEach(async () => {
+  closeOpenClawStateDatabaseForTest();
   resetAutoMigrateLegacyStateForTest();
   resetAutoMigrateLegacyStateDirForTest();
   await Promise.all(
@@ -258,11 +261,12 @@ async function detectAndRunMigrations(params: {
   await runLegacyStateMigrations({ detected, now: params.now });
 }
 
-function readSessionsStore(targetDir: string) {
-  return JSON.parse(fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8")) as Record<
-    string,
-    { sessionId: string }
-  >;
+function readSessionsStore(params: { root: string; targetDir: string }) {
+  const agentId = path.basename(path.dirname(params.targetDir));
+  return loadSqliteSessionStore({
+    agentId,
+    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+  }) as Record<string, { sessionId: string }>;
 }
 
 async function runAndReadSessionsStore(params: {
@@ -276,7 +280,7 @@ async function runAndReadSessionsStore(params: {
     cfg: params.cfg,
     now: params.now,
   });
-  return readSessionsStore(params.targetDir);
+  return readSessionsStore({ root: params.root, targetDir: params.targetDir });
 }
 
 type StateDirMigrationResult = Awaited<ReturnType<typeof autoMigrateLegacyStateDir>>;
@@ -385,9 +389,8 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(targetDir, "b.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(false);
 
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
+    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(false);
+    const store = readSessionsStore({ root, targetDir });
     expect(store["agent:main:main"]?.sessionId).toBe("b");
     expect(store["agent:main:+1555"]?.sessionId).toBe("a");
     expect(store["agent:main:+1666"]?.sessionId).toBe("b");
@@ -476,7 +479,8 @@ describe("doctor legacy state migrations", () => {
     const targetDir = path.join(root, "agents", "main", "sessions");
     expect(fs.existsSync(path.join(targetDir, "a.jsonl"))).toBe(true);
     expect(fs.existsSync(path.join(legacySessionsDir, "a.jsonl"))).toBe(false);
-    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(true);
+    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(false);
+    expect(readSessionsStore({ root, targetDir })["agent:main:+1555"]?.sessionId).toBe("a");
   });
 
   it("migrates legacy WhatsApp auth files without touching oauth.json", async () => {
@@ -699,9 +703,8 @@ describe("doctor legacy state migrations", () => {
 
     const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
 
-    const store = JSON.parse(
-      fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),
-    ) as Record<string, { sessionId: string }>;
+    expect(fs.existsSync(path.join(targetDir, "sessions.json"))).toBe(false);
+    const store = readSessionsStore({ root, targetDir });
     expect(result.migrated).toBe(true);
     expect(log.info).toHaveBeenCalled();
     expect(store["main"]).toBeUndefined();

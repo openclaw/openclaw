@@ -133,15 +133,15 @@ Canonical session metadata lives in the shared state database:
 - `~/.openclaw/state/openclaw.sqlite`
 - JSONL transcripts live alongside the store
 
-Legacy `sessions.json` files are imported on first open and remain the
-compatibility/export shape. You can still force or override a JSON file-backed
-store via `session.store` and `{agentId}` templating.
+Legacy `sessions.json` indexes are imported by `openclaw doctor --fix` and
+removed after SQLite has the rows. Custom offline repair stores can still use an
+explicit `--store` path, but per-agent runtime metadata should go through the
+shared state database.
 
 Gateway and ACP session discovery also scans disk-backed agent stores under the
 default `agents/` root and under templated `session.store` roots. Discovered
-stores must stay inside that resolved agent root and use a regular
-`sessions.json` file when JSON compatibility mode is selected. Symlinks and
-out-of-root paths are ignored.
+stores must stay inside that resolved agent root. Symlinks and out-of-root paths
+are ignored.
 
 ## WebChat behavior
 

@@ -46,10 +46,9 @@ This plan has started landing in slices:
   The shared `kv` table now has a small typed helper for scoped JSON-compatible
   values so low-risk JSON sidecars can move behind the same SQLite connection
   without each feature reimplementing read/write/delete glue.
-- Canonical per-agent session stores use SQLite by default. Legacy
-  `sessions.json` imports once, custom `--store` paths remain JSON by default,
-  and `openclaw sessions --export-store <path>` exports the compatibility JSON
-  shape.
+- Canonical per-agent session stores use SQLite by default. `openclaw doctor
+--fix` imports legacy `sessions.json` indexes into SQLite and removes the JSON
+  index after import, instead of keeping a parallel compatibility/export store.
 - Transcript events have a SQLite store primitive with JSONL import/export.
   Transcript append paths dual-write when the caller already has agent and
   session scope, including gateway-injected assistant messages. Scoped appends
@@ -344,7 +343,8 @@ Migration order:
 2. Add shared SQLite connection and migration helpers.
 3. Move `sessions.json` behind a `SessionStoreBackend` interface.
 4. Make SQLite primary for session entries.
-5. Import old `sessions.json` on first open and keep an export/debug command.
+5. Import old `sessions.json` from `openclaw doctor --fix`, then remove the JSON
+   index after SQLite has the rows.
 6. Leave `*.jsonl` transcripts on disk while PI owns transcript semantics.
 7. After session manager ownership moves behind OpenClaw APIs, store transcript
    events in SQLite and export JSONL for compatibility.
@@ -543,7 +543,8 @@ Phase 0: inventory and contracts
 Phase 1: SQLite session index
 
 - Add shared state DB helper.
-- Keep `sessions.json` compatibility.
+- Add a doctor migration that imports `sessions.json` into SQLite and removes
+  the JSON index.
 - Move session entries to SQLite behind a flag.
 - Prove current session list, patch, reset, cleanup, and UI flows.
 
@@ -601,7 +602,7 @@ This refactor is successful when:
 - Core code no longer imports PI packages outside the runtime adapter.
 - Repeated JSON, transcript, PI adapter, and scratch filesystem logic has one
   owner each.
-- `sessions.json` is compatibility-only, not the primary Gateway store.
+- `sessions.json` is a doctor-migrated legacy input, not a compatibility store.
 - Scratch state and tool artifacts can live in SQLite-backed VFS.
 - Agents can run in disk, VFS scratch, and VFS-only filesystem modes.
 - Real workspace writes still use capability-safe host filesystem operations.
